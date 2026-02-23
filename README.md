@@ -1,63 +1,111 @@
-# Satori ⛩️
-**Agent-Optimized MCP Server for "Sudden Insight" Semantic Code Indexing**
+# Satori
+
+**Semantic code search for AI agents — hybrid RAG, incremental sync, zero-config MCP.**
 
 <p align="left">
-  <img src="https://img.shields.io/badge/Architected%20by-Hamza-blueviolet" alt="Architected by Hamza">
+  <img src="https://img.shields.io/badge/Built%20by-Hamza-blueviolet" alt="Built by Hamza">
   <img src="https://img.shields.io/badge/Architecture-Agent--Safe-brightgreen" alt="Agent Safe">
   <img src="https://img.shields.io/badge/VectorDB-Milvus-blue" alt="Milvus">
   <img src="https://img.shields.io/badge/Protocol-MCP-orange" alt="MCP">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT">
 </p>
 
-Satori means "sudden insight." This project applies that idea to code retrieval, bridging the gap between raw codebase intelligence and autonomous AI agents. Built entirely by **Hamza (@ham-zax)**, it provides high-signal answers, safe state handling, and predictable agent workflows through the Model Context Protocol (MCP).
+Satori (悟り — "sudden insight") gives AI coding agents deep codebase understanding through a production MCP server. It parses source files with tree-sitter into structure-aware chunks, embeds them into Milvus, and serves hybrid semantic + keyword search through a minimal 4-tool API.
 
-Satori is optimized for production MCP + core workflows, focusing heavily on two runtime packages:
-* `@zokizuan/satori-core`: Indexing, AST chunking, embeddings, vector storage, and incremental sync.
-* `@zokizuan/satori-mcp`: The MCP server surface for agent tools (`manage_index`, `search_codebase`, `read_file`, `list_codebases`).
-
----
-
-## 🎯 The "Why" (Project Philosophy)
-
-Standard Retrieval-Augmented Generation (RAG) pipelines are fundamentally unsafe for autonomous coding agents. If an agent queries a 1536-dimensional vector database using a 768-dimensional model, it hallucinates disastrously or crashes the DB. Furthermore, naive text splitters slice right through function signatures, stripping away vital code structure.
-
-**I architected Satori to solve these specific AI-engineering flaws:**
-1. **Agent-Safe State Gating:** An airtight runtime fingerprinting state machine (`requires_reindex` gate) hard-locks `search_codebase` tools to specific vector dimensions, models, and database schemas. It explicitly prevents context hallucination.
-2. **O(1) Incremental Sync via Merkle DAG:** Background synchronization uses an internal SHA-256 Merkle tree to track codebase changes. Instead of full $O(N)$ re-indexing, Satori calculates strict delta updates (`added`, `modified`, `removed`), saving massive API costs.
-3. **AST-Aware Semantic Chunking:** Leverages `Tree-sitter` (TS/JS/PY/Java/Go/C++/Rust) to bound chunks around structural logic (functions/classes). It injects "Scope Breadcrumbs" (e.g., `Class > Method`) directly into the Milvus Hybrid Search (BM25 + Dense + RRF) pipeline, drastically improving LLM context relevance.
+Two runtime packages:
+- `@zokizuan/satori-core` — indexing, AST chunking, embeddings, vector storage, incremental sync
+- `@zokizuan/satori-mcp` — MCP server with agent-safe tools
 
 ---
 
-## 🏗️ Architecture & Flow
+## Why I Built This
 
-Satori is decoupled into a core data engine and a strict MCP routing surface. 
+Standard RAG pipelines are fundamentally unsafe for autonomous coding agents:
 
-**Core Data Lineage Pipeline:**
-1. **Raw File** → `Tree-sitter Parser` extracts AST Nodes.
-2. **AST Splitter** → Boundaries chunks strictly on functions/classes, injects `metadata.breadcrumbs`.
-3. **Embeddings** → Maps chunks to Dense/Sparse vectors via OpenAI, VoyageAI, Gemini, or Ollama.
-4. **Milvus DB** → Stores chunks natively; applies Reciprocal Rank Fusion (RRF) on read.
+1. **Silent vector corruption.** If an agent queries a 1536-dimensional index using a 768-dimensional model, it either hallucinates or crashes. No existing tool caught this at runtime.
+2. **Broken code chunks.** Naive text splitters slice through function signatures. The agent sees half a function, loses structural context, and wastes its context window on a second retrieval.
+3. **Full re-indexing on every change.** Most systems re-embed the entire codebase when a single file changes. At scale, this burns through embedding API budgets.
 
-> **View the full visual breakdown, including the State Machine and Merkle Sync flows, in [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)**.
+I built Satori to solve all three: fingerprint-gated safety, AST-aware chunking, and Merkle-based incremental sync.
 
 ---
 
-## 🚀 Quickstart (MCP Usage)
+## Architecture
 
-Satori runs as a standard stdio MCP server. You can add it directly to your Claude Desktop config or run it via `npx`.
+```
+  MCP Client (Claude, Cursor, Windsurf, etc.)
+       |
+       | JSON-RPC over stdio
+       v
+  +------------------------------------------------------------------+
+  |  MCP Server  (@zokizuan/satori-mcp)                              |
+  |                                                                   |
+  |  4 Tools:                                                         |
+  |    manage_index | search_codebase | read_file | list_codebases    |
+  |                                                                   |
+  |  CapabilityResolver     SnapshotManager v3     SyncManager        |
+  |  (fast|standard|slow)   (fingerprint gate)     (3-min loop +      |
+  |                                                 fs watcher)       |
+  +------------------------------+------------------------------------+
+                                 |
+                                 v
+  +------------------------------------------------------------------+
+  |  Core Engine  (@zokizuan/satori-core)                             |
+  |                                                                   |
+  |  Context Orchestrator                                             |
+  |    +-> Splitter: AstCodeSplitter (tree-sitter) + LangChain        |
+  |    +-> Embeddings: OpenAI | VoyageAI | Gemini | Ollama            |
+  |    +-> VectorDB: Milvus gRPC | Milvus REST adapters               |
+  |    +-> Sync: FileSynchronizer (Merkle DAG)                        |
+  +---------------------------+-------------------+-------------------+
+                              |                   |
+                              v                   v
+                      Milvus / Zilliz        ~/.satori/
+                      (vector storage)       (local state)
+```
 
-### 1. Claude Desktop Configuration (JSON)
+> Full architecture docs with state machine, data lineage, and sync flows: [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+---
+
+## Key Design Decisions
+
+**Hybrid Search with Reranking**
+Dense vector similarity + BM25 keyword matching, merged via Reciprocal Rank Fusion (RRF). RRF is rank-based, not score-based — no need to calibrate between incompatible scoring scales. Optional VoyageAI neural reranker for precision-critical queries.
+
+**AST-Aware Code Chunking**
+Tree-sitter splits code at function/class boundaries instead of arbitrary character limits. Each chunk carries structural breadcrumbs (`class UserService > method authenticate`) as metadata. 8 language grammars: TypeScript, JavaScript, Python, Java, Go, C++, Rust, C#, Scala. Falls back to LangChain splitting for unsupported languages.
+
+**Incremental Merkle Sync**
+File-level SHA-256 hashing with Merkle DAG diffing. Only changed files get re-embedded: 3 files changed out of 10,000 = only 3 re-embedded. Background polling every 3 minutes + optional chokidar filesystem watcher for near-real-time freshness.
+
+**Fingerprint Safety Gates**
+Every index is stamped with `{ provider, model, dimension, vectorStore, schemaVersion }`. On every search or sync call, the runtime fingerprint is compared against the stored one. Mismatch → state transitions to `requires_reindex`, blocking all queries. Error messages include the exact recovery command ("train-in-the-error" design).
+
+**4-Tool Hard-Break API**
+Reduced from 9 tools (pre-v1.0) to 4. Fewer tools = less agent tool-selection ambiguity. The `manage_index` tool uses an `action` parameter to handle create/sync/status/clear in a single tool.
+
+---
+
+## Quickstart
+
+### 1. Add to your MCP client config
+
+**JSON** (Claude Desktop, Cursor):
+
 ```json
 {
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@1.0.2"],
+      "args": ["-y", "@zokizuan/satori-mcp@latest"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
         "EMBEDDING_MODEL": "voyage-4-large",
         "EMBEDDING_OUTPUT_DIMENSION": "1024",
         "VOYAGEAI_API_KEY": "your-api-key",
+        "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
         "MILVUS_ADDRESS": "your-milvus-endpoint",
         "MILVUS_TOKEN": "your-milvus-token"
       }
@@ -66,61 +114,206 @@ Satori runs as a standard stdio MCP server. You can add it directly to your Clau
 }
 ```
 
-### 2. Agent Tool Surface
-Once connected, the AI agent natively has access to a routing-safe, 4-tool deterministic surface:
-* `manage_index`: Create, sync, check status, or clear the codebase index. (Supports `force=true` for self-healing).
-* `search_codebase`: Perform semantic or hybrid search (optional reranker override).
-* `read_file`: Safely read files with automatic line-range truncation.
-* `list_codebases`: View tracked state and snapshot health.
+**TOML** (Claude Code CLI):
+
+```toml
+[mcp_servers.satori]
+command = "npx"
+args = ["-y", "@zokizuan/satori-mcp@latest"]
+startup_timeout_ms = 180000
+env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
+```
+
+### 2. Restart your MCP client
+
+### 3. Index and search
+
+```
+> list_codebases                                    # verify connection
+> manage_index  action="create" path="/your/repo"   # index a codebase
+> search_codebase  query="authentication flow"      # semantic search
+```
+
+Results include file paths, line ranges, code snippets, and structural scope annotations.
 
 ---
 
-## 💻 Developer Setup & Local Execution
+## Data Flow
 
-**Requirements:**
-- Node.js >= 20 and < 24
-- pnpm >= 10
-- Milvus/Zilliz endpoint and token (for real deployments)
-
-**Install & Build:**
-```bash
-pnpm install
-pnpm build
 ```
+INDEX
+=====
+  Source File (.ts, .py, .go, ...)
+       |
+       v
+  File Discovery (5-layer ignore model)
+       |
+       v
+  +----- AST parse? -----+
+  | YES                NO |
+  v                       v
+  AstCodeSplitter     LangChainCodeSplitter
+  (tree-sitter)       (fallback)
+  + breadcrumbs            |
+  |                        |
+  +--------+---------------+
+           v
+      CodeChunk { content, path, lines, breadcrumbs }
+           |
+           v
+      embedBatch(size=100) --> Milvus upsert
+      deterministic IDs: hash(path + lines + content)
 
-**Run Integration Tests:**
-*(Validates end-to-end indexing, semantic retrieval, and incremental sync)*
-```bash
-pnpm test:integration
+
+SEARCH
+======
+  Query: "how does auth work?"
+       |
+       +---> embed(query) --> Dense vector search
+       |
+       +---> BM25 sparse keyword search
+       |
+       v
+  Reciprocal Rank Fusion (merge by rank position)
+       |
+       v
+  Ignore-pattern + extension filter
+       |
+       v
+  Adjacent chunk merging (contiguous lines -> single result)
+       |
+       v
+  VoyageAI Reranker (optional, capability-driven)
+       |
+       v
+  Response: path + lines + code + "Scope: class Foo > method bar"
+
+
+SYNC
+====
+  Trigger (3-min timer / fs watcher / manual)
+       |
+       v
+  Hash all files --> diff against stored Merkle DAG
+       |
+       v
+  Delta: { added[], removed[], modified[] }
+       |
+       v
+  Delete old chunks --> re-embed changed files --> update DAG
 ```
-
-**Run MCP Server Locally:**
-```bash
-pnpm --filter @zokizuan/satori-mcp start
-```
-
-### Key Environment Variables
-- `EMBEDDING_PROVIDER` (OpenAI, VoyageAI, Gemini, Ollama)
-- `EMBEDDING_MODEL`
-- `EMBEDDING_OUTPUT_DIMENSION` (e.g. VoyageAI supported: `256 | 512 | 1024 | 2048`)
-- `OPENAI_API_KEY` / `VOYAGEAI_API_KEY` / `GEMINI_API_KEY`
-- `MILVUS_ADDRESS` & `MILVUS_TOKEN`
-- `VOYAGEAI_RERANKER_MODEL` (optional)
-- `MCP_ENABLE_WATCHER` (optional, default `true`)
 
 ---
 
-## 🔧 Startup Troubleshooting
+## Codebase State Machine
 
-If your MCP client reports startup/handshake failure (`initialize response` closed):
-1. Pin a published version in config (for example `@zokizuan/satori-mcp@1.0.2`).
-2. Use a larger startup timeout for cold starts (`180000` recommended).
-3. Remove local link shadowing so `npx` resolves the published package:
-   - `npm unlink -g @zokizuan/satori-mcp`
-4. Restart MCP client after config changes.
+```
+                 manage_index(create)
+  not_found ---------------------------> indexing
+      ^                                   |     |
+      |                              success   failure
+      |                                   |     |
+      |                                   v     v
+      +-- clear -------- indexed    indexfailed
+      |                     |            |
+      |                    sync      create again
+      |                     |
+      |                     v
+      +-- clear --- sync_completed --+
+      |                     |        |
+      |                     +--------+
+      |                    sync succeeds
+      |
+      |             fingerprint mismatch
+      |             (from indexed or sync_completed)
+      |                     |
+      |                     v
+      +-- create --- requires_reindex
+         (force)     Blocks: search, sync
+                     Recovery: create with force=true
+```
+
+---
+
+## Configuration
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `EMBEDDING_PROVIDER` | yes | — | `OpenAI`, `VoyageAI`, `Gemini`, or `Ollama` |
+| `EMBEDDING_MODEL` | yes | — | Model name for your provider |
+| `MILVUS_ADDRESS` | yes | — | Milvus/Zilliz endpoint |
+| `MILVUS_TOKEN` | yes | — | Milvus/Zilliz auth token |
+| `EMBEDDING_OUTPUT_DIMENSION` | no | provider default | Output dimension |
+| `VOYAGEAI_RERANKER_MODEL` | no | — | Reranker model (e.g. `rerank-2.5`) |
+| `HYBRID_MODE` | no | `true` | Dense + BM25 hybrid search |
+| `READ_FILE_MAX_LINES` | no | `1000` | Truncation guard for `read_file` |
+| `MCP_ENABLE_WATCHER` | no | `true` | Auto-sync on file changes |
+| `MCP_WATCH_DEBOUNCE_MS` | no | `5000` | Watcher debounce interval |
+
+## Tool Reference
+
+| Tool | Description |
+|---|---|
+| `manage_index` | Create, sync, check status, or clear a codebase index |
+| `search_codebase` | Hybrid semantic search with optional reranking and query-time excludes |
+| `read_file` | Read file content with optional line ranges and truncation guard |
+| `list_codebases` | List all tracked codebases and their indexing state |
+
+Full parameter docs: [`packages/mcp/README.md`](packages/mcp/README.md)
+
+## Project Structure
+
+```
+packages/
+  core/                     @zokizuan/satori-core
+    src/
+      core/context.ts         orchestrator (index, search, sync)
+      splitter/               AstCodeSplitter + LangChain fallback
+      embedding/              OpenAI, VoyageAI, Gemini, Ollama
+      vectordb/               Milvus gRPC + REST adapters
+      sync/                   FileSynchronizer (Merkle DAG)
+  mcp/                      @zokizuan/satori-mcp
+    src/
+      index.ts                MCP server bootstrap + stdio safety
+      core/handlers.ts        tool execution + fingerprint gate
+      core/snapshot.ts        state machine + fingerprint storage
+      core/sync.ts            background sync + watcher
+      tools/                  per-tool modules (Zod schemas)
+tests/
+  integration/              end-to-end index + search + sync
+```
+
+## Development
+
+```bash
+pnpm install                                    # install dependencies
+pnpm build                                      # build all packages
+pnpm test:integration                           # run integration tests
+pnpm --filter @zokizuan/satori-mcp start        # run MCP server locally
+```
+
+## Troubleshooting
+
+If MCP startup fails (`initialize response` closed):
+
+1. Pin a specific version: `@zokizuan/satori-mcp@1.0.2`
+2. Increase startup timeout to `180000` (cold start package download)
+3. Remove local link shadowing: `npm unlink -g @zokizuan/satori-mcp`
+4. Restart MCP client
+
+## Tech Stack
+
+| Category | Technology |
+|---|---|
+| Runtime | Node.js 20+, TypeScript, pnpm monorepo |
+| Code Parsing | tree-sitter (AST + breadcrumbs), LangChain (fallback) |
+| Embeddings | OpenAI, VoyageAI, Google Gemini, Ollama |
+| Vector Store | Milvus / Zilliz Cloud (gRPC + REST) |
+| Search | Dense + BM25 hybrid, RRF, VoyageAI reranker |
+| Protocol | MCP (Model Context Protocol) over stdio |
+| Sync | Merkle DAG + chokidar filesystem watcher |
+| Schemas | Zod -> JSON Schema |
 
 ## License
-MIT © Hamza (@ham-zax)
 
----
-*Note: Core system abstractions inspired by the [Zilliz Claude Context](https://github.com/zilliztech/claude-context) architecture.*
+MIT © Hamza (@ham-zax)

@@ -63,6 +63,7 @@ CLAUDE.md
 
 .cursor/*
 .serena/
+.omc/
 
 evaluation/repos
 repos

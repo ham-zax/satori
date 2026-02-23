@@ -1,255 +1,307 @@
 # Satori Architecture
 
-Visual-first architecture summary for the `satori` monorepo.
-Satori means "sudden insight"; this architecture is designed to deliver that insight with strict safety and predictable agent behavior.
+Visual-first architecture reference for the Satori monorepo.
 
-Source basis:
-- Manual code discovery (`rg`, targeted reads).
-- Serena symbol tracing (classes, methods, flows).
+---
 
-## 1) System Overview
+## 1. System Overview
 
-```text
-MCP Client
-  |
-  v
-+---------------------------------------------------------------+
-| MCP Server (`packages/mcp`)                                  |
-|  - Tool Registry (4 tools)                                   |
-|  - ToolHandlers                                               |
-|  - CapabilityResolver                                         |
-|  - SnapshotManager / SyncManager                              |
-+---------------------------+-----------------------------------+
-                            |
-                            v
-+---------------------------------------------------------------+
-| Core Engine (`packages/core`)                                |
-|  - Context orchestrator                                      |
-|  - Splitter (AST + LangChain fallback)                       |
-|  - Embedding providers                                       |
-|  - Vector DB adapters (Milvus gRPC / REST)                   |
-+---------------------+----------------------+------------------+
-                      |                      |
-                      v                      v
-      +------------------------------+   +----------------------+
-      | `~/.satori` local state      |   | Milvus / Zilliz      |
-      | snapshot + merkle sync files |   | dense/hybrid indexes |
-      +------------------------------+   +----------------------+
+```
+  MCP Client (Claude, Cursor, Windsurf, etc.)
+       |
+       | JSON-RPC over stdio
+       v
+  +------------------------------------------------------------------+
+  |  MCP Server  (@zokizuan/satori-mcp)                              |
+  |                                                                   |
+  |  +---------------+  +------------------+  +-------------------+  |
+  |  | Tool Registry |  | Capability       |  | Snapshot          |  |
+  |  | (4 tools)     |->| Resolver         |  | Manager v3        |  |
+  |  | Zod -> JSON   |  | fast|std|slow    |  | fingerprint gate  |  |
+  |  +-------+-------+  +------------------+  +--------+----------+  |
+  |          |                                          |             |
+  |  +-------v-------+              +-------------------v----------+  |
+  |  | Tool          |              | SyncManager                  |  |
+  |  | Handlers      |              | 3-min loop + chokidar watch  |  |
+  |  +-------+-------+              +---------------+--------------+  |
+  |          |    +-------------+                    |                |
+  |          |    | VoyageAI    |                    |                |
+  |          +--->| Reranker    |                    |                |
+  |          |    | (optional)  |                    |                |
+  |          |    +-------------+                    |                |
+  +----------+--------------------------------------|----------------+
+             |                                      |
+             v                                      v
+  +------------------------------------------------------------------+
+  |  Core Engine  (@zokizuan/satori-core)                             |
+  |                                                                   |
+  |  +-----------------+  +--------------+  +---------------------+  |
+  |  | Context         |  | Splitter     |  | FileSynchronizer    |  |
+  |  | Orchestrator    |->| Layer        |  | (Merkle DAG)        |  |
+  |  |                 |  +--------------+  +----------+----------+  |
+  |  | indexCodebase() |  | AstCode      |             |             |
+  |  | semanticSearch()|  |  (tree-sitter)|             |             |
+  |  | reindexByChange |  | LangChain    |             |             |
+  |  +--------+--------+  |  (fallback)  |             |             |
+  |           |            +--------------+             |             |
+  |  +--------v--------------------------+              |             |
+  |  | Embedding Providers               |              |             |
+  |  | OpenAI | VoyageAI | Gemini | Ollama              |             |
+  |  +--------+--------------------------+              |             |
+  |  +--------v--------------------------+              |             |
+  |  | VectorDatabase Adapters           |              |             |
+  |  | Milvus gRPC | Milvus REST         |              |             |
+  |  +--------+--------------------------+              |             |
+  +------------+----------------------------------------+-------------+
+               |                                        |
+               v                                        v
+       Milvus / Zilliz                      ~/.satori/
+       (dense + hybrid                     mcp-codebase-snapshot.json
+        collections)                       merkle/<md5(path)>.json
 ```
 
-Control/state paths:
-- `~/.satori/mcp-codebase-snapshot.json`
-- `~/.satori/merkle/<md5(codebasePath)>.json`
+**Boundary:** The MCP Server owns state management (snapshots, sync scheduling, capability resolution). The Core Engine owns computation (chunking, embedding, vector operations). Core has zero MCP awareness and can be used as a standalone library.
 
-## 2) Repository Layout
+---
 
-```text
+## 2. Repository Layout
+
+```
 packages/
   core/
     src/
-      core/context.ts
-      splitter/
-      embedding/
-      vectordb/
-      sync/
-      config/
-      utils/
+      core/context.ts           orchestrator
+      splitter/                  AstCodeSplitter + LangChain fallback
+      embedding/                 OpenAI, VoyageAI, Gemini, Ollama
+      vectordb/                  Milvus gRPC + REST adapters
+      sync/                      FileSynchronizer (Merkle DAG)
+      config/                    defaults, extensions, ignore patterns
+      utils/                     shared utilities
   mcp/
     src/
-      index.ts
-      core/
-      tools/
-      telemetry/
-      config.ts
-      embedding.ts
+      index.ts                   bootstrap + stdio safety
+      core/handlers.ts           tool execution + fingerprint gate
+      core/snapshot.ts           state machine + fingerprint storage
+      core/sync.ts               background sync + watcher
+      tools/                     per-tool modules (Zod schemas)
+      telemetry/                 structured search telemetry
+      config.ts                  env -> typed config
+      embedding.ts               provider factory
 tests/
-  integration/
+  integration/                   end-to-end index + search + sync
 ```
 
-## 3) Core Engine (`packages/core`)
+---
 
-### 3.1 Core Responsibilities
+## 3. Core Engine
 
-```text
-Context (`core/context.ts`)
-  -> build effective config (defaults + ctor + env)
-  -> indexCodebase / reindexByChange
-  -> semanticSearch (dense or hybrid)
+### 3.1 Context Orchestrator
+
+```
+Context (core/context.ts)
+  -> build effective config (defaults + constructor + env)
+  -> indexCodebase: scan -> split -> embed -> insert
+  -> semanticSearch: embed query -> dense/hybrid search -> filter -> merge
+  -> reindexByChange: delete old chunks -> re-embed changed files
   -> manage per-collection synchronizers
 ```
 
-### 3.2 Core Runtime Knobs
+### 3.2 Runtime Knobs
 
-```text
-HYBRID_MODE default: true
-Collection names:
-  - dense : code_chunks_<md5(path)[0..8]>
-  - hybrid: hybrid_code_chunks_<md5(path)[0..8]>
-Chunk cap per indexing run: 450000
-Embedding batch size: EMBEDDING_BATCH_SIZE (default 100)
+```
+HYBRID_MODE           default: true
+EMBEDDING_BATCH_SIZE  default: 100
+Chunk cap per run:    450,000
+
+Collection naming:
+  dense:  code_chunks_<md5(path)[0..8]>
+  hybrid: hybrid_code_chunks_<md5(path)[0..8]>
 ```
 
 ### 3.3 File Discovery and Ignore Model
 
-Effective matching source order:
-1. built-ins (`DEFAULT_SUPPORTED_EXTENSIONS`, `DEFAULT_IGNORE_PATTERNS`)
-2. constructor overrides
-3. env custom values (`CUSTOM_EXTENSIONS`, `CUSTOM_IGNORE_PATTERNS`)
-4. repo root `.*ignore` files
-5. global `~/.satori/.satoriignore`
+5-layer ignore resolution (each layer additive):
 
-### 3.4 Splitter, Embedding, Vector Abstractions
+1. Built-in defaults (`DEFAULT_SUPPORTED_EXTENSIONS`, `DEFAULT_IGNORE_PATTERNS`)
+2. Constructor overrides
+3. Env custom values (`CUSTOM_EXTENSIONS`, `CUSTOM_IGNORE_PATTERNS`)
+4. Repo-root ignore files (`.gitignore`, `.satoriignore`)
+5. Global ignore (`~/.satori/.satoriignore`)
 
-```text
+### 3.4 Splitter + Embedding + Vector Abstractions
+
+```
 Splitter:
-  - AstCodeSplitter (tree-sitter)
-  - LangChainCodeSplitter (fallback / generic)
+  AstCodeSplitter       tree-sitter (TS, JS, PY, Java, Go, C++, Rust, C#, Scala)
+  LangChainCodeSplitter fallback for unsupported languages
 
 Embedding providers:
-  - OpenAI, VoyageAI, Gemini, Ollama
-  - common contract: detectDimension, embed, embedBatch
+  OpenAI, VoyageAI, Gemini, Ollama
+  Common contract: detectDimension(), embed(), embedBatch()
 
 VectorDatabase adapters:
-  - MilvusVectorDatabase (gRPC)
-  - MilvusRestfulVectorDatabase (HTTP)
+  MilvusVectorDatabase        (gRPC)
+  MilvusRestfulVectorDatabase (HTTP)
 ```
 
-### 3.5 Breadcrumb Metadata (Index-Time)
+### 3.5 Breadcrumb Metadata
 
-`AstCodeSplitter` writes `metadata.breadcrumbs` at index time with strict bounds:
-- scope depth capped at 2 (`outer > inner`).
-- each breadcrumb label truncated to max length.
-- label extraction is signature-focused for TS/JS/PY scopes.
-
-Important behavior:
-- Scope breadcrumbs are emitted for TS/JS/PY label mappers.
-- Other languages/files can still be chunked and searched, but typically omit scope breadcrumbs.
-- Breadcrumbs are metadata for retrieval/rendering context and are not a separate semantic signal source.
+`AstCodeSplitter` writes `metadata.breadcrumbs` at index time:
+- Scope depth capped at 2 (`outer > inner`)
+- Each label truncated to max length
+- Label extraction is signature-focused for TS/JS/PY scopes
+- Non-breadcrumbed files (Markdown, HTML) are still indexed and searchable — they omit scope annotation in results
 
 ### 3.6 Dense vs Hybrid Storage
 
-```text
+```
 Dense collection fields:
-  id, vector, content, relativePath, startLine, endLine, fileExtension, metadata
+  id, vector, content, relativePath, startLine, endLine,
+  fileExtension, metadata
 
 Hybrid collection adds:
   sparse_vector + BM25 function on content
   dense+sparse index path with RRF rerank strategy
 ```
 
-### 3.7 Incremental Sync (Core)
+### 3.7 Incremental Sync
 
-`FileSynchronizer` keeps file hashes + Merkle DAG per codebase and returns:
-- `added`
-- `removed`
-- `modified`
+```
+FileSynchronizer:
+  1. Hash all current files (SHA-256)
+  2. Load stored Merkle DAG from ~/.satori/merkle/<hash>.json
+  3. Diff current vs stored
+  4. Return { added[], removed[], modified[] }
 
-`reindexByChange` behavior:
-- removed/modified -> delete old chunks
-- added/modified -> re-index
+reindexByChange:
+  removed/modified -> delete old chunks from Milvus
+  added/modified   -> re-split, re-embed, insert
+```
 
-## 4) MCP Runtime (`packages/mcp`)
+---
+
+## 4. MCP Runtime
 
 ### 4.1 Bootstrap
 
 `packages/mcp/src/index.ts`:
-- starts MCP stdio server.
-- redirects `console.log`/`console.warn` to `stderr` (protects MCP JSON on `stdout`).
-- builds runtime fingerprint.
-- wires `Context`, `SnapshotManager`, `SyncManager`, `ToolHandlers`, optional `VoyageAIReranker`.
-- starts background sync loop.
-- enables watcher mode by default (`MCP_ENABLE_WATCHER=true`) with debounce (`MCP_WATCH_DEBOUNCE_MS`, default `5000`).
+- Starts MCP stdio server
+- Redirects `console.log`/`console.warn` to `stderr` (protects JSON-RPC on stdout)
+- Builds runtime fingerprint
+- Wires Context, SnapshotManager, SyncManager, ToolHandlers, optional VoyageAI Reranker
+- Starts background sync loop
+- Enables watcher mode by default (`MCP_ENABLE_WATCHER=true`)
 
-### 4.2 Public Tool Surface
+### 4.2 Tool Surface
 
-```text
-manage_index    create|sync|status|clear
-search_codebase semantic search (+ optional rerank)
-read_file       safe read with optional line ranges
-list_codebases  tracked state summary
+```
+manage_index     create | sync | status | clear
+search_codebase  semantic search (+ optional rerank)
+read_file        safe read with optional line ranges
+list_codebases   tracked state summary
 ```
 
-Tool schemas:
-- defined in Zod
-- converted to JSON Schema for MCP `ListTools`
+Tool schemas defined in Zod, converted to JSON Schema for MCP `ListTools`.
 
-### 4.3 ToolHandlers Highlights
+### 4.3 ToolHandlers
 
-- absolute path normalization/validation.
-- cloud/local reconciliation before key operations.
-- fingerprint compatibility gate before searchable access.
-- background indexing kickoff for `manage_index(action=create)`.
-- subdirectory smart-resolution to indexed parent root for search.
+- Absolute path normalization/validation
+- Cloud/local reconciliation before key operations
+- Fingerprint compatibility gate before searchable access
+- Background indexing kickoff for `manage_index(action=create)`
+- Subdirectory smart-resolution to indexed parent root for search
 
-### 4.4 Snapshot and Gate Model
+### 4.4 Capability Model
 
-Snapshot status states:
-- `indexing`
-- `indexed`
-- `indexfailed`
-- `sync_completed`
-- `requires_reindex`
-
-Format behavior:
-- v1/v2 migrate to v3 on load.
-
-Gate reasons:
-- legacy assumed fingerprint
-- missing fingerprint
-- fingerprint mismatch
-
-### 4.5 SyncManager Model
-
-`ensureFreshness` includes:
-- in-flight coalescing (per codebase).
-- freshness throttling.
-- shared path for periodic/manual/read-time sync.
-
-Schedule:
-- initial delay: ~5s.
-- repeat: every 3 minutes.
-
-### 4.6 Capability Model
-
-```text
-Embedding locality/profile:
-  Ollama              -> local / slow
-  VoyageAI or OpenAI  -> cloud / fast
-  others              -> cloud / standard
-
-Search limits:
-  fast     default 50, max 50
-  standard default 25, max 30
-  slow     default 10, max 15
 ```
+Provider mapping:
+  Ollama              -> local / slow     -> limit 10, max 15
+  VoyageAI, OpenAI    -> cloud / fast     -> limit 50, max 50
+  Others (Gemini)     -> cloud / standard -> limit 25, max 30
 
 Rerank decision:
-- `useReranker=true` -> force (error if unavailable)
-- `useReranker=false` -> disable
-- omitted -> capability-driven default
+  useReranker=true    -> force (error if unavailable)
+  useReranker=false   -> disable
+  omitted             -> capability-driven default
+```
 
-### 4.7 Search Telemetry
+### 4.5 Search Telemetry
 
-`search_codebase` emits structured telemetry to `stderr`:
-- event/tool/profile
-- query length
-- requested limit
+`search_codebase` emits structured JSON telemetry to `stderr`:
+- event, tool, profile
+- query length, requested limit
 - results before/after filter
-- excluded-by-ignore
-- reranker used
-- latency
-- optional error
+- excluded-by-ignore count
+- reranker used (boolean)
+- latency (ms)
 
-## 5) Runtime Flows
+---
 
-### 5.1 Create Index (`manage_index:create`)
+## 5. State Machine
 
-```text
+### 5.1 Snapshot Lifecycle
+
+```
+                 manage_index(create)
+  not_found ---------------------------> indexing
+      ^                                   |     |
+      |                              success   failure
+      |                                   |     |
+      |                                   v     v
+      +-- clear -------- indexed    indexfailed
+      |                     |            |
+      |                    sync      create again
+      |                     |
+      |                     v
+      +-- clear --- sync_completed --+
+      |                     |        |
+      |                     +--------+
+      |                    sync succeeds
+      |
+      |             fingerprint mismatch
+      |             (from indexed or sync_completed)
+      |                     |
+      |                     v
+      +-- create --- requires_reindex
+         (force)
+                     Blocks: search, sync
+                     Recovery: create with force=true
+```
+
+### 5.2 Fingerprint Contract
+
+```
+{
+  embeddingProvider    "VoyageAI"
+  embeddingModel       "voyage-4-large"
+  embeddingDimension   1024
+  vectorStoreProvider  "Milvus"
+  schemaVersion        "dense_v2" | "hybrid_v2"
+}
+```
+
+Mismatch on any field -> `requires_reindex`.
+Legacy v1/v2 snapshots auto-migrate on load but get flagged as legacy.
+
+### 5.3 Gate Reasons
+
+- Legacy assumed fingerprint (pre-v3 snapshot)
+- Missing fingerprint field
+- Provider, model, or dimension mismatch
+- Schema version mismatch (`*_v1` -> `*_v2`)
+
+---
+
+## 6. Runtime Flows
+
+### 6.1 Create Index
+
+```
 Client
   |
   v
 ToolHandlers.handleIndexCodebase
-  |-- validate path + capacity
+  |-- validate path + collection capacity
   |-- sync snapshot <-> cloud
   |-- snapshot -> indexing
   `-- startBackgroundIndexing (async)
@@ -257,129 +309,101 @@ ToolHandlers.handleIndexCodebase
 Background:
   load ignore patterns
   init FileSynchronizer
-  prepare collection
-  scan -> split -> embedBatch -> insert
+  prepare collection (dense or hybrid)
+  scan -> split (AST/LangChain) -> embedBatch -> insert
   periodic progress saves
 
-terminal:
-  success -> indexed
+Terminal:
+  success -> indexed (with fingerprint)
   failure -> indexfailed
 ```
 
-### 5.2 Search (`search_codebase`)
+### 6.2 Search
 
-```text
+```
 search_codebase
-  -> rerank policy decision
+  -> rerank policy decision (CapabilityResolver)
   -> handleSearchCode
-      -> fingerprint gate
-      -> ensureFreshness(sync-on-read)
-      -> semantic/hybrid search
-      -> filter + format or raw payload
-      -> merge nearby same-scope chunks
-      -> render optional `🧬 Scope: ...` for breadcrumbed results
+      -> fingerprint gate check
+      -> ensureFreshness (sync-on-read)
+      -> semantic/hybrid search (Milvus)
+      -> filter by ignore patterns + extensions
+      -> merge adjacent same-file chunks
+      -> render "Scope: class Foo > method bar" for breadcrumbed results
   -> optional VoyageAI rerank
   -> telemetry emit
 ```
 
-### 5.3 Sync (`manage_index:sync`)
+### 6.3 Sync
 
-```text
-validate indexed + gate
-  -> reindexByChange
-  -> snapshot -> sync_completed (+delta counts)
+```
+validate indexed + fingerprint gate
+  -> FileSynchronizer.sync() (Merkle DAG diff)
+  -> reindexByChange(delta)
+  -> snapshot -> sync_completed (with delta counts)
 ```
 
-### 5.4 Clear (`manage_index:clear`)
+### 6.4 Incremental Sync Detail
 
-```text
-validate tracked state
-  -> drop collection
-  -> delete merkle snapshot
-  -> remove codebase from snapshot map
+```
+Trigger (3-min timer / chokidar event / manual sync call)
+     |
+     v
+SyncManager.ensureFreshness(codebasePath)
+     |
+     +-- In-flight coalescing: already syncing this path? -> skip
+     +-- Freshness throttle: synced recently? -> skip
+     |
+     v
+FileSynchronizer.sync()
+     |
+     +-- 1. Hash all current files
+     +-- 2. Load stored Merkle DAG
+     +-- 3. Diff current vs stored
+     |
+     v
+Delta: { added[], removed[], modified[] }
+     |
+     +--- No changes? -> skip
+     |
+     +--- Changes found:
+          |
+          +-- Delete chunks for removed + modified files
+          +-- Re-split + re-embed added + modified files
+          +-- Insert new chunks into Milvus
+          +-- Persist updated Merkle DAG
+          +-- Snapshot -> sync_completed
 ```
 
-### 5.5 Read/List
+---
 
-```text
-read_file:
-  - optional start_line/end_line
-  - truncation guard by READ_FILE_MAX_LINES (default 1000)
+## 7. Data Lineage
 
-list_codebases:
-  - grouped by status
 ```
-
-## 6) State and Data Contracts
-
-### 6.1 Codebase State Machine
-
-```text
-not_found --create--> indexing --success--> indexed --sync--> sync_completed
-   ^                    |  \                               |
-   |                    |   \--failure--> indexfailed ----+
-   |                    |
-   |                    \--incompatible--> requires_reindex
-   |                                       |
-   +---------------- clear / create(force)-+
-```
-
-### 6.2 Vector Document Contract
-
-```text
-id: deterministic from path + line range + chunk content
-document fields: content, vector, relativePath, startLine, endLine, fileExtension, metadata
-metadata includes source context (language/codebase, etc.)
-```
-
-### 6.3 Fingerprint Contract
-
-```text
-embeddingProvider
-embeddingModel
-embeddingDimension
-vectorStoreProvider
-schemaVersion (dense_v2 | hybrid_v2)
-```
-
-Mismatch -> `requires_reindex`.
-
-### 6.4 Data Lineage
-
-```text
 file -> CodeChunk -> EmbeddingVector -> VectorDocument -> Milvus row
      -> search result -> MCP response snippet
+
+VectorDocument fields:
+  id:            deterministic hash(path + lineRange + content)
+  vector:        float32[dimension]
+  content:       chunk text
+  relativePath:  file path relative to codebase root
+  startLine:     first line of chunk
+  endLine:       last line of chunk
+  fileExtension: .ts, .py, etc.
+  metadata:      breadcrumbs, language, codebase path
 ```
 
-## 7) Operational Notes and Edge Cases
+---
 
-- Search can run while indexing; results may be incomplete.
-- Unsupported or failed AST parsing falls back to LangChain splitting.
-- Scope line rendering (`🧬 Scope`) is expected on breadcrumbed TS/JS/PY results; non-breadcrumbed results omit it.
-- REST adapter currently treats `checkCollectionLimit` as non-blocking (`true`).
-- Search-time exclude patterns are normalized/validated; invalid patterns generate warnings.
+## 8. Extension Seams
 
-## 8) Testing Coverage
-
-Integration (`tests/integration/context.integration.test.mjs`):
-- index creation and persistence.
-- semantic retrieval quality signal.
-- incremental add/modify/remove behavior.
-- ignore + negation pattern behavior.
-
-MCP unit tests:
-- capability/rerank decision behavior.
-- telemetry emission path.
-- snapshot fingerprint gate behavior.
-- tool registry/schema invariants.
-
-## 9) Extension Seams
-
-```text
-New embedding provider  -> implement Embedding
-New vector backend      -> implement VectorDatabase
-Tooling changes         -> tools/* + core/handlers.ts
+```
+New embedding provider  -> implement Embedding interface
+New vector backend      -> implement VectorDatabase interface
+New tool                -> add to tools/* + register in core/handlers.ts
 Search policy tuning    -> CapabilityResolver + rerank decision
+New language support    -> add tree-sitter grammar to AstCodeSplitter
 ```
 
 Key files:
@@ -391,3 +415,19 @@ Key files:
 - `packages/mcp/src/core/snapshot.ts`
 - `packages/mcp/src/core/sync.ts`
 - `packages/mcp/src/tools/*`
+
+---
+
+## 9. Testing
+
+Integration (`tests/integration/context.integration.test.mjs`):
+- Index creation and persistence
+- Semantic retrieval quality signal
+- Incremental add/modify/remove behavior
+- Ignore + negation pattern behavior
+
+MCP unit tests:
+- Capability/rerank decision behavior
+- Telemetry emission path
+- Snapshot fingerprint gate behavior
+- Tool registry/schema invariants

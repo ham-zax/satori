@@ -1,16 +1,16 @@
 # @zokizuan/satori-core
 
-Core semantic indexing engine for Satori.
-Satori means "sudden insight"; this package is the indexing/search foundation that produces that insight.
+Core indexing and retrieval engine used by Satori.
+This package handles the heavy lifting behind indexing, semantic retrieval, and incremental sync.
 
 Maintained by: `ham-zax` (`@zokizuan`).
 
 ## Responsibilities
 
-- codebase file discovery + filtering
-- code splitting (AST/LangChain)
+- codebase file discovery and filtering
+- code splitting (AST + LangChain fallback)
 - embedding generation
-- vector persistence/search via Milvus
+- vector persistence and search via Milvus
 - incremental sync via Merkle-based change detection
 
 ## Install

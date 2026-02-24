@@ -1,13 +1,11 @@
 # Satori Architecture
 
-Visual-first architecture summary for the `satori` monorepo. Satori means "sudden insight"; this architecture is designed to deliver that insight with strict safety and predictable agent behavior.
-
-> **Architected by:** Hamza (@ham-zax)
+This document explains how Satori handles indexing, search, and sync in production MCP workflows.
 
 ---
 
 ## 1. Macro System Flow
-This diagram illustrates the macro-level request lifecycle, from the MCP Client, through the Satori internal handlers and capability resolvers, down to the Core Engine and local state.
+This diagram shows the request path from MCP client to server runtime, then into the core engine and storage layers.
 
 ```mermaid
 graph TD
@@ -54,12 +52,12 @@ graph TD
 
     Client -- "Call Tool: search_codebase" --> Server
 ```
-*Explanation:* The architecture is cleanly decoupled. The MCP server layer handles tool registration, telemetry, capability throttling, and state routing (snapshots). It passes clean inputs to the Core layer, which acts as a library orchestrating splitting, embedding, and vector insertion.
+*Explanation:* Responsibilities are separated on purpose. The MCP layer handles tool routing, capability decisions, telemetry, and snapshot state. The core layer handles chunking, embedding, and vector operations.
 
 ---
 
 ## 2. Snapshot State Machine
-This diagram maps the strict lifecycle of a codebase index within Satori, preventing autonomous agents from acting on corrupted or mismatched data.
+This diagram shows the codebase lifecycle and the `requires_reindex` gate that blocks mismatched or legacy index states.
 
 ```mermaid
 stateDiagram-v2
@@ -88,12 +86,12 @@ stateDiagram-v2
     indexfailed --> [*] : manage_index:clear
     requires_reindex --> [*] : manage_index:clear
 ```
-*Explanation:* The core safety mechanism of Satori. Autonomous agents run into the `requires_reindex` gate immediately if the server starts with a different configuration (e.g., switching from OpenAI 1536-dim to Gemini 768-dim) than what is persisted in `~/.satori/mcp-codebase-snapshot.json`.
+*Explanation:* This is the main safety barrier. If runtime configuration differs from the stored snapshot fingerprint (for example, OpenAI 1536-dim to Gemini 768-dim), searchable access is blocked until reindex.
 
 ---
 
 ## 3. Data Lineage Pipeline
-This diagram traces how a raw file on disk is transformed into searchable semantic chunks using Tree-sitter and embedding models.
+This diagram traces how a file on disk becomes searchable chunks in Milvus.
 
 ```mermaid
 flowchart LR
@@ -119,7 +117,7 @@ flowchart LR
     
     K -.-> L[search_codebase Result]
 ```
-*Explanation:* Satori prioritizes structural chunking. Tree-sitter extracts logical units (like methods or classes). If a unit is massive, it splits character-by-character but crucially retains the "Scope Breadcrumbs" (e.g., `class UserService > method updateUserProfile`) so the LLM understands exactly where the chunk came from, even if it lacks surrounding code.
+*Explanation:* Satori prioritizes structural chunking. Tree-sitter extracts methods/classes first. If a unit is too large, it is sub-split while retaining scope breadcrumbs (for example, `class UserService > method updateUserProfile`) so results stay anchored.
 
 ---
 

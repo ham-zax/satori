@@ -1,589 +1,1029 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Satori | Perfect Code Retrieval</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=JetBrains+Mono:wght@100;400;700&display=swap" rel="stylesheet">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Satori | Agent-Safe Code Retrieval via MCP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@100;400;700&display=swap"
+      rel="stylesheet"
+    />
     <style>
-        :root {
-            --bg: #000000;
-            --fg: #ffffff;
-            --accent: #DFFF00; /* Radioactive Chartreuse */
-            --border-width: 1px;
-            --border-color: rgba(255, 255, 255, 0.15);
-            --serif: 'Cormorant Garamond', serif;
-            --mono: 'JetBrains Mono', monospace;
+      :root {
+        --bg: #000000;
+        --panel: rgba(10, 10, 10, 0.85);
+        --fg: #ffffff;
+        --muted: rgba(255, 255, 255, 0.55);
+        --line: rgba(255, 255, 255, 0.15);
+        --accent: #dfff00; /* Radioactive Chartreuse */
+        --accent-dim: rgba(223, 255, 0, 0.15);
+        --serif: "Cormorant Garamond", serif;
+        --sans: "Inter", sans-serif;
+        --mono: "JetBrains Mono", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        cursor: crosshair;
+      }
+
+      body {
+        min-height: 100vh;
+        color: var(--fg);
+        font-family: var(--sans);
+        background-color: var(--bg);
+        background-image:
+          linear-gradient(var(--line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--line) 1px, transparent 1px);
+        background-size: 50px 50px;
+        background-position: center center;
+        line-height: 1.6;
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      ::selection {
+        background: var(--accent);
+        color: #060607;
+      }
+
+      .canvas-wrap {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.2;
+        z-index: 0;
+      }
+
+      #vector-canvas {
+        width: 100%;
+        height: 100%;
+      }
+
+      .container {
+        position: relative;
+        z-index: 1;
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 1rem 1rem 4rem;
+      }
+
+      nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+        border: 1px solid var(--line);
+        padding: 1.2rem 1.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        font-size: 0.75rem;
+        font-family: var(--mono);
+        background: var(--bg);
+        backdrop-filter: blur(10px);
+        position: sticky;
+        top: 1rem;
+        z-index: 100;
+      }
+
+      .nav-brand {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        border-radius: 50%;
+        box-shadow: 0 0 10px var(--accent);
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.6;
+          transform: scale(0.9);
+        }
+      }
+
+      .nav-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+      }
+
+      a {
+        color: var(--fg);
+        text-decoration: none;
+      }
+
+      a:hover {
+        color: var(--accent);
+      }
+
+      .hero {
+        margin-top: 2rem;
+        border: 1px solid var(--line);
+        padding: 5rem 2rem;
+        background: var(--bg);
+        backdrop-filter: blur(10px);
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        position: relative;
+        transition: border-color 0.3s;
+      }
+
+      .hero:hover {
+        border-color: var(--accent);
+        box-shadow: 0 0 40px var(--accent-dim);
+      }
+
+      .hero h1 {
+        font-family: var(--serif);
+        font-size: clamp(4rem, 12vw, 9rem);
+        line-height: 0.8;
+        font-weight: 300;
+        letter-spacing: -0.04em;
+        transition:
+          color 0.2s,
+          text-shadow 0.2s;
+      }
+
+      .hero h1:hover {
+        color: var(--accent);
+        text-shadow: 0 0 60px var(--accent-dim);
+      }
+
+      .hero h2 {
+        margin-top: 1.5rem;
+        font-family: var(--sans);
+        font-size: clamp(1.2rem, 3vw, 1.8rem);
+        font-weight: 300;
+        max-width: 800px;
+      }
+
+      .hero p {
+        margin-top: 1rem;
+        color: var(--muted);
+        max-width: 700px;
+        font-weight: 300;
+        font-size: 1.1rem;
+      }
+
+      .hero-meta {
+        margin-top: 2rem;
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+      }
+
+      .install-strip {
+        margin-top: 1rem;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        padding: 3rem 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+        position: relative;
+      }
+
+      .install-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        border-bottom: 1px dotted var(--line);
+        padding-bottom: 1rem;
+      }
+
+      .install-title {
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+      }
+
+      .install-note {
+        font-family: var(--sans);
+        color: var(--muted);
+        font-size: 1rem;
+        font-weight: 300;
+      }
+
+      .config-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .config-card {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.01);
+        padding: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        transition: border-color 0.2s;
+      }
+
+      .config-card:hover {
+        border-color: rgba(223, 255, 0, 0.4);
+      }
+
+      .config-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+
+      code {
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        line-height: 1.5;
+        color: var(--fg);
+      }
+
+      pre {
+        margin: 0;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.6);
+        padding: 1rem;
+        overflow-x: auto;
+        font-size: 0.8rem;
+        line-height: 1.6;
+        white-space: pre;
+        color: var(--muted);
+      }
+
+      pre::-webkit-scrollbar {
+        height: 4px;
+      }
+
+      pre::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+      }
+
+      .btn {
+        border: 1px solid var(--fg);
+        background: transparent;
+        color: var(--fg);
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        padding: 0.6rem 1rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .btn:hover {
+        background: var(--accent);
+        color: var(--bg);
+        border-color: var(--accent);
+        box-shadow: 0 0 20px var(--accent-dim);
+        font-weight: 700;
+      }
+
+      .section {
+        margin-top: 1rem;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        padding: 4rem 2rem;
+        position: relative;
+        transition: border-left-color 0.3s;
+      }
+
+      .section:hover {
+        border-left: 2px solid var(--accent);
+      }
+
+      .section h3 {
+        font-family: var(--serif);
+        font-size: clamp(2rem, 5vw, 3.5rem);
+        font-weight: 300;
+        line-height: 0.95;
+        margin-bottom: 1rem;
+      }
+
+      .section-intro {
+        font-family: var(--sans);
+        font-size: 1.1rem;
+        font-weight: 300;
+        color: var(--muted);
+        max-width: 800px;
+        margin-bottom: 2.5rem;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.01);
+        padding: 2rem;
+        transition: all 0.2s;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .card:hover {
+        border-color: var(--accent);
+        background: rgba(223, 255, 0, 0.02);
+        transform: translateY(-2px);
+      }
+
+      .card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 1px;
+        background: var(--accent);
+        transform: scaleX(0);
+        transform-origin: left;
+        transition: transform 0.3s ease;
+      }
+
+      .card:hover::before {
+        transform: scaleX(1);
+      }
+
+      .card h4 {
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+        margin-bottom: 1rem;
+      }
+
+      .card p {
+        font-family: var(--sans);
+        color: var(--muted);
+        font-size: 0.95rem;
+        font-weight: 300;
+        line-height: 1.6;
+      }
+
+      .steps {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+      }
+
+      .step {
+        border-left: 2px solid var(--line);
+        padding-left: 1.5rem;
+        position: relative;
+        transition: border-color 0.2s;
+      }
+
+      .step:hover {
+        border-left-color: var(--accent);
+      }
+
+      .step strong {
+        display: block;
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+        margin-bottom: 0.5rem;
+      }
+
+      .step code {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-size: 0.8rem;
+        white-space: pre-wrap;
+        background: rgba(0, 0, 0, 0.4);
+        padding: 0.75rem;
+        border: 1px solid var(--line);
+      }
+
+      .step p {
+        font-family: var(--sans);
+        font-size: 0.95rem;
+        font-weight: 300;
+        color: var(--muted);
+      }
+
+      .accordion-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      details {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.01);
+        transition: border-color 0.2s;
+      }
+
+      details:hover {
+        border-color: rgba(223, 255, 0, 0.3);
+      }
+
+      summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 1.5rem;
+        font-family: var(--mono);
+        text-transform: uppercase;
+        font-size: 0.85rem;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+      }
+
+      summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .details-body {
+        border-top: 1px dotted var(--line);
+        padding: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .details-body pre {
+        margin: 0;
+      }
+
+      .terminal {
+        margin-top: 1rem;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.8);
+        backdrop-filter: blur(10px);
+        padding: 2rem;
+        height: 360px;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        position: relative;
+      }
+
+      .terminal::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background: var(--accent);
+      }
+
+      .terminal-head {
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        color: var(--muted);
+        border-bottom: 1px dotted var(--line);
+        padding-bottom: 1rem;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .terminal-body {
+        flex: 1;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        gap: 0.4rem;
+        font-family: var(--mono);
+      }
+
+      .line {
+        font-size: 0.8rem;
+        opacity: 0.4;
+        transition: all 0.1s;
+      }
+
+      .line::before {
+        content: ">> ";
+        opacity: 0.5;
+      }
+
+      .line.active {
+        color: var(--accent);
+        opacity: 1;
+        text-shadow: 0 0 8px var(--accent-dim);
+      }
+
+      .terminal-actions {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+        border-top: 1px dotted var(--line);
+        padding-top: 1rem;
+      }
+
+      .footer {
+        margin-top: 1rem;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        padding: 1.5rem 2rem;
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        font-family: var(--sans);
+        font-size: 0.85rem;
+        color: var(--muted);
+        font-weight: 300;
+      }
+
+      @media (max-width: 860px) {
+        .grid {
+          grid-template-columns: 1fr;
         }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            cursor: crosshair;
-        }
-
-        body {
-            background-color: var(--bg);
-            color: var(--fg);
-            font-family: var(--mono);
-            overflow-x: hidden;
-            -webkit-font-smoothing: antialiased;
-            text-rendering: optimizeLegibility;
-        }
-
-        ::selection {
-            background-color: var(--accent);
-            color: var(--bg);
-        }
-
-        /* GRID BACKGROUND / BORDERS */
-        .wrapper {
-            padding: 1rem;
-            min-height: 100vh;
-        }
-
-        .grid-container {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            border: var(--border-width) solid var(--border-color);
-            position: relative;
-        }
-
-        /* Nav */
-        nav {
-            grid-column: 1 / -1;
-            display: flex;
-            justify-content: space-between;
-            padding: 1.5rem 2rem;
-            border-bottom: var(--border-width) solid var(--border-color);
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.15em;
-            z-index: 10;
-        }
-        
-        nav a {
-            color: var(--fg);
-            text-decoration: none;
-            transition: color 0s;
-        }
-        nav a:hover {
-            color: var(--accent);
-            text-shadow: 0 0 10px var(--accent);
-        }
-
-        .status-container {
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            background-color: var(--fg);
-            border-radius: 50%;
-            transition: all 0.1s;
-        }
-
-        /* HERO SECTION */
         .hero {
-            grid-column: 1 / -1;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            padding: 12rem 2rem;
-            border-bottom: var(--border-width) solid var(--border-color);
-            position: relative;
-            overflow: hidden;
+          padding: 4rem 1.5rem;
         }
 
-        .hero h1 {
-            font-family: var(--serif);
-            font-size: clamp(5rem, 18vw, 18rem);
-            font-weight: 300;
-            letter-spacing: -0.04em;
-            line-height: 0.75;
-            margin-bottom: 2rem;
-            text-align: center;
-            position: relative;
-            z-index: 2;
-            transition: all 0.1s;
+        .section {
+          padding: 3rem 1.5rem;
         }
 
-        .hero h1:hover {
-            color: var(--accent);
-            text-shadow: 0 0 60px rgba(223, 255, 0, 0.3);
-            letter-spacing: -0.01em;
+        .config-grid {
+          grid-template-columns: 1fr;
         }
 
-        .hero p {
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.25em;
-            max-width: 600px;
-            text-align: center;
-            opacity: 0.6;
-            z-index: 2;
+        .install-strip {
+          padding: 2rem 1.5rem;
         }
 
-        /* FEATURE BLOCKS */
-        .block {
-            padding: 4rem 3rem;
-            border-right: var(--border-width) solid var(--border-color);
-            border-bottom: var(--border-width) solid var(--border-color);
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            transition: background 0.0s, color 0.0s;
-            position: relative;
-            min-height: 400px;
-            overflow: hidden;
-        }
-
-        .block:nth-child(even) {
-            border-right: none;
-        }
-
-        .block::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: var(--fg);
-            transform: scaleY(0);
-            transform-origin: bottom;
-            transition: transform 0.1s ease-out;
-            z-index: 0;
-        }
-
-        .block:hover::before {
-            transform: scaleY(1);
-            transform-origin: top;
-        }
-
-        .block:hover {
-            color: var(--bg);
-        }
-
-        .block:hover .block-title {
-            color: var(--bg);
-        }
-
-        .block-number {
-            font-size: 0.7rem;
-            opacity: 0.5;
-            margin-bottom: 2rem;
-            z-index: 1;
-        }
-
-        .block-title {
-            font-family: var(--serif);
-            font-size: clamp(3rem, 5vw, 4.5rem);
-            font-weight: 300;
-            line-height: 0.9;
-            margin-bottom: 1.5rem;
-            z-index: 1;
-            transition: color 0.1s;
-        }
-
-        .block-content {
-            font-size: 0.8rem;
-            line-height: 1.6;
-            opacity: 0.7;
-            z-index: 1;
-            max-width: 80%;
-        }
-
-        /* INTERACTIVE VECTOR SPACE */
-        #vector-canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 1;
-            pointer-events: none;
-            opacity: 0.4;
-        }
-
-        /* DATA TERMINAL */
         .terminal {
-            grid-column: 1 / -1;
-            padding: 2rem;
-            background: #000;
-            border-bottom: var(--border-width) solid var(--border-color);
-            font-size: 0.75rem;
-            line-height: 1.5;
-            color: var(--fg);
-            display: flex;
-            flex-direction: column;
-            height: 250px;
+          padding: 1.5rem;
+          height: 400px;
         }
-
-        .terminal-header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 1rem;
-            border-bottom: 1px dotted rgba(255,255,255,0.2);
-            padding-bottom: 0.5rem;
-            opacity: 0.5;
-        }
-
-        .terminal-body {
-            flex-grow: 1;
-            overflow-y: hidden;
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            justify-content: flex-end;
-        }
-        
-        .line {
-            opacity: 0.4;
-            transition: all 0s;
-            margin-bottom: 0.2rem;
-        }
-
-        .line::before {
-            content: '>> ';
-            opacity: 0.5;
-        }
-
-        .line.active {
-            color: var(--accent);
-            opacity: 1;
-            text-shadow: 0 0 8px var(--accent);
-        }
-
-        /* CTA */
-        .cta {
-            grid-column: 1 / -1;
-            padding: 8rem 2rem;
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            border-bottom: none;
-            position: relative;
-        }
-
-        .btn {
-            background: transparent;
-            color: var(--fg);
-            border: 1px solid var(--fg);
-            padding: 1.5rem 4rem;
-            font-family: var(--mono);
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.2em;
-            cursor: pointer;
-            transition: all 0.0s; 
-            position: relative;
-            overflow: hidden;
-            z-index: 2;
-        }
-
-        .btn:hover {
-            background: var(--accent);
-            color: var(--bg);
-            border-color: var(--accent);
-            box-shadow: 0 0 40px rgba(223, 255, 0, 0.4);
-            font-weight: 700;
-        }
-
-        .btn::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-            transition: left 0.5s ease;
-        }
-
-        .btn:hover::after {
-            left: 100%;
-            transition: left 0.2s ease;
-        }
-
-        /* Responsive */
-        @media (max-width: 900px) {
-            .grid-container {
-                grid-template-columns: 1fr;
-            }
-            .block {
-                border-right: none;
-            }
-            .hero {
-                padding: 8rem 1rem;
-            }
-        }
+      }
     </style>
-</head>
-<body>
-    <div class="wrapper">
-        <div class="grid-container">
-            <nav>
-                <div>Satori // @zokizuan/satori-core</div>
-                <div class="status-container">
-                    <div class="status-dot" id="status-dot"></div>
-                    <span id="status">SYS.IDLE</span>
-                </div>
-                <div><a href="https://github.com/zokizuan/satori" target="_blank">[ REPOSITORY ]</a></div>
-            </nav>
+  </head>
+  <body>
+    <div class="canvas-wrap">
+      <canvas id="vector-canvas"></canvas>
+    </div>
 
-            <section class="hero" id="hero">
-                <canvas id="vector-canvas"></canvas>
-                <h1 id="title">Satori</h1>
-                <p>Semantic code search for AI agents. Hybrid retrieval. Incremental sync.</p>
-            </section>
-
-            <section class="block" data-sector="01">
-                <div class="block-number">01 // CONTEXT ORCHESTRATOR</div>
-                <div class="block-title">High-Signal<br>Context</div>
-                <div class="block-content">
-                    Stop dumping noisy chunks into the context window. Agents receive precise, AST-aware context mapped directly from logical structure to vector space. High first-hit relevance.
-                </div>
-            </section>
-
-            <section class="block" data-sector="02">
-                <div class="block-number">02 // TOOL SURFACE</div>
-                <div class="block-title">Constrained<br>MCP</div>
-                <div class="block-content">
-                    A ruthlessly trimmed tool registry. 4 agent-safe operations defined by rigorous Zod schemas mapped to JSON-RPC over stdio. Predictable behavior. Zero hallucination drift.
-                </div>
-            </section>
-
-            <section class="block" data-sector="03">
-                <div class="block-number">03 // VECTOR STORAGE</div>
-                <div class="block-title">Milvus &<br>VoyageAI</div>
-                <div class="block-content">
-                    Engineered around Milvus vector databases with optional VoyageAI rerankers. Fast, scalable embeddings indexed seamlessly across extreme-scale codebases.
-                </div>
-            </section>
-
-            <section class="block" data-sector="04">
-                <div class="block-number">04 // MERKLE DAG</div>
-                <div class="block-title">Incremental<br>Sync</div>
-                <div class="block-content">
-                    Relentless 3-minute synchronization loops governed by Merkle DAG fingerprinting. Eradicates stale context immediately. The agent never hallucinates on shifted code.
-                </div>
-            </section>
-
-            <section class="terminal">
-                <div class="terminal-header">
-                    <span>[ SATORI_ENGINE_LOG ]</span>
-                    <span id="coord">VEC: [0.00, 0.00, 0.00]</span>
-                </div>
-                <div class="terminal-body" id="term-body">
-                    <div class="line">engine @zokizuan/satori-core loaded.</div>
-                    <div class="line">awaiting spatial input.</div>
-                </div>
-            </section>
-
-            <section class="cta">
-                <button class="btn" id="cta-btn">Initiate Engine</button>
-            </section>
+    <div class="container">
+      <nav>
+        <div class="nav-brand">
+          <div class="status-dot"></div>
+          <span>Satori // MCP Engine</span>
         </div>
+        <div class="nav-links">
+          <a href="https://github.com/ham-zax/satori" target="_blank"
+            >[ Repository ]</a
+          >
+          <a href="architecture.html">[ Architecture ]</a>
+          <a
+            href="https://github.com/ham-zax/satori/blob/main/README.md"
+            target="_blank"
+            >[ Docs ]</a
+          >
+        </div>
+      </nav>
+
+      <section class="hero">
+        <h1>Satori</h1>
+        <h2>Stop your AI from hallucinating bad code.</h2>
+        <p>
+          Satori is an MCP server that gives agents exact, structurally-aware
+          code retrieval. You get cleaner context, safer workflows, and faster
+          path-to-edit.
+        </p>
+        <div class="hero-meta">
+          MIT and free to use. Works with any MCP-capable agent or client.
+        </div>
+      </section>
+
+      <section class="install-strip">
+        <div class="install-top">
+          <div class="install-title">Try It In 30 Seconds</div>
+        </div>
+        <p class="install-note">Add this to your agent MCP config.</p>
+        <div class="config-grid">
+          <div class="config-card">
+            <div class="config-head">
+              <div class="install-title">For Codex (TOML)</div>
+              <button class="btn copy-btn" data-copy="codex-config-top">
+                Copy Codex
+              </button>
+            </div>
+            <pre><code id="codex-config-top">[mcp_servers.satori]
+command = "npx"
+args = ["-y", "@zokizuan/satori-mcp@1.0.2"]
+startup_timeout_ms = 180000
+env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
+          </div>
+          <div class="config-card">
+            <div class="config-head">
+              <div class="install-title">For OpenCode / Claude</div>
+              <button class="btn copy-btn" data-copy="claude-config-top">
+                Copy OpenCode/Claude
+              </button>
+            </div>
+            <pre><code id="claude-config-top">"satori": {
+  "type": "local",
+  "command": [
+    "npx",
+    "-y",
+    "@zokizuan/satori-mcp@1.0.2"
+  ],
+  "enabled": true,
+  "timeout": 30000,
+  "environment": {
+    "MILVUS_ADDRESS": "your-milvus-endpoint",
+    "MILVUS_TOKEN": "your-milvus-token",
+    "VOYAGEAI_API_KEY": "your-api-key",
+    "EMBEDDING_PROVIDER": "VoyageAI",
+    "EMBEDDING_MODEL": "voyage-4-large",
+    "EMBEDDING_OUTPUT_DIMENSION": "1024",
+    "VOYAGEAI_RERANKER_MODEL": "rerank-2.5"
+  }
+}</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h3>Why Teams Switch</h3>
+        <p class="section-intro">
+          Features are kept technical under the hood, but outcomes stay simple
+          and predictable.
+        </p>
+        <div class="grid">
+          <article class="card">
+            <h4>Predictable Agent Behavior</h4>
+            <p>
+              Exactly four MCP tools reduce routing confusion and loop-prone
+              workflows.
+            </p>
+          </article>
+          <article class="card">
+            <h4>Fresh Context</h4>
+            <p>
+              Incremental Merkle sync re-embeds only changed files. Polling and
+              watcher modes are supported.
+            </p>
+          </article>
+          <article class="card">
+            <h4>Better Retrieval Quality</h4>
+            <p>
+              AST-aware chunking plus dense+BM25 hybrid search with optional
+              reranking improves first-hit relevance.
+            </p>
+          </article>
+          <article class="card">
+            <h4>Safety Gates</h4>
+            <p>
+              Snapshot fingerprints block incompatible index states with
+              deterministic requires_reindex handling.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h3>How Agents Actually Use Satori</h3>
+        <p class="section-intro">
+          Satori is just an MCP tool. Any MCP-capable agent can call the same
+          workflow.
+        </p>
+        <div class="steps">
+          <div class="step">
+            <strong>1. Check Readiness</strong>
+            <code
+              >satori.list_codebases({})
+              satori.manage_index({"action":"status","path":"/abs/repo"})</code
+            >
+            <p>
+              Confirm the index exists and is synchronized before starting
+              retrieval.
+            </p>
+          </div>
+          <div class="step">
+            <strong>2. Run Semantic Queries</strong>
+            <code
+              >satori.search_codebase({"path":"/abs/repo","query":"architecture
+              guides","limit":8})</code
+            >
+            <p>
+              Review ranked results with relevance scores and file line ranges.
+            </p>
+          </div>
+          <div class="step">
+            <strong>3. Read Exact Spans And Recover Fast</strong>
+            <code
+              >satori.read_file({"path":"...","start_line":1,"end_line":220})</code
+            >
+            <p>
+              If a path is missing, run a new semantic query and pivot to the
+              current canonical path.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h3>Quickstart (Progressive Disclosure)</h3>
+        <p class="section-intro">
+          Start with the minimum. Open details only when you need them.
+        </p>
+        <div class="accordion-list">
+          <details>
+            <summary>MCP Config (Copy-Paste)</summary>
+            <div class="details-body">
+              <div class="config-grid">
+                <div class="config-card">
+                  <div class="config-head">
+                    <div class="install-title">Codex TOML</div>
+                    <button class="btn copy-btn" data-copy="codex-config">
+                      Copy
+                    </button>
+                  </div>
+                  <pre><code id="codex-config">[mcp_servers.satori]
+command = "npx"
+args = ["-y", "@zokizuan/satori-mcp@1.0.2"]
+startup_timeout_ms = 180000
+env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
+                </div>
+                <div class="config-card">
+                  <div class="config-head">
+                    <div class="install-title">OpenCode / Claude</div>
+                    <button class="btn copy-btn" data-copy="claude-config">
+                      Copy
+                    </button>
+                  </div>
+                  <pre><code id="claude-config">"satori": {
+  "type": "local",
+  "command": [
+    "npx",
+    "-y",
+    "@zokizuan/satori-mcp@1.0.2"
+  ],
+  "enabled": true,
+  "timeout": 30000,
+  "environment": {
+    "MILVUS_ADDRESS": "your-milvus-endpoint",
+    "MILVUS_TOKEN": "your-milvus-token",
+    "VOYAGEAI_API_KEY": "your-api-key",
+    "EMBEDDING_PROVIDER": "VoyageAI",
+    "EMBEDDING_MODEL": "voyage-4-large",
+    "EMBEDDING_OUTPUT_DIMENSION": "1024",
+    "VOYAGEAI_RERANKER_MODEL": "rerank-2.5"
+  }
+}</code></pre>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details>
+            <summary>Search Options (Rerank, Ignore, Filters)</summary>
+            <div class="details-body">
+              <pre><code># Rerank modes
+satori.search_codebase({"path":"/repo","query":"auth flow","useReranker":true})
+satori.search_codebase({"path":"/repo","query":"auth flow","useReranker":false})
+satori.search_codebase({"path":"/repo","query":"auth flow"})  # auto by capability
+
+# Ignore and excludes
+satori.search_codebase({"path":"/repo","query":"retry logic","useIgnoreFiles":true,"excludePatterns":["**/dist/**"]})
+
+# Filters and output shape
+satori.search_codebase({"path":"/repo","query":"validator","extensionFilter":[".ts",".py"],"limit":25,"showScores":true,"returnRaw":true})</code></pre>
+              <p>
+                Ignore behavior respects <code>.gitignore</code>,
+                <code>.satoriignore</code>, and global
+                <code>~/.satori/.satoriignore</code>.
+              </p>
+            </div>
+          </details>
+
+          <details>
+            <summary>
+              Real Agent Trace (Docs Investigation + Missing Path Recovery)
+            </summary>
+            <div class="details-body">
+              <pre><code>Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/CLI_COMMANDS.md","start_line":1,"end_line":220})
+Result: "QAP CLI Command Reference ..."
+
+Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"MASTER_AUDIT.md location current path archived","limit":10})
+Reranker: rerank-2.5 (auto-enabled by capability resolver)
+Hit: docs/research/PHASES_OVERVIEW.md:322-371
+
+Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220})
+Error: File not found
+
+Fallback:
+satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch","limit":10})
+satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620})</code></pre>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="terminal">
+        <div class="terminal-head">
+          <span>Satori Agent Trace Replay</span>
+          <span>SYS.READY</span>
+        </div>
+        <div class="terminal-body" id="term-body">
+          <div class="line">
+            ready. click replay to run a realistic transcript.
+          </div>
+          <div class="line">
+            pattern: status check, semantic search, read, fallback, recover.
+          </div>
+        </div>
+        <div class="terminal-actions">
+          <button class="btn" id="replay-btn">Replay Trace</button>
+          <button class="btn" id="clear-btn">Clear</button>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span
+          >Deep architecture:
+          <a href="architecture.html">architecture.html</a> +
+          ARCHITECTURE.md.</span
+        >
+        <span>Keep landing pages short. Keep docs deep.</span>
+      </footer>
     </div>
 
     <script>
-        // Interactive Vector Canvas Logic
-        const canvas = document.getElementById('vector-canvas');
-        const ctx = canvas.getContext('2d');
-        let width, height;
-        let particles = [];
-        let mouse = { x: -1000, y: -1000 };
-        const accentColor = '#DFFF00';
+      const canvas = document.getElementById("vector-canvas");
+      const ctx = canvas.getContext("2d");
+      let w = 0;
+      let h = 0;
+      let particles = [];
 
-        function resize() {
-            width = canvas.width = canvas.offsetWidth;
-            height = canvas.height = canvas.offsetHeight;
+      function resizeCanvas() {
+        w = canvas.width = window.innerWidth;
+        h = canvas.height = window.innerHeight;
+      }
+
+      class Particle {
+        constructor() {
+          this.x = Math.random() * w;
+          this.y = Math.random() * h;
+          this.vx = (Math.random() - 0.5) * 0.22;
+          this.vy = (Math.random() - 0.5) * 0.22;
+          this.r = Math.random() * 1.3 + 0.3;
         }
 
-        window.addEventListener('resize', resize);
-        
-        class Particle {
-            constructor() {
-                this.x = Math.random() * width;
-                this.y = Math.random() * height;
-                this.vx = (Math.random() - 0.5) * 0.3;
-                this.vy = (Math.random() - 0.5) * 0.3;
-                this.baseSize = Math.random() * 1.5 + 0.5;
-            }
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-
-                if (this.x < 0) this.x = width;
-                if (this.x > width) this.x = 0;
-                if (this.y < 0) this.y = height;
-                if (this.y > height) this.y = 0;
-
-                const dx = mouse.x - this.x;
-                const dy = mouse.y - this.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                // Sudden insight / alien repulse effect
-                if (dist < 200) {
-                    const angle = Math.atan2(dy, dx);
-                    const force = (200 - dist) / 200;
-                    this.x -= Math.cos(angle) * force * 5;
-                    this.y -= Math.sin(angle) * force * 5;
-                }
-            }
-            draw() {
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.baseSize, 0, Math.PI * 2);
-                ctx.fill();
-            }
+        step() {
+          this.x += this.vx;
+          this.y += this.vy;
+          if (this.x < 0) this.x = w;
+          if (this.x > w) this.x = 0;
+          if (this.y < 0) this.y = h;
+          if (this.y > h) this.y = 0;
         }
 
-        function initParticles() {
-            particles = [];
-            for (let i = 0; i < 200; i++) {
-                particles.push(new Particle());
-            }
+        draw() {
+          ctx.fillStyle = "rgba(246,246,246,0.55)";
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+          ctx.fill();
         }
+      }
 
-        function animate() {
-            ctx.clearRect(0, 0, width, height);
-            
-            for (let i = 0; i < particles.length; i++) {
-                particles[i].update();
-                particles[i].draw();
-                
-                for (let j = i + 1; j < particles.length; j++) {
-                    const dx = particles[i].x - particles[j].x;
-                    const dy = particles[i].y - particles[j].y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-
-                    if (dist < 100) {
-                        ctx.strokeStyle = `rgba(255, 255, 255, ${0.3 * (1 - dist/100)})`;
-                        ctx.lineWidth = 0.5;
-                        ctx.beginPath();
-                        ctx.moveTo(particles[i].x, particles[i].y);
-                        ctx.lineTo(particles[j].x, particles[j].y);
-                        ctx.stroke();
-                    }
-                }
-            }
-            requestAnimationFrame(animate);
+      function initParticles() {
+        particles = [];
+        for (let i = 0; i < 120; i++) {
+          particles.push(new Particle());
         }
+      }
 
-        // Setup Canvas
-        const hero = document.getElementById('hero');
-        resize();
+      function animate() {
+        ctx.clearRect(0, 0, w, h);
+        for (let i = 0; i < particles.length; i++) {
+          particles[i].step();
+          particles[i].draw();
+        }
+        requestAnimationFrame(animate);
+      }
+
+      resizeCanvas();
+      initParticles();
+      animate();
+      window.addEventListener("resize", () => {
+        resizeCanvas();
         initParticles();
-        animate();
+      });
 
-        // High kinetic reactivity
-        hero.addEventListener('mousemove', (e) => {
-            const rect = canvas.getBoundingClientRect();
-            mouse.x = e.clientX - rect.left;
-            mouse.y = e.clientY - rect.top;
+      const copyButtons = document.querySelectorAll(".copy-btn");
+      copyButtons.forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const targetId = btn.getAttribute("data-copy");
+          const source = document.getElementById(targetId);
+          if (!source) return;
+          try {
+            await navigator.clipboard.writeText(source.textContent);
+            const prev = btn.textContent;
+            btn.textContent = "Copied";
+            setTimeout(() => {
+              btn.textContent = prev;
+            }, 1000);
+          } catch {
+            const prev = btn.textContent;
+            btn.textContent = "Copy failed";
+            setTimeout(() => {
+              btn.textContent = prev;
+            }, 1200);
+          }
         });
+      });
 
-        hero.addEventListener('mouseleave', () => {
-            mouse.x = -1000;
-            mouse.y = -1000;
-        });
-
-        // Terminal Logic
-        const termBody = document.getElementById('term-body');
-        const coord = document.getElementById('coord');
-        const statusText = document.getElementById('status');
-        const statusDot = document.getElementById('status-dot');
-
-        document.addEventListener('mousemove', (e) => {
-            const normX = (e.clientX / window.innerWidth).toFixed(3);
-            const normY = (e.clientY / window.innerHeight).toFixed(3);
-            const normZ = Math.random().toFixed(3);
-            coord.innerText = `VEC: [${normX}, ${normY}, ${normZ}]`;
-        });
-
-        function addLog(text, isActive = false) {
-            const line = document.createElement('div');
-            line.className = `line ${isActive ? 'active' : ''}`;
-            line.innerText = text;
-            termBody.appendChild(line);
-            if (termBody.children.length > 8) {
-                termBody.removeChild(termBody.firstChild);
-            }
+      const termBody = document.getElementById("term-body");
+      function addLog(line, active = false) {
+        const row = document.createElement("div");
+        row.className = `line${active ? " active" : ""}`;
+        row.textContent = line;
+        termBody.appendChild(row);
+        if (termBody.children.length > 14) {
+          termBody.removeChild(termBody.firstChild);
         }
+      }
 
-        const blockLogs = {
-            "01": "AST chunking active. Context orchestrator mapping logical bounds.",
-            "02": "Mounting @zokizuan/satori-mcp... tools registered [4/4].",
-            "03": "Milvus DB connected. VoyageAI embedding pipeline engaged.",
-            "04": "Merkle DAG hash calculated. 0 files modified. Sync complete."
-        };
+      const traceLines = [
+        "Called satori.list_codebases({})",
+        "Ready: /home/hamza/repo/tradingview_ratio",
+        "Called satori.manage_index({action: status, path: /home/hamza/repo/tradingview_ratio})",
+        "sync completed | +0 added, -0 removed, ~0 modified",
+        "Called satori.search_codebase({query: architecture guides, limit: 8})",
+        "Reranker: rerank-2.5 auto-enabled",
+        "Hit: docs/investigations/project/structure.md:357-406",
+        "Called satori.read_file({path: archive/docs/northstar/core/INVARIANTS.md})",
+        "Error: File not found",
+        "Fallback query: northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch",
+        "Called satori.read_file({path: docs/INVARIANTS.md, start_line: 480, end_line: 620})",
+      ];
 
-        document.querySelectorAll('.block').forEach(block => {
-            block.addEventListener('mouseenter', () => {
-                const sector = block.getAttribute('data-sector');
-                addLog(`scanning sector ${sector}...`);
-                addLog(blockLogs[sector], true);
-                
-                statusText.innerText = 'SYS.INDEXING';
-                statusDot.style.backgroundColor = accentColor;
-                statusDot.style.boxShadow = `0 0 10px ${accentColor}`;
-            });
-            
-            block.addEventListener('mouseleave', () => {
-                const lines = termBody.querySelectorAll('.line');
-                if(lines.length > 0) lines[lines.length-1].classList.remove('active');
-                
-                statusText.innerText = 'SYS.IDLE';
-                statusDot.style.backgroundColor = 'var(--fg)';
-                statusDot.style.boxShadow = 'none';
-            });
-        });
+      const replayBtn = document.getElementById("replay-btn");
+      const clearBtn = document.getElementById("clear-btn");
+      let traceInterval;
 
-        const btn = document.getElementById('cta-btn');
-        let intervalId;
-        const ctaLogs = [
-            "REQ: search_codebase('where is auth refresh handled?')",
-            "VEC: converting query to dense vector representation...",
-            "DB: querying milvus collection 'satori_idx_01'",
-            "RERANK: voyageAI scoring 45 candidates...",
-            "HIT: src/auth/refresh.ts -> AST node #8812 (score: 0.992)",
-            "MCP: transmitting 1450 chars safe-context window.",
-            "SYS: cycle complete."
-        ];
+      replayBtn.addEventListener("click", () => {
+        clearInterval(traceInterval);
+        let i = 0;
+        traceInterval = setInterval(() => {
+          if (i >= traceLines.length) {
+            clearInterval(traceInterval);
+            return;
+          }
+          const active =
+            traceLines[i].startsWith("Hit:") ||
+            traceLines[i].startsWith("Error:");
+          addLog(traceLines[i], active);
+          i++;
+        }, 170);
+      });
 
-        btn.addEventListener('mouseenter', () => {
-            let i = 0;
-            statusText.innerText = 'SYS.RETRIEVING';
-            statusText.style.color = accentColor;
-            statusDot.style.backgroundColor = accentColor;
-            
-            clearInterval(intervalId);
-            intervalId = setInterval(() => {
-                if(i >= ctaLogs.length) {
-                    clearInterval(intervalId);
-                    return;
-                }
-                addLog(ctaLogs[i], i === 4); // Highlight the hit
-                i++;
-            }, 150);
-        });
-
-        btn.addEventListener('mouseleave', () => {
-            clearInterval(intervalId);
-            statusText.innerText = 'SYS.IDLE';
-            statusText.style.color = 'var(--fg)';
-            statusDot.style.backgroundColor = 'var(--fg)';
-        });
+      clearBtn.addEventListener("click", () => {
+        clearInterval(traceInterval);
+        termBody.innerHTML = "";
+        addLog("ready. click replay to run a realistic transcript.");
+        addLog(
+          "pattern: status check, semantic search, read, fallback, recover.",
+        );
+      });
     </script>
-</body>
+  </body>
 </html>

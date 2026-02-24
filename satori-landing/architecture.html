@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Satori Architecture | MCP Runtime + Core Engine</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@100;400;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #000000;
+        --panel: rgba(10, 10, 10, 0.85);
+        --fg: #ffffff;
+        --muted: rgba(255, 255, 255, 0.55);
+        --line: rgba(255, 255, 255, 0.15);
+        --accent: #dfff00; /* Radioactive Chartreuse */
+        --accent-dim: rgba(223, 255, 0, 0.15);
+        --serif: "Cormorant Garamond", serif;
+        --sans: "Inter", sans-serif;
+        --mono: "JetBrains Mono", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        cursor: crosshair;
+      }
+
+      body {
+        min-height: 100vh;
+        color: var(--fg);
+        font-family: var(--sans);
+        background-color: var(--bg);
+        background-image:
+          linear-gradient(var(--line) 1px, transparent 1px),
+          linear-gradient(90deg, var(--line) 1px, transparent 1px);
+        background-size: 50px 50px;
+        background-position: center center;
+        line-height: 1.6;
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      ::selection {
+        background: var(--accent);
+        color: #060607;
+      }
+
+      .container {
+        max-width: 1140px;
+        margin: 0 auto;
+        padding: 1rem 1rem 4rem;
+      }
+
+      nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+        border: 1px solid var(--line);
+        padding: 1.2rem 1.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        font-size: 0.75rem;
+        font-family: var(--mono);
+        background: var(--bg);
+        backdrop-filter: blur(10px);
+        position: sticky;
+        top: 1rem;
+        z-index: 100;
+      }
+
+      .nav-brand {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        border-radius: 50%;
+        box-shadow: 0 0 10px var(--accent);
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.6;
+          transform: scale(0.9);
+        }
+      }
+
+      .nav-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+      }
+
+      a {
+        color: var(--fg);
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      a:hover {
+        color: var(--accent);
+      }
+
+      .hero {
+        margin-top: 2rem;
+        border: 1px solid var(--line);
+        padding: 5rem 2rem;
+        background: var(--bg);
+        backdrop-filter: blur(10px);
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        position: relative;
+        transition: border-color 0.3s;
+      }
+
+      .hero:hover {
+        border-color: var(--accent);
+        box-shadow: 0 0 40px var(--accent-dim);
+      }
+
+      h1 {
+        font-family: var(--serif);
+        font-size: clamp(3rem, 8vw, 6rem);
+        line-height: 0.9;
+        font-weight: 300;
+        letter-spacing: -0.04em;
+        transition:
+          color 0.2s,
+          text-shadow 0.2s;
+      }
+
+      h1:hover {
+        color: var(--accent);
+        text-shadow: 0 0 60px var(--accent-dim);
+      }
+
+      .hero p {
+        margin-top: 1.5rem;
+        max-width: 800px;
+        color: var(--muted);
+        font-size: 1.1rem;
+        font-weight: 300;
+      }
+
+      .hero-meta {
+        margin-top: 2rem;
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+      }
+
+      .section {
+        margin-top: 1rem;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        padding: 4rem 2rem;
+        position: relative;
+        transition: border-left-color 0.3s;
+      }
+
+      .section:hover {
+        border-left: 2px solid var(--accent);
+      }
+
+      h2 {
+        font-family: var(--serif);
+        font-size: clamp(2rem, 5vw, 3.5rem);
+        line-height: 0.95;
+        font-weight: 300;
+        margin-bottom: 1rem;
+      }
+
+      .intro {
+        font-family: var(--sans);
+        font-size: 1.1rem;
+        font-weight: 300;
+        color: var(--muted);
+        max-width: 800px;
+        margin-bottom: 2.5rem;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.01);
+        padding: 2rem;
+        transition: all 0.2s;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .card:hover {
+        border-color: var(--accent);
+        background: rgba(223, 255, 0, 0.02);
+        transform: translateY(-2px);
+      }
+
+      .card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 1px;
+        background: var(--accent);
+        transform: scaleX(0);
+        transform-origin: left;
+        transition: transform 0.3s ease;
+      }
+
+      .card:hover::before {
+        transform: scaleX(1);
+      }
+
+      .card h3 {
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+        margin-bottom: 1rem;
+      }
+
+      .card p,
+      .card li {
+        font-family: var(--sans);
+        color: var(--muted);
+        font-size: 0.95rem;
+        font-weight: 300;
+        line-height: 1.6;
+      }
+
+      .card ul {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+
+      .card li {
+        padding-left: 1rem;
+        position: relative;
+      }
+
+      .card li::before {
+        content: ">>";
+        position: absolute;
+        left: 0;
+        color: var(--accent);
+        opacity: 0.5;
+        font-family: var(--mono);
+        font-size: 0.8rem;
+      }
+
+      .table-wrap {
+        margin-top: 2rem;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.01);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 760px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 1rem 1.5rem;
+        text-align: left;
+        vertical-align: top;
+        font-size: 0.9rem;
+        font-family: var(--sans);
+        font-weight: 300;
+      }
+
+      th {
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        font-size: 0.75rem;
+        color: var(--accent);
+        background: rgba(0, 0, 0, 0.4);
+        font-family: var(--mono);
+      }
+
+      td code {
+        color: var(--accent);
+        background: rgba(223, 255, 0, 0.05);
+        padding: 0.2rem 0.4rem;
+        font-size: 0.8rem;
+      }
+
+      pre {
+        margin: 1rem 0 0 0;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.6);
+        padding: 1rem;
+        overflow-x: auto;
+        font-size: 0.8rem;
+        line-height: 1.6;
+        white-space: pre;
+        color: var(--muted);
+      }
+
+      pre::-webkit-scrollbar,
+      .diagram-wrap::-webkit-scrollbar,
+      .table-wrap::-webkit-scrollbar {
+        height: 4px;
+      }
+
+      pre::-webkit-scrollbar-thumb,
+      .diagram-wrap::-webkit-scrollbar-thumb,
+      .table-wrap::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+      }
+
+      .diagram-wrap {
+        margin-top: 2rem;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.4);
+        padding: 2rem;
+        overflow-x: auto;
+        display: flex;
+        justify-content: center;
+      }
+
+      .mermaid {
+        min-width: 760px;
+      }
+
+      code {
+        font-family: var(--mono);
+      }
+
+      .details-list {
+        margin-top: 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      details {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.01);
+        transition: border-color 0.2s;
+      }
+
+      details:hover {
+        border-color: rgba(223, 255, 0, 0.3);
+      }
+
+      summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 1.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        font-size: 0.85rem;
+        font-family: var(--mono);
+        color: var(--accent);
+      }
+
+      summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .details-body {
+        border-top: 1px dotted var(--line);
+        padding: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .details-body pre {
+        margin-top: 0;
+      }
+
+      .btn {
+        border: 1px solid var(--fg);
+        background: transparent;
+        color: var(--fg);
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        padding: 0.6rem 1rem;
+        cursor: pointer;
+        width: fit-content;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+      }
+
+      .btn:hover {
+        background: var(--accent);
+        color: var(--bg);
+        border-color: var(--accent);
+        box-shadow: 0 0 20px var(--accent-dim);
+        font-weight: 700;
+      }
+
+      .footer {
+        margin-top: 1rem;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        padding: 1.5rem 2rem;
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        color: var(--muted);
+        font-size: 0.85rem;
+        font-family: var(--sans);
+        font-weight: 300;
+      }
+
+      @media (max-width: 920px) {
+        .grid-2 {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          padding: 4rem 1.5rem;
+        }
+
+        .section {
+          padding: 3rem 1.5rem;
+        }
+
+        .card {
+          padding: 1.5rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <nav>
+        <div class="nav-brand">
+          <div class="status-dot"></div>
+          <span>Satori // Architecture</span>
+        </div>
+        <div class="nav-links">
+          <a href="index.html">[ Landing ]</a>
+          <a href="https://github.com/ham-zax/satori" target="_blank"
+            >[ Repository ]</a
+          >
+          <a
+            href="https://github.com/ham-zax/satori/blob/main/ARCHITECTURE.md"
+            target="_blank"
+            >[ Source Doc ]</a
+          >
+          <a
+            href="https://github.com/ham-zax/satori/blob/main/packages/mcp/README.md"
+            target="_blank"
+            >[ MCP Spec ]</a
+          >
+        </div>
+      </nav>
+
+      <section class="hero">
+        <h1>Satori Architecture</h1>
+        <p>
+          Satori separates control plane and compute plane. The MCP runtime
+          handles tool contracts, state, sync orchestration, and access gates.
+          The core engine handles chunking, embedding, vector search, and delta
+          reindexing.
+        </p>
+        <div class="hero-meta">
+          4 tools. Hybrid retrieval. Snapshot gates. Merkle sync. MCP-compatible
+          for any agent.
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>System Overview</h2>
+        <p class="intro">
+          Request flow from MCP client to runtime, then to the core engine and
+          storage layers.
+        </p>
+        <div class="diagram-wrap">
+          <div class="mermaid">
+            flowchart TD client["MCP Client<br />Claude / Cursor / Windsurf /
+            Codex / custom"] mcp["@zokizuan/satori-mcp<br />Tool Registry (4
+            tools)<br />CapabilityResolver<br />SnapshotManager v3<br />SyncManager"]
+            core["@zokizuan/satori-core<br />Context Orchestrator<br />AST/LangChain
+            Splitter<br />Embeddings<br />Vector Adapters<br />FileSynchronizer
+            (Merkle DAG)"] milvus["Milvus / Zilliz"] local["~/.satori state"]
+            client --> mcp mcp --> core core --> milvus core --> local
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Runtime Boundaries</h2>
+        <div class="grid-2">
+          <article class="card">
+            <h3>MCP Runtime (@zokizuan/satori-mcp)</h3>
+            <ul>
+              <li>Defines the 4-tool MCP contract.</li>
+              <li>Validates tool inputs via Zod-derived JSON Schema.</li>
+              <li>Enforces snapshot fingerprint compatibility.</li>
+              <li>Schedules background sync and optional watcher sync.</li>
+              <li>
+                Applies capability-based defaults (including rerank behavior).
+              </li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Core Engine (@zokizuan/satori-core)</h3>
+            <ul>
+              <li>Parses files and splits code at structural boundaries.</li>
+              <li>Generates embeddings and performs dense/hybrid retrieval.</li>
+              <li>Maintains deterministic chunk IDs and line metadata.</li>
+              <li>Computes Merkle-diff file deltas for incremental reindex.</li>
+              <li>Stays MCP-agnostic and reusable outside MCP.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Tool Surface</h2>
+        <p class="intro">
+          Satori intentionally exposes only four MCP tools to reduce routing
+          ambiguity.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th>Purpose</th>
+                <th>Key Params</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>manage_index</code></td>
+                <td>Create/sync/status/clear index lifecycle.</td>
+                <td>
+                  <code>action</code>, <code>path</code>, optional
+                  <code>force</code>, <code>splitter</code>
+                </td>
+                <td>Primary state transition entrypoint.</td>
+              </tr>
+              <tr>
+                <td><code>search_codebase</code></td>
+                <td>Semantic search with optional rerank and filters.</td>
+                <td>
+                  <code>query</code>, <code>path</code>, <code>limit</code>,
+                  <code>useReranker</code>, filters
+                </td>
+                <td>Returns path/range/snippet/scope metadata.</td>
+              </tr>
+              <tr>
+                <td><code>read_file</code></td>
+                <td>Safe file reads with optional line ranges.</td>
+                <td>
+                  <code>path</code>, <code>start_line</code>,
+                  <code>end_line</code>
+                </td>
+                <td>Used for exact span verification before edits.</td>
+              </tr>
+              <tr>
+                <td><code>list_codebases</code></td>
+                <td>List tracked roots and state.</td>
+                <td>None</td>
+                <td>Fast readiness and inventory check.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>State And Safety</h2>
+        <p class="intro">
+          Snapshot state controls searchable access. Compatibility mismatches
+          are blocked until reindex.
+        </p>
+        <div class="diagram-wrap">
+          <div class="mermaid">
+            stateDiagram-v2 [*] --> not_found not_found --> indexing:
+            manage_index create indexing --> indexed: success indexing -->
+            indexfailed: failure indexed --> sync_completed: sync sync_completed
+            --> sync_completed: subsequent sync indexed --> requires_reindex:
+            fingerprint mismatch sync_completed --> requires_reindex:
+            fingerprint mismatch requires_reindex --> indexing: create
+            force=true indexed --> [*]: clear sync_completed --> [*]: clear
+            indexfailed --> [*]: clear requires_reindex --> [*]: clear
+          </div>
+        </div>
+        <div class="grid-2">
+          <article class="card">
+            <h3>Fingerprint Fields</h3>
+            <p>
+              <code
+                >{ provider, model, dimension, vectorStore, schemaVersion
+                }</code
+              >
+            </p>
+          </article>
+          <article class="card">
+            <h3>Safety Result</h3>
+            <p>No silent serving of stale or incompatible embeddings.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Search And Sync Behavior</h2>
+        <div class="details-list">
+          <details>
+            <summary>Search Pipeline</summary>
+            <div class="details-body">
+              <pre><code>query -> embed(query)
+  -> dense retrieval + BM25 sparse retrieval
+  -> RRF merge
+  -> ignore/filter pruning
+  -> adjacent chunk merge
+  -> optional reranker
+  -> formatted output (path + lines + snippet + scope)</code></pre>
+            </div>
+          </details>
+
+          <details>
+            <summary>Ignore Model</summary>
+            <div class="details-body">
+              <pre><code>1) Built-in defaults
+2) Constructor overrides
+3) Env custom values
+4) Repo ignore files (.gitignore, .satoriignore)
+5) Global ignore (~/.satori/.satoriignore)</code></pre>
+              <p class="intro">
+                Query-time filters add <code>excludePatterns</code>,
+                <code>extensionFilter</code>, and <code>useIgnoreFiles</code>.
+              </p>
+            </div>
+          </details>
+
+          <details>
+            <summary>Capability Resolver + Rerank</summary>
+            <div class="details-body">
+              <pre><code>useReranker=true  -> force (error if unavailable)
+useReranker=false -> disable
+omitted           -> capability default (auto)</code></pre>
+              <p class="intro">
+                Default limit ranges vary by profile (fast/standard/slow) and
+                provider locality.
+              </p>
+            </div>
+          </details>
+
+          <details>
+            <summary>Incremental Sync</summary>
+            <div class="details-body">
+              <pre><code>hash files -> diff Merkle DAG -> {added, removed, modified}
+removed/modified -> delete old chunks
+added/modified   -> split + embed + insert</code></pre>
+              <p class="intro">
+                Polling loop runs every 3 minutes, optional watcher reuses the
+                same delta pipeline.
+              </p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Transcript-Style Agent Calls</h2>
+        <p class="intro">
+          Representative MCP calls and output shape from real usage patterns.
+        </p>
+        <div style="margin: 2rem 0 1rem 0">
+          <button class="btn copy-btn" data-copy="trace-block">
+            Copy Trace
+          </button>
+        </div>
+        <pre
+          style="margin-top: 0"
+        ><code id="trace-block">Called satori.list_codebases({})
+Called satori.manage_index({"action":"status","path":"/home/hamza/repo/tradingview_ratio"})
+-> sync completed, +0/-0/~0
+
+Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"project documentation overview README architecture guides","limit":8})
+-> Reranker: rerank-2.5 (auto-enabled by capability resolver)
+-> Hit: docs/investigations/project/structure.md:357-406
+
+Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220})
+-> Error: File not found
+
+Fallback:
+Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch","limit":10})
+Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620})</code></pre>
+      </section>
+
+      <footer class="footer">
+        <span
+          >Source of truth: README.md, ARCHITECTURE.md, and
+          packages/mcp/README.md.</span
+        >
+        <span><a href="index.html">Back to Landing</a></span>
+      </footer>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <script>
+      if (window.mermaid) {
+        window.mermaid.initialize({
+          startOnLoad: true,
+          securityLevel: "loose",
+          theme: "dark",
+          themeVariables: {
+            background: "#0a0a0b",
+            primaryColor: "#111114",
+            primaryTextColor: "#f6f6f6",
+            primaryBorderColor: "rgba(246, 246, 246, 0.28)",
+            lineColor: "rgba(246, 246, 246, 0.55)",
+            secondaryColor: "#111114",
+            tertiaryColor: "#111114",
+          },
+        });
+      }
+
+      const copyButtons = document.querySelectorAll(".copy-btn");
+      copyButtons.forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-copy");
+          const source = document.getElementById(id);
+          if (!source) return;
+          const previous = btn.textContent;
+          try {
+            await navigator.clipboard.writeText(source.textContent);
+            btn.textContent = "Copied";
+          } catch {
+            btn.textContent = "Copy failed";
+          }
+          setTimeout(() => {
+            btn.textContent = previous;
+          }, 1100);
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -3,6 +3,8 @@ node_modules/
 *.pnp
 .pnp.js
 
+temp*.md
+
 # Production builds
 dist/
 build/

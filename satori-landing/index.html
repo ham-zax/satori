@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Satori | Perfect Code Retrieval</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=JetBrains+Mono:wght@100;400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #000000;
+            --fg: #ffffff;
+            --accent: #DFFF00; /* Radioactive Chartreuse */
+            --border-width: 1px;
+            --border-color: rgba(255, 255, 255, 0.15);
+            --serif: 'Cormorant Garamond', serif;
+            --mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            cursor: crosshair;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--fg);
+            font-family: var(--mono);
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+        }
+
+        ::selection {
+            background-color: var(--accent);
+            color: var(--bg);
+        }
+
+        /* GRID BACKGROUND / BORDERS */
+        .wrapper {
+            padding: 1rem;
+            min-height: 100vh;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            border: var(--border-width) solid var(--border-color);
+            position: relative;
+        }
+
+        /* Nav */
+        nav {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            padding: 1.5rem 2rem;
+            border-bottom: var(--border-width) solid var(--border-color);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            z-index: 10;
+        }
+        
+        nav a {
+            color: var(--fg);
+            text-decoration: none;
+            transition: color 0s;
+        }
+        nav a:hover {
+            color: var(--accent);
+            text-shadow: 0 0 10px var(--accent);
+        }
+
+        .status-container {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--fg);
+            border-radius: 50%;
+            transition: all 0.1s;
+        }
+
+        /* HERO SECTION */
+        .hero {
+            grid-column: 1 / -1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 12rem 2rem;
+            border-bottom: var(--border-width) solid var(--border-color);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero h1 {
+            font-family: var(--serif);
+            font-size: clamp(5rem, 18vw, 18rem);
+            font-weight: 300;
+            letter-spacing: -0.04em;
+            line-height: 0.75;
+            margin-bottom: 2rem;
+            text-align: center;
+            position: relative;
+            z-index: 2;
+            transition: all 0.1s;
+        }
+
+        .hero h1:hover {
+            color: var(--accent);
+            text-shadow: 0 0 60px rgba(223, 255, 0, 0.3);
+            letter-spacing: -0.01em;
+        }
+
+        .hero p {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.25em;
+            max-width: 600px;
+            text-align: center;
+            opacity: 0.6;
+            z-index: 2;
+        }
+
+        /* FEATURE BLOCKS */
+        .block {
+            padding: 4rem 3rem;
+            border-right: var(--border-width) solid var(--border-color);
+            border-bottom: var(--border-width) solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: background 0.0s, color 0.0s;
+            position: relative;
+            min-height: 400px;
+            overflow: hidden;
+        }
+
+        .block:nth-child(even) {
+            border-right: none;
+        }
+
+        .block::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--fg);
+            transform: scaleY(0);
+            transform-origin: bottom;
+            transition: transform 0.1s ease-out;
+            z-index: 0;
+        }
+
+        .block:hover::before {
+            transform: scaleY(1);
+            transform-origin: top;
+        }
+
+        .block:hover {
+            color: var(--bg);
+        }
+
+        .block:hover .block-title {
+            color: var(--bg);
+        }
+
+        .block-number {
+            font-size: 0.7rem;
+            opacity: 0.5;
+            margin-bottom: 2rem;
+            z-index: 1;
+        }
+
+        .block-title {
+            font-family: var(--serif);
+            font-size: clamp(3rem, 5vw, 4.5rem);
+            font-weight: 300;
+            line-height: 0.9;
+            margin-bottom: 1.5rem;
+            z-index: 1;
+            transition: color 0.1s;
+        }
+
+        .block-content {
+            font-size: 0.8rem;
+            line-height: 1.6;
+            opacity: 0.7;
+            z-index: 1;
+            max-width: 80%;
+        }
+
+        /* INTERACTIVE VECTOR SPACE */
+        #vector-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none;
+            opacity: 0.4;
+        }
+
+        /* DATA TERMINAL */
+        .terminal {
+            grid-column: 1 / -1;
+            padding: 2rem;
+            background: #000;
+            border-bottom: var(--border-width) solid var(--border-color);
+            font-size: 0.75rem;
+            line-height: 1.5;
+            color: var(--fg);
+            display: flex;
+            flex-direction: column;
+            height: 250px;
+        }
+
+        .terminal-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+            border-bottom: 1px dotted rgba(255,255,255,0.2);
+            padding-bottom: 0.5rem;
+            opacity: 0.5;
+        }
+
+        .terminal-body {
+            flex-grow: 1;
+            overflow-y: hidden;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+        }
+        
+        .line {
+            opacity: 0.4;
+            transition: all 0s;
+            margin-bottom: 0.2rem;
+        }
+
+        .line::before {
+            content: '>> ';
+            opacity: 0.5;
+        }
+
+        .line.active {
+            color: var(--accent);
+            opacity: 1;
+            text-shadow: 0 0 8px var(--accent);
+        }
+
+        /* CTA */
+        .cta {
+            grid-column: 1 / -1;
+            padding: 8rem 2rem;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border-bottom: none;
+            position: relative;
+        }
+
+        .btn {
+            background: transparent;
+            color: var(--fg);
+            border: 1px solid var(--fg);
+            padding: 1.5rem 4rem;
+            font-family: var(--mono);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            cursor: pointer;
+            transition: all 0.0s; 
+            position: relative;
+            overflow: hidden;
+            z-index: 2;
+        }
+
+        .btn:hover {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+            box-shadow: 0 0 40px rgba(223, 255, 0, 0.4);
+            font-weight: 700;
+        }
+
+        .btn::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s ease;
+        }
+
+        .btn:hover::after {
+            left: 100%;
+            transition: left 0.2s ease;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .grid-container {
+                grid-template-columns: 1fr;
+            }
+            .block {
+                border-right: none;
+            }
+            .hero {
+                padding: 8rem 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="grid-container">
+            <nav>
+                <div>Satori // @zokizuan/satori-core</div>
+                <div class="status-container">
+                    <div class="status-dot" id="status-dot"></div>
+                    <span id="status">SYS.IDLE</span>
+                </div>
+                <div><a href="https://github.com/zokizuan/satori" target="_blank">[ REPOSITORY ]</a></div>
+            </nav>
+
+            <section class="hero" id="hero">
+                <canvas id="vector-canvas"></canvas>
+                <h1 id="title">Satori</h1>
+                <p>Semantic code search for AI agents. Hybrid retrieval. Incremental sync.</p>
+            </section>
+
+            <section class="block" data-sector="01">
+                <div class="block-number">01 // CONTEXT ORCHESTRATOR</div>
+                <div class="block-title">High-Signal<br>Context</div>
+                <div class="block-content">
+                    Stop dumping noisy chunks into the context window. Agents receive precise, AST-aware context mapped directly from logical structure to vector space. High first-hit relevance.
+                </div>
+            </section>
+
+            <section class="block" data-sector="02">
+                <div class="block-number">02 // TOOL SURFACE</div>
+                <div class="block-title">Constrained<br>MCP</div>
+                <div class="block-content">
+                    A ruthlessly trimmed tool registry. 4 agent-safe operations defined by rigorous Zod schemas mapped to JSON-RPC over stdio. Predictable behavior. Zero hallucination drift.
+                </div>
+            </section>
+
+            <section class="block" data-sector="03">
+                <div class="block-number">03 // VECTOR STORAGE</div>
+                <div class="block-title">Milvus &<br>VoyageAI</div>
+                <div class="block-content">
+                    Engineered around Milvus vector databases with optional VoyageAI rerankers. Fast, scalable embeddings indexed seamlessly across extreme-scale codebases.
+                </div>
+            </section>
+
+            <section class="block" data-sector="04">
+                <div class="block-number">04 // MERKLE DAG</div>
+                <div class="block-title">Incremental<br>Sync</div>
+                <div class="block-content">
+                    Relentless 3-minute synchronization loops governed by Merkle DAG fingerprinting. Eradicates stale context immediately. The agent never hallucinates on shifted code.
+                </div>
+            </section>
+
+            <section class="terminal">
+                <div class="terminal-header">
+                    <span>[ SATORI_ENGINE_LOG ]</span>
+                    <span id="coord">VEC: [0.00, 0.00, 0.00]</span>
+                </div>
+                <div class="terminal-body" id="term-body">
+                    <div class="line">engine @zokizuan/satori-core loaded.</div>
+                    <div class="line">awaiting spatial input.</div>
+                </div>
+            </section>
+
+            <section class="cta">
+                <button class="btn" id="cta-btn">Initiate Engine</button>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        // Interactive Vector Canvas Logic
+        const canvas = document.getElementById('vector-canvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+        let particles = [];
+        let mouse = { x: -1000, y: -1000 };
+        const accentColor = '#DFFF00';
+
+        function resize() {
+            width = canvas.width = canvas.offsetWidth;
+            height = canvas.height = canvas.offsetHeight;
+        }
+
+        window.addEventListener('resize', resize);
+        
+        class Particle {
+            constructor() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.vx = (Math.random() - 0.5) * 0.3;
+                this.vy = (Math.random() - 0.5) * 0.3;
+                this.baseSize = Math.random() * 1.5 + 0.5;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+
+                if (this.x < 0) this.x = width;
+                if (this.x > width) this.x = 0;
+                if (this.y < 0) this.y = height;
+                if (this.y > height) this.y = 0;
+
+                const dx = mouse.x - this.x;
+                const dy = mouse.y - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                // Sudden insight / alien repulse effect
+                if (dist < 200) {
+                    const angle = Math.atan2(dy, dx);
+                    const force = (200 - dist) / 200;
+                    this.x -= Math.cos(angle) * force * 5;
+                    this.y -= Math.sin(angle) * force * 5;
+                }
+            }
+            draw() {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.baseSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < 200; i++) {
+                particles.push(new Particle());
+            }
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            
+            for (let i = 0; i < particles.length; i++) {
+                particles[i].update();
+                particles[i].draw();
+                
+                for (let j = i + 1; j < particles.length; j++) {
+                    const dx = particles[i].x - particles[j].x;
+                    const dy = particles[i].y - particles[j].y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < 100) {
+                        ctx.strokeStyle = `rgba(255, 255, 255, ${0.3 * (1 - dist/100)})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.beginPath();
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(particles[j].x, particles[j].y);
+                        ctx.stroke();
+                    }
+                }
+            }
+            requestAnimationFrame(animate);
+        }
+
+        // Setup Canvas
+        const hero = document.getElementById('hero');
+        resize();
+        initParticles();
+        animate();
+
+        // High kinetic reactivity
+        hero.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+        });
+
+        hero.addEventListener('mouseleave', () => {
+            mouse.x = -1000;
+            mouse.y = -1000;
+        });
+
+        // Terminal Logic
+        const termBody = document.getElementById('term-body');
+        const coord = document.getElementById('coord');
+        const statusText = document.getElementById('status');
+        const statusDot = document.getElementById('status-dot');
+
+        document.addEventListener('mousemove', (e) => {
+            const normX = (e.clientX / window.innerWidth).toFixed(3);
+            const normY = (e.clientY / window.innerHeight).toFixed(3);
+            const normZ = Math.random().toFixed(3);
+            coord.innerText = `VEC: [${normX}, ${normY}, ${normZ}]`;
+        });
+
+        function addLog(text, isActive = false) {
+            const line = document.createElement('div');
+            line.className = `line ${isActive ? 'active' : ''}`;
+            line.innerText = text;
+            termBody.appendChild(line);
+            if (termBody.children.length > 8) {
+                termBody.removeChild(termBody.firstChild);
+            }
+        }
+
+        const blockLogs = {
+            "01": "AST chunking active. Context orchestrator mapping logical bounds.",
+            "02": "Mounting @zokizuan/satori-mcp... tools registered [4/4].",
+            "03": "Milvus DB connected. VoyageAI embedding pipeline engaged.",
+            "04": "Merkle DAG hash calculated. 0 files modified. Sync complete."
+        };
+
+        document.querySelectorAll('.block').forEach(block => {
+            block.addEventListener('mouseenter', () => {
+                const sector = block.getAttribute('data-sector');
+                addLog(`scanning sector ${sector}...`);
+                addLog(blockLogs[sector], true);
+                
+                statusText.innerText = 'SYS.INDEXING';
+                statusDot.style.backgroundColor = accentColor;
+                statusDot.style.boxShadow = `0 0 10px ${accentColor}`;
+            });
+            
+            block.addEventListener('mouseleave', () => {
+                const lines = termBody.querySelectorAll('.line');
+                if(lines.length > 0) lines[lines.length-1].classList.remove('active');
+                
+                statusText.innerText = 'SYS.IDLE';
+                statusDot.style.backgroundColor = 'var(--fg)';
+                statusDot.style.boxShadow = 'none';
+            });
+        });
+
+        const btn = document.getElementById('cta-btn');
+        let intervalId;
+        const ctaLogs = [
+            "REQ: search_codebase('where is auth refresh handled?')",
+            "VEC: converting query to dense vector representation...",
+            "DB: querying milvus collection 'satori_idx_01'",
+            "RERANK: voyageAI scoring 45 candidates...",
+            "HIT: src/auth/refresh.ts -> AST node #8812 (score: 0.992)",
+            "MCP: transmitting 1450 chars safe-context window.",
+            "SYS: cycle complete."
+        ];
+
+        btn.addEventListener('mouseenter', () => {
+            let i = 0;
+            statusText.innerText = 'SYS.RETRIEVING';
+            statusText.style.color = accentColor;
+            statusDot.style.backgroundColor = accentColor;
+            
+            clearInterval(intervalId);
+            intervalId = setInterval(() => {
+                if(i >= ctaLogs.length) {
+                    clearInterval(intervalId);
+                    return;
+                }
+                addLog(ctaLogs[i], i === 4); // Highlight the hit
+                i++;
+            }, 150);
+        });
+
+        btn.addEventListener('mouseleave', () => {
+            clearInterval(intervalId);
+            statusText.innerText = 'SYS.IDLE';
+            statusText.style.color = 'var(--fg)';
+            statusDot.style.backgroundColor = 'var(--fg)';
+        });
+    </script>
+</body>
+</html>

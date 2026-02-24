@@ -12,23 +12,66 @@
 
 Satori (悟り, "sudden insight") is built around one idea: give coding agents high-signal code context without dumping noisy chunks into the context window.
 
-This project is focused on production MCP workflows, so the repo is intentionally trimmed to the runtime engine. No UI extensions, no eval sidecars, just the core parts that index, search, and safely sync.
+Satori is my personal project and an active experimentation space for agent-safe retrieval. I use it to test ideas quickly, keep what works in real MCP workflows, and cut anything that adds noise.
+
+Because of that focus, the repo is intentionally trimmed to the runtime engine. No UI extensions, no eval sidecars, just the core parts that index, search, and safely sync.
 
 Two runtime packages:
 - `@zokizuan/satori-core` — indexing, AST chunking, embeddings, vector storage, incremental sync
 - `@zokizuan/satori-mcp` — MCP server with agent-safe tools
 
+## Why Try Satori
+
+If you only test one thing, test this:
+- Ask your agent a high-level question (`"where is auth refresh handled?"`) and see if it lands on the right files and lines quickly.
+
+What users usually notice first:
+- Better first-hit relevance for cross-module questions
+- Less duplicate/noisy context returned to the model
+- Faster path from search result to safe code edit (`search_codebase` -> `read_file`)
+- Simple, constrained MCP surface (4 tools) with predictable behavior
+
 ---
 
 ## Why I Built This
 
-After watching autonomous agents in real repos, the same three issues kept showing up:
+I started this to solve problems I kept hitting while running agents on real codebases:
 
-1. **Silent vector mismatch.** If an agent queries a 1536-dimensional index with a 768-dimensional model, retrieval quality collapses or the request fails.
-2. **Broken code chunks.** Naive splitters cut through function/class boundaries, so the model gets partial context and needs extra retrieval turns.
-3. **Wasteful full re-indexing.** Re-embedding entire repos for tiny changes burns budget and slows feedback loops.
+1. **Stale context (no reliable real-time sync).** Agents answered from old code after files changed.
+2. **Duplicate and redundant retrieval.** Results often repeated the same logic in slightly different chunks, wasting context window space.
+3. **Low-signal chunks.** Naive splitting broke important boundaries, so agents missed key details and needed extra search turns.
+4. **Weak intent-to-code discovery.** Agents relying on filename guesses or keyword grep often missed the real implementation path across modules.
 
-Satori addresses these directly with fingerprint-gated safety, AST-aware chunking, and Merkle-based incremental sync.
+Satori is my attempt to improve retrieval accuracy and finding quality, make workflows faster, and cut token/indexing costs with fingerprint safety, AST-aware chunking, and incremental sync.
+
+In practice, the agent flow is simple: ask `search_codebase` with intent-level queries (for example, "where is auth token refresh handled"), inspect the top scoped results, then use `read_file` on exact line ranges to reason and edit safely.
+
+It is open-source (MIT) and free to use. Your only runtime cost is the infrastructure you choose (embedding provider and vector store), and local-first setups are supported.
+
+## Start for Free
+
+You can run Satori with little to no cost:
+
+1. **Cloud free-tier path (easy start).**
+Use Milvus/Zilliz Cloud free tier + VoyageAI starter free tier/credits for embeddings.
+2. **Fully local path (no API spend).**
+Use local Milvus + Ollama embeddings.
+
+Suggested setup for most users:
+- Start with `VoyageAI + Zilliz` to get good quality quickly.
+- Move to local `Ollama` when you want zero API-key usage.
+
+Example provider switch:
+
+```bash
+# Cloud path
+EMBEDDING_PROVIDER=VoyageAI
+
+# Local path
+EMBEDDING_PROVIDER=Ollama
+```
+
+Free-tier availability and limits can change, so check current provider pricing pages before production use.
 
 ---
 
@@ -139,6 +182,17 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
 Results include file paths, line ranges, code snippets, and structural scope annotations.
 
 Cold starts can take time on first install. Keep `timeout` / `startup_timeout_ms` at `180000`.
+
+### Query Ideas for First Run
+
+Use intent-based queries (not filenames) to feel the difference:
+
+```text
+> search_codebase  query="where is auth token refresh handled"
+> search_codebase  query="trace request validation from route to service"
+> search_codebase  query="where are retries, backoff, and timeout policies defined"
+> search_codebase  query="find database write path for user deletion"
+```
 
 ---
 

@@ -1,6 +1,6 @@
 # Satori Architecture
 
-Visual-first architecture reference for the Satori monorepo.
+Reference for how requests, indexing, and sync flow through the Satori monorepo.
 
 ---
 
@@ -60,7 +60,7 @@ Visual-first architecture reference for the Satori monorepo.
         collections)                       merkle/<md5(path)>.json
 ```
 
-**Boundary:** The MCP Server owns state management (snapshots, sync scheduling, capability resolution). The Core Engine owns computation (chunking, embedding, vector operations). Core has zero MCP awareness and can be used as a standalone library.
+**Boundary:** The MCP server owns state and control flow (snapshots, sync scheduling, capability resolution). The core engine owns computation (chunking, embedding, vector operations). Core stays MCP-agnostic and can run as a standalone library.
 
 ---
 
@@ -120,7 +120,7 @@ Collection naming:
 
 ### 3.3 File Discovery and Ignore Model
 
-5-layer ignore resolution (each layer additive):
+Ignore rules are merged in five additive layers:
 
 1. Built-in defaults (`DEFAULT_SUPPORTED_EXTENSIONS`, `DEFAULT_IGNORE_PATTERNS`)
 2. Constructor overrides
@@ -201,7 +201,7 @@ read_file        safe read with optional line ranges
 list_codebases   tracked state summary
 ```
 
-Tool schemas defined in Zod, converted to JSON Schema for MCP `ListTools`.
+Tool schemas are defined in Zod, then converted to JSON Schema for MCP `ListTools`.
 
 ### 4.3 ToolHandlers
 

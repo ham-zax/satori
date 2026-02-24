@@ -1,13 +1,10 @@
 # Contributing
 
-## Scope
-
-This repository is intentionally scoped to:
-
+This repository is intentionally narrow. Keep changes focused on:
 - `packages/core`: semantic indexing engine
-- `packages/mcp`: MCP server integration
+- `packages/mcp`: MCP server runtime
 
-Do not add UI extension packages or parallel product surfaces in this repo.
+Do not add UI extensions, eval sidecars, or parallel product surfaces here.
 
 ## Setup
 
@@ -26,9 +23,9 @@ pnpm test:integration
 
 ## Architecture Guardrails
 
-- Keep orchestration logic in `src/core/` modules.
-- Keep provider/config code isolated from business flow.
-- Keep indexing, search, and sync behavior testable without external services.
+- Keep orchestration logic inside `src/core/` modules.
+- Keep provider/config plumbing isolated from business flow.
+- Keep indexing, search, and sync logic testable without external services.
 - Prefer small focused modules over monolithic handlers.
 
 ## Testing
@@ -40,11 +37,11 @@ pnpm build
 pnpm test:integration
 ```
 
-Integration tests must continue to validate:
+Integration tests should continue validating:
 
 1. indexing works end-to-end
 2. semantic search returns relevant snippets
-3. incremental sync correctly handles add/modify/remove changes
+3. incremental sync handles add/modify/remove changes correctly
 
 ## Pull Requests
 
@@ -54,4 +51,4 @@ Integration tests must continue to validate:
 
 ## License
 
-By contributing, you agree your changes are released under the MIT license.
+By contributing, you agree your changes are released under the MIT License.

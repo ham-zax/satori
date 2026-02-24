@@ -1,12 +1,10 @@
 # Contributing to @zokizuan/satori-core
 
-Thanks for your interest in contributing to the Satori core package!
-
-> 📖 **First time contributing?** Please read the [main contributing guide](../../CONTRIBUTING.md) first for general setup and workflow.
+Read the [main contributing guide](../../CONTRIBUTING.md) first for shared setup and workflow rules.
 
 ## Core Package Development
 
-This guide covers development specific to the core indexing engine.
+This file covers package-specific expectations for the core indexing engine.
 
 ## Development Workflow
 
@@ -21,9 +19,9 @@ pnpm dev:core
 
 ### Making Changes
 
-1. Create a new branch for your feature/fix
-2. Make your changes in the `src/` directory
-3. Follow the commit guidelines in the [main guide](../../CONTRIBUTING.md)
+1. Create a branch for your change.
+2. Make edits under `src/`.
+3. Follow commit and PR expectations from the [main guide](../../CONTRIBUTING.md).
 
 ## Project Structure
 
@@ -39,7 +37,7 @@ pnpm dev:core
 - Follow existing code style
 - Handle errors gracefully
 
-## Questions?
+## Support
 
-- **General questions**: See [main contributing guide](../../CONTRIBUTING.md)
-- **Core-specific issues**: Open an issue with the `core` label 
+- General questions: see the [main contributing guide](../../CONTRIBUTING.md)
+- Core-specific issues: open an issue with the `core` label

@@ -1,5 +1,6 @@
 import { FreshnessDecision } from "./sync.js";
 import { SearchGroupBy, SearchResultMode, SearchScope } from "./search-constants.js";
+import { FingerprintSource, IndexFingerprint } from "../config.js";
 
 export type StalenessBucket = "fresh" | "aging" | "stale" | "unknown";
 
@@ -60,6 +61,14 @@ export interface SearchGroupResult {
     };
 }
 
+export interface FingerprintCompatibilityDiagnostics {
+    runtimeFingerprint: IndexFingerprint;
+    indexedFingerprint?: IndexFingerprint;
+    fingerprintSource?: FingerprintSource;
+    reindexReason?: "legacy_unverified_fingerprint" | "fingerprint_mismatch" | "missing_fingerprint";
+    statusAtCheck?: "indexed" | "indexing" | "indexfailed" | "sync_completed" | "requires_reindex" | "not_found";
+}
+
 interface SearchBaseResponseEnvelope {
     status: "ok" | "requires_reindex" | "not_indexed";
     path: string;
@@ -71,6 +80,7 @@ interface SearchBaseResponseEnvelope {
     warnings?: string[];
     message?: string;
     hints?: Record<string, unknown>;
+    compatibility?: FingerprintCompatibilityDiagnostics;
 }
 
 export interface SearchGroupedResponseEnvelope extends SearchBaseResponseEnvelope {

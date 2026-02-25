@@ -33,6 +33,7 @@ function createHandlers(repoPath: string) {
     const snapshotManager = {
         getIndexedCodebases: () => [repoPath],
         getCodebaseInfo: () => undefined,
+        getCodebaseStatus: () => 'indexed',
         getCodebaseCallGraphSidecar: () => undefined,
         ensureFingerprintCompatibilityOnAccess: () => ({
             allowed: false,
@@ -79,6 +80,8 @@ test('handleCallGraph returns requires_reindex envelope with explicit freshnessD
         assert.equal(payload.hints.reindex.tool, 'manage_index');
         assert.equal(payload.hints.reindex.args.action, 'reindex');
         assert.equal(payload.hints.reindex.args.path, repoPath);
+        assert.equal(payload.compatibility.runtimeFingerprint.schemaVersion, 'hybrid_v3');
+        assert.equal(payload.compatibility.statusAtCheck, 'indexed');
     });
 });
 
@@ -92,6 +95,7 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
         const snapshotManager = {
             getIndexedCodebases: () => [],
             getCodebaseInfo: () => undefined,
+            getCodebaseStatus: () => 'requires_reindex',
             getCodebaseCallGraphSidecar: () => undefined,
             ensureFingerprintCompatibilityOnAccess: () => ({
                 allowed: true,
@@ -128,6 +132,8 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
         assert.equal(payload.reason, 'requires_reindex');
         assert.equal(payload.freshnessDecision.mode, 'skipped_requires_reindex');
         assert.equal(payload.hints.reindex.args.path, repoPath);
+        assert.equal(payload.compatibility.runtimeFingerprint.schemaVersion, 'hybrid_v3');
+        assert.equal(payload.compatibility.statusAtCheck, 'requires_reindex');
     });
 });
 

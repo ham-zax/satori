@@ -20,6 +20,7 @@ import {
 } from "./search-constants.js";
 import {
     CallGraphHint,
+    FingerprintCompatibilityDiagnostics,
     FileOutlineInput,
     FileOutlineResponseEnvelope,
     FileOutlineStatus,
@@ -201,6 +202,56 @@ export class ToolHandlers {
         };
     }
 
+    private summarizeFingerprint(fingerprint: IndexFingerprint): string {
+        return `${fingerprint.embeddingProvider}/${fingerprint.embeddingModel}/${fingerprint.embeddingDimension}/${fingerprint.vectorStoreProvider}/${fingerprint.schemaVersion}`;
+    }
+
+    private buildCompatibilityDiagnostics(codebasePath: string): FingerprintCompatibilityDiagnostics {
+        const info = typeof (this.snapshotManager as any).getCodebaseInfo === 'function'
+            ? this.snapshotManager.getCodebaseInfo(codebasePath)
+            : undefined;
+        const statusAtCheck = info?.status
+            || (typeof (this.snapshotManager as any).getCodebaseStatus === 'function'
+                ? this.snapshotManager.getCodebaseStatus(codebasePath)
+                : 'not_found');
+        const diagnostics: FingerprintCompatibilityDiagnostics = {
+            runtimeFingerprint: this.runtimeFingerprint,
+            statusAtCheck
+        };
+
+        if (info?.indexFingerprint) {
+            diagnostics.indexedFingerprint = info.indexFingerprint;
+        }
+
+        if (info?.fingerprintSource) {
+            diagnostics.fingerprintSource = info.fingerprintSource;
+        }
+
+        if (info?.reindexReason) {
+            diagnostics.reindexReason = info.reindexReason;
+        }
+
+        return diagnostics;
+    }
+
+    private buildCompatibilityStatusLines(codebasePath: string): string {
+        const diagnostics = this.buildCompatibilityDiagnostics(codebasePath);
+        let lines = `\n🧬 Runtime fingerprint: ${this.summarizeFingerprint(diagnostics.runtimeFingerprint)}`;
+        lines += diagnostics.indexedFingerprint
+            ? `\n🧬 Indexed fingerprint: ${this.summarizeFingerprint(diagnostics.indexedFingerprint)}`
+            : `\n🧬 Indexed fingerprint: unavailable`;
+
+        if (diagnostics.fingerprintSource) {
+            lines += `\n🧬 Fingerprint source: ${diagnostics.fingerprintSource}`;
+        }
+
+        if (diagnostics.reindexReason) {
+            lines += `\n🧬 Reindex reason: ${diagnostics.reindexReason}`;
+        }
+
+        return lines;
+    }
+
     private buildRequiresReindexPayload(
         codebasePath: string,
         detail?: string,
@@ -233,7 +284,8 @@ export class ToolHandlers {
             message: `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {\"action\":\"reindex\",\"path\":\"${codebasePath}\"}.`,
             hints: {
                 reindex: this.buildReindexHint(codebasePath)
-            }
+            },
+            compatibility: this.buildCompatibilityDiagnostics(codebasePath)
         };
     }
 
@@ -288,7 +340,8 @@ export class ToolHandlers {
             message: `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
             hints: {
                 reindex: this.buildReindexHint(codebasePath)
-            }
+            },
+            compatibility: this.buildCompatibilityDiagnostics(codebasePath)
         };
     }
 
@@ -2496,7 +2549,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             // Check indexing status using new status system
             const statusGate = this.enforceFingerprintGate(absolutePath);
             if (statusGate.blockedResponse) {
-                return statusGate.blockedResponse;
+                const statusMessage = this.buildReindexInstruction(absolutePath, statusGate.message);
+                const compatibilityStatus = this.buildCompatibilityStatusLines(absolutePath);
+                const pathInfo = codebasePath !== absolutePath
+                    ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
+                    : '';
+
+                return {
+                    content: [{
+                        type: "text",
+                        text: statusMessage + compatibilityStatus + pathInfo
+                    }]
+                };
             }
 
             const status = this.snapshotManager.getCodebaseStatus(absolutePath);
@@ -2574,11 +2638,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const pathInfo = codebasePath !== absolutePath
                 ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
                 : '';
+            const compatibilityStatus = this.buildCompatibilityStatusLines(absolutePath);
 
             return {
                 content: [{
                     type: "text",
-                    text: statusMessage + pathInfo
+                    text: statusMessage + compatibilityStatus + pathInfo
                 }]
             };
 

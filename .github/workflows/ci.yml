@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -29,6 +31,14 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
+
+      - name: Enforce MCP version bump for package-relevant changes
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '20.x'
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+        run: bash scripts/check-mcp-version-bump.sh
 
       - name: Configure Windows line endings
         if: matrix.os == 'windows-latest'

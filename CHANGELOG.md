@@ -2,6 +2,27 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Fingerprint Diagnostics and Version-Bump Guard
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.4.0`
+- `@zokizuan/satori-core`: `0.1.7`
+
+### Added
+- Added explicit compatibility diagnostics for migration visibility:
+  - `search_codebase` requires-reindex responses now include `compatibility` with runtime/index fingerprints and reindex metadata.
+  - `call_graph` requires-reindex responses now include the same `compatibility` diagnostics.
+  - `manage_index action:"status"` now prints runtime/index fingerprint diagnostics and reindex reason when available.
+- Added CI enforcement for MCP package versioning:
+  - New script `scripts/check-mcp-version-bump.sh`.
+  - CI now fails when package-relevant MCP source changes are made without a `packages/mcp/package.json` version bump.
+
+### Tests
+- Added/expanded regression coverage for:
+  - `search_codebase` requires-reindex compatibility diagnostics.
+  - `call_graph` requires-reindex compatibility diagnostics.
+  - `manage_index status` fingerprint diagnostics (including access-gate blocked paths).
+
 ## [2026-02-25] Call Graph Alias Compatibility and Search Fault-Injection Coverage
 
 ### Release Versions

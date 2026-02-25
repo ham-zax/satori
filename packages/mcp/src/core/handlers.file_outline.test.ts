@@ -19,6 +19,7 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const repoPath = path.join(tempDir, 'repo');
     fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
     fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), 'export function run() { return true; }\n');
+    fs.writeFileSync(path.join(repoPath, 'src', 'runtime.js'), 'export function run() { return true; }\n');
     fs.writeFileSync(path.join(repoPath, 'docs.md'), '# docs\n');
     return fn(repoPath).finally(() => {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -100,6 +101,26 @@ test('handleFileOutline returns unsupported for unsupported file extensions', as
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'unsupported');
         assert.equal(payload.outline, null);
+    });
+});
+
+test('handleFileOutline supports JavaScript extensions for sidecar-backed outline flow', async () => {
+    await withTempRepo(async (repoPath) => {
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.js'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'requires_reindex');
+        assert.equal(payload.file, 'src/runtime.js');
     });
 });
 

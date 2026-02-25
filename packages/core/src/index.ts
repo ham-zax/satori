@@ -6,3 +6,4 @@ export * from './context';
 export * from './sync/synchronizer';
 export * from './utils';
 export * from './reranker';
+export * from './language';

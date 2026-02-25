@@ -3,7 +3,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import crypto from 'node:crypto';
 import ignore from 'ignore';
-import { AstCodeSplitter } from '@zokizuan/satori-core';
+import {
+    AstCodeSplitter,
+    getLanguageIdFromExtension,
+    getSupportedExtensionsForCapability,
+    getSupportedLanguageIdsForCapability,
+} from '@zokizuan/satori-core';
 import { CallGraphSidecarInfo, IndexFingerprint } from '../config.js';
 
 export type CallGraphDirection = 'callers' | 'callees' | 'both';
@@ -86,8 +91,9 @@ export interface CallGraphDeltaPolicy {
     shouldRebuild(changedFiles: string[]): boolean;
 }
 
-const SUPPORTED_SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py']);
-const QUERY_SUPPORTED_EXTENSIONS = new Set(['.ts', '.tsx', '.py']);
+const SUPPORTED_SOURCE_EXTENSIONS = new Set(getSupportedExtensionsForCapability('callGraphBuild'));
+const QUERY_SUPPORTED_EXTENSIONS = new Set(getSupportedExtensionsForCapability('callGraphQuery'));
+const QUERY_SUPPORTED_LANGUAGE_IDS = getSupportedLanguageIdsForCapability('callGraphQuery');
 const DEFAULT_IGNORE_PATTERNS = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/.next/**'];
 const CALL_KEYWORDS = new Set([
     'if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'typeof', 'function', 'class', 'def', 'await', 'with', 'from', 'import',
@@ -657,11 +663,9 @@ export class CallGraphSidecarManager {
 
     private getSplitLanguage(relativePath: string): string {
         const ext = path.extname(relativePath).toLowerCase();
-        if (ext === '.py') {
-            return 'python';
-        }
-        if (ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx' || ext === '.mjs' || ext === '.cjs') {
-            return ext === '.js' || ext === '.jsx' || ext === '.mjs' || ext === '.cjs' ? 'javascript' : 'typescript';
+        const language = getLanguageIdFromExtension(ext, 'unknown');
+        if (language === 'python' || language === 'typescript' || language === 'javascript') {
+            return language;
         }
         return 'unknown';
     }
@@ -676,8 +680,9 @@ export class CallGraphSidecarManager {
             supported: false,
             reason: 'unsupported_language',
             hints: {
-                supportedExtensions: ['.ts', '.tsx', '.py'],
-                message: 'call_graph currently supports TypeScript and Python symbols.',
+                supportedExtensions: Array.from(QUERY_SUPPORTED_EXTENSIONS).sort((a, b) => a.localeCompare(b)),
+                supportedLanguages: QUERY_SUPPORTED_LANGUAGE_IDS,
+                message: 'call_graph currently supports TypeScript, JavaScript, and Python symbols.',
             },
         };
     }

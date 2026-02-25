@@ -118,6 +118,23 @@ test('call graph query returns structured unsupported response for unsupported l
     }
 });
 
+test('call graph query accepts JavaScript symbols for query routing', async () => {
+    const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
+    const response = manager.queryGraph('/tmp/repo', {
+        file: 'src/runtime.js',
+        symbolId: 'sym_missing'
+    }, {
+        direction: 'both',
+        depth: 1,
+        limit: 20
+    });
+
+    assert.equal(response.supported, false);
+    if (!response.supported) {
+        assert.equal(response.reason, 'missing_sidecar');
+    }
+});
+
 test('call graph sidecar emits missing_symbol_metadata notes without synthetic node ids', async () => {
     await withTempRepo(async (repoPath) => {
         const splitter = new AstCodeSplitter();

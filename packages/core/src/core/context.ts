@@ -19,6 +19,7 @@ import {
 import { SemanticSearchResult } from '../types';
 import { envManager } from '../utils/env-manager';
 import { DEFAULT_IGNORE_PATTERNS, DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
+import { getLanguageIdFromExtension } from '../language';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -854,30 +855,7 @@ export class Context {
      * Get programming language based on file extension
      */
     private getLanguageFromExtension(ext: string): string {
-        const languageMap: Record<string, string> = {
-            '.ts': 'typescript',
-            '.tsx': 'typescript',
-            '.js': 'javascript',
-            '.jsx': 'javascript',
-            '.py': 'python',
-            '.java': 'java',
-            '.cpp': 'cpp',
-            '.c': 'c',
-            '.h': 'c',
-            '.hpp': 'cpp',
-            '.cs': 'csharp',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.php': 'php',
-            '.rb': 'ruby',
-            '.swift': 'swift',
-            '.kt': 'kotlin',
-            '.scala': 'scala',
-            '.m': 'objective-c',
-            '.mm': 'objective-c',
-            '.ipynb': 'jupyter'
-        };
-        return languageMap[ext] || 'text';
+        return getLanguageIdFromExtension(ext, 'text');
     }
 
     /**
@@ -1132,7 +1110,6 @@ export class Context {
         const splitterName = this.codeSplitter.constructor.name;
 
         if (splitterName === 'AstCodeSplitter') {
-            const { AstCodeSplitter } = require('./splitter/ast-splitter');
             return {
                 type: 'ast',
                 hasBuiltinFallback: true,
@@ -1154,7 +1131,6 @@ export class Context {
         const splitterName = this.codeSplitter.constructor.name;
 
         if (splitterName === 'AstCodeSplitter') {
-            const { AstCodeSplitter } = require('./splitter/ast-splitter');
             return AstCodeSplitter.isLanguageSupported(language);
         }
 
@@ -1170,7 +1146,6 @@ export class Context {
         const splitterName = this.codeSplitter.constructor.name;
 
         if (splitterName === 'AstCodeSplitter') {
-            const { AstCodeSplitter } = require('./splitter/ast-splitter');
             const isSupported = AstCodeSplitter.isLanguageSupported(language);
 
             return {

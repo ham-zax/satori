@@ -1,6 +1,12 @@
 import Parser from 'tree-sitter';
 import crypto from 'node:crypto';
 import { Splitter, CodeChunk } from './index';
+import {
+    normalizeLanguageId,
+    getSupportedLanguageAliasesForCapability,
+    getSupportedLanguageIdsForCapability,
+    isLanguageCapabilitySupportedForLanguage,
+} from '../language';
 
 // Language parsers
 const JavaScript = require('tree-sitter-javascript');
@@ -46,33 +52,34 @@ export class AstCodeSplitter implements Splitter {
     }
 
     async split(code: string, language: string, filePath?: string): Promise<CodeChunk[]> {
+        const normalizedLanguage = normalizeLanguageId(language);
         // Check if language is supported by AST splitter
-        const langConfig = this.getLanguageConfig(language);
+        const langConfig = this.getLanguageConfig(normalizedLanguage);
         if (!langConfig) {
             console.log(`📝 Language ${language} not supported by AST, using LangChain splitter for: ${filePath || 'unknown'}`);
             return await this.langchainFallback.split(code, language, filePath);
         }
 
         try {
-            console.log(`🌳 Using AST splitter for ${language} file: ${filePath || 'unknown'}`);
+            console.log(`🌳 Using AST splitter for ${normalizedLanguage} file: ${filePath || 'unknown'}`);
 
             this.parser.setLanguage(langConfig.parser);
             const tree = this.parser.parse(code);
 
             if (!tree.rootNode) {
-                console.warn(`[ASTSplitter] ⚠️  Failed to parse AST for ${language}, falling back to LangChain: ${filePath || 'unknown'}`);
+                console.warn(`[ASTSplitter] ⚠️  Failed to parse AST for ${normalizedLanguage}, falling back to LangChain: ${filePath || 'unknown'}`);
                 return await this.langchainFallback.split(code, language, filePath);
             }
 
             // Extract chunks based on AST nodes
-            const chunks = this.extractChunks(tree.rootNode, code, langConfig.nodeTypes, language, filePath);
+            const chunks = this.extractChunks(tree.rootNode, code, langConfig.nodeTypes, normalizedLanguage, filePath);
 
             // If chunks are too large, split them further
             const refinedChunks = await this.refineChunks(chunks, code);
 
             return refinedChunks;
         } catch (error) {
-            console.warn(`[ASTSplitter] ⚠️  AST splitter failed for ${language}, falling back to LangChain: ${error}`);
+            console.warn(`[ASTSplitter] ⚠️  AST splitter failed for ${normalizedLanguage}, falling back to LangChain: ${error}`);
             return await this.langchainFallback.split(code, language, filePath);
         }
     }
@@ -89,25 +96,18 @@ export class AstCodeSplitter implements Splitter {
 
     private getLanguageConfig(language: string): { parser: any; nodeTypes: string[] } | null {
         const langMap: Record<string, { parser: any; nodeTypes: string[] }> = {
-            'javascript': { parser: JavaScript, nodeTypes: SPLITTABLE_NODE_TYPES.javascript },
-            'js': { parser: JavaScript, nodeTypes: SPLITTABLE_NODE_TYPES.javascript },
-            'typescript': { parser: TypeScript, nodeTypes: SPLITTABLE_NODE_TYPES.typescript },
-            'ts': { parser: TypeScript, nodeTypes: SPLITTABLE_NODE_TYPES.typescript },
-            'python': { parser: Python, nodeTypes: SPLITTABLE_NODE_TYPES.python },
-            'py': { parser: Python, nodeTypes: SPLITTABLE_NODE_TYPES.python },
-            'java': { parser: Java, nodeTypes: SPLITTABLE_NODE_TYPES.java },
-            'cpp': { parser: Cpp, nodeTypes: SPLITTABLE_NODE_TYPES.cpp },
-            'c++': { parser: Cpp, nodeTypes: SPLITTABLE_NODE_TYPES.cpp },
-            'c': { parser: Cpp, nodeTypes: SPLITTABLE_NODE_TYPES.cpp },
-            'go': { parser: Go, nodeTypes: SPLITTABLE_NODE_TYPES.go },
-            'rust': { parser: Rust, nodeTypes: SPLITTABLE_NODE_TYPES.rust },
-            'rs': { parser: Rust, nodeTypes: SPLITTABLE_NODE_TYPES.rust },
-            'cs': { parser: CSharp, nodeTypes: SPLITTABLE_NODE_TYPES.csharp },
-            'csharp': { parser: CSharp, nodeTypes: SPLITTABLE_NODE_TYPES.csharp },
-            'scala': { parser: Scala, nodeTypes: SPLITTABLE_NODE_TYPES.scala }
+            javascript: { parser: JavaScript, nodeTypes: SPLITTABLE_NODE_TYPES.javascript },
+            typescript: { parser: TypeScript, nodeTypes: SPLITTABLE_NODE_TYPES.typescript },
+            python: { parser: Python, nodeTypes: SPLITTABLE_NODE_TYPES.python },
+            java: { parser: Java, nodeTypes: SPLITTABLE_NODE_TYPES.java },
+            cpp: { parser: Cpp, nodeTypes: SPLITTABLE_NODE_TYPES.cpp },
+            go: { parser: Go, nodeTypes: SPLITTABLE_NODE_TYPES.go },
+            rust: { parser: Rust, nodeTypes: SPLITTABLE_NODE_TYPES.rust },
+            csharp: { parser: CSharp, nodeTypes: SPLITTABLE_NODE_TYPES.csharp },
+            scala: { parser: Scala, nodeTypes: SPLITTABLE_NODE_TYPES.scala }
         };
 
-        return langMap[language.toLowerCase()] || null;
+        return langMap[normalizeLanguageId(language)] || null;
     }
 
     private extractChunks(
@@ -500,10 +500,14 @@ export class AstCodeSplitter implements Splitter {
      * Check if AST splitting is supported for the given language
      */
     static isLanguageSupported(language: string): boolean {
-        const supportedLanguages = [
-            'javascript', 'js', 'typescript', 'ts', 'python', 'py',
-            'java', 'cpp', 'c++', 'c', 'go', 'rust', 'rs', 'cs', 'csharp', 'scala'
-        ];
-        return supportedLanguages.includes(language.toLowerCase());
+        return isLanguageCapabilitySupportedForLanguage(language, 'astSplitter');
+    }
+
+    static getSupportedLanguages(): string[] {
+        return getSupportedLanguageAliasesForCapability('astSplitter');
+    }
+
+    static getSupportedCanonicalLanguages(): string[] {
+        return getSupportedLanguageIdsForCapability('astSplitter');
     }
 }

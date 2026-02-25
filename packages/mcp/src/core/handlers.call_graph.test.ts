@@ -294,7 +294,7 @@ test('handleCallGraph maps unsupported_language to status unsupported', async ()
                 supported: false,
                 reason: 'unsupported_language',
                 hints: {
-                    supportedExtensions: ['.ts', '.tsx', '.py']
+                    supportedExtensions: ['.cjs', '.js', '.jsx', '.mjs', '.py', '.ts', '.tsx']
                 }
             })
         } as any;

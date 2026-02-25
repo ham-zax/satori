@@ -2,7 +2,13 @@ import * as fs from "fs";
 import * as path from "path";
 import crypto from "node:crypto";
 import ignore from "ignore";
-import { Context, COLLECTION_LIMIT_MESSAGE } from "@zokizuan/satori-core";
+import {
+    Context,
+    COLLECTION_LIMIT_MESSAGE,
+    getSupportedExtensionsForCapability,
+    isLanguageCapabilitySupportedForExtension,
+    isLanguageCapabilitySupportedForLanguage,
+} from "@zokizuan/satori-core";
 import { SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
 import { SyncManager } from "./sync.js";
@@ -43,6 +49,7 @@ const COLLECTION_LIMIT_PATTERNS = [
 
 const SATORI_COLLECTION_PREFIXES = ['code_chunks_', 'hybrid_code_chunks_'];
 const ZILLIZ_FREE_TIER_COLLECTION_LIMIT = 5;
+const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability('fileOutline');
 
 interface CandidateCollection {
     name: string;
@@ -632,14 +639,13 @@ export class ToolHandlers {
     }
 
     private isCallGraphLanguageSupported(language: string, file?: string): boolean {
-        const normalized = String(language || '').toLowerCase();
-        if (normalized === 'typescript' || normalized === 'ts' || normalized === 'python' || normalized === 'py') {
+        if (isLanguageCapabilitySupportedForLanguage(language, 'callGraphQuery')) {
             return true;
         }
 
         if (typeof file === 'string') {
             const ext = path.extname(file).toLowerCase();
-            return ext === '.ts' || ext === '.tsx' || ext === '.py';
+            return isLanguageCapabilitySupportedForExtension(ext, 'callGraphQuery');
         }
 
         return false;
@@ -2135,7 +2141,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     file: normalizedFile,
                     outline: null,
                     hasMore: false,
-                    message: `File '${normalizedFile}' is not supported for sidecar outline. Supported extensions: .ts, .tsx, .py.`
+                    message: `File '${normalizedFile}' is not supported for sidecar outline. Supported extensions: ${OUTLINE_SUPPORTED_EXTENSIONS.join(', ')}.`
                 };
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]

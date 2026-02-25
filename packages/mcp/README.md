@@ -85,7 +85,7 @@ Unified semantic search with runtime/docs scope control, grouped/raw output mode
 
 ### `call_graph`
 
-Traverse the prebuilt TS/Python call graph sidecar for callers/callees/bidirectional symbol relationships.
+Traverse the prebuilt TS/JS/Python call graph sidecar for callers/callees/bidirectional symbol relationships.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|

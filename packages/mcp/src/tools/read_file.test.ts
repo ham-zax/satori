@@ -213,3 +213,24 @@ test('read_file annotated mode degrades gracefully when outline is unavailable',
         assert.equal(payload.outline, null);
     });
 });
+
+test('read_file annotated mode treats JavaScript files as outline-capable', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'runtime.js');
+        fs.writeFileSync(filePath, 'const value = 1;\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            mode: 'annotated'
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => []
+            } as any
+        });
+
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.mode, 'annotated');
+        assert.equal(payload.outlineStatus, 'requires_reindex');
+        assert.equal(payload.outline, null);
+    });
+});

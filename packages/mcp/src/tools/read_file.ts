@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { isLanguageCapabilitySupportedForExtension } from "@zokizuan/satori-core";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { ensureAbsolutePath } from "../utils.js";
 
@@ -33,7 +34,7 @@ function normalizeRelativePath(value: string): string {
 
 function isOutlineSupportedFile(absolutePath: string): boolean {
     const ext = path.extname(absolutePath).toLowerCase();
-    return ext === ".ts" || ext === ".tsx" || ext === ".py";
+    return isLanguageCapabilitySupportedForExtension(ext, "fileOutline");
 }
 
 function resolveCodebaseRootForFile(absolutePath: string, ctx: ToolContext): string | undefined {

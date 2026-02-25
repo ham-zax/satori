@@ -2,6 +2,23 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-25] Call Graph Alias Compatibility and Search Fault-Injection Coverage
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.3.0`
+- `@zokizuan/satori-core`: `0.1.7`
+
+### Fixed
+- Added `call_graph.direction="bidirectional"` compatibility and normalized dispatch to canonical `direction:"both"`.
+- Preserved strict validation for invalid direction values outside the supported canonical/alias set.
+
+### Tests
+- Added `call_graph` tool tests for alias normalization and invalid-direction validation.
+- Added deterministic, test-only fault-injection coverage for `search_codebase` semantic pass failures (`primary|expanded|both`), including:
+  - partial failure warning emission
+  - full failure structured error path
+  - non-test-mode guard behavior
+
 ## [2026-02-26] Call Graph Declaration Parsing Hardening
 
 ### Release Versions

@@ -49,32 +49,56 @@ Use tools in descending order of conceptual leverage. *(Note: If a tool is unava
 
 1. `list_codebases` (only if target/index state is unclear).
 2. `manage_index` with `action="status"` for target path.
-3. If not indexed: `manage_index` with `action="create"`.
-   - use `force=true` **only** when explicitly required.
-4. If indexed but stale:
+3. If status reports fingerprint mismatch / `requires_reindex`: run `manage_index` with `action="reindex"` immediately.
+4. If not indexed: run `manage_index` with `action="create"`.
+   - Use `force=true` **only** when explicitly required.
+5. If indexed but stale:
    - prefer watcher-based freshness.
-   - use `manage_index` with `action="sync"` only as fallback.
-5. `search_codebase` (`limit=5` default for triage; increase only when needed).
-6. `read_file` for full context before edits.
-   - use `start_line`/`end_line` for large files.
+   - Use `manage_index` with `action="sync"` only as fallback.
+6. Run `search_codebase` for triage with explicit defaults:
+   - `scope:"runtime"`, `resultMode:"grouped"`, `groupBy:"symbol"`, `limit:5` (increase only when needed).
+7. Run `file_outline` on candidate files to get deterministic symbol lists and `callGraphHint` handles.
+8. Run `call_graph` from a selected `symbolRef` to trace callers/callees (`direction: "callers" | "callees" | "both"`; compatibility alias `bidirectional` maps to `both`).
+9. Use `read_file` for full context before edits.
+   - `mode:"plain"` for content-only reads.
+   - `mode:"annotated"` for content + `outlineStatus` + `outline` + `hasMore`.
+   - Use `start_line`/`end_line` for large files.
 
-### Query-time Excludes (Avoid Noise)
+### Scope-First Noise Control
 
-Default excludes:
-```json
-["**/docs/**", "**/investigations/**", "**/*.md", "**/*.test.*", "**/*.spec.*"]
-```
-Pattern semantics are gitignore-style (`*`, `**`, `?`, `!`, leading `/` anchor). Do **not** assume brace expansion.
+- `scope:"runtime"`: strict exclude docs/tests.
+- `scope:"docs"`: strict include docs/tests only.
+- `scope:"mixed"`: include both runtime and docs/tests.
+- Prefer scope controls first; do not depend on legacy exclude-pattern assumptions.
 
-### Reranker & File Reading Policies
+### Optimal Usage Patterns
 
-- **Reranker**: Omit `useReranker` by default (let resolver decide). `true` forces it; `false` disables it.
-- **Read limits**: `start_line`/`end_line` are **1-based inclusive**. Large files may auto-truncate (default ~1000 lines). Follow continuation hints exactly.
-- **Full Ingestion Rule**: Never edit a file without reading **all relevant sections end-to-end**, including dependent definitions and call sites for the touched behavior.
+- Start symbol-first: use grouped search (`resultMode:"grouped"`, `groupBy:"symbol"`) and pick `callGraphHint.supported:true` results before expanding query breadth.
+- Keep graph traversal tight by default: `call_graph` with `direction:"both"`, `depth:1`, `limit:20`; only increase depth when the first hop is insufficient.
+- Use `file_outline` before full reads to lock symbol boundaries, then `read_file` with `start_line/end_line` around selected spans.
+- Treat freshness as a trust signal:
+  - check `freshnessDecision` on every search response,
+  - prefer groups with recent `indexedAt` and expected `stalenessBucket`.
+- Use `debug:true` on `search_codebase` only for ranking/regression analysis; keep it off for normal investigation flow.
+### Index / Response Contracts
+
+- Treat `< v3`/incompatible indexes as hard-gated:
+  - expect structured `status:"requires_reindex"` responses.
+  - use the provided `hints.reindex` and run `manage_index { action:"reindex", path }`.
+- `search_codebase` grouped mode returns group-level navigation fields:
+  - `groupId`, `symbolId`/`symbolLabel` (nullable fallback allowed), `indexedAt`, `stalenessBucket`, `collapsedChunkCount`, `callGraphHint`.
+- `search_codebase` may include `warnings[]` on partial pass failure; treat as degraded-but-usable output.
+- `file_outline` is sidecar-backed and returns `status: "ok" | "not_found" | "requires_reindex" | "unsupported"` with deterministic symbol ordering and `hasMore`.
+- `call_graph` returns structured statuses (`ok`, `not_found`, `unsupported`, `requires_reindex`) and deterministic node/edge ordering.
+
+### Read Policies
+
+- **Read limits**: `start_line`/`end_line` are **1-based inclusive**. Large reads may auto-truncate (~1000 lines). Follow continuation hints.
+- **Full Ingestion Rule**: Never edit a file without reading all relevant sections end-to-end, including dependent definitions and call sites for touched behavior.
 
 ### Hard-Break Rule (Mandatory)
 
-Only these Satori tools are valid: `manage_index`, `search_codebase`, `read_file`, `list_codebases`.
+Only these Satori tools are valid: `manage_index`, `search_codebase`, `call_graph`, `file_outline`, `read_file`, `list_codebases`.
 **Safety Rule**: Never call `manage_index` with `action="clear"` unless the user explicitly requests a destructive reset.
 
 ---

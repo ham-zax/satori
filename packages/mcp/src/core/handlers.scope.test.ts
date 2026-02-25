@@ -23,6 +23,30 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     });
 }
 
+async function withEnv(vars: Record<string, string | undefined>, fn: () => Promise<void>): Promise<void> {
+    const previous = new Map<string, string | undefined>();
+    for (const [key, value] of Object.entries(vars)) {
+        previous.set(key, process.env[key]);
+        if (value === undefined) {
+            delete process.env[key];
+        } else {
+            process.env[key] = value;
+        }
+    }
+
+    try {
+        await fn();
+    } finally {
+        for (const [key, value] of previous.entries()) {
+            if (value === undefined) {
+                delete process.env[key];
+            } else {
+                process.env[key] = value;
+            }
+        }
+    }
+}
+
 function createHandlers(repoPath: string, searchResults: any[]) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
@@ -385,5 +409,206 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
 
         assert.equal(response.isError, true);
         assert.match(response.content[0]?.text || '', /all semantic search passes failed/i);
+    });
+});
+
+test('handleSearchCode supports deterministic test-only fault injection for expanded pass', { concurrency: false }, async () => {
+    await withTempRepo(async (repoPath) => {
+        await withEnv({
+            NODE_ENV: 'test',
+            SATORI_TEST_FAIL_SEARCH_PASS: 'expanded'
+        }, async () => {
+            const context = {
+                getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+                semanticSearch: async (_root: string, query: string) => {
+                    if (query.includes('implementation runtime source entrypoint')) {
+                        return [{
+                            content: 'expanded pass hit',
+                            relativePath: 'src/expanded.ts',
+                            startLine: 1,
+                            endLine: 2,
+                            language: 'typescript',
+                            score: 0.95,
+                            indexedAt: '2026-01-01T00:30:00.000Z',
+                            symbolId: 'sym_expanded',
+                            symbolLabel: 'function expandedPass()'
+                        }];
+                    }
+                    return [{
+                        content: 'primary pass hit',
+                        relativePath: 'src/primary.ts',
+                        startLine: 1,
+                        endLine: 2,
+                        language: 'typescript',
+                        score: 0.99,
+                        indexedAt: '2026-01-01T00:30:00.000Z',
+                        symbolId: 'sym_primary',
+                        symbolLabel: 'function primaryPass()'
+                    }];
+                }
+            } as any;
+
+            const snapshotManager = {
+                getAllCodebases: () => [],
+                getIndexedCodebases: () => [repoPath],
+                getIndexingCodebases: () => [],
+                ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+            } as any;
+
+            const syncManager = {
+                ensureFreshness: async () => ({
+                    mode: 'skipped_recent',
+                    checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                    thresholdMs: 180000
+                })
+            } as any;
+
+            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+            (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'session token',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results.length, 1);
+            assert.equal(payload.results[0].symbolId, 'sym_primary');
+            assert.deepEqual(payload.warnings, [
+                'SEARCH_PASS_FAILED:expanded - expanded semantic search pass failed; results may be degraded.'
+            ]);
+            assert.equal(response.meta?.searchDiagnostics?.searchPassFailureCount, 1);
+        });
+    });
+});
+
+test('handleSearchCode ignores fault injection env outside test mode', { concurrency: false }, async () => {
+    await withTempRepo(async (repoPath) => {
+        await withEnv({
+            NODE_ENV: 'production',
+            SATORI_TEST_FAIL_SEARCH_PASS: 'both'
+        }, async () => {
+            const context = {
+                getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+                semanticSearch: async (_root: string, query: string) => {
+                    if (query.includes('implementation runtime source entrypoint')) {
+                        return [{
+                            content: 'expanded pass hit',
+                            relativePath: 'src/expanded.ts',
+                            startLine: 1,
+                            endLine: 2,
+                            language: 'typescript',
+                            score: 0.95,
+                            indexedAt: '2026-01-01T00:30:00.000Z',
+                            symbolId: 'sym_expanded',
+                            symbolLabel: 'function expandedPass()'
+                        }];
+                    }
+                    return [{
+                        content: 'primary pass hit',
+                        relativePath: 'src/primary.ts',
+                        startLine: 1,
+                        endLine: 2,
+                        language: 'typescript',
+                        score: 0.99,
+                        indexedAt: '2026-01-01T00:30:00.000Z',
+                        symbolId: 'sym_primary',
+                        symbolLabel: 'function primaryPass()'
+                    }];
+                }
+            } as any;
+
+            const snapshotManager = {
+                getAllCodebases: () => [],
+                getIndexedCodebases: () => [repoPath],
+                getIndexingCodebases: () => [],
+                ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+            } as any;
+
+            const syncManager = {
+                ensureFreshness: async () => ({
+                    mode: 'skipped_recent',
+                    checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                    thresholdMs: 180000
+                })
+            } as any;
+
+            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+            (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'session token',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results.length, 2);
+            assert.equal(payload.warnings, undefined);
+            assert.equal(response.meta?.searchDiagnostics?.searchPassFailureCount, 0);
+        });
+    });
+});
+
+test('handleSearchCode returns deterministic all-pass error when test fault injection forces both passes', { concurrency: false }, async () => {
+    await withTempRepo(async (repoPath) => {
+        await withEnv({
+            NODE_ENV: 'test',
+            SATORI_TEST_FAIL_SEARCH_PASS: 'both'
+        }, async () => {
+            const context = {
+                getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+                semanticSearch: async () => [{
+                    content: 'primary pass hit',
+                    relativePath: 'src/primary.ts',
+                    startLine: 1,
+                    endLine: 2,
+                    language: 'typescript',
+                    score: 0.99,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_primary',
+                    symbolLabel: 'function primaryPass()'
+                }]
+            } as any;
+
+            const snapshotManager = {
+                getAllCodebases: () => [],
+                getIndexedCodebases: () => [repoPath],
+                getIndexingCodebases: () => [],
+                ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+            } as any;
+
+            const syncManager = {
+                ensureFreshness: async () => ({
+                    mode: 'skipped_recent',
+                    checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                    thresholdMs: 180000
+                })
+            } as any;
+
+            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+            (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'session token',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5
+            });
+
+            assert.equal(response.isError, true);
+            assert.match(response.content[0]?.text || '', /all semantic search passes failed/i);
+        });
     });
 });

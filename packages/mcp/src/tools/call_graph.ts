@@ -24,7 +24,18 @@ export const callGraphTool: McpTool = {
     description: () => 'Traverse the prebuilt TS/Python call graph sidecar for callers/callees/bidirectional symbol relationships.',
     inputSchemaZod: () => callGraphInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
-        const parsed = callGraphInputSchema.safeParse(args || {});
+        const normalizedArgs = (args && typeof args === 'object')
+            ? { ...(args as Record<string, unknown>) }
+            : (args || {});
+        if (
+            normalizedArgs
+            && typeof normalizedArgs === 'object'
+            && (normalizedArgs as Record<string, unknown>).direction === 'bidirectional'
+        ) {
+            (normalizedArgs as Record<string, unknown>).direction = 'both';
+        }
+
+        const parsed = callGraphInputSchema.safeParse(normalizedArgs);
         if (!parsed.success) {
             return {
                 content: [{

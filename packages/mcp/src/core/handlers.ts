@@ -656,6 +656,32 @@ export class ToolHandlers {
         return `SEARCH_PASS_FAILED:${passId} - ${passId} semantic search pass failed; results may be degraded.`;
     }
 
+    private isSearchPassFaultInjectionEnabled(): boolean {
+        return process.env.NODE_ENV === 'test';
+    }
+
+    private getForcedFailedSearchPassId(): 'primary' | 'expanded' | 'both' | undefined {
+        if (!this.isSearchPassFaultInjectionEnabled()) {
+            return undefined;
+        }
+
+        const raw = typeof process.env.SATORI_TEST_FAIL_SEARCH_PASS === 'string'
+            ? process.env.SATORI_TEST_FAIL_SEARCH_PASS.trim().toLowerCase()
+            : '';
+        if (raw === 'primary' || raw === 'expanded' || raw === 'both') {
+            return raw;
+        }
+        return undefined;
+    }
+
+    private shouldForceSearchPassFailure(passId: 'primary' | 'expanded'): boolean {
+        const forced = this.getForcedFailedSearchPassId();
+        if (!forced) {
+            return false;
+        }
+        return forced === 'both' || forced === passId;
+    }
+
     private mapCallGraphStatus(graph: { supported: boolean; reason?: string }): 'ok' | 'not_found' | 'unsupported' | 'not_ready' {
         if (graph.supported) {
             return 'ok';
@@ -1660,7 +1686,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             ] as const;
             searchDiagnostics.searchPassCount = passDescriptors.length;
 
-            const passSettled = await Promise.allSettled(passDescriptors.map((pass) => {
+            const passSettled = await Promise.allSettled(passDescriptors.map(async (pass) => {
+                const passId = pass.id as 'primary' | 'expanded';
+                if (this.shouldForceSearchPassFailure(passId)) {
+                    throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${passId}`);
+                }
                 return this.context.semanticSearch(effectiveRoot, pass.query, candidateLimit, 0.3);
             }));
             const searchWarnings: string[] = [];

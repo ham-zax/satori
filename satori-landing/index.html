@@ -4,11 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Satori | Agent-Safe Code Retrieval via MCP</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+      media="(min-width: 861px)"
+    />
+    <link
+      rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin
+      media="(min-width: 861px)"
+    />
     <link
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@100;400;700&display=swap"
       rel="stylesheet"
+      media="(min-width: 861px)"
     />
     <style>
       :root {
@@ -567,8 +577,39 @@
       }
 
       @media (max-width: 860px) {
+        :root {
+          --serif: ui-serif, Georgia, serif;
+          --sans:
+            system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+            Arial, sans-serif;
+          --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        * {
+          cursor: auto;
+        }
+
+        body {
+          background-image: none;
+        }
+
+        .canvas-wrap {
+          display: none;
+        }
+
         .grid {
           grid-template-columns: 1fr;
+        }
+
+        nav,
+        .hero,
+        .terminal {
+          backdrop-filter: none;
+        }
+
+        .status-dot {
+          animation: none;
+          box-shadow: none;
         }
 
         .hero {
@@ -577,6 +618,33 @@
 
         .section {
           padding: 3rem 1.5rem;
+        }
+
+        .hero,
+        .card,
+        .btn,
+        .line,
+        .step,
+        details,
+        a {
+          transition: none !important;
+        }
+
+        .hero:hover,
+        .card:hover,
+        .btn:hover {
+          box-shadow: none;
+          transform: none;
+        }
+
+        .section:hover {
+          border-left: 1px solid var(--line);
+        }
+
+        .step:hover,
+        details:hover {
+          border-left-color: var(--line);
+          border-color: var(--line);
         }
 
         .config-grid {
@@ -946,13 +1014,16 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
         requestAnimationFrame(animate);
       }
 
-      resizeCanvas();
-      initParticles();
-      animate();
-      window.addEventListener("resize", () => {
+      const isSmallViewport = window.matchMedia("(max-width: 860px)").matches;
+      if (!isSmallViewport) {
         resizeCanvas();
         initParticles();
-      });
+        animate();
+        window.addEventListener("resize", () => {
+          resizeCanvas();
+          initParticles();
+        });
+      }
 
       const copyButtons = document.querySelectorAll(".copy-btn");
       copyButtons.forEach((btn) => {

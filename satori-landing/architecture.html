@@ -4,11 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Satori Architecture | MCP Runtime + Core Engine</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+      media="(min-width: 921px)"
+    />
+    <link
+      rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin
+      media="(min-width: 921px)"
+    />
     <link
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@100;400;700&display=swap"
       rel="stylesheet"
+      media="(min-width: 921px)"
     />
     <style>
       :root {
@@ -445,6 +455,55 @@
       }
 
       @media (max-width: 920px) {
+        :root {
+          --serif: ui-serif, Georgia, serif;
+          --sans:
+            system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+            Arial, sans-serif;
+          --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        * {
+          cursor: auto;
+        }
+
+        body {
+          background-image: none;
+        }
+
+        nav {
+          backdrop-filter: none;
+        }
+
+        .status-dot {
+          animation: none;
+          box-shadow: none;
+        }
+
+        .hero,
+        .card,
+        .btn,
+        .section,
+        details,
+        a {
+          transition: none !important;
+        }
+
+        .hero:hover,
+        .card:hover,
+        .btn:hover {
+          box-shadow: none;
+          transform: none;
+        }
+
+        .section:hover {
+          border-left: 1px solid var(--line);
+        }
+
+        details:hover {
+          border-color: var(--line);
+        }
+
         .grid-2 {
           grid-template-columns: 1fr;
         }
@@ -751,22 +810,35 @@ Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIA
       </footer>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script>
-      if (window.mermaid) {
-        window.mermaid.initialize({
-          startOnLoad: true,
-          securityLevel: "loose",
-          theme: "dark",
-          themeVariables: {
-            background: "#0a0a0b",
-            primaryColor: "#111114",
-            primaryTextColor: "#f6f6f6",
-            primaryBorderColor: "rgba(246, 246, 246, 0.28)",
-            lineColor: "rgba(246, 246, 246, 0.55)",
-            secondaryColor: "#111114",
-            tertiaryColor: "#111114",
-          },
+      const isSmallViewport = window.matchMedia("(max-width: 920px)").matches;
+      if (!isSmallViewport) {
+        const mermaidScript = document.createElement("script");
+        mermaidScript.src =
+          "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
+        mermaidScript.onload = () => {
+          if (!window.mermaid) return;
+          window.mermaid.initialize({
+            startOnLoad: true,
+            securityLevel: "loose",
+            theme: "dark",
+            themeVariables: {
+              background: "#0a0a0b",
+              primaryColor: "#111114",
+              primaryTextColor: "#f6f6f6",
+              primaryBorderColor: "rgba(246, 246, 246, 0.28)",
+              lineColor: "rgba(246, 246, 246, 0.55)",
+              secondaryColor: "#111114",
+              tertiaryColor: "#111114",
+            },
+          });
+        };
+        document.body.appendChild(mermaidScript);
+      } else {
+        const diagramWraps = document.querySelectorAll(".diagram-wrap");
+        diagramWraps.forEach((wrap) => {
+          wrap.innerHTML =
+            '<p class="intro">Diagram rendering is disabled on small screens to prioritize load speed. Open on desktop for full rendered diagrams.</p>';
         });
       }
 

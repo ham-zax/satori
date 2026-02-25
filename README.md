@@ -54,6 +54,7 @@ You can run Satori with little to no cost:
 
 1. **Cloud free-tier path (easy start).**
 Use Milvus/Zilliz Cloud free tier + VoyageAI starter free tier/credits for embeddings.
+On Zilliz free tier (Milvus), Satori can index up to 5 codebases (one collection per codebase).
 2. **Fully local path (no API spend).**
 Use local Milvus + Ollama embeddings.
 

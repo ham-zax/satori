@@ -4,6 +4,8 @@ export {
     SearchOptions,
     VectorSearchResult,
     VectorDatabase,
+    CollectionDetails,
+    VectorStoreBackendInfo,
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,

@@ -471,6 +471,7 @@
           <span>Satori // Architecture</span>
         </div>
         <div class="nav-links">
+          <a href="https://satori-mcp.vercel.app" target="_blank">[ Live ]</a>
           <a href="index.html">[ Landing ]</a>
           <a href="https://github.com/ham-zax/satori" target="_blank"
             >[ Repository ]</a
@@ -494,7 +495,8 @@
           Satori separates control plane and compute plane. The MCP runtime
           handles tool contracts, state, sync orchestration, and access gates.
           The core engine handles chunking, embedding, vector search, and delta
-          reindexing.
+          reindexing. On Zilliz Cloud (Milvus) free tier, Satori can index up
+          to 5 codebases (one collection per codebase).
         </p>
         <div class="hero-meta">
           4 tools. Hybrid retrieval. Snapshot gates. Merkle sync. MCP-compatible
@@ -505,18 +507,22 @@
       <section class="section">
         <h2>System Overview</h2>
         <p class="intro">
-          Request flow from MCP client to runtime, then to the core engine and
-          storage layers.
+          Request flow from MCP client to MCP runtime, then into the core
+          engine and storage layers.
         </p>
         <div class="diagram-wrap">
           <div class="mermaid">
-            flowchart TD client["MCP Client<br />Claude / Cursor / Windsurf /
-            Codex / custom"] mcp["@zokizuan/satori-mcp<br />Tool Registry (4
-            tools)<br />CapabilityResolver<br />SnapshotManager v3<br />SyncManager"]
-            core["@zokizuan/satori-core<br />Context Orchestrator<br />AST/LangChain
-            Splitter<br />Embeddings<br />Vector Adapters<br />FileSynchronizer
-            (Merkle DAG)"] milvus["Milvus / Zilliz"] local["~/.satori state"]
-            client --> mcp mcp --> core core --> milvus core --> local
+flowchart TD
+    client["MCP Client<br/>Claude / Cursor / Windsurf / Codex / custom"]
+    mcp["@zokizuan/satori-mcp<br/>Tool Registry (4 tools)<br/>CapabilityResolver<br/>SnapshotManager v3<br/>SyncManager"]
+    core["@zokizuan/satori-core<br/>Context Orchestrator<br/>AST/LangChain Splitter<br/>Embeddings<br/>Vector Adapters<br/>FileSynchronizer (Merkle DAG)"]
+    milvus["Milvus / Zilliz"]
+    local["~/.satori state"]
+
+    client --> mcp
+    mcp --> core
+    core --> milvus
+    core --> local
           </div>
         </div>
       </section>
@@ -605,21 +611,31 @@
       </section>
 
       <section class="section">
-        <h2>State And Safety</h2>
+        <h2>State and Safety</h2>
         <p class="intro">
           Snapshot state controls searchable access. Compatibility mismatches
-          are blocked until reindex.
+          are blocked until explicit reindex.
         </p>
         <div class="diagram-wrap">
           <div class="mermaid">
-            stateDiagram-v2 [*] --> not_found not_found --> indexing:
-            manage_index create indexing --> indexed: success indexing -->
-            indexfailed: failure indexed --> sync_completed: sync sync_completed
-            --> sync_completed: subsequent sync indexed --> requires_reindex:
-            fingerprint mismatch sync_completed --> requires_reindex:
-            fingerprint mismatch requires_reindex --> indexing: create
-            force=true indexed --> [*]: clear sync_completed --> [*]: clear
-            indexfailed --> [*]: clear requires_reindex --> [*]: clear
+stateDiagram-v2
+    [*] --> not_found
+
+    not_found --> indexing: manage_index(create)
+    indexing --> indexed: success
+    indexing --> indexfailed: failure
+
+    indexed --> sync_completed: sync
+    sync_completed --> sync_completed: subsequent sync
+
+    indexed --> requires_reindex: fingerprint mismatch
+    sync_completed --> requires_reindex: fingerprint mismatch
+    requires_reindex --> indexing: create(force=true)
+
+    indexed --> [*]: clear
+    sync_completed --> [*]: clear
+    indexfailed --> [*]: clear
+    requires_reindex --> [*]: clear
           </div>
         </div>
         <div class="grid-2">

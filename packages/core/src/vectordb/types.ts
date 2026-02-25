@@ -46,6 +46,17 @@ export interface HybridSearchResult {
     score: number;
 }
 
+export interface CollectionDetails {
+    name: string;
+    createdAt?: string;
+}
+
+export interface VectorStoreBackendInfo {
+    provider: 'milvus' | 'zilliz';
+    transport: 'grpc' | 'rest';
+    address?: string;
+}
+
 export interface VectorDatabase {
     /**
      * Create collection
@@ -79,6 +90,16 @@ export interface VectorDatabase {
      * List all collections
      */
     listCollections(): Promise<string[]>;
+
+    /**
+     * List all collections with optional metadata such as creation timestamp
+     */
+    listCollectionDetails?(): Promise<CollectionDetails[]>;
+
+    /**
+     * Backend metadata for provider-specific behaviors (e.g. Zilliz guidance)
+     */
+    getBackendInfo?(): VectorStoreBackendInfo;
 
     /**
      * Insert vector documents

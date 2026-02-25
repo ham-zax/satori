@@ -116,6 +116,9 @@ Chunk cap per run:    450,000
 Collection naming:
   dense:  code_chunks_<md5(path)[0..8]>
   hybrid: hybrid_code_chunks_<md5(path)[0..8]>
+
+Operational note:
+  Zilliz free tier (Milvus) allows up to 5 collections, so Satori indexes up to 5 codebases in that tier.
 ```
 
 ### 3.3 File Discovery and Ignore Model

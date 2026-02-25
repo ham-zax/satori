@@ -17,7 +17,9 @@ import {
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,
-    COLLECTION_LIMIT_MESSAGE
+    COLLECTION_LIMIT_MESSAGE,
+    CollectionDetails,
+    VectorStoreBackendInfo,
 } from './types';
 import { ClusterManager } from './zilliz-utils';
 
@@ -27,6 +29,20 @@ export interface MilvusRestfulConfig {
     username?: string;
     password?: string;
     database?: string;
+}
+
+function normalizeHost(address: string): string {
+    const withProtocol = address.includes('://') ? address : `http://${address}`;
+    try {
+        return new URL(withProtocol).hostname.toLowerCase();
+    } catch {
+        return address.toLowerCase();
+    }
+}
+
+function looksLikeZillizAddress(address: string): boolean {
+    const host = normalizeHost(address);
+    return host.endsWith('cloud.zilliz.com') || host.endsWith('zillizcloud.com');
 }
 
 /**
@@ -61,6 +77,8 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
     protected config: MilvusRestfulConfig;
     private baseUrl: string | null = null;
     protected initializationPromise: Promise<void>;
+    private resolvedAddress: string | null = null;
+    private resolvedFromToken: boolean = false;
 
     constructor(config: MilvusRestfulConfig) {
         this.config = config;
@@ -82,6 +100,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         }
 
         this.baseUrl = processedAddress.replace(/\/$/, '') + '/v2/vectordb';
+        this.resolvedAddress = processedAddress;
 
         console.log(`🔌 Connecting to Milvus REST API at: ${processedAddress}`);
     }
@@ -92,9 +111,11 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
      */
     protected async resolveAddress(): Promise<string> {
         let finalConfig = { ...this.config };
+        this.resolvedFromToken = false;
 
         // If address is not provided, get it using token
         if (!finalConfig.address && finalConfig.token) {
+            this.resolvedFromToken = true;
             finalConfig.address = await ClusterManager.getAddressFromToken(finalConfig.token);
         }
 
@@ -345,6 +366,11 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
     }
 
     async listCollections(): Promise<string[]> {
+        const details = await this.listCollectionDetails();
+        return details.map((collection) => collection.name);
+    }
+
+    async listCollectionDetails(): Promise<CollectionDetails[]> {
         await this.ensureInitialized();
 
         try {
@@ -353,11 +379,48 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
                 dbName: restfulConfig.database
             });
 
-            return response.data || [];
+            if (!Array.isArray(response.data)) {
+                return [];
+            }
+
+            return response.data
+                .map((item: any) => {
+                    if (typeof item === 'string') {
+                        return { name: item };
+                    }
+
+                    const name = item?.name || item?.collectionName;
+                    if (typeof name !== 'string' || name.length === 0) {
+                        return null;
+                    }
+
+                    const rawCreatedAt = item?.createdAt || item?.createTime;
+                    let createdAt: string | undefined;
+                    if (typeof rawCreatedAt === 'string') {
+                        const parsed = Date.parse(rawCreatedAt);
+                        if (Number.isFinite(parsed)) {
+                            createdAt = new Date(parsed).toISOString();
+                        }
+                    }
+
+                    return { name, createdAt };
+                })
+                .filter((item: CollectionDetails | null): item is CollectionDetails => item !== null);
         } catch (error) {
             console.error(`[MilvusRestfulDB] ❌ Failed to list collections:`, error);
             throw error;
         }
+    }
+
+    getBackendInfo(): VectorStoreBackendInfo {
+        const address = this.resolvedAddress || this.config.address;
+        const isZilliz = Boolean(address && looksLikeZillizAddress(address)) || this.resolvedFromToken;
+
+        return {
+            provider: isZilliz ? 'zilliz' : 'milvus',
+            transport: 'rest',
+            address,
+        };
     }
 
     async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {

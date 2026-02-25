@@ -1,4 +1,4 @@
-import { MilvusClient, DataType, MetricType, FunctionType, LoadState } from '@zilliz/milvus2-sdk-node';
+import { MilvusClient, DataType, MetricType, FunctionType, LoadState, hybridtsToUnixtime } from '@zilliz/milvus2-sdk-node';
 import {
     VectorDocument,
     SearchOptions,
@@ -7,8 +7,118 @@ import {
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,
+    CollectionDetails,
+    VectorStoreBackendInfo,
 } from './types';
 import { ClusterManager } from './zilliz-utils';
+
+const COLLECTION_LIMIT_PATTERNS = [
+    /exceeded the limit number of collections/i,
+    /collection limit/i,
+    /too many collections/i,
+    /quota.*collection/i,
+];
+
+function collectErrorText(
+    value: unknown,
+    output: string[],
+    visited: Set<unknown>,
+    depth: number = 0
+): void {
+    if (value === null || value === undefined || depth > 4 || output.length >= 8) {
+        return;
+    }
+
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed.length > 0) {
+            output.push(trimmed);
+        }
+        return;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        output.push(String(value));
+        return;
+    }
+
+    if (value instanceof Error) {
+        collectErrorText(value.message, output, visited, depth + 1);
+        collectErrorText((value as any).cause, output, visited, depth + 1);
+        return;
+    }
+
+    if (typeof value !== 'object') {
+        return;
+    }
+
+    if (visited.has(value)) {
+        return;
+    }
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            collectErrorText(item, output, visited, depth + 1);
+            if (output.length >= 8) {
+                return;
+            }
+        }
+        return;
+    }
+
+    const record = value as Record<string, unknown>;
+    const priorityKeys = ['message', 'reason', 'detail', 'details', 'error', 'msg', 'code', 'error_code'];
+    for (const key of priorityKeys) {
+        if (key in record) {
+            collectErrorText(record[key], output, visited, depth + 1);
+            if (output.length >= 8) {
+                return;
+            }
+        }
+    }
+
+    for (const nestedValue of Object.values(record)) {
+        collectErrorText(nestedValue, output, visited, depth + 1);
+        if (output.length >= 8) {
+            return;
+        }
+    }
+}
+
+function stringifyMilvusError(error: unknown): string {
+    const messages: string[] = [];
+    collectErrorText(error, messages, new Set());
+
+    const deduped = Array.from(new Set(messages.map((message) => message.trim()).filter(Boolean)));
+    if (deduped.length > 0) {
+        return deduped.slice(0, 3).join(' | ');
+    }
+
+    try {
+        return JSON.stringify(error);
+    } catch {
+        return String(error);
+    }
+}
+
+function isCollectionLimitErrorMessage(message: string): boolean {
+    return COLLECTION_LIMIT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function normalizeHost(address: string): string {
+    const withProtocol = address.includes('://') ? address : `http://${address}`;
+    try {
+        return new URL(withProtocol).hostname.toLowerCase();
+    } catch {
+        return address.toLowerCase();
+    }
+}
+
+function looksLikeZillizAddress(address: string): boolean {
+    const host = normalizeHost(address);
+    return host.endsWith('cloud.zilliz.com') || host.endsWith('zillizcloud.com');
+}
 
 export interface MilvusConfig {
     address?: string;
@@ -24,6 +134,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
     protected config: MilvusConfig;
     private client: MilvusClient | null = null;
     protected initializationPromise: Promise<void>;
+    private resolvedAddress: string | null = null;
+    private resolvedFromToken: boolean = false;
 
     constructor(config: MilvusConfig) {
         this.config = config;
@@ -55,9 +167,11 @@ export class MilvusVectorDatabase implements VectorDatabase {
      */
     protected async resolveAddress(): Promise<string> {
         let finalConfig = { ...this.config };
+        this.resolvedFromToken = false;
 
         // If address is not provided, get it using token
         if (!finalConfig.address && finalConfig.token) {
+            this.resolvedFromToken = true;
             finalConfig.address = await ClusterManager.getAddressFromToken(finalConfig.token);
         }
 
@@ -65,6 +179,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             throw new Error('Address is required and could not be resolved from token');
         }
 
+        this.resolvedAddress = finalConfig.address;
         return finalConfig.address;
     }
 
@@ -330,6 +445,11 @@ export class MilvusVectorDatabase implements VectorDatabase {
     }
 
     async listCollections(): Promise<string[]> {
+        const details = await this.listCollectionDetails();
+        return details.map((collection) => collection.name);
+    }
+
+    async listCollectionDetails(): Promise<CollectionDetails[]> {
         await this.ensureInitialized();
 
         if (!this.client) {
@@ -337,9 +457,51 @@ export class MilvusVectorDatabase implements VectorDatabase {
         }
 
         const result = await this.client.showCollections();
-        // Handle the response format - cast to any to avoid type errors
-        const collections = (result as any).collection_names || (result as any).collections || [];
-        return Array.isArray(collections) ? collections : [];
+        const payload = result as any;
+
+        if (Array.isArray(payload?.data)) {
+            return payload.data
+                .map((entry: any) => {
+                    const name = typeof entry?.name === 'string' ? entry.name : '';
+                    const rawTimestamp = entry?.timestamp;
+                    let createdAt: string | undefined;
+
+                    if (rawTimestamp !== null && rawTimestamp !== undefined && rawTimestamp !== '') {
+                        try {
+                            const unixSeconds = Number(hybridtsToUnixtime(String(rawTimestamp)));
+                            if (Number.isFinite(unixSeconds) && unixSeconds > 0) {
+                                createdAt = new Date(unixSeconds * 1000).toISOString();
+                            }
+                        } catch {
+                            // Best-effort only; keep createdAt undefined when timestamp parsing fails.
+                        }
+                    }
+
+                    return { name, createdAt };
+                })
+                .filter((entry: CollectionDetails) => entry.name.length > 0);
+        }
+
+        // Legacy response fallback
+        const collections = payload?.collection_names || payload?.collections || [];
+        if (!Array.isArray(collections)) {
+            return [];
+        }
+
+        return collections
+            .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0)
+            .map((name) => ({ name }));
+    }
+
+    getBackendInfo(): VectorStoreBackendInfo {
+        const address = this.resolvedAddress || this.config.address;
+        const isZilliz = Boolean(address && looksLikeZillizAddress(address)) || this.resolvedFromToken;
+
+        return {
+            provider: isZilliz ? 'zilliz' : 'milvus',
+            transport: 'grpc',
+            address,
+        };
     }
 
     async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
@@ -719,6 +881,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
      * Returns true if collection can be created, false if limit exceeded
      */
     async checkCollectionLimit(): Promise<boolean> {
+        await this.ensureInitialized();
+
         if (!this.client) {
             throw new Error('MilvusClient is not initialized. Call ensureInitialized() first.');
         }
@@ -752,14 +916,13 @@ export class MilvusVectorDatabase implements VectorDatabase {
             }
             return true;
         } catch (error: any) {
-            // Check if the error message contains the collection limit exceeded pattern
-            const errorMessage = error.message || error.toString() || '';
-            if (/exceeded the limit number of collections/i.test(errorMessage)) {
+            const errorMessage = stringifyMilvusError(error);
+            if (isCollectionLimitErrorMessage(errorMessage)) {
                 // Return false for collection limit exceeded
                 return false;
             }
-            // Re-throw other errors as-is
-            throw error;
+            // Re-throw with useful details instead of generic [object Object]
+            throw new Error(errorMessage);
         }
     }
 }

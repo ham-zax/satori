@@ -65,8 +65,9 @@ Manage index lifecycle operations (create/sync/status/clear) for a codebase path
 | `path` | string | yes |  | ABSOLUTE path to the target codebase. |
 | `force` | boolean | no |  | Only for action='create'. Force rebuild from scratch. |
 | `splitter` | enum("ast", "langchain") | no |  | Only for action='create'. Code splitter strategy. |
-| `customExtensions` | array\<string\> | no |  | Only for action='create'. Additional file extensions to include. |
-| `ignorePatterns` | array\<string\> | no |  | Only for action='create'. Additional ignore patterns to apply. |
+| `customExtensions` | array<string> | no |  | Only for action='create'. Additional file extensions to include. |
+| `ignorePatterns` | array<string> | no |  | Only for action='create'. Additional ignore patterns to apply. |
+| `zillizDropCollection` | string | no |  | Only for action='create'. Zilliz-only: drop this Satori-managed collection before creating the new index. |
 
 ### `search_codebase`
 
@@ -77,9 +78,9 @@ Unified semantic search tool. Supports optional reranking and query-time exclude
 | `path` | string | yes |  | ABSOLUTE path to an indexed codebase or subdirectory. |
 | `query` | string | yes |  | Natural-language query. |
 | `limit` | integer | no | `50` | Maximum results to return. |
-| `extensionFilter` | array\<string\> | no | `[]` | Optional file-extension filter (e.g. ['.ts','.py']). |
+| `extensionFilter` | array<string> | no | `[]` | Optional file-extension filter (e.g. ['.ts','.py']). |
 | `useIgnoreFiles` | boolean | no | `true` | Apply repo ignore files at search-time. |
-| `excludePatterns` | array\<string\> | no | `[]` | Optional query-time exclude patterns. |
+| `excludePatterns` | array<string> | no | `[]` | Optional query-time exclude patterns. |
 | `returnRaw` | boolean | no | `false` | Return machine-readable JSON results. |
 | `showScores` | boolean | no | `false` | Include similarity scores in formatted output. |
 | `useReranker` | boolean | no |  | Optional override: true=force rerank, false=disable rerank, omitted=resolver default. |

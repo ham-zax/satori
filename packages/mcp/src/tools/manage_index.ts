@@ -9,7 +9,8 @@ const manageIndexInputSchema = z.object({
     force: z.boolean().optional().describe("Only for action='create'. Force rebuild from scratch."),
     splitter: z.enum(["ast", "langchain"]).optional().describe("Only for action='create'. Code splitter strategy."),
     customExtensions: z.array(z.string()).optional().describe("Only for action='create'. Additional file extensions to include."),
-    ignorePatterns: z.array(z.string()).optional().describe("Only for action='create'. Additional ignore patterns to apply.")
+    ignorePatterns: z.array(z.string()).optional().describe("Only for action='create'. Additional ignore patterns to apply."),
+    zillizDropCollection: z.string().min(1).optional().describe("Only for action='create'. Zilliz-only: drop this Satori-managed collection before creating the new index.")
 });
 
 export const manageIndexTool: McpTool = {

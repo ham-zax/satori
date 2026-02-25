@@ -151,6 +151,8 @@ MCP Client
       +------------------------------+   +----------------------+
 ```
 
+Operational note: on Zilliz Cloud (Milvus) free tier, Satori can index up to 5 codebases (one collection per codebase).
+
 Control/state paths:
 - `~/.satori/mcp-codebase-snapshot.json`
 - `~/.satori/merkle/<md5(codebasePath)>.json`

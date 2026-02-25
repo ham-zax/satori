@@ -7,6 +7,131 @@ import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils
 import { SyncManager } from "./sync.js";
 import { IndexFingerprint } from "../config.js";
 
+const COLLECTION_LIMIT_PATTERNS = [
+    /exceeded the limit number of collections/i,
+    /collection limit/i,
+    /too many collections/i,
+    /quota.*collection/i,
+];
+
+const SATORI_COLLECTION_PREFIXES = ['code_chunks_', 'hybrid_code_chunks_'];
+const ZILLIZ_FREE_TIER_COLLECTION_LIMIT = 5;
+
+interface CandidateCollection {
+    name: string;
+    createdAt?: string;
+    codebasePath?: string;
+    isTargetCollection: boolean;
+}
+
+interface CollectionDetailsView {
+    name: string;
+    createdAt?: string;
+}
+
+interface VectorStoreBackendInfoView {
+    provider: 'milvus' | 'zilliz';
+    transport: 'grpc' | 'rest';
+    address?: string;
+}
+
+function collectErrorFragments(
+    value: unknown,
+    output: string[],
+    visited: Set<unknown>,
+    depth: number = 0
+): void {
+    if (value === null || value === undefined || depth > 4 || output.length >= 8) {
+        return;
+    }
+
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed.length > 0) {
+            output.push(trimmed);
+        }
+        return;
+    }
+
+    if (typeof value === "number" || typeof value === "boolean") {
+        output.push(String(value));
+        return;
+    }
+
+    if (value instanceof Error) {
+        collectErrorFragments(value.message, output, visited, depth + 1);
+        collectErrorFragments((value as any).cause, output, visited, depth + 1);
+        return;
+    }
+
+    if (typeof value !== "object") {
+        return;
+    }
+
+    if (visited.has(value)) {
+        return;
+    }
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            collectErrorFragments(item, output, visited, depth + 1);
+            if (output.length >= 8) {
+                return;
+            }
+        }
+        return;
+    }
+
+    const record = value as Record<string, unknown>;
+    const priorityKeys = ["message", "reason", "detail", "details", "error", "msg", "code", "error_code"];
+    for (const key of priorityKeys) {
+        if (key in record) {
+            collectErrorFragments(record[key], output, visited, depth + 1);
+            if (output.length >= 8) {
+                return;
+            }
+        }
+    }
+
+    for (const nestedValue of Object.values(record)) {
+        collectErrorFragments(nestedValue, output, visited, depth + 1);
+        if (output.length >= 8) {
+            return;
+        }
+    }
+}
+
+function formatUnknownError(error: unknown): string {
+    if (error === COLLECTION_LIMIT_MESSAGE) {
+        return COLLECTION_LIMIT_MESSAGE;
+    }
+
+    const fragments: string[] = [];
+    collectErrorFragments(error, fragments, new Set());
+    const deduped = Array.from(new Set(fragments.map((fragment) => fragment.trim()).filter(Boolean)));
+    if (deduped.length > 0) {
+        return deduped.slice(0, 3).join(" | ");
+    }
+
+    try {
+        return JSON.stringify(error);
+    } catch {
+        return String(error);
+    }
+}
+
+function isCollectionLimitError(error: unknown): boolean {
+    if (error === COLLECTION_LIMIT_MESSAGE) {
+        return true;
+    }
+    const message = formatUnknownError(error);
+    if (message === COLLECTION_LIMIT_MESSAGE) {
+        return true;
+    }
+    return COLLECTION_LIMIT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 export class ToolHandlers {
     private context: Context;
     private snapshotManager: SnapshotManager;
@@ -209,6 +334,285 @@ export class ToolHandlers {
         return `   🧬 Scope: ${capped}\n`;
     }
 
+    private getVectorStore(): any {
+        return this.context.getVectorStore() as any;
+    }
+
+    private isSatoriCodeCollection(collectionName: string): boolean {
+        return SATORI_COLLECTION_PREFIXES.some((prefix) => collectionName.startsWith(prefix));
+    }
+
+    private getVectorBackendInfo(): VectorStoreBackendInfoView | null {
+        const vectorDb = this.getVectorStore();
+        if (typeof vectorDb.getBackendInfo !== 'function') {
+            return null;
+        }
+
+        try {
+            const info = vectorDb.getBackendInfo();
+            if (!info || typeof info !== 'object') {
+                return null;
+            }
+
+            if (info.provider !== 'milvus' && info.provider !== 'zilliz') {
+                return null;
+            }
+
+            if (info.transport !== 'grpc' && info.transport !== 'rest') {
+                return null;
+            }
+
+            return {
+                provider: info.provider,
+                transport: info.transport,
+                address: typeof info.address === 'string' ? info.address : undefined,
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    private isZillizBackend(): boolean {
+        const backendInfo = this.getVectorBackendInfo();
+        return backendInfo?.provider === 'zilliz';
+    }
+
+    private async listCollectionDetailsWithFallback(vectorDb: any): Promise<CollectionDetailsView[]> {
+        if (typeof vectorDb.listCollectionDetails === 'function') {
+            const details = await vectorDb.listCollectionDetails();
+            if (Array.isArray(details)) {
+                return details
+                    .filter((detail): detail is CollectionDetailsView => Boolean(detail && typeof detail.name === 'string' && detail.name.length > 0))
+                    .map((detail) => ({
+                        name: detail.name,
+                        createdAt: detail.createdAt,
+                    }));
+            }
+        }
+
+        const names = await vectorDb.listCollections();
+        if (!Array.isArray(names)) {
+            return [];
+        }
+
+        return names
+            .filter((name): name is string => typeof name === 'string' && name.length > 0)
+            .map((name) => ({ name }));
+    }
+
+    private parseCodebaseFromMetadata(metadataValue: unknown): string | undefined {
+        if (typeof metadataValue !== 'string' || metadataValue.trim().length === 0) {
+            return undefined;
+        }
+
+        try {
+            const metadata = JSON.parse(metadataValue);
+            const codebasePath = metadata?.codebasePath;
+            return typeof codebasePath === 'string' && codebasePath.trim().length > 0
+                ? codebasePath
+                : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private async resolveCollectionCodebasePath(
+        vectorDb: any,
+        collectionName: string,
+        byCollectionName: Map<string, string>
+    ): Promise<string | undefined> {
+        const knownPath = byCollectionName.get(collectionName);
+        if (knownPath) {
+            return knownPath;
+        }
+
+        try {
+            const results = await vectorDb.query(collectionName, '', ['metadata'], 1);
+            if (!Array.isArray(results) || results.length === 0) {
+                return undefined;
+            }
+
+            return this.parseCodebaseFromMetadata(results[0]?.metadata);
+        } catch {
+            return undefined;
+        }
+    }
+
+    private formatCollectionTimestamp(createdAt?: string): string {
+        if (!createdAt) {
+            return '[unknown]';
+        }
+
+        const timestamp = Date.parse(createdAt);
+        if (!Number.isFinite(timestamp)) {
+            return createdAt;
+        }
+
+        return new Date(timestamp).toISOString();
+    }
+
+    private async buildZillizCollectionLimitGuidance(targetCodebasePath: string): Promise<string> {
+        const targetCollectionName = this.context.resolveCollectionName(targetCodebasePath);
+        const vectorDb = this.getVectorStore();
+        const collectionDetails = await this.listCollectionDetailsWithFallback(vectorDb);
+        const codeCollections = collectionDetails.filter((detail) => this.isSatoriCodeCollection(detail.name));
+
+        const trackedCodebases = this.snapshotManager.getAllCodebases().map((entry) => entry.path);
+        const byCollectionName = new Map<string, string>();
+        for (const codebasePath of trackedCodebases) {
+            byCollectionName.set(this.context.resolveCollectionName(codebasePath), codebasePath);
+        }
+
+        const candidates: CandidateCollection[] = [];
+        for (const detail of codeCollections) {
+            const codebasePath = await this.resolveCollectionCodebasePath(vectorDb, detail.name, byCollectionName);
+            candidates.push({
+                name: detail.name,
+                createdAt: detail.createdAt,
+                codebasePath,
+                isTargetCollection: detail.name === targetCollectionName,
+            });
+        }
+
+        candidates.sort((a, b) => {
+            const aTime = a.createdAt ? Date.parse(a.createdAt) : NaN;
+            const bTime = b.createdAt ? Date.parse(b.createdAt) : NaN;
+            const aValid = Number.isFinite(aTime);
+            const bValid = Number.isFinite(bTime);
+            if (aValid && bValid) {
+                return aTime - bTime;
+            }
+            if (aValid) return -1;
+            if (bValid) return 1;
+            return a.name.localeCompare(b.name);
+        });
+
+        const oldestName = candidates.length > 0 ? candidates[0].name : undefined;
+        const newestName = candidates.length > 1 ? candidates[candidates.length - 1].name : oldestName;
+        const lines = candidates.map((candidate, index) => {
+            const codebaseInfo = candidate.codebasePath ? candidate.codebasePath : '[unknown]';
+            const labels: string[] = [];
+            if (candidate.name === oldestName) labels.push('oldest');
+            if (candidate.name === newestName) labels.push('newest');
+            if (candidate.isTargetCollection) labels.push('target');
+            const labelText = labels.length > 0 ? ` [${labels.join(', ')}]` : '';
+            return `${index + 1}. ${candidate.name}${labelText} | codebase: ${codebaseInfo} | created: ${this.formatCollectionTimestamp(candidate.createdAt)}`;
+        });
+
+        const suggestions = lines.length > 0
+            ? lines.join('\n')
+            : 'No Satori-managed collections were discovered.';
+
+        return `${COLLECTION_LIMIT_MESSAGE}
+
+Reason: Zilliz free-tier clusters are capped at ${ZILLIZ_FREE_TIER_COLLECTION_LIMIT} collections, and this cluster has no remaining collection slots.
+Target codebase: '${targetCodebasePath}'
+Target collection: '${targetCollectionName}'
+
+Current Satori-managed collections (oldest -> newest):
+${suggestions}
+
+To continue, choose one collection from the list and retry:
+manage_index {"action":"create","path":"${targetCodebasePath}","zillizDropCollection":"<collection_name>"}
+
+Agent instructions:
+1. Show this list to the user and ask which collection to delete.
+2. Do not auto-delete without explicit user confirmation.
+3. Retry create with zillizDropCollection set to the exact chosen collection name.`;
+    }
+
+    private async buildCollectionLimitMessage(targetCodebasePath: string): Promise<string> {
+        if (!this.isZillizBackend()) {
+            return COLLECTION_LIMIT_MESSAGE;
+        }
+
+        try {
+            return await this.buildZillizCollectionLimitGuidance(targetCodebasePath);
+        } catch (error) {
+            console.warn(`[INDEX-VALIDATION] Failed to build Zilliz collection guidance: ${formatUnknownError(error)}`);
+            return COLLECTION_LIMIT_MESSAGE;
+        }
+    }
+
+    private async clearAllCollectionsForForceReindex(codebasePath: string): Promise<string[]> {
+        const vectorDb = this.getVectorStore();
+        const resolvedCollectionName = this.context.resolveCollectionName(codebasePath);
+        const hash = resolvedCollectionName.split('_').pop();
+
+        const candidateNames = new Set<string>();
+        if (hash) {
+            candidateNames.add(`code_chunks_${hash}`);
+            candidateNames.add(`hybrid_code_chunks_${hash}`);
+        }
+        candidateNames.add(resolvedCollectionName);
+
+        try {
+            const cloudCollections = await this.listCollectionDetailsWithFallback(vectorDb);
+            for (const collection of cloudCollections) {
+                if (!this.isSatoriCodeCollection(collection.name)) {
+                    continue;
+                }
+                if (hash && collection.name.endsWith(`_${hash}`)) {
+                    candidateNames.add(collection.name);
+                }
+            }
+        } catch (error) {
+            console.warn(`[FORCE-REINDEX] Failed to list cloud collections while preparing cleanup: ${formatUnknownError(error)}`);
+        }
+
+        const droppedCollections: string[] = [];
+        for (const candidateName of candidateNames) {
+            try {
+                if (await vectorDb.hasCollection(candidateName)) {
+                    await vectorDb.dropCollection(candidateName);
+                    droppedCollections.push(candidateName);
+                }
+            } catch (error) {
+                console.warn(`[FORCE-REINDEX] Failed to drop collection '${candidateName}': ${formatUnknownError(error)}`);
+            }
+        }
+
+        // Ensure local Merkle/snapshot state is cleared for this codebase.
+        try {
+            await this.context.clearIndex(codebasePath);
+        } catch (error) {
+            console.warn(`[FORCE-REINDEX] Failed to clear local sync snapshot for '${codebasePath}': ${formatUnknownError(error)}`);
+        }
+
+        return droppedCollections;
+    }
+
+    private async dropZillizCollectionForCreate(collectionName: string): Promise<{ droppedCodebasePath?: string }> {
+        const trimmedName = collectionName.trim();
+        if (trimmedName.length === 0) {
+            throw new Error('zillizDropCollection must be a non-empty string.');
+        }
+
+        if (!this.isSatoriCodeCollection(trimmedName)) {
+            throw new Error(`zillizDropCollection '${trimmedName}' is not a Satori-managed collection (expected prefix ${SATORI_COLLECTION_PREFIXES.join(' or ')}).`);
+        }
+
+        const vectorDb = this.getVectorStore();
+        if (!await vectorDb.hasCollection(trimmedName)) {
+            throw new Error(`Collection '${trimmedName}' does not exist in the connected Zilliz cluster.`);
+        }
+
+        const droppedCodebasePath = await this.resolveCollectionCodebasePath(vectorDb, trimmedName, new Map());
+        await vectorDb.dropCollection(trimmedName);
+
+        if (droppedCodebasePath) {
+            this.snapshotManager.removeCodebaseCompletely(droppedCodebasePath);
+            this.snapshotManager.saveCodebaseSnapshot();
+            try {
+                await this.syncManager.unregisterCodebaseWatcher(droppedCodebasePath);
+            } catch {
+                // Best-effort watcher cleanup; dropping cloud collection remains successful.
+            }
+        }
+
+        return { droppedCodebasePath };
+    }
+
     /**
      * Sync indexed codebases from Zilliz Cloud collections
      * This method fetches all collections from the vector database,
@@ -364,17 +768,19 @@ export class ToolHandlers {
 
             console.log(`[SYNC-CLOUD] ✅ Cloud sync completed successfully`);
         } catch (error: any) {
-            console.error(`[SYNC-CLOUD] ❌ Error syncing codebases from cloud:`, error.message || error);
+            console.error(`[SYNC-CLOUD] ❌ Error syncing codebases from cloud:`, formatUnknownError(error));
             // Don't throw - this is not critical for the main functionality
         }
     }
 
     public async handleIndexCodebase(args: any) {
-        const { path: codebasePath, force, splitter, customExtensions, ignorePatterns } = args;
+        const { path: codebasePath, force, splitter, customExtensions, ignorePatterns, zillizDropCollection } = args;
         const forceReindex = force || false;
         const splitterType = splitter || 'ast'; // Default to AST
         const customFileExtensions = customExtensions || [];
         const customIgnorePatterns = ignorePatterns || [];
+        const requestedDropCollection = typeof zillizDropCollection === 'string' ? zillizDropCollection.trim() : undefined;
+        let dropSummaryLine = '';
 
         try {
             // Sync indexed codebases from cloud first
@@ -457,16 +863,52 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            // If force reindex and codebase is already indexed, remove it
+            // If force reindex, always clear every previous collection for this codebase hash.
             if (forceReindex) {
-                if (this.snapshotManager.getIndexedCodebases().includes(absolutePath) || this.snapshotManager.getCodebaseStatus(absolutePath) === 'requires_reindex') {
-                    console.log(`[FORCE-REINDEX] 🔄 Removing '${absolutePath}' from indexed list for re-indexing`);
-                    this.snapshotManager.removeCodebaseCompletely(absolutePath);
+                console.log(`[FORCE-REINDEX] 🔄 Preparing force cleanup for '${absolutePath}'`);
+                this.snapshotManager.removeCodebaseCompletely(absolutePath);
+                this.snapshotManager.saveCodebaseSnapshot();
+                try {
+                    await this.syncManager.unregisterCodebaseWatcher(absolutePath);
+                } catch {
+                    // Best-effort watcher cleanup before force rebuild.
                 }
-                if (await this.context.hasIndexedCollection(absolutePath)) {
-                    console.log(`[FORCE-REINDEX] 🔄 Clearing index for '${absolutePath}'`);
-                    await this.context.clearIndex(absolutePath);
+
+                const droppedCollections = await this.clearAllCollectionsForForceReindex(absolutePath);
+                if (droppedCollections.length > 0) {
+                    const sortedDroppedCollections = [...droppedCollections].sort();
+                    dropSummaryLine += `\nForce reindex cleanup dropped ${sortedDroppedCollections.length} prior collection(s) for this codebase hash: ${sortedDroppedCollections.join(', ')}.`;
+                } else {
+                    dropSummaryLine += `\nForce reindex cleanup found no prior collections for this codebase hash.`;
                 }
+            }
+
+            if (requestedDropCollection) {
+                if (!this.isZillizBackend()) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Error: zillizDropCollection is only supported when connected to a Zilliz Cloud backend."
+                        }],
+                        isError: true
+                    };
+                }
+
+                const targetCollectionName = this.context.resolveCollectionName(absolutePath);
+                if (requestedDropCollection === targetCollectionName) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: `Error: zillizDropCollection cannot target '${targetCollectionName}' for this same codebase create flow. Use {"action":"create","path":"${absolutePath}","force":true} for reindexing this codebase.`
+                        }],
+                        isError: true
+                    };
+                }
+
+                const dropResult = await this.dropZillizCollectionForCreate(requestedDropCollection);
+                dropSummaryLine += dropResult.droppedCodebasePath
+                    ? `\nDropped Zilliz collection '${requestedDropCollection}' (mapped codebase: '${dropResult.droppedCodebasePath}').`
+                    : `\nDropped Zilliz collection '${requestedDropCollection}'.`;
             }
 
             // CRITICAL: Pre-index collection creation validation
@@ -476,12 +918,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
                 if (!canCreateCollection) {
                     console.error(`[INDEX-VALIDATION] ❌ Collection limit validation failed: ${absolutePath}`);
-
-                    // CRITICAL: Immediately return the COLLECTION_LIMIT_MESSAGE to MCP client
+                    const guidanceMessage = await this.buildCollectionLimitMessage(absolutePath);
                     return {
                         content: [{
                             type: "text",
-                            text: COLLECTION_LIMIT_MESSAGE
+                            text: guidanceMessage
                         }],
                         isError: true
                     };
@@ -491,10 +932,22 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             } catch (validationError: any) {
                 // Handle other collection creation errors
                 console.error(`[INDEX-VALIDATION] ❌ Collection creation validation failed:`, validationError);
+                if (isCollectionLimitError(validationError)) {
+                    const guidanceMessage = await this.buildCollectionLimitMessage(absolutePath);
+                    return {
+                        content: [{
+                            type: "text",
+                            text: guidanceMessage
+                        }],
+                        isError: true
+                    };
+                }
+
+                const validationMessage = formatUnknownError(validationError);
                 return {
                     content: [{
                         type: "text",
-                        text: `Error validating collection creation: ${validationError.message || validationError}`
+                        text: `Error validating collection creation: ${validationMessage}`
                     }],
                     isError: true
                 };
@@ -544,19 +997,20 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             return {
                 content: [{
                     type: "text",
-                    text: `Started background indexing for codebase '${absolutePath}' using ${splitterType.toUpperCase()} splitter.${pathInfo}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`
+                    text: `Started background indexing for codebase '${absolutePath}' using ${splitterType.toUpperCase()} splitter.${pathInfo}${dropSummaryLine}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`
                 }]
             };
 
         } catch (error: any) {
             // Enhanced error handling to prevent MCP service crash
             console.error('Error in handleIndexCodebase:', error);
+            const errorMessage = formatUnknownError(error);
 
             // Ensure we always return a proper MCP response, never throw
             return {
                 content: [{
                     type: "text",
-                    text: `Error starting indexing: ${error.message || error}`
+                    text: `Error starting indexing: ${errorMessage}`
                 }],
                 isError: true
             };
@@ -645,7 +1099,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const lastProgress = this.snapshotManager.getIndexingProgress(absolutePath);
 
             // Set codebase to failed status with error information
-            const errorMessage = error.message || String(error);
+            let errorMessage = formatUnknownError(error);
+            if (isCollectionLimitError(error)) {
+                errorMessage = await this.buildCollectionLimitMessage(absolutePath);
+            }
             this.snapshotManager.setCodebaseIndexFailed(absolutePath, errorMessage, lastProgress);
             this.snapshotManager.saveCodebaseSnapshot();
 

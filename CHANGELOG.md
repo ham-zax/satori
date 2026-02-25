@@ -2,6 +2,23 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Runtime Scope Filter Hardening
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.1.0`
+- `@zokizuan/satori-core`: `0.1.7`
+
+### Fixed
+- Hardened `search_codebase` path categorization for strict scope filtering:
+  - Top-level `tests/` and `test/` paths are now classified as test paths.
+  - Top-level `docs/` plus `doc/`, `documentation/`, `guide/`, and `guides/` paths are now classified as docs paths.
+- Closed runtime leakage where `scope:"runtime"` could include top-level test fixture files (for example `tests/fixtures/...`).
+
+### Tests
+- Extended scope regression coverage:
+  - Runtime scope now explicitly verifies exclusion of `tests/fixtures/offline-corpus/...`.
+  - Docs scope now verifies inclusion of non-markdown files under `docs/` (for example `docs/runtime-helper.ts`).
+
 ## [2026-02-26] Navigation-First Fast Path
 
 ### Added

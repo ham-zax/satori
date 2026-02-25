@@ -153,6 +153,39 @@ test('call graph sidecar emits missing_symbol_metadata notes without synthetic n
     });
 });
 
+test('call graph does not emit declaration self-loop edges for non-recursive symbols', async () => {
+    await withTempRepo(async (repoPath) => {
+        const filePath = path.join(repoPath, 'src', 'runtime.ts');
+        fs.writeFileSync(filePath, [
+            'export function helper() {',
+            '  return true;',
+            '}',
+            '',
+            'export function runtimeEntry() {',
+            '  return helper();',
+            '}',
+            ''
+        ].join('\n'));
+
+        const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT, {
+            now: () => Date.parse('2026-01-01T00:00:00.000Z')
+        });
+
+        await manager.rebuildForCodebase(repoPath);
+        const sidecar = manager.loadSidecar(repoPath);
+        assert.ok(sidecar);
+
+        const runtimeEntryNode = sidecar!.nodes.find((node) => (node.symbolLabel || '').toLowerCase().includes('function runtimeentry'));
+        assert.ok(runtimeEntryNode);
+
+        const selfLoop = sidecar!.edges.find((edge) =>
+            edge.srcSymbolId === runtimeEntryNode!.symbolId && edge.dstSymbolId === runtimeEntryNode!.symbolId
+        );
+
+        assert.equal(selfLoop, undefined);
+    });
+});
+
 test('supported source delta policy only rebuilds for source file changes', () => {
     const policy = new SupportedSourceDeltaPolicy();
     assert.equal(policy.shouldRebuild(['README.md', 'docs/notes.txt']), false);

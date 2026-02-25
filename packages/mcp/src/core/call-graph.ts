@@ -583,12 +583,12 @@ export class CallGraphSidecarManager {
 
     private looksLikeDefinition(line: string, name: string): boolean {
         const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const pattern = new RegExp(`\\b(function|class|def)\\s+${escaped}\\b`);
+        const pattern = new RegExp(`\\b(function|class|def)\\s+${escaped}\\b`, 'i');
         if (pattern.test(line)) {
             return true;
         }
 
-        const methodPattern = new RegExp(`\\b${escaped}\\s*\\([^)]*\\)\\s*(=>|\\{)`);
+        const methodPattern = new RegExp(`\\b${escaped}\\s*\\([^)]*\\)\\s*(=>|\\{)`, 'i');
         return methodPattern.test(line);
     }
 

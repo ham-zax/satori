@@ -2,6 +2,19 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Call Graph Declaration Parsing Hardening
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.2.0`
+- `@zokizuan/satori-core`: `0.1.7`
+
+### Fixed
+- Prevented false-positive self-loop edges in `call_graph` caused by declaration lines being parsed as call sites.
+- Hardened definition detection to be case-insensitive for `function|class|def` and method signatures.
+
+### Tests
+- Added regression coverage that asserts non-recursive symbols do not emit declaration self-loop edges.
+
 ## [2026-02-26] Runtime Scope Filter Hardening
 
 ### Release Versions

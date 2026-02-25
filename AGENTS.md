@@ -173,5 +173,11 @@ git commit -m "feat(domain): enforce idempotent event processing"
 git commit -m "fix(api): fail-closed validation for payload"
 ```
 
+## Versioning
+
+- Default to a **minor** version bump for releases.
+- Do **not** perform a major bump unless the user explicitly asks for a major revision.
+- If a breaking change exists but no explicit major-bump request was given, pause and ask before bumping major.
+
 ---
 *End of Directive. Execute with precision.*

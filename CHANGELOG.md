@@ -5,7 +5,7 @@ All notable changes to this repository are documented in this file.
 ## [2026-02-25] Satori UX Overhaul
 
 ### Release Versions
-- `@zokizuan/satori-mcp`: `2.0.0`
+- `@zokizuan/satori-mcp`: `3.0.0`
 - `@zokizuan/satori-core`: `0.1.7`
 
 ### Added

@@ -596,6 +596,22 @@ export class ToolHandlers {
         };
     }
 
+    private mapCallGraphStatus(graph: { supported: boolean; reason?: string }): 'ok' | 'not_found' | 'unsupported' | 'not_ready' {
+        if (graph.supported) {
+            return 'ok';
+        }
+
+        if (graph.reason === 'missing_symbol') {
+            return 'not_found';
+        }
+
+        if (graph.reason === 'unsupported_language') {
+            return 'unsupported';
+        }
+
+        return 'not_ready';
+    }
+
     private getContextIgnorePatterns(): string[] {
         if (typeof (this.context as any).getActiveIgnorePatterns === 'function') {
             const patterns = (this.context as any).getActiveIgnorePatterns();
@@ -1900,6 +1916,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         content: [{
                             type: "text",
                             text: JSON.stringify({
+                                status: 'not_indexed',
                                 supported: false,
                                 reason: 'not_indexed',
                                 hints: {
@@ -1940,6 +1957,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     content: [{
                         type: "text",
                         text: JSON.stringify({
+                            status: 'not_ready',
                             supported: false,
                             reason: 'missing_sidecar',
                             hints: {
@@ -1961,6 +1979,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 content: [{
                     type: "text",
                     text: JSON.stringify({
+                        status: this.mapCallGraphStatus(graph),
                         path: effectiveRoot,
                         symbolRef,
                         ...graph

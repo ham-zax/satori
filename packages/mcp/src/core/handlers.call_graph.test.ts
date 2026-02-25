@@ -130,3 +130,186 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
         assert.equal(payload.hints.reindex.args.path, repoPath);
     });
 });
+
+test('handleCallGraph returns status ok for v3-compatible indexed call graph query', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => ({
+                version: 'v3',
+                sidecarPath: '/tmp/sidecar.json',
+                builtAt: '2026-01-01T00:00:00.000Z',
+                nodeCount: 1,
+                edgeCount: 0,
+                noteCount: 0,
+                fingerprint: RUNTIME_FINGERPRINT
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+
+        const syncManager = {} as any;
+        const callGraphManager = {
+            queryGraph: () => ({
+                supported: true,
+                direction: 'both',
+                depth: 1,
+                limit: 20,
+                nodes: [],
+                edges: [],
+                notes: [],
+                sidecar: {
+                    builtAt: '2026-01-01T00:00:00.000Z',
+                    nodeCount: 1,
+                    edgeCount: 0
+                }
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/runtime.ts',
+                symbolId: 'sym_runtime_run'
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 20
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.supported, true);
+    });
+});
+
+test('handleCallGraph maps missing_symbol to status not_found', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => ({
+                version: 'v3',
+                sidecarPath: '/tmp/sidecar.json',
+                builtAt: '2026-01-01T00:00:00.000Z',
+                nodeCount: 1,
+                edgeCount: 0,
+                noteCount: 0,
+                fingerprint: RUNTIME_FINGERPRINT
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+
+        const syncManager = {} as any;
+        const callGraphManager = {
+            queryGraph: () => ({
+                supported: false,
+                reason: 'missing_symbol',
+                hints: {
+                    message: 'Symbol not found'
+                }
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/runtime.ts',
+                symbolId: 'sym_missing'
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 20
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_found');
+        assert.equal(payload.supported, false);
+        assert.equal(payload.reason, 'missing_symbol');
+    });
+});
+
+test('handleCallGraph maps unsupported_language to status unsupported', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => ({
+                version: 'v3',
+                sidecarPath: '/tmp/sidecar.json',
+                builtAt: '2026-01-01T00:00:00.000Z',
+                nodeCount: 1,
+                edgeCount: 0,
+                noteCount: 0,
+                fingerprint: RUNTIME_FINGERPRINT
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+
+        const syncManager = {} as any;
+        const callGraphManager = {
+            queryGraph: () => ({
+                supported: false,
+                reason: 'unsupported_language',
+                hints: {
+                    supportedExtensions: ['.ts', '.tsx', '.py']
+                }
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'docs/readme.md',
+                symbolId: 'sym_doc'
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 20
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'unsupported');
+        assert.equal(payload.supported, false);
+        assert.equal(payload.reason, 'unsupported_language');
+    });
+});

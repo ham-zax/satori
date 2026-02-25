@@ -2,6 +2,26 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-25] Language Adapter Registry and JavaScript Symbol Flow
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.5.0`
+- `@zokizuan/satori-core`: `0.1.7`
+
+### Added
+- Added a shared language adapter registry in `@zokizuan/satori-core` to centralize language IDs, aliases, extensions, and capabilities (`astSplitter`, `symbolMetadata`, `callGraphBuild`, `callGraphQuery`, `fileOutline`).
+
+### Modified
+- Refactored splitter/runtime language mapping to use the shared registry as the single source of truth.
+- Extended JS support across symbol/navigation flow:
+  - `call_graph` query gating now supports JavaScript extensions (`.js`, `.jsx`, `.mjs`, `.cjs`) in addition to TS/Python.
+  - `file_outline` support gating now includes JavaScript files.
+  - `read_file(mode:"annotated")` now treats JavaScript files as outline-capable.
+- Updated MCP docs/tool descriptions to reflect TS/JS/Python call-graph support.
+
+### Tests
+- Added regression coverage for JavaScript call-graph query routing and JavaScript outline-capable paths (`file_outline`, `read_file(mode:"annotated")`).
+
 ## [2026-02-26] Fingerprint Diagnostics and Version-Bump Guard
 
 ### Release Versions

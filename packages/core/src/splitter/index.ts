@@ -7,6 +7,8 @@ export interface CodeChunk {
         language?: string;
         filePath?: string;
         breadcrumbs?: string[];
+        symbolId?: string;
+        symbolLabel?: string;
     };
 }
 

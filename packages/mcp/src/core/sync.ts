@@ -8,12 +8,35 @@ import { SnapshotManager } from "./snapshot.js";
 interface SyncManagerOptions {
     watchEnabled?: boolean;
     watchDebounceMs?: number;
+    now?: () => number;
+    onSyncCompleted?: (codebasePath: string, stats: { added: number; removed: number; modified: number; changedFiles: string[] }) => Promise<void> | void;
+}
+
+export type FreshnessDecisionMode =
+    | 'synced'
+    | 'skipped_recent'
+    | 'coalesced'
+    | 'skipped_requires_reindex'
+    | 'skipped_missing_path';
+
+export interface FreshnessDecision {
+    mode: FreshnessDecisionMode;
+    checkedAt: string;
+    thresholdMs: number;
+    lastSyncAt?: string;
+    ageMs?: number;
+    stats?: { added: number; removed: number; modified: number };
+}
+
+interface SyncExecutionOutcome {
+    mode: Exclude<FreshnessDecisionMode, 'coalesced' | 'skipped_recent'>;
+    stats?: { added: number; removed: number; modified: number; changedFiles: string[] };
 }
 
 export class SyncManager {
     private context: Context;
     private snapshotManager: SnapshotManager;
-    private activeSyncs: Map<string, Promise<void>> = new Map();
+    private activeSyncs: Map<string, Promise<SyncExecutionOutcome>> = new Map();
     private lastSyncTimes: Map<string, number> = new Map();
     private backgroundSyncTimer: NodeJS.Timeout | null = null;
     private watcherModeStarted = false;
@@ -22,31 +45,52 @@ export class SyncManager {
     private watchers: Map<string, FSWatcher> = new Map();
     private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
     private watcherIgnoreMatchers: Map<string, ReturnType<typeof ignore>> = new Map();
+    private readonly now: () => number;
+    private readonly onSyncCompleted?: (codebasePath: string, stats: { added: number; removed: number; modified: number; changedFiles: string[] }) => Promise<void> | void;
 
     constructor(context: Context, snapshotManager: SnapshotManager, options: SyncManagerOptions = {}) {
         this.context = context;
         this.snapshotManager = snapshotManager;
         this.watchEnabled = options.watchEnabled === true;
         this.watchDebounceMs = Math.max(1, options.watchDebounceMs ?? 5000);
+        this.now = options.now || (() => Date.now());
+        this.onSyncCompleted = options.onSyncCompleted;
     }
 
     /**
      * Ensures the codebase is fresh before use.
      * Unified entry point for ALL sync operations (manual, periodic, and on-read).
      */
-    public async ensureFreshness(codebasePath: string, thresholdMs: number = 60000): Promise<void> {
+    public async ensureFreshness(codebasePath: string, thresholdMs: number = 60000): Promise<FreshnessDecision> {
+        const checkedAtMs = this.now();
+        const checkedAt = new Date(checkedAtMs).toISOString();
+
         // 1. Coalescing: Join existing in-flight sync
         if (this.activeSyncs.has(codebasePath)) {
             console.log(`[SYNC] 🛡️ Request Coalesced: Attaching to active sync for '${codebasePath}'`);
-            return this.activeSyncs.get(codebasePath);
+            await this.activeSyncs.get(codebasePath);
+            const lastSync = this.lastSyncTimes.get(codebasePath);
+            return {
+                mode: 'coalesced',
+                checkedAt,
+                thresholdMs,
+                lastSyncAt: lastSync ? new Date(lastSync).toISOString() : undefined,
+                ageMs: lastSync ? Math.max(0, checkedAtMs - lastSync) : undefined,
+            };
         }
 
         // 2. Throttling: Skip if recently synced
         const lastSync = this.lastSyncTimes.get(codebasePath) || 0;
-        const timeSince = Date.now() - lastSync;
+        const timeSince = checkedAtMs - lastSync;
         if (thresholdMs > 0 && timeSince < thresholdMs) {
             console.log(`[SYNC] ⏩ Skipped (Fresh): '${codebasePath}' was synced ${Math.round(timeSince / 1000)}s ago (Threshold: ${thresholdMs / 1000}s)`);
-            return;
+            return {
+                mode: 'skipped_recent',
+                checkedAt,
+                thresholdMs,
+                lastSyncAt: lastSync > 0 ? new Date(lastSync).toISOString() : undefined,
+                ageMs: lastSync > 0 ? timeSince : undefined,
+            };
         }
 
         // 3. Execution Gate
@@ -54,7 +98,7 @@ export class SyncManager {
 
         const syncPromise = (async () => {
             try {
-                await this.syncCodebase(codebasePath);
+                return await this.syncCodebase(codebasePath);
             } catch (e) {
                 // Log and rethrow to allow callers to handle/see failure
                 console.error(`[SYNC] Error syncing '${codebasePath}':`, e);
@@ -65,13 +109,26 @@ export class SyncManager {
         })();
 
         this.activeSyncs.set(codebasePath, syncPromise);
-        return syncPromise;
+        const outcome = await syncPromise;
+        const lastSyncedAt = this.lastSyncTimes.get(codebasePath);
+        return {
+            mode: outcome.mode,
+            checkedAt,
+            thresholdMs,
+            lastSyncAt: lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined,
+            ageMs: lastSyncedAt ? Math.max(0, checkedAtMs - lastSyncedAt) : undefined,
+            stats: outcome.stats ? {
+                added: outcome.stats.added,
+                removed: outcome.stats.removed,
+                modified: outcome.stats.modified
+            } : undefined,
+        };
     }
 
-    private async syncCodebase(codebasePath: string): Promise<void> {
+    private async syncCodebase(codebasePath: string): Promise<SyncExecutionOutcome> {
         if (this.snapshotManager.getCodebaseStatus(codebasePath) === 'requires_reindex') {
             console.log(`[SYNC] ⏭️  Skipping sync for '${codebasePath}' because it requires reindex.`);
-            return;
+            return { mode: 'skipped_requires_reindex' };
         }
 
         // Async existence check to avoid blocking event loop
@@ -87,7 +144,7 @@ export class SyncManager {
             } catch (e) {
                 console.error(`[SYNC] Failed to clean snapshot for '${codebasePath}':`, e);
             }
-            return;
+            return { mode: 'skipped_missing_path' };
         }
 
         try {
@@ -95,15 +152,25 @@ export class SyncManager {
             const stats = await this.context.reindexByChange(codebasePath);
 
             // Centralized State Update
-            this.lastSyncTimes.set(codebasePath, Date.now());
+            this.lastSyncTimes.set(codebasePath, this.now());
 
             // Persist Snapshot
             this.snapshotManager.setCodebaseSyncCompleted(codebasePath, stats);
             this.snapshotManager.saveCodebaseSnapshot();
 
+            if (this.onSyncCompleted) {
+                await this.onSyncCompleted(codebasePath, {
+                    added: stats.added,
+                    removed: stats.removed,
+                    modified: stats.modified,
+                    changedFiles: Array.isArray(stats.changedFiles) ? stats.changedFiles : []
+                });
+            }
+
             if (stats.added > 0 || stats.removed > 0 || stats.modified > 0) {
                 console.log(`[SYNC] ✅ Sync Result for '${codebasePath}': +${stats.added}, -${stats.removed}, ~${stats.modified}`);
             }
+            return { mode: 'synced', stats };
         } catch (error: any) {
             console.error(`[SYNC] Failed to sync '${codebasePath}':`, error);
             throw error; // Let ensureFreshness handle the catch/finally

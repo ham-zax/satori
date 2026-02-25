@@ -11,7 +11,7 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v2'
+    schemaVersion: 'hybrid_v3'
 };
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
@@ -23,20 +23,10 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     });
 }
 
-function createHandlers(repoPath: string, searchResults?: any[]) {
-    const defaultResults = [{
-        content: 'return session.isValid();',
-        relativePath: 'src/auth.ts',
-        startLine: 3,
-        endLine: 3,
-        language: 'typescript',
-        score: 0.99,
-        breadcrumbs: ['class SessionManager', 'method validateSession(token: string)']
-    }];
-
+function createHandlers(repoPath: string, searchResults: any[]) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-        semanticSearch: async () => (searchResults || defaultResults)
+        semanticSearch: async () => searchResults
     } as any;
 
     const snapshotManager = {
@@ -47,96 +37,223 @@ function createHandlers(repoPath: string, searchResults?: any[]) {
     } as any;
 
     const syncManager = {
-        ensureFreshness: async () => undefined
+        ensureFreshness: async () => ({
+            mode: 'skipped_recent',
+            checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+            thresholdMs: 180000
+        })
     } as any;
 
-    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT);
+    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }
 
-test('handleSearchCode returnRaw includes breadcrumbs in result metadata', async () => {
+test('handleSearchCode grouped output includes symbol metadata and callGraphHint', async () => {
     await withTempRepo(async (repoPath) => {
-        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
-        fs.writeFileSync(path.join(repoPath, 'src', 'auth.ts'), 'export class SessionManager {\n  validateSession(token: string) {\n    return session.isValid();\n  }\n}\n');
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_auth_validate',
+            symbolLabel: 'method validateSession(token: string)',
+            breadcrumbs: ['class SessionManager', 'method validateSession(token: string)']
+        }]);
 
-        const handlers = createHandlers(repoPath);
         const response = await handlers.handleSearchCode({
             path: repoPath,
             query: 'validate session',
-            limit: 5,
-            returnRaw: true,
-            useIgnoreFiles: false
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
         });
 
         assert.equal(response.isError, undefined);
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.deepEqual(payload.results?.[0]?.metadata?.breadcrumbs, ['class SessionManager', 'method validateSession(token: string)']);
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.resultMode, 'grouped');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].symbolId, 'sym_auth_validate');
+        assert.equal(payload.results[0].callGraphHint.supported, true);
+        assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, 'sym_auth_validate');
     });
 });
 
-test('handleSearchCode formatted output renders scope line when breadcrumbs exist', async () => {
+test('handleSearchCode runtime scope excludes docs and tests', async () => {
     await withTempRepo(async (repoPath) => {
-        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
-        fs.writeFileSync(path.join(repoPath, 'src', 'auth.ts'), 'export class SessionManager {\n  validateSession(token: string) {\n    return session.isValid();\n  }\n}\n');
-
-        const handlers = createHandlers(repoPath);
-        const response = await handlers.handleSearchCode({
-            path: repoPath,
-            query: 'validate session',
-            limit: 5,
-            returnRaw: false,
-            useIgnoreFiles: false
-        });
-
-        assert.equal(response.isError, undefined);
-        const text = response.content[0]?.text || '';
-        assert.match(text, /🧬 Scope: class SessionManager > method validateSession\(token: string\)/);
-    });
-});
-
-test('handleSearchCode does not merge adjacent chunks when breadcrumbs differ', async () => {
-    await withTempRepo(async (repoPath) => {
-        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
-        fs.writeFileSync(
-            path.join(repoPath, 'src', 'auth.ts'),
-            'function firstScope() {\n  return "one";\n}\n\nfunction secondScope() {\n  return "two";\n}\n'
-        );
-
         const handlers = createHandlers(repoPath, [
             {
-                content: 'return "one";',
-                relativePath: 'src/auth.ts',
+                content: 'export const run = () => true;',
+                relativePath: 'src/runtime.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.9,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: '# docs',
+                relativePath: 'docs/runtime.md',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.95,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: 'describe("runtime", () => {})',
+                relativePath: 'src/runtime.test.ts',
                 startLine: 1,
                 endLine: 2,
                 language: 'typescript',
-                score: 0.95,
-                breadcrumbs: ['function firstScope()']
-            },
-            {
-                content: 'return "two";',
-                relativePath: 'src/auth.ts',
-                startLine: 5,
-                endLine: 6,
-                language: 'typescript',
-                score: 0.90,
-                breadcrumbs: ['function secondScope()']
+                score: 0.94,
+                indexedAt: '2026-01-01T00:30:00.000Z'
             }
         ]);
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
-            query: 'return value',
-            limit: 5,
-            returnRaw: false,
-            useIgnoreFiles: false
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 10
         });
 
-        assert.equal(response.isError, undefined);
-        const text = response.content[0]?.text || '';
-        assert.match(text, /Scope: function firstScope\(\)/);
-        assert.match(text, /Scope: function secondScope\(\)/);
-        assert.match(text, /Location: src\/auth\.ts:1-2/);
-        assert.match(text, /Location: src\/auth\.ts:5-6/);
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.resultMode, 'raw');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, 'src/runtime.ts');
+    });
+});
+
+test('handleSearchCode docs scope only returns docs and tests', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const run = () => true;',
+                relativePath: 'src/runtime.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.9,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: '# docs',
+                relativePath: 'docs/runtime.md',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.95,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: 'describe("runtime", () => {})',
+                relativePath: 'src/runtime.test.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.94,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'docs',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 10
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const files = payload.results.map((r: any) => r.file).sort();
+        assert.deepEqual(files, ['docs/runtime.md', 'src/runtime.test.ts']);
+    });
+});
+
+test('handleSearchCode grouped fallback emits stable hash groupId and unsupported callGraphHint when symbol is missing', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'const value = computeToken();',
+            relativePath: 'src/runtime.ts',
+            startLine: 42,
+            endLine: 45,
+            language: 'typescript',
+            score: 0.88,
+            indexedAt: '2026-01-01T00:30:00.000Z'
+        }]);
+
+        const args = {
+            path: repoPath,
+            query: 'compute token',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 10
+        };
+
+        const firstResponse = await handlers.handleSearchCode(args);
+        const secondResponse = await handlers.handleSearchCode(args);
+
+        const firstPayload = JSON.parse(firstResponse.content[0]?.text || '{}');
+        const secondPayload = JSON.parse(secondResponse.content[0]?.text || '{}');
+
+        assert.equal(firstPayload.results.length, 1);
+        assert.equal(secondPayload.results.length, 1);
+        assert.match(firstPayload.results[0].groupId, /^grp_[a-f0-9]{16}$/);
+        assert.equal(firstPayload.results[0].groupId, secondPayload.results[0].groupId);
+        assert.equal(firstPayload.results[0].callGraphHint.supported, false);
+        assert.equal(firstPayload.results[0].callGraphHint.reason, 'missing_symbol');
+    });
+});
+
+test('handleSearchCode grouped sorting places null symbolLabel last for deterministic tie-breaking', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'return verifyToken(token);',
+                relativePath: 'src/auth.ts',
+                startLine: 10,
+                endLine: 12,
+                language: 'typescript',
+                score: 0.91,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_with_label',
+                symbolLabel: 'function withLabel(token: string)'
+            },
+            {
+                content: 'return verifyToken(token);',
+                relativePath: 'src/auth.ts',
+                startLine: 10,
+                endLine: 13,
+                language: 'typescript',
+                score: 0.91,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_without_label'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'verify token',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 10
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results.length, 2);
+        assert.equal(payload.results[0].symbolId, 'sym_with_label');
+        assert.equal(payload.results[1].symbolId, 'sym_without_label');
     });
 });

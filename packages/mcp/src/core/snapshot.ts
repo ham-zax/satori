@@ -12,6 +12,7 @@ import {
     CodebaseSnapshotV1,
     CodebaseSnapshotV2,
     CodebaseSnapshotV3,
+    CallGraphSidecarInfo,
     FingerprintSource,
     IndexFingerprint,
 } from "../config.js";
@@ -264,6 +265,7 @@ export class SnapshotManager {
             indexFingerprint: existing?.indexFingerprint,
             fingerprintSource: existing?.fingerprintSource,
             reindexReason: existing?.reindexReason,
+            callGraphSidecar: existing?.callGraphSidecar,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -275,6 +277,7 @@ export class SnapshotManager {
         indexFingerprint?: IndexFingerprint,
         fingerprintSource: FingerprintSource = 'verified'
     ): void {
+        const existing = this.codebaseInfoMap.get(codebasePath);
         const info: CodebaseInfoIndexed = {
             status: 'indexed',
             indexedFiles: stats.indexedFiles,
@@ -283,6 +286,7 @@ export class SnapshotManager {
             lastUpdated: new Date().toISOString(),
             indexFingerprint: indexFingerprint || this.runtimeFingerprint,
             fingerprintSource,
+            callGraphSidecar: existing?.callGraphSidecar,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -297,6 +301,7 @@ export class SnapshotManager {
             lastUpdated: new Date().toISOString(),
             indexFingerprint: existing?.indexFingerprint,
             fingerprintSource: existing?.fingerprintSource,
+            callGraphSidecar: existing?.callGraphSidecar,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -319,6 +324,7 @@ export class SnapshotManager {
             lastUpdated: new Date().toISOString(),
             indexFingerprint: indexFingerprint || existing?.indexFingerprint || this.runtimeFingerprint,
             fingerprintSource: existing?.fingerprintSource || fingerprintSource,
+            callGraphSidecar: existing?.callGraphSidecar,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -337,9 +343,28 @@ export class SnapshotManager {
             lastUpdated: new Date().toISOString(),
             indexFingerprint: existing?.indexFingerprint,
             fingerprintSource: existing?.fingerprintSource,
+            callGraphSidecar: existing?.callGraphSidecar,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
+    }
+
+    public setCodebaseCallGraphSidecar(codebasePath: string, sidecar: CallGraphSidecarInfo): void {
+        const existing = this.codebaseInfoMap.get(codebasePath);
+        if (!existing) {
+            return;
+        }
+
+        this.codebaseInfoMap.set(codebasePath, {
+            ...existing,
+            callGraphSidecar: sidecar,
+            lastUpdated: new Date().toISOString(),
+        });
+        this.refreshDerivedState();
+    }
+
+    public getCodebaseCallGraphSidecar(codebasePath: string): CallGraphSidecarInfo | undefined {
+        return this.codebaseInfoMap.get(codebasePath)?.callGraphSidecar;
     }
 
     public removeCodebaseCompletely(codebasePath: string): void {

@@ -36,7 +36,7 @@ function captureTelemetry(run: () => Promise<void>): Promise<string[]> {
     }).then(() => lines);
 }
 
-test('search_codebase emits telemetry in non-rerank path', async () => {
+test('search_codebase emits telemetry with diagnostics from handler meta', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
 
     const ctx = {
@@ -44,12 +44,26 @@ test('search_codebase emits telemetry in non-rerank path', async () => {
         reranker: null,
         toolHandlers: {
             handleSearchCode: async () => ({
-                content: [{ type: 'text', text: 'Found 2 results for query: "auth" in codebase "/repo"' }],
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        status: 'ok',
+                        path: '/repo',
+                        query: 'auth',
+                        scope: 'runtime',
+                        groupBy: 'symbol',
+                        resultMode: 'grouped',
+                        limit: 10,
+                        freshnessDecision: { mode: 'skipped_recent' },
+                        results: [{ kind: 'group', groupId: 'sym_auth', file: 'src/auth.ts' }]
+                    })
+                }],
                 meta: {
                     searchDiagnostics: {
                         resultsBeforeFilter: 5,
-                        resultsAfterFilter: 2,
-                        excludedByIgnore: 3,
+                        resultsAfterFilter: 1,
+                        excludedByIgnore: 4,
+                        freshnessMode: 'skipped_recent'
                     }
                 }
             })
@@ -60,7 +74,11 @@ test('search_codebase emits telemetry in non-rerank path', async () => {
         const response = await searchCodebaseTool.execute({
             path: '/repo',
             query: 'auth',
-            useReranker: false
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 10,
+            debug: false
         }, ctx);
 
         assert.equal(response.isError, undefined);
@@ -71,211 +89,34 @@ test('search_codebase emits telemetry in non-rerank path', async () => {
     assert.equal(payload.event, 'search_executed');
     assert.equal(payload.reranker_used, false);
     assert.equal(payload.results_before_filter, 5);
-    assert.equal(payload.results_after_filter, 2);
-    assert.equal(payload.excluded_by_ignore, 3);
+    assert.equal(payload.results_after_filter, 1);
+    assert.equal(payload.results_returned, 1);
+    assert.equal(payload.excluded_by_ignore, 4);
+    assert.equal(payload.freshness_mode, 'skipped_recent');
 });
 
-test('search_codebase returns capability error and emits telemetry when rerank forced but unavailable', async () => {
-    const capabilities = new CapabilityResolver(buildConfig({ voyageKey: undefined }));
+test('search_codebase falls back to parsed JSON response for telemetry diagnostics', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
 
     const ctx = {
         capabilities,
         reranker: null,
         toolHandlers: {
             handleSearchCode: async () => ({
-                content: [{ type: 'text', text: 'should not be called' }]
-            })
-        }
-    } as unknown as ToolContext;
-
-    const telemetry = await captureTelemetry(async () => {
-        const response = await searchCodebaseTool.execute({
-            path: '/repo',
-            query: 'auth',
-            useReranker: true
-        }, ctx);
-
-        assert.equal(response.isError, true);
-        assert.match(response.content[0].text, /Reranking is unavailable/);
-    });
-
-    assert.equal(telemetry.length, 1);
-    const payload = JSON.parse(telemetry[0].replace(/^\[TELEMETRY\]\s*/, ''));
-    assert.equal(payload.reranker_used, false);
-    assert.equal(typeof payload.error, 'string');
-    assert.match(payload.error, /Reranking is unavailable/);
-});
-
-test('search_codebase rerank output renders scope line from raw result breadcrumbs', async () => {
-    const capabilities = new CapabilityResolver(buildConfig());
-    const ctx = {
-        capabilities,
-        reranker: {
-            rerank: async () => [{ index: 0, relevanceScore: 0.9876 }],
-            getModel: () => 'rerank-2.5'
-        },
-        toolHandlers: {
-            handleSearchCode: async () => ({
                 content: [{
                     type: 'text',
                     text: JSON.stringify({
-                        query: 'validate token',
-                        resultCount: 1,
-                        results: [{
-                            index: 0,
-                            language: 'typescript',
-                            location: 'src/auth/manager.ts:120-150',
-                            score: 0.75,
-                            content: 'const decoded = verify(token);',
-                            metadata: {
-                                breadcrumbs: ['class AuthManager', 'async function validateSession(token: string)']
-                            }
-                        }],
-                        documentsForReranking: ['const decoded = verify(token);']
-                    })
-                }]
-            })
-        }
-    } as unknown as ToolContext;
-
-    const response = await searchCodebaseTool.execute({
-        path: '/repo',
-        query: 'validate token',
-        useReranker: true
-    }, ctx);
-
-    assert.equal(response.isError, undefined);
-    const text = response.content[0]?.text || '';
-    assert.match(text, /🧬 Scope: class AuthManager > async function validateSession\(token: string\)/);
-});
-
-test('search_codebase rerank output omits scope line when breadcrumbs are absent', async () => {
-    const capabilities = new CapabilityResolver(buildConfig());
-    const ctx = {
-        capabilities,
-        reranker: {
-            rerank: async () => [{ index: 0, relevanceScore: 0.8877 }],
-            getModel: () => 'rerank-2.5'
-        },
-        toolHandlers: {
-            handleSearchCode: async () => ({
-                content: [{
-                    type: 'text',
-                    text: JSON.stringify({
-                        query: 'token check',
-                        resultCount: 1,
-                        results: [{
-                            index: 0,
-                            language: 'typescript',
-                            location: 'src/auth/manager.ts:90-95',
-                            score: 0.7,
-                            content: 'return true;',
-                            metadata: {}
-                        }],
-                        documentsForReranking: ['return true;']
-                    })
-                }]
-            })
-        }
-    } as unknown as ToolContext;
-
-    const response = await searchCodebaseTool.execute({
-        path: '/repo',
-        query: 'token check',
-        useReranker: true
-    }, ctx);
-
-    assert.equal(response.isError, undefined);
-    const text = response.content[0]?.text || '';
-    assert.doesNotMatch(text, /🧬 Scope:/);
-});
-
-test('search_codebase rerank prefers breadcrumb-bearing source when duplicate documents exist', async () => {
-    const capabilities = new CapabilityResolver(buildConfig());
-    const sharedDoc = 'return this.runSharedCheck(token);';
-    const ctx = {
-        capabilities,
-        reranker: {
-            rerank: async () => [{ index: 0, relevanceScore: 0.9012 }],
-            getModel: () => 'rerank-2.5'
-        },
-        toolHandlers: {
-            handleSearchCode: async () => ({
-                content: [{
-                    type: 'text',
-                    text: JSON.stringify({
-                        query: 'shared check',
-                        resultCount: 2,
-                        results: [{
-                            index: 0,
-                            language: 'typescript',
-                            location: 'src/auth/fixture.ts:10-12',
-                            score: 0.95,
-                            content: sharedDoc,
-                            metadata: {}
-                        }, {
-                            index: 1,
-                            language: 'typescript',
-                            location: 'src/auth/fixture.ts:40-44',
-                            score: 0.93,
-                            content: sharedDoc,
-                            metadata: {
-                                breadcrumbs: ['class AuthFixture', 'method sharedCheck(token: string)']
-                            }
-                        }],
-                        documentsForReranking: [sharedDoc, sharedDoc]
-                    })
-                }]
-            })
-        }
-    } as unknown as ToolContext;
-
-    const response = await searchCodebaseTool.execute({
-        path: '/repo',
-        query: 'shared check',
-        useReranker: true
-    }, ctx);
-
-    assert.equal(response.isError, undefined);
-    const text = response.content[0]?.text || '';
-    assert.match(text, /🧬 Scope: class AuthFixture > method sharedCheck\(token: string\)/);
-});
-
-test('search_codebase rerank falls back to nearby breadcrumb metadata for same file cluster', async () => {
-    const capabilities = new CapabilityResolver(buildConfig());
-    const ctx = {
-        capabilities,
-        reranker: {
-            rerank: async () => [{ index: 0, relevanceScore: 0.845 }],
-            getModel: () => 'rerank-2.5'
-        },
-        toolHandlers: {
-            handleSearchCode: async () => ({
-                content: [{
-                    type: 'text',
-                    text: JSON.stringify({
-                        query: 'branch token',
-                        resultCount: 2,
-                        results: [{
-                            index: 0,
-                            language: 'typescript',
-                            location: 'src/auth/fixture.ts:120-130',
-                            score: 0.82,
-                            content: 'if (branchToken) { return true; }',
-                            metadata: {}
-                        }, {
-                            index: 1,
-                            language: 'typescript',
-                            location: 'src/auth/fixture.ts:118-140',
-                            score: 0.81,
-                            content: 'function wrapper() { if (branchToken) { return true; } }',
-                            metadata: {
-                                breadcrumbs: ['class AuthFixture', 'method handleBranchToken()']
-                            }
-                        }],
-                        documentsForReranking: [
-                            'if (branchToken) { return true; }',
-                            'function wrapper() { if (branchToken) { return true; } }'
+                        status: 'ok',
+                        path: '/repo',
+                        query: 'token',
+                        scope: 'docs',
+                        groupBy: 'file',
+                        resultMode: 'raw',
+                        limit: 20,
+                        freshnessDecision: { mode: 'synced' },
+                        results: [
+                            { kind: 'chunk', file: 'docs/auth.md' },
+                            { kind: 'chunk', file: 'docs/token.md' }
                         ]
                     })
                 }]
@@ -283,13 +124,46 @@ test('search_codebase rerank falls back to nearby breadcrumb metadata for same f
         }
     } as unknown as ToolContext;
 
+    const telemetry = await captureTelemetry(async () => {
+        const response = await searchCodebaseTool.execute({
+            path: '/repo',
+            query: 'token',
+            scope: 'docs',
+            resultMode: 'raw',
+            groupBy: 'file',
+            limit: 20,
+            debug: true
+        }, ctx);
+
+        assert.equal(response.isError, undefined);
+    });
+
+    assert.equal(telemetry.length, 1);
+    const payload = JSON.parse(telemetry[0].replace(/^\[TELEMETRY\]\s*/, ''));
+    assert.equal(payload.results_before_filter, 2);
+    assert.equal(payload.results_after_filter, 2);
+    assert.equal(payload.results_returned, 2);
+    assert.equal(payload.freshness_mode, 'synced');
+});
+
+test('search_codebase returns validation error for invalid arguments', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+
+    const ctx = {
+        capabilities,
+        reranker: null,
+        toolHandlers: {
+            handleSearchCode: async () => ({
+                content: [{ type: 'text', text: 'should not run' }]
+            })
+        }
+    } as unknown as ToolContext;
+
     const response = await searchCodebaseTool.execute({
         path: '/repo',
-        query: 'branch token',
-        useReranker: true
+        query: '',
     }, ctx);
 
-    assert.equal(response.isError, undefined);
-    const text = response.content[0]?.text || '';
-    assert.match(text, /🧬 Scope: class AuthFixture > method handleBranchToken\(\)/);
+    assert.equal(response.isError, true);
+    assert.match(response.content[0].text, /Invalid arguments for 'search_codebase'/);
 });

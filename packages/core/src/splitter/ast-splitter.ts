@@ -1,4 +1,5 @@
 import Parser from 'tree-sitter';
+import crypto from 'node:crypto';
 import { Splitter, CodeChunk } from './index';
 
 // Language parsers
@@ -130,6 +131,7 @@ export class AstCodeSplitter implements Splitter {
                 const endLine = currentNode.endPosition.row + 1;
                 const nodeText = code.slice(currentNode.startIndex, currentNode.endIndex);
                 const breadcrumbs = this.buildBreadcrumbs(nextScope);
+                const symbolMetadata = this.buildSymbolMetadata(filePath, startLine, endLine, scopeLabel || undefined);
 
                 // Only create chunk if it has meaningful content
                 if (nodeText.trim().length > 0) {
@@ -141,6 +143,7 @@ export class AstCodeSplitter implements Splitter {
                             language,
                             filePath,
                             breadcrumbs,
+                            ...symbolMetadata,
                         }
                     });
                 }
@@ -207,6 +210,8 @@ export class AstCodeSplitter implements Splitter {
                         language: chunk.metadata.language,
                         filePath: chunk.metadata.filePath,
                         breadcrumbs: chunk.metadata.breadcrumbs,
+                        symbolId: chunk.metadata.symbolId,
+                        symbolLabel: chunk.metadata.symbolLabel,
                     }
                 });
 
@@ -229,6 +234,8 @@ export class AstCodeSplitter implements Splitter {
                     language: chunk.metadata.language,
                     filePath: chunk.metadata.filePath,
                     breadcrumbs: chunk.metadata.breadcrumbs,
+                    symbolId: chunk.metadata.symbolId,
+                    symbolLabel: chunk.metadata.symbolLabel,
                 }
             });
         }
@@ -266,6 +273,29 @@ export class AstCodeSplitter implements Splitter {
 
     private getLineCount(text: string): number {
         return text.split('\n').length;
+    }
+
+    private buildSymbolMetadata(
+        filePath: string | undefined,
+        startLine: number,
+        endLine: number,
+        symbolLabel?: string
+    ): { symbolId?: string; symbolLabel?: string } {
+        if (!symbolLabel) {
+            return {};
+        }
+
+        if (!filePath) {
+            return { symbolLabel };
+        }
+
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        const payload = `${normalizedPath}:${startLine}:${endLine}:${symbolLabel}`;
+        const digest = crypto.createHash('sha1').update(payload, 'utf8').digest('hex').slice(0, 16);
+        return {
+            symbolId: `sym_${digest}`,
+            symbolLabel,
+        };
     }
 
     private buildBreadcrumbs(scopeStack: string[]): string[] | undefined {

@@ -12,4 +12,7 @@ export interface SemanticSearchResult {
     language: string;
     score: number;
     breadcrumbs?: string[];
+    indexedAt?: string;
+    symbolId?: string;
+    symbolLabel?: string;
 }

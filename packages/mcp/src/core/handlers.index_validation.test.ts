@@ -13,7 +13,7 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v2'
+    schemaVersion: 'hybrid_v3'
 };
 
 type BackendProvider = 'zilliz' | 'milvus';

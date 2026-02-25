@@ -34,6 +34,7 @@ import { CapabilityResolver } from "./core/capabilities.js";
 import { SnapshotManager } from "./core/snapshot.js";
 import { SyncManager } from "./core/sync.js";
 import { ToolHandlers } from "./core/handlers.js";
+import { CallGraphSidecarManager } from "./core/call-graph.js";
 import { ToolContext } from "./tools/types.js";
 import { getMcpToolList, toolRegistry } from "./tools/registry.js";
 
@@ -75,6 +76,7 @@ class ContextMcpServer {
     private readFileMaxLines: number;
     private watchSyncEnabled: boolean;
     private watchDebounceMs: number;
+    private callGraphManager: CallGraphSidecarManager;
 
     constructor(config: ContextMcpConfig) {
         this.server = new Server(
@@ -113,11 +115,28 @@ class ContextMcpServer {
         });
 
         this.snapshotManager = new SnapshotManager(this.runtimeFingerprint);
+        this.callGraphManager = new CallGraphSidecarManager(this.runtimeFingerprint);
         this.syncManager = new SyncManager(this.context, this.snapshotManager, {
             watchEnabled: this.watchSyncEnabled,
             watchDebounceMs: this.watchDebounceMs,
+            onSyncCompleted: async (codebasePath, stats) => {
+                try {
+                    const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
+                        codebasePath,
+                        stats.changedFiles,
+                        this.context.getActiveIgnorePatterns()
+                    );
+                    if (sidecar) {
+                        this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
+                        this.snapshotManager.saveCodebaseSnapshot();
+                        console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
+                    }
+                } catch (error: any) {
+                    console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${error?.message || error}`);
+                }
+            }
         });
-        this.toolHandlers = new ToolHandlers(this.context, this.snapshotManager, this.syncManager, this.runtimeFingerprint);
+        this.toolHandlers = new ToolHandlers(this.context, this.snapshotManager, this.syncManager, this.runtimeFingerprint, () => Date.now(), this.callGraphManager);
 
         if (this.capabilities.hasReranker()) {
             this.reranker = new VoyageAIReranker({

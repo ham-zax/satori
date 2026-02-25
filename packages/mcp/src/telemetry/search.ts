@@ -10,6 +10,7 @@ export interface SearchTelemetryEvent {
     excluded_by_ignore: number;
     reranker_used: boolean;
     latency_ms: number;
+    freshness_mode?: string;
     error?: string;
 }
 

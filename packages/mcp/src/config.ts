@@ -9,7 +9,7 @@ export interface IndexFingerprint {
     embeddingModel: string;
     embeddingDimension: number;
     vectorStoreProvider: VectorStoreProvider;
-    schemaVersion: 'dense_v2' | 'hybrid_v2';
+    schemaVersion: 'dense_v3' | 'hybrid_v3';
 }
 
 export interface ContextMcpConfig {
@@ -40,6 +40,16 @@ export interface ContextMcpConfig {
     watchDebounceMs?: number;
 }
 
+export interface CallGraphSidecarInfo {
+    version: 'v3';
+    sidecarPath: string;
+    builtAt: string;
+    nodeCount: number;
+    edgeCount: number;
+    noteCount: number;
+    fingerprint: IndexFingerprint;
+}
+
 // Legacy format (v1) - for backward compatibility
 export interface CodebaseSnapshotV1 {
     indexedCodebases: string[];
@@ -52,6 +62,7 @@ interface CodebaseInfoBase {
     indexFingerprint?: IndexFingerprint;
     fingerprintSource?: FingerprintSource;
     reindexReason?: 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint';
+    callGraphSidecar?: CallGraphSidecarInfo;
 }
 
 // Indexing state - when indexing is in progress
@@ -150,12 +161,12 @@ export function getEmbeddingModelForProvider(provider: string): string {
     }
 }
 
-function getSchemaVersionFromEnv(): 'dense_v2' | 'hybrid_v2' {
+function getSchemaVersionFromEnv(): 'dense_v3' | 'hybrid_v3' {
     const hybridModeRaw = envManager.get('HYBRID_MODE');
     if (!hybridModeRaw) {
-        return 'hybrid_v2';
+        return 'hybrid_v3';
     }
-    return hybridModeRaw.toLowerCase() === 'true' ? 'hybrid_v2' : 'dense_v2';
+    return hybridModeRaw.toLowerCase() === 'true' ? 'hybrid_v3' : 'dense_v3';
 }
 
 export function buildRuntimeIndexFingerprint(config: ContextMcpConfig, embeddingDimension: number): IndexFingerprint {

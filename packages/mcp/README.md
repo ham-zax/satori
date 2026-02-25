@@ -57,11 +57,11 @@ Tool surface is hard-broken to 4 tools. This reduces agent tool-selection ambigu
 
 ### `manage_index`
 
-Manage index lifecycle operations (create/sync/status/clear) for a codebase path.
+Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `action` | enum("create", "sync", "status", "clear") | yes |  | Required operation to run. |
+| `action` | enum("create", "reindex", "sync", "status", "clear") | yes |  | Required operation to run. |
 | `path` | string | yes |  | ABSOLUTE path to the target codebase. |
 | `force` | boolean | no |  | Only for action='create'. Force rebuild from scratch. |
 | `splitter` | enum("ast", "langchain") | no |  | Only for action='create'. Code splitter strategy. |
@@ -71,19 +71,29 @@ Manage index lifecycle operations (create/sync/status/clear) for a codebase path
 
 ### `search_codebase`
 
-Unified semantic search tool. Supports optional reranking and query-time excludes. Reranker is available. If useReranker is omitted, reranking is enabled automatically for fast/standard profiles.
+Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decision.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `path` | string | yes |  | ABSOLUTE path to an indexed codebase or subdirectory. |
 | `query` | string | yes |  | Natural-language query. |
-| `limit` | integer | no | `50` | Maximum results to return. |
-| `extensionFilter` | array<string> | no | `[]` | Optional file-extension filter (e.g. ['.ts','.py']). |
-| `useIgnoreFiles` | boolean | no | `true` | Apply repo ignore files at search-time. |
-| `excludePatterns` | array<string> | no | `[]` | Optional query-time exclude patterns. |
-| `returnRaw` | boolean | no | `false` | Return machine-readable JSON results. |
-| `showScores` | boolean | no | `false` | Include similarity scores in formatted output. |
-| `useReranker` | boolean | no |  | Optional override: true=force rerank, false=disable rerank, omitted=resolver default. |
+| `scope` | enum("runtime", "mixed", "docs") | no | `"runtime"` | Search scope policy. runtime excludes docs/tests, docs returns docs/tests only, mixed includes all. |
+| `resultMode` | enum("grouped", "raw") | no | `"grouped"` | Output mode. grouped returns merged search groups, raw returns chunk hits. |
+| `groupBy` | enum("symbol", "file") | no | `"symbol"` | Grouping strategy in grouped mode. |
+| `limit` | integer | no | `50` | Maximum groups (grouped mode) or chunks (raw mode). |
+| `debug` | boolean | no | `false` | Optional debug payload toggle for score and fusion breakdowns. |
+
+### `call_graph`
+
+Traverse the prebuilt TS/Python call graph sidecar for callers/callees/bidirectional symbol relationships.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `path` | string | yes |  | ABSOLUTE path to the indexed codebase root (or subdirectory). |
+| `symbolRef` | object | yes |  | Symbol reference from a grouped search result callGraphHint. |
+| `direction` | enum("callers", "callees", "both") | no | `"both"` | Traversal direction from the starting symbol. |
+| `depth` | integer | no | `1` | Traversal depth (max 3). |
+| `limit` | integer | no | `20` | Maximum number of returned edges. |
 
 ### `read_file`
 

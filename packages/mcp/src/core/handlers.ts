@@ -1,11 +1,33 @@
 import * as fs from "fs";
 import * as path from "path";
+import crypto from "node:crypto";
 import ignore from "ignore";
 import { Context, COLLECTION_LIMIT_MESSAGE } from "@zokizuan/satori-core";
 import { SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
 import { SyncManager } from "./sync.js";
 import { IndexFingerprint } from "../config.js";
+import {
+    SEARCH_MAX_CANDIDATES,
+    SEARCH_PROXIMITY_WINDOW,
+    SEARCH_RRF_K,
+    SCOPE_PATH_MULTIPLIERS,
+    STALENESS_THRESHOLDS_MS,
+    PathCategory,
+    SearchGroupBy,
+    SearchResultMode,
+    SearchScope
+} from "./search-constants.js";
+import {
+    CallGraphHint,
+    SearchChunkResult,
+    SearchGroupResult,
+    SearchRequestInput,
+    SearchResponseEnvelope,
+    SearchSpan,
+    StalenessBucket
+} from "./search-types.js";
+import { CallGraphDirection, CallGraphSidecarManager, CallGraphSymbolRef } from "./call-graph.js";
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -139,19 +161,131 @@ export class ToolHandlers {
     private runtimeFingerprint: IndexFingerprint;
     private indexingStats: { indexedFiles: number; totalChunks: number } | null = null;
     private currentWorkspace: string;
+    private readonly now: () => number;
+    private readonly callGraphManager: CallGraphSidecarManager;
 
-    constructor(context: Context, snapshotManager: SnapshotManager, syncManager: SyncManager, runtimeFingerprint: IndexFingerprint) {
+    constructor(
+        context: Context,
+        snapshotManager: SnapshotManager,
+        syncManager: SyncManager,
+        runtimeFingerprint: IndexFingerprint,
+        now: () => number = () => Date.now(),
+        callGraphManager?: CallGraphSidecarManager
+    ) {
         this.context = context;
         this.snapshotManager = snapshotManager;
         this.syncManager = syncManager;
         this.runtimeFingerprint = runtimeFingerprint;
         this.currentWorkspace = process.cwd();
+        this.now = now;
+        this.callGraphManager = callGraphManager || new CallGraphSidecarManager(runtimeFingerprint, { now });
         console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`);
     }
 
     private buildReindexInstruction(codebasePath: string, detail?: string): string {
         const detailLine = detail ? `${detail}\n\n` : '';
-        return `${detailLine}Error: The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt.\nNext step: call manage_index with {\"action\":\"create\",\"path\":\"${codebasePath}\",\"force\":true}.`;
+        return `${detailLine}Error: The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt.\nNext step: call manage_index with {\"action\":\"reindex\",\"path\":\"${codebasePath}\"}.`;
+    }
+
+    private buildReindexHint(codebasePath: string): { tool: string; args: { action: string; path: string } } {
+        return {
+            tool: "manage_index",
+            args: {
+                action: "reindex",
+                path: codebasePath
+            }
+        };
+    }
+
+    private buildRequiresReindexPayload(
+        codebasePath: string,
+        detail?: string,
+        searchContext?: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        }
+    ): Record<string, unknown> {
+        const detailLine = detail ? `${detail}\n\n` : '';
+        const base = searchContext ? {
+            path: searchContext.path,
+            query: searchContext.query,
+            scope: searchContext.scope,
+            groupBy: searchContext.groupBy,
+            resultMode: searchContext.resultMode,
+            limit: searchContext.limit,
+        } : {};
+        return {
+            ...base,
+            status: "requires_reindex",
+            codebasePath,
+            results: [],
+            freshnessDecision: {
+                mode: "skipped_requires_reindex"
+            },
+            message: `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {\"action\":\"reindex\",\"path\":\"${codebasePath}\"}.`,
+            hints: {
+                reindex: this.buildReindexHint(codebasePath)
+            }
+        };
+    }
+
+    private buildRequiresReindexSearchResponse(
+        codebasePath: string,
+        detail?: string,
+        searchContext?: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        }
+    ): { content: Array<{ type: string; text: string }> } {
+        return {
+            content: [{
+                type: "text",
+                text: JSON.stringify(this.buildRequiresReindexPayload(codebasePath, detail, searchContext), null, 2)
+            }]
+        };
+    }
+
+    private buildRequiresReindexCallGraphPayload(
+        codebasePath: string,
+        detail: string | undefined,
+        context: {
+            path: string;
+            symbolRef: CallGraphSymbolRef;
+            direction: CallGraphDirection;
+            depth: number;
+            limit: number;
+        }
+    ): Record<string, unknown> {
+        const detailLine = detail ? `${detail}\n\n` : '';
+        return {
+            status: "requires_reindex",
+            supported: false,
+            reason: "requires_reindex",
+            path: context.path,
+            codebasePath,
+            symbolRef: context.symbolRef,
+            direction: context.direction,
+            depth: context.depth,
+            limit: context.limit,
+            nodes: [],
+            edges: [],
+            notes: [],
+            freshnessDecision: {
+                mode: "skipped_requires_reindex"
+            },
+            message: `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
+            hints: {
+                reindex: this.buildReindexHint(codebasePath)
+            }
+        };
     }
 
     private getMatchingBlockedRoot(absolutePath: string): { path: string; message?: string } | null {
@@ -175,13 +309,14 @@ export class ToolHandlers {
         };
     }
 
-    private enforceFingerprintGate(codebasePath: string): { blockedResponse?: any } {
+    private enforceFingerprintGate(codebasePath: string): { blockedResponse?: any; message?: string } {
         const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(codebasePath);
         if (!gate.allowed) {
             if (gate.changed) {
                 this.snapshotManager.saveCodebaseSnapshot();
             }
             return {
+                message: gate.message,
                 blockedResponse: {
                     content: [{
                         type: "text",
@@ -332,6 +467,174 @@ export class ToolHandlers {
         const joined = normalized.join(' > ');
         const capped = joined.length > 220 ? `${joined.slice(0, 217)}...` : joined;
         return `   🧬 Scope: ${capped}\n`;
+    }
+
+    private normalizeSearchPath(relativePath: string): string {
+        return relativePath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+    }
+
+    private isTestPath(normalizedPath: string): boolean {
+        return normalizedPath.includes('/test/')
+            || normalizedPath.includes('/tests/')
+            || normalizedPath.includes('/__tests__/')
+            || /\.test\.[^/]+$/.test(normalizedPath)
+            || /\.spec\.[^/]+$/.test(normalizedPath);
+    }
+
+    private isDocPath(normalizedPath: string): boolean {
+        return normalizedPath.includes('/docs/')
+            || normalizedPath.endsWith('.md')
+            || normalizedPath.endsWith('.mdx')
+            || normalizedPath.endsWith('.rst')
+            || normalizedPath.endsWith('.adoc')
+            || normalizedPath.endsWith('.txt');
+    }
+
+    private isGeneratedPath(normalizedPath: string): boolean {
+        return normalizedPath.includes('/dist/')
+            || normalizedPath.includes('/build/')
+            || normalizedPath.includes('/coverage/')
+            || normalizedPath.includes('/.next/')
+            || normalizedPath.includes('/generated/')
+            || normalizedPath.endsWith('.min.js')
+            || normalizedPath.endsWith('.min.css');
+    }
+
+    private isEntrypointPath(normalizedPath: string): boolean {
+        const entryNames = ['main.', 'index.', 'app.', 'server.', 'cli.', 'entry.'];
+        const baseName = normalizedPath.split('/').pop() || '';
+        return entryNames.some((prefix) => baseName.startsWith(prefix));
+    }
+
+    private classifyPathCategory(relativePath: string): PathCategory {
+        const normalized = this.normalizeSearchPath(relativePath);
+        if (this.isDocPath(normalized)) return 'docs';
+        if (this.isTestPath(normalized)) return 'tests';
+        if (this.isGeneratedPath(normalized)) return 'generated';
+        if (this.isEntrypointPath(normalized)) return 'entrypoint';
+        if (normalized.includes('/src/core/') || normalized.includes('/core/')) return 'core';
+        if (normalized.includes('/src/')) return 'srcRuntime';
+        return 'neutral';
+    }
+
+    private shouldIncludeCategoryInScope(scope: SearchScope, category: PathCategory): boolean {
+        if (scope === 'runtime') {
+            return category !== 'docs' && category !== 'tests';
+        }
+        if (scope === 'docs') {
+            return category === 'docs' || category === 'tests';
+        }
+        return true;
+    }
+
+    private parseIndexedAtMs(indexedAt?: string): number | undefined {
+        if (!indexedAt) return undefined;
+        const parsed = Date.parse(indexedAt);
+        if (!Number.isFinite(parsed)) return undefined;
+        return parsed;
+    }
+
+    private getStalenessBucket(indexedAt?: string): StalenessBucket {
+        const indexedAtMs = this.parseIndexedAtMs(indexedAt);
+        if (indexedAtMs === undefined) {
+            return 'unknown';
+        }
+        const ageMs = Math.max(0, this.now() - indexedAtMs);
+        if (ageMs <= STALENESS_THRESHOLDS_MS.fresh) return 'fresh';
+        if (ageMs <= STALENESS_THRESHOLDS_MS.aging) return 'aging';
+        return 'stale';
+    }
+
+    private compareNullableNumbersAsc(a?: number | null, b?: number | null): number {
+        const av = a === undefined || a === null ? Number.POSITIVE_INFINITY : a;
+        const bv = b === undefined || b === null ? Number.POSITIVE_INFINITY : b;
+        return av - bv;
+    }
+
+    private compareNullableStringsAsc(a?: string | null, b?: string | null): number {
+        if (!a && !b) return 0;
+        if (!a) return 1;
+        if (!b) return -1;
+        return a.localeCompare(b);
+    }
+
+    private buildFallbackGroupId(relativePath: string, span: SearchSpan): string {
+        const payload = `${relativePath}:${span.startLine}-${span.endLine}`;
+        const digest = crypto.createHash('sha1').update(payload, 'utf8').digest('hex').slice(0, 16);
+        return `grp_${digest}`;
+    }
+
+    private isCallGraphLanguageSupported(language: string, file?: string): boolean {
+        const normalized = String(language || '').toLowerCase();
+        if (normalized === 'typescript' || normalized === 'ts' || normalized === 'python' || normalized === 'py') {
+            return true;
+        }
+
+        if (typeof file === 'string') {
+            const ext = path.extname(file).toLowerCase();
+            return ext === '.ts' || ext === '.tsx' || ext === '.py';
+        }
+
+        return false;
+    }
+
+    private buildCallGraphHint(file: string, span: SearchSpan, language: string, symbolId?: string, symbolLabel?: string): CallGraphHint {
+        if (!symbolId) {
+            return { supported: false, reason: 'missing_symbol' };
+        }
+        if (!this.isCallGraphLanguageSupported(language, file)) {
+            return { supported: false, reason: 'unsupported_language' };
+        }
+        return {
+            supported: true,
+            symbolRef: {
+                file,
+                symbolId,
+                symbolLabel: symbolLabel || undefined,
+                span
+            }
+        };
+    }
+
+    private getContextIgnorePatterns(): string[] {
+        if (typeof (this.context as any).getActiveIgnorePatterns === 'function') {
+            const patterns = (this.context as any).getActiveIgnorePatterns();
+            if (Array.isArray(patterns)) {
+                return patterns.filter((pattern) => typeof pattern === 'string');
+            }
+        }
+        return [];
+    }
+
+    private async rebuildCallGraphForIndex(codebasePath: string): Promise<void> {
+        try {
+            const sidecar = await this.callGraphManager.rebuildForCodebase(codebasePath, this.getContextIgnorePatterns());
+            this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
+            this.snapshotManager.saveCodebaseSnapshot();
+            console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
+        } catch (error) {
+            console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after indexing '${codebasePath}': ${formatUnknownError(error)}`);
+        }
+    }
+
+    private async rebuildCallGraphForSyncDelta(codebasePath: string, changedFiles: string[]): Promise<boolean> {
+        try {
+            const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
+                codebasePath,
+                changedFiles,
+                this.getContextIgnorePatterns()
+            );
+            if (!sidecar) {
+                return false;
+            }
+            this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
+            this.snapshotManager.saveCodebaseSnapshot();
+            console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync delta (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
+            return true;
+        } catch (error) {
+            console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after sync '${codebasePath}': ${formatUnknownError(error)}`);
+            return false;
+        }
     }
 
     private getVectorStore(): any {
@@ -1083,6 +1386,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Save snapshot after updating codebase lists
             this.snapshotManager.saveCodebaseSnapshot();
+            await this.rebuildCallGraphForIndex(absolutePath);
             await this.syncManager.registerCodebaseWatcher(absolutePath);
 
             let message = `Background indexing completed for '${absolutePath}' using ${splitterType.toUpperCase()} splitter.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`;
@@ -1111,38 +1415,72 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         }
     }
 
+    public async handleReindexCodebase(args: any) {
+        const { path: codebasePath, splitter, customExtensions, ignorePatterns, zillizDropCollection } = args;
+        return this.handleIndexCodebase({
+            path: codebasePath,
+            force: true,
+            splitter,
+            customExtensions,
+            ignorePatterns,
+            zillizDropCollection
+        });
+    }
+
     public async handleSearchCode(args: any) {
-        const { path: codebasePath, query, limit = 10, extensionFilter, excludePatterns, useIgnoreFiles = true, returnRaw = false, showScores = false } = args;
-        const resultLimit = limit || 10;
+        const scope = (args?.scope || 'runtime') as SearchScope;
+        const resultMode = (args?.resultMode || 'grouped') as SearchResultMode;
+        const groupBy = (args?.groupBy || 'symbol') as SearchGroupBy;
+        const debug = args?.debug === true;
+        const input: SearchRequestInput = {
+            path: args?.path,
+            query: args?.query,
+            scope,
+            resultMode,
+            groupBy,
+            limit: Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 10,
+            debug,
+        };
+
+        const isScopeValid = input.scope === 'runtime' || input.scope === 'mixed' || input.scope === 'docs';
+        const isResultModeValid = input.resultMode === 'grouped' || input.resultMode === 'raw';
+        const isGroupByValid = input.groupBy === 'symbol' || input.groupBy === 'file';
+
+        if (!isScopeValid || !isResultModeValid || !isGroupByValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
+            return {
+                content: [{
+                    type: "text",
+                    text: "Error: Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file."
+                }],
+                isError: true
+            };
+        }
+
         const searchDiagnostics = {
-            queryLength: typeof query === 'string' ? query.length : 0,
-            limitRequested: resultLimit,
+            queryLength: input.query.length,
+            limitRequested: input.limit,
             resultsBeforeFilter: 0,
             resultsAfterFilter: 0,
             excludedByIgnore: 0,
             excludedBySubdirectory: 0,
-            filterPass: 'initial' as 'initial' | 'expanded',
+            filterPass: 'expanded' as 'initial' | 'expanded',
+            freshnessMode: undefined as string | undefined,
         };
 
         try {
-            // Sync indexed codebases from cloud first
             await this.syncIndexedCodebasesFromCloud();
 
-            // Force absolute path resolution - warn if relative path provided
-            const absolutePath = ensureAbsolutePath(codebasePath);
-
-            // Validate path exists
+            const absolutePath = ensureAbsolutePath(input.path);
             if (!fs.existsSync(absolutePath)) {
                 return {
                     content: [{
                         type: "text",
-                        text: `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`
+                        text: `Error: Path '${absolutePath}' does not exist. Original input: '${input.path}'`
                     }],
                     isError: true
                 };
             }
 
-            // Check if it's a directory
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
                 return {
@@ -1158,403 +1496,305 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const blockedRoot = this.getMatchingBlockedRoot(absolutePath);
             if (blockedRoot) {
+                const payload = this.buildRequiresReindexPayload(blockedRoot.path, blockedRoot.message, {
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                }) as unknown as SearchResponseEnvelope;
                 return {
-                    content: [{
-                        type: "text",
-                        text: this.buildReindexInstruction(blockedRoot.path, blockedRoot.message)
-                    }],
-                    isError: true
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    meta: { searchDiagnostics }
                 };
             }
 
-            // Check if this codebase is indexed or being indexed
-            // Smart Path Resolution: Check if indexed, or if a parent is indexed
             let effectiveRoot = absolutePath;
-            let subdirectoryFilter: string | null = null;
-
             let isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
             let isIndexing = this.snapshotManager.getIndexingCodebases().includes(absolutePath);
 
             if (!isIndexed && !isIndexing) {
-                // Try to find an indexed parent
                 const indexedCodebases = this.snapshotManager.getIndexedCodebases();
                 const parents = indexedCodebases.filter(root => absolutePath.startsWith(root) && absolutePath !== root);
-
                 if (parents.length > 0) {
-                    // Sort by length desc (longest match is closest parent)
                     parents.sort((a: string, b: string) => b.length - a.length);
                     effectiveRoot = parents[0];
-                    subdirectoryFilter = absolutePath;
                     isIndexed = true;
                     isIndexing = this.snapshotManager.getIndexingCodebases().includes(effectiveRoot);
                     console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${effectiveRoot}'`);
                 } else {
+                    const envelope: SearchResponseEnvelope = {
+                        status: "not_indexed",
+                        path: absolutePath,
+                        query: input.query,
+                        scope: input.scope,
+                        groupBy: input.groupBy,
+                        limit: input.limit,
+                        resultMode: input.resultMode,
+                        freshnessDecision: null,
+                        message: `Codebase '${absolutePath}' (or any parent) is not indexed.`,
+                        hints: {
+                            create: {
+                                tool: "manage_index",
+                                args: { action: "create", path: absolutePath }
+                            }
+                        },
+                        results: []
+                    };
                     return {
-                        content: [{
-                            type: "text",
-                            text: `Error: Codebase '${absolutePath}' (or any parent) is not indexed. Call manage_index with {"action":"create","path":"${absolutePath}"} to index it first.`
-                        }],
-                        isError: true
+                        content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+                        meta: { searchDiagnostics }
                     };
                 }
             }
 
             const gateResult = this.enforceFingerprintGate(effectiveRoot);
             if (gateResult.blockedResponse) {
-                return gateResult.blockedResponse;
+                const payload = this.buildRequiresReindexPayload(effectiveRoot, gateResult.message, {
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                }) as unknown as SearchResponseEnvelope;
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    meta: { searchDiagnostics }
+                };
             }
 
-            // Sync Optimization: Ensure freshness (Smart Sync-on-Read)
-            // This handles the "call 5 tools, only 1 syncs" requirement via coalescing
-            await this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000); // 3 minute threshold matching auto-sync
-
-            // Show indexing status if codebase is being indexed
-            let indexingStatusMessage = '';
-            if (isIndexing) {
-                indexingStatusMessage = `\n⚠️  **Indexing in Progress**: This codebase is currently being indexed in the background. Search results may be incomplete until indexing completes.`;
-            }
-
-            console.log(`[SEARCH] Searching in codebase: ${absolutePath}`);
-            console.log(`[SEARCH] Query: "${query}"`);
-            console.log(`[SEARCH] Indexing status: ${isIndexing ? 'In Progress' : 'Completed'}`);
-
-            // Log embedding provider information before search
+            const freshnessDecision = await this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000);
+            searchDiagnostics.freshnessMode = freshnessDecision.mode;
             const encoderEngine = this.context.getEmbeddingEngine();
+            console.log(`[SEARCH] Searching in codebase: ${absolutePath}`);
+            console.log(`[SEARCH] Query: "${input.query}"`);
+            console.log(`[SEARCH] Indexing status: ${isIndexing ? 'In Progress' : 'Completed'}`);
             console.log(`[SEARCH] 🧠 Using embedding provider: ${encoderEngine.getProvider()} for search`);
-            console.log(`[SEARCH] 🔍 Generating embeddings for query using ${encoderEngine.getProvider()}...`);
 
-            // Build filter expression from extensionFilter list
-            let filterExpr: string | undefined = undefined;
-            if (Array.isArray(extensionFilter) && extensionFilter.length > 0) {
-                const cleaned = extensionFilter
-                    .filter((v: any) => typeof v === 'string')
-                    .map((v: string) => v.trim())
-                    .filter((v: string) => v.length > 0);
-                const invalid = cleaned.filter((e: string) => !(e.startsWith('.') && e.length > 1 && !/\s/.test(e)));
-                if (invalid.length > 0) {
-                    return {
-                        content: [{ type: 'text', text: `Error: Invalid file extensions in extensionFilter: ${JSON.stringify(invalid)}. Use proper extensions like '.ts', '.py'.` }],
-                        isError: true
-                    };
-                }
-                const quoted = cleaned.map((e: string) => `'${e}'`).join(', ');
-                filterExpr = `fileExtension in [${quoted}]`;
-            }
+            const candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
+            const expandedQuery = `${input.query}\nimplementation runtime source entrypoint`;
 
-            // Add query-time excludes (even if already indexed)
-            const mergedExcludePatterns: string[] = [];
-            if (Array.isArray(excludePatterns)) {
-                for (const p of excludePatterns) {
-                    if (typeof p === 'string') mergedExcludePatterns.push(p);
-                }
-            }
+            const passOne = await this.context.semanticSearch(effectiveRoot, input.query, candidateLimit, 0.3);
+            const passTwo = await this.context.semanticSearch(effectiveRoot, expandedQuery, candidateLimit, 0.3);
 
-            // Also apply repo-root ignore files at search-time (opt-out)
-            if (useIgnoreFiles !== false) {
-                try {
-                    const ignoreFiles = await fs.promises.readdir(effectiveRoot, { withFileTypes: true });
-                    const ignoreFileNames = ignoreFiles
-                        .filter((e: any) => e.isFile && e.isFile())
-                        .map((e: any) => e.name)
-                        .filter((name: string) => name.startsWith('.') && name.endsWith('ignore'));
-
-                    for (const name of ignoreFileNames) {
-                        if (mergedExcludePatterns.length > 200) break;
-                        const filePath = path.join(effectiveRoot, name);
-                        const patterns = await Context.getIgnorePatternsFromFile(filePath);
-                        for (const pat of patterns) {
-                            if (mergedExcludePatterns.length > 200) break;
-                            mergedExcludePatterns.push(pat);
-                        }
-                    }
-                } catch (e) {
-                    // Ignore missing permissions / read errors for ignore files at search time.
-                }
-            }
-
-            const excludeBuilt = this.buildSearchExcludeMatcher(mergedExcludePatterns, effectiveRoot, absolutePath);
-            const relativeFilter = subdirectoryFilter
-                ? path.relative(effectiveRoot, subdirectoryFilter).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
-                : null;
-            const MAX_SEARCH_CANDIDATES = 50;
-            const initialCandidateLimit = Math.max(
-                1,
-                Math.min(MAX_SEARCH_CANDIDATES, Math.max(resultLimit * 4, resultLimit + 20))
-            );
-
-            const applyPostFilters = (results: any[], stageLabel: string, pass: 'initial' | 'expanded'): any[] => {
-                let filteredResults = this.applySearchExcludeMatcher(results, excludeBuilt.matcher);
-                const excludedByIgnore = results.length - filteredResults.length;
-                if (excludeBuilt.matcher && filteredResults.length !== results.length) {
-                    console.log(`[SEARCH] ${stageLabel}: excludePatterns filtered ${results.length} -> ${filteredResults.length}`);
-                }
-
-                let excludedBySubdirectory = 0;
-                if (relativeFilter) {
-                    const beforeSubdirectoryFilter = filteredResults.length;
-                    filteredResults = filteredResults.filter((r: any) => {
-                        if (!r || typeof r.relativePath !== 'string') return false;
-                        const normalizedPath = r.relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
-                        return normalizedPath === relativeFilter || normalizedPath.startsWith(`${relativeFilter}/`);
-                    });
-                    excludedBySubdirectory = beforeSubdirectoryFilter - filteredResults.length;
-                    if (beforeSubdirectoryFilter !== filteredResults.length) {
-                        console.log(`[SEARCH] ${stageLabel}: subdirectory filter '${relativeFilter}' trimmed ${beforeSubdirectoryFilter} -> ${filteredResults.length}`);
-                    }
-                }
-
-                searchDiagnostics.resultsBeforeFilter = results.length;
-                searchDiagnostics.resultsAfterFilter = filteredResults.length;
-                searchDiagnostics.excludedByIgnore = Math.max(0, excludedByIgnore);
-                searchDiagnostics.excludedBySubdirectory = Math.max(0, excludedBySubdirectory);
-                searchDiagnostics.filterPass = pass;
-
-                return filteredResults;
+            type Candidate = {
+                result: any;
+                baseScore: number;
+                fusionScore: number;
+                finalScore: number;
+                pathCategory: PathCategory;
+                pathMultiplier: number;
             };
 
-            // Search in the specified codebase (or resolved parent)
-            let rawSearchResults = await this.context.semanticSearch(
-                effectiveRoot,
-                query,
-                initialCandidateLimit,
-                0.3,
-                filterExpr
-            );
-            let searchResults = applyPostFilters(rawSearchResults, 'Initial pass', 'initial');
-
-            // If post-filtering under-fills, expand candidate pool once to improve recall.
-            if (
-                searchResults.length < resultLimit &&
-                initialCandidateLimit < MAX_SEARCH_CANDIDATES &&
-                (excludeBuilt.matcher || relativeFilter)
-            ) {
-                rawSearchResults = await this.context.semanticSearch(
-                    effectiveRoot,
-                    query,
-                    MAX_SEARCH_CANDIDATES,
-                    0.3,
-                    filterExpr
-                );
-                searchResults = applyPostFilters(rawSearchResults, 'Expanded pass', 'expanded');
-            }
-
-            if (searchResults.length > resultLimit) {
-                searchResults = searchResults.slice(0, resultLimit);
-            }
-
-            console.log(`[SEARCH] ✅ Search completed! Found ${searchResults.length} results using ${encoderEngine.getProvider()} embeddings`);
-
-            if (excludeBuilt.warning) {
-                console.log(`[SEARCH] ⚠️  ${excludeBuilt.warning}`);
-            }
-
-            if (searchResults.length === 0) {
-                let noResultsMessage = `No results found for query: "${query}" in codebase '${absolutePath}'`;
-                if (isIndexing) {
-                    noResultsMessage += `\n\nNote: This codebase is still being indexed. Try searching again after indexing completes, or the query may not match any indexed content.`;
-                }
-                return {
-                    content: [{
-                        type: "text",
-                        text: noResultsMessage
-                    }],
-                    meta: { searchDiagnostics }
-                };
-            }
-
-            // If returnRaw is true, return JSON format for reranking
-            if (returnRaw) {
-                const rawResults = searchResults.map((result: any, index: number) => ({
-                    index,
-                    location: `${result.relativePath}:${result.startLine}-${result.endLine}`,
-                    language: result.language,
-                    score: result.score,
-                    content: result.content,
-                    breadcrumbs: Array.isArray(result.breadcrumbs) ? result.breadcrumbs : undefined,
-                    metadata: {
-                        breadcrumbs: Array.isArray(result.breadcrumbs) ? result.breadcrumbs : undefined
+            const byChunkKey = new Map<string, Candidate>();
+            const addPass = (results: any[], passWeight = 1) => {
+                for (let i = 0; i < results.length; i++) {
+                    const result = results[i];
+                    if (!result || typeof result.relativePath !== 'string') continue;
+                    const key = `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || 'unknown'}`;
+                    const rank = i + 1;
+                    const rrf = passWeight * (1 / (SEARCH_RRF_K + rank));
+                    const existing = byChunkKey.get(key);
+                    if (!existing) {
+                        byChunkKey.set(key, {
+                            result,
+                            baseScore: typeof result.score === 'number' ? result.score : 0,
+                            fusionScore: rrf,
+                            finalScore: 0,
+                            pathCategory: 'neutral',
+                            pathMultiplier: 1.0,
+                        });
+                    } else {
+                        existing.fusionScore += rrf;
+                        if (typeof result.score === 'number') {
+                            existing.baseScore = Math.max(existing.baseScore, result.score);
+                        }
                     }
+                }
+            };
+
+            addPass(passOne, 1);
+            addPass(passTwo, 1);
+
+            const beforeFilter = byChunkKey.size;
+            const scored: Candidate[] = [];
+            for (const candidate of byChunkKey.values()) {
+                const category = this.classifyPathCategory(candidate.result.relativePath);
+                if (!this.shouldIncludeCategoryInScope(input.scope, category)) {
+                    continue;
+                }
+                const multiplier = SCOPE_PATH_MULTIPLIERS[input.scope][category];
+                candidate.pathCategory = category;
+                candidate.pathMultiplier = multiplier;
+                candidate.finalScore = candidate.fusionScore * multiplier;
+                scored.push(candidate);
+            }
+
+            searchDiagnostics.resultsBeforeFilter = beforeFilter;
+            searchDiagnostics.resultsAfterFilter = scored.length;
+            searchDiagnostics.excludedByIgnore = Math.max(0, beforeFilter - scored.length);
+
+            scored.sort((a, b) => {
+                if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+                const fileCmp = a.result.relativePath.localeCompare(b.result.relativePath);
+                if (fileCmp !== 0) return fileCmp;
+                const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
+                if (startCmp !== 0) return startCmp;
+                const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
+                if (labelCmp !== 0) return labelCmp;
+                return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
+            });
+
+            if (input.resultMode === 'raw') {
+                const rawResults: SearchChunkResult[] = scored.slice(0, input.limit).map((candidate) => ({
+                    kind: "chunk",
+                    file: candidate.result.relativePath,
+                    span: {
+                        startLine: candidate.result.startLine || 0,
+                        endLine: candidate.result.endLine || 0,
+                    },
+                    language: candidate.result.language || "unknown",
+                    content: String(candidate.result.content || ""),
+                    score: candidate.finalScore,
+                    indexedAt: typeof candidate.result.indexedAt === 'string' ? candidate.result.indexedAt : undefined,
+                    stalenessBucket: this.getStalenessBucket(candidate.result.indexedAt),
+                    symbolId: typeof candidate.result.symbolId === 'string' ? candidate.result.symbolId : undefined,
+                    symbolLabel: typeof candidate.result.symbolLabel === 'string' ? candidate.result.symbolLabel : undefined,
+                    ...(input.debug ? {
+                        debug: {
+                            baseScore: candidate.baseScore,
+                            fusionScore: candidate.fusionScore,
+                            pathMultiplier: candidate.pathMultiplier,
+                            pathCategory: candidate.pathCategory
+                        }
+                    } : {})
                 }));
 
-                const status = isIndexing ? 'indexing' : 'ready';
+                const envelope: SearchResponseEnvelope = {
+                    status: "ok",
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    limit: input.limit,
+                    resultMode: "raw",
+                    freshnessDecision,
+                    results: rawResults
+                };
 
                 return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({
-                            query,
-                            codebasePath: absolutePath,
-                            resultCount: searchResults.length,
-                            resultsBeforeFilter: searchDiagnostics.resultsBeforeFilter,
-                            resultsAfterFilter: searchDiagnostics.resultsAfterFilter,
-                            excludedByIgnore: searchDiagnostics.excludedByIgnore,
-                            excludedBySubdirectory: searchDiagnostics.excludedBySubdirectory,
-                            filterPass: searchDiagnostics.filterPass,
-                            isIndexing,
-                            indexingStatus: status,
-                            excludePatternsWarning: excludeBuilt.warning,
-                            results: rawResults,
-                            documentsForReranking: rawResults.map((r: any) => r.content)
-                        }, null, 2)
-                    }],
+                    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
                     meta: { searchDiagnostics }
                 };
             }
 
-            // Optimize: Merge overlapping/adjacent chunks to provide better context
-            // This solves the issue of fragmented snippets for large functions
-            const mergedResults: any[] = [];
-            const processedFiles = new Set<string>();
+            type GroupAccumulator = {
+                chunks: Candidate[];
+            };
 
-            // Sort by score to prioritize high relevance, but process by file group
-            const sortedByScore = [...searchResults].sort((a: any, b: any) => b.score - a.score);
-
-            for (const result of sortedByScore) {
-                if (processedFiles.has(result.relativePath)) continue;
-
-                // Find all relevant chunks for this file from the original search results
-                // We want to merge all chunks that are close to each other
-                const fileChunks = searchResults.filter((r: any) => r.relativePath === result.relativePath);
-
-                if (fileChunks.length > 1) {
-                    // Sort by line number
-                    fileChunks.sort((a: any, b: any) => a.startLine - b.startLine);
-
-                    const clusters: any[][] = [];
-                    let currentCluster = [fileChunks[0]];
-
-                    for (let i = 1; i < fileChunks.length; i++) {
-                        const previous = currentCluster[currentCluster.length - 1];
-                        const sameScope =
-                            this.getBreadcrumbMergeKey(fileChunks[i]?.breadcrumbs) ===
-                            this.getBreadcrumbMergeKey(previous?.breadcrumbs);
-
-                        // Merge if within 20 lines (context window)
-                        if (fileChunks[i].startLine <= previous.endLine + 20 && sameScope) {
-                            currentCluster.push(fileChunks[i]);
-                        } else {
-                            clusters.push(currentCluster);
-                            currentCluster = [fileChunks[i]];
-                        }
-                    }
-                    clusters.push(currentCluster);
-
-                    // Create merged result for each cluster
-                    for (const cluster of clusters) {
-                        const start = cluster[0].startLine;
-                        const end = cluster[cluster.length - 1].endLine;
-                        const maxScore = Math.max(...cluster.map((c: any) => c.score));
-                        const representative = cluster.reduce((best: any, candidate: any) => (
-                            candidate.score > best.score ? candidate : best
-                        ), cluster[0]);
-
-                        let mergedContent = "";
-                        try {
-                            const filePath = path.join(absolutePath, result.relativePath);
-                            if (fs.existsSync(filePath)) {
-                                const fileContent = fs.readFileSync(filePath, 'utf-8');
-                                const lines = fileContent.split('\n');
-                                // Ensure bounds
-                                const startIdx = Math.max(0, start - 1);
-                                const endIdx = Math.min(lines.length, end);
-                                mergedContent = lines.slice(startIdx, endIdx).join('\n');
-                            } else {
-                                throw new Error("File not found");
-                            }
-                        } catch (e) {
-                            // Fallback to joining snippets with divider
-                            mergedContent = cluster.map((c: any) => c.content).join('\n\n... (gap) ...\n\n');
-                        }
-
-                        mergedResults.push({
-                            ...representative, // Keep metadata from highest-scoring chunk in this cluster
-                            startLine: start,
-                            endLine: end,
-                            content: mergedContent,
-                            score: maxScore,
-                            isMerged: cluster.length > 1
-                        });
-                    }
+            const groups = new Map<string, GroupAccumulator>();
+            for (const candidate of scored) {
+                const result = candidate.result;
+                let groupKey = '';
+                if (input.groupBy === 'file') {
+                    groupKey = `file:${result.relativePath}`;
+                } else if (result.symbolId) {
+                    groupKey = `symbol:${result.symbolId}`;
                 } else {
-                    mergedResults.push(result);
+                    const proximityBucket = Math.floor((Math.max(1, result.startLine || 1) - 1) / SEARCH_PROXIMITY_WINDOW);
+                    groupKey = `fallback:${result.relativePath}:${proximityBucket}`;
                 }
 
-                processedFiles.add(result.relativePath);
+                const existing = groups.get(groupKey);
+                if (!existing) {
+                    groups.set(groupKey, { chunks: [candidate] });
+                } else {
+                    existing.chunks.push(candidate);
+                }
             }
 
-            // Re-sort final merged results by score
-            mergedResults.sort((a, b) => b.score - a.score);
+            const groupedResults: SearchGroupResult[] = [];
+            for (const group of groups.values()) {
+                group.chunks.sort((a, b) => b.finalScore - a.finalScore);
+                const representative = group.chunks[0];
+                const spanStart = Math.min(...group.chunks.map((c) => c.result.startLine || 0));
+                const spanEnd = Math.max(...group.chunks.map((c) => c.result.endLine || 0));
+                const span: SearchSpan = { startLine: spanStart, endLine: spanEnd };
 
-            // Format results (Use mergedResults instead of searchResults)
-            const formattedResults = mergedResults.map((result: any, index: number) => {
-                const location = `${result.relativePath}:${result.startLine}-${result.endLine}`;
-                const PREVIEW_LIMIT = 4000;
-                let context = truncateContent(result.content, PREVIEW_LIMIT);
-
-                // Add explicit hint for agents if content is truncated
-                if (context.endsWith('...')) {
-                    const fullFilePath = path.join(absolutePath, result.relativePath);
-                    // Use forward slashes for cross-platform consistency in agent thought process
-                    const cleanPath = fullFilePath.replace(/\\/g, '/');
-                    const missingChars = result.content.length - PREVIEW_LIMIT;
-                    context += `\n\n(Preview truncated: ${missingChars} more chars. To read full file, call read_file(path='${cleanPath}'))`;
-                }
-
-                // Identify exact line matches for query terms
-                let matchInfo = "";
-                try {
-                    const queryTerms = query.toLowerCase().split(/\s+/).filter((t: string) => t.length > 2);
-                    if (queryTerms.length > 0) {
-                        const matches: number[] = [];
-                        const lines = result.content.split('\n');
-                        lines.forEach((line: string, i: number) => {
-                            const lowerLine = line.toLowerCase();
-                            if (queryTerms.some((term: string) => lowerLine.includes(term))) {
-                                matches.push(result.startLine + i);
-                            }
-                        });
-
-                        if (matches.length > 0) {
-                            // Deduplicate and limit
-                            const unique = [...new Set(matches)].sort((a, b) => a - b);
-                            const shown = unique.slice(0, 5).join(', ');
-                            matchInfo = `\n   Matches at lines: ${shown}${unique.length > 5 ? '...' : ''}`;
-                        }
+                let indexedAtMax: string | undefined;
+                let indexedAtMaxMs = Number.NEGATIVE_INFINITY;
+                for (const chunk of group.chunks) {
+                    const indexedAt = typeof chunk.result.indexedAt === 'string' ? chunk.result.indexedAt : undefined;
+                    const indexedAtMs = this.parseIndexedAtMs(indexedAt);
+                    if (indexedAtMs !== undefined && indexedAtMs > indexedAtMaxMs) {
+                        indexedAtMaxMs = indexedAtMs;
+                        indexedAtMax = indexedAt;
                     }
-                } catch (e) {
-                    // Ignore matching errors
                 }
 
-                const codebaseInfo = path.basename(absolutePath);
+                const repSymbolId = typeof representative.result.symbolId === 'string' ? representative.result.symbolId : null;
+                const repSymbolLabel = typeof representative.result.symbolLabel === 'string' ? representative.result.symbolLabel : null;
+                const groupId = repSymbolId || this.buildFallbackGroupId(representative.result.relativePath, span);
+                const callGraphHint = this.buildCallGraphHint(
+                    representative.result.relativePath,
+                    span,
+                    representative.result.language || 'unknown',
+                    repSymbolId || undefined,
+                    repSymbolLabel || undefined
+                );
 
-                const scoreInfo = showScores ? ` [Score: ${result.score.toFixed(4)}]` : '';
-                const scopeLine = this.formatScopeLine(result.breadcrumbs);
-
-                return `${index + 1}. Code snippet (${result.language}) [${codebaseInfo}]${scoreInfo}\n` +
-                    `   Location: ${location}${matchInfo}\n` +
-                    `   Rank: ${index + 1}\n` +
-                    scopeLine +
-                    `   Context: \n\`\`\`${result.language}\n${context}\n\`\`\`\n`;
-            }).join('\n');
-
-            let resultMessage = `Found ${searchResults.length} results for query: "${query}" in codebase '${absolutePath}'${indexingStatusMessage}\n\n${formattedResults}`;
-
-            if (excludeBuilt.warning) {
-                resultMessage = `${excludeBuilt.warning}\n\n${resultMessage}`;
+                groupedResults.push({
+                    kind: "group",
+                    groupId,
+                    file: representative.result.relativePath,
+                    span,
+                    language: representative.result.language || 'unknown',
+                    symbolId: repSymbolId,
+                    symbolLabel: repSymbolLabel,
+                    score: representative.finalScore,
+                    indexedAt: indexedAtMax || null,
+                    stalenessBucket: this.getStalenessBucket(indexedAtMax),
+                    collapsedChunkCount: group.chunks.length,
+                    callGraphHint,
+                    preview: truncateContent(String(representative.result.content || ''), 4000),
+                    ...(input.debug ? {
+                        debug: {
+                            representativeChunkCount: group.chunks.length,
+                            pathCategory: representative.pathCategory,
+                            pathMultiplier: representative.pathMultiplier,
+                            topChunkScore: representative.finalScore
+                        }
+                    } : {})
+                });
             }
 
-            if (isIndexing) {
-                resultMessage += `\n\n💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses.`;
-                resultMessage += `\nStatus: 🔄 Indexing in progress`;
-            } else {
-                resultMessage += `\nStatus: ✅ Indexing complete`;
-            }
+            groupedResults.sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                const fileCmp = a.file.localeCompare(b.file);
+                if (fileCmp !== 0) return fileCmp;
+                const spanCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+                if (spanCmp !== 0) return spanCmp;
+                const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+                if (labelCmp !== 0) return labelCmp;
+                return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+            });
+
+            const envelope: SearchResponseEnvelope = {
+                status: "ok",
+                path: absolutePath,
+                query: input.query,
+                scope: input.scope,
+                groupBy: input.groupBy,
+                limit: input.limit,
+                resultMode: "grouped",
+                freshnessDecision,
+                results: groupedResults.slice(0, input.limit)
+            };
 
             return {
-                content: [{
-                    type: "text",
-                    text: resultMessage
-                }],
+                content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
                 meta: { searchDiagnostics }
             };
         } catch (error) {
@@ -1562,10 +1802,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             if (errorMessage === COLLECTION_LIMIT_MESSAGE || errorMessage.includes(COLLECTION_LIMIT_MESSAGE)) {
                 return {
-                    content: [{
-                        type: "text",
-                        text: COLLECTION_LIMIT_MESSAGE
-                    }]
+                    content: [{ type: "text", text: COLLECTION_LIMIT_MESSAGE }]
                 };
             }
 
@@ -1573,6 +1810,168 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 content: [{
                     type: "text",
                     text: `Error searching code: ${errorMessage} Please check if the codebase has been indexed first.`
+                }],
+                isError: true
+            };
+        }
+    }
+
+    public async handleCallGraph(args: any) {
+        const rawDirection = args?.direction;
+        const direction: CallGraphDirection = rawDirection === 'callers' || rawDirection === 'callees' || rawDirection === 'both'
+            ? rawDirection
+            : 'both';
+        const depth = Number.isFinite(args?.depth) ? Math.max(1, Math.min(3, Number(args.depth))) : 1;
+        const limit = Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 20;
+        const symbolRef = args?.symbolRef as CallGraphSymbolRef | undefined;
+
+        if (!symbolRef || typeof symbolRef.file !== 'string' || typeof symbolRef.symbolId !== 'string') {
+            return {
+                content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        supported: false,
+                        reason: 'invalid_symbol_ref',
+                        hints: {
+                            message: "symbolRef with { file, symbolId } is required."
+                        }
+                    }, null, 2)
+                }],
+                isError: true
+            };
+        }
+
+        try {
+            await this.syncIndexedCodebasesFromCloud();
+
+            const absolutePath = ensureAbsolutePath(args?.path);
+            if (!fs.existsSync(absolutePath)) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: Path '${absolutePath}' does not exist.`
+                    }],
+                    isError: true
+                };
+            }
+
+            const stat = fs.statSync(absolutePath);
+            if (!stat.isDirectory()) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: Path '${absolutePath}' is not a directory`
+                    }],
+                    isError: true
+                };
+            }
+
+            trackCodebasePath(absolutePath);
+
+            let effectiveRoot = absolutePath;
+            const indexedCodebases = this.snapshotManager.getIndexedCodebases();
+            if (!indexedCodebases.includes(absolutePath)) {
+                const blockedMatch = this.getMatchingBlockedRoot(absolutePath);
+                if (blockedMatch) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify(this.buildRequiresReindexCallGraphPayload(
+                                blockedMatch.path,
+                                blockedMatch.message,
+                                {
+                                    path: absolutePath,
+                                    symbolRef,
+                                    direction,
+                                    depth,
+                                    limit
+                                }
+                            ), null, 2)
+                        }]
+                    };
+                }
+
+                const parents = indexedCodebases.filter((root) => absolutePath.startsWith(root) && absolutePath !== root);
+                if (parents.length > 0) {
+                    parents.sort((a, b) => b.length - a.length);
+                    effectiveRoot = parents[0];
+                } else {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                supported: false,
+                                reason: 'not_indexed',
+                                hints: {
+                                    create: {
+                                        tool: 'manage_index',
+                                        args: { action: 'create', path: absolutePath }
+                                    }
+                                }
+                            }, null, 2)
+                        }]
+                    };
+                }
+            }
+
+            const gateResult = this.enforceFingerprintGate(effectiveRoot);
+            if (gateResult.blockedResponse) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(this.buildRequiresReindexCallGraphPayload(
+                            effectiveRoot,
+                            gateResult.message,
+                            {
+                                path: absolutePath,
+                                symbolRef,
+                                direction,
+                                depth,
+                                limit
+                            }
+                        ), null, 2)
+                    }]
+                };
+            }
+
+            const sidecarInfo = this.snapshotManager.getCodebaseCallGraphSidecar(effectiveRoot);
+            if (!sidecarInfo || sidecarInfo.version !== 'v3') {
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            supported: false,
+                            reason: 'missing_sidecar',
+                            hints: {
+                                message: 'Call graph sidecar is unavailable for this codebase. Reindex to rebuild call graph metadata.',
+                                reindex: this.buildReindexHint(effectiveRoot)
+                            }
+                        }, null, 2)
+                    }]
+                };
+            }
+
+            const graph = this.callGraphManager.queryGraph(effectiveRoot, symbolRef, {
+                direction,
+                depth,
+                limit
+            });
+
+            return {
+                content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        path: effectiveRoot,
+                        symbolRef,
+                        ...graph
+                    }, null, 2)
+                }]
+            };
+        } catch (error: any) {
+            return {
+                content: [{
+                    type: "text",
+                    text: `Error generating call graph: ${error.message || error}`
                 }],
                 isError: true
             };
@@ -1886,10 +2285,19 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Perform incremental sync
             const syncStats = await this.context.reindexByChange(absolutePath);
+            const changedFiles = Array.isArray((syncStats as any).changedFiles)
+                ? (syncStats as any).changedFiles.filter((file: unknown): file is string => typeof file === 'string')
+                : [];
+            const syncTotals = {
+                added: syncStats.added,
+                removed: syncStats.removed,
+                modified: syncStats.modified
+            };
 
             // Store sync result in snapshot
-            this.snapshotManager.setCodebaseSyncCompleted(absolutePath, syncStats, this.runtimeFingerprint, 'verified');
+            this.snapshotManager.setCodebaseSyncCompleted(absolutePath, syncTotals, this.runtimeFingerprint, 'verified');
             this.snapshotManager.saveCodebaseSnapshot();
+            const rebuiltCallGraph = await this.rebuildCallGraphForSyncDelta(absolutePath, changedFiles);
 
             const totalChanges = syncStats.added + syncStats.removed + syncStats.modified;
 
@@ -1902,7 +2310,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${syncStats.added} file(s) added\n- ${syncStats.removed} file(s) removed\n~ ${syncStats.modified} file(s) modified\n\nTotal changes: ${totalChanges}`;
+            const callGraphLine = rebuiltCallGraph
+                ? `\n🕸️ Call graph sidecar rebuilt from supported source changes.`
+                : '';
+            const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${syncStats.added} file(s) added\n- ${syncStats.removed} file(s) removed\n~ ${syncStats.modified} file(s) modified\n\nTotal changes: ${totalChanges}${callGraphLine}`;
 
             console.log(`[SYNC] ✅ Sync completed: +${syncStats.added}, -${syncStats.removed}, ~${syncStats.modified}`);
 

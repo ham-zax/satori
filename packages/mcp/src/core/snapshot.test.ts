@@ -11,7 +11,7 @@ const FINGERPRINT_A: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v2'
+    schemaVersion: 'hybrid_v3'
 };
 
 const FINGERPRINT_B: IndexFingerprint = {
@@ -19,7 +19,7 @@ const FINGERPRINT_B: IndexFingerprint = {
     embeddingModel: 'text-embedding-3-small',
     embeddingDimension: 1536,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v2'
+    schemaVersion: 'hybrid_v3'
 };
 
 function withTempHome<T>(fn: (homeDir: string) => T): T {
@@ -106,14 +106,14 @@ test('fingerprint mismatch transitions searchable entry to requires_reindex', ()
     });
 });
 
-test('legacy schemaVersion v1 fingerprint transitions entry to requires_reindex under v2 runtime', () => {
+test('legacy schemaVersion v2 fingerprint transitions entry to requires_reindex under v3 runtime', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo');
         fs.mkdirSync(codebase, { recursive: true });
 
         const legacyFingerprint = {
             ...FINGERPRINT_A,
-            schemaVersion: 'hybrid_v1'
+            schemaVersion: 'hybrid_v2'
         } as unknown as IndexFingerprint;
 
         const writer = new SnapshotManager(FINGERPRINT_A);

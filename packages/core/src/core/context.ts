@@ -256,7 +256,7 @@ export class Context {
     async reindexByChange(
         codebasePath: string,
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
-    ): Promise<{ added: number, removed: number, modified: number }> {
+    ): Promise<{ added: number; removed: number; modified: number; changedFiles: string[] }> {
         const collectionName = this.resolveCollectionName(codebasePath);
         const synchronizer = this.synchronizers.get(collectionName);
 
@@ -279,7 +279,7 @@ export class Context {
         if (totalChanges === 0) {
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
             console.log('[Context] ✅ No file changes detected.');
-            return { added: 0, removed: 0, modified: 0 };
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
         }
 
         console.log(`[Context] 🔄 Found changes: ${added.length} added, ${removed.length} removed, ${modified.length} modified.`);
@@ -319,7 +319,12 @@ export class Context {
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
         progressCallback?.({ phase: 'Re-indexing complete!', current: totalChanges, total: totalChanges, percentage: 100 });
 
-        return { added: added.length, removed: removed.length, modified: modified.length };
+        return {
+            added: added.length,
+            removed: removed.length,
+            modified: modified.length,
+            changedFiles: Array.from(new Set([...added, ...removed, ...modified]))
+        };
     }
 
     private async deleteFileChunks(collectionName: string, relativePath: string): Promise<void> {
@@ -433,7 +438,10 @@ export class Context {
                 endLine: result.document.endLine,
                 language: result.document.metadata.language || 'unknown',
                 score: result.score,
-                breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs)
+                breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs),
+                indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
+                symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
+                symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined
             }));
 
             console.log(`[Context] ✅ Found ${results.length} relevant hybrid results`);
@@ -462,7 +470,10 @@ export class Context {
                 endLine: result.document.endLine,
                 language: result.document.metadata.language || 'unknown',
                 score: result.score,
-                breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs)
+                breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs),
+                indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
+                symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
+                symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined
             }));
 
             console.log(`[Context] ✅ Found ${results.length} relevant results`);
@@ -768,6 +779,7 @@ export class Context {
      */
     private async processChunkBatch(chunks: CodeChunk[], codebasePath: string): Promise<void> {
         const isHybrid = this.getIsHybrid();
+        const indexedAt = new Date().toISOString();
 
         // Generate embedding vectors
         const chunkContents = chunks.map(chunk => chunk.content);
@@ -796,7 +808,8 @@ export class Context {
                         ...restMetadata,
                         codebasePath,
                         language: chunk.metadata.language || 'unknown',
-                        chunkIndex: index
+                        chunkIndex: index,
+                        indexedAt
                     }
                 };
             });
@@ -826,7 +839,8 @@ export class Context {
                         ...restMetadata,
                         codebasePath,
                         language: chunk.metadata.language || 'unknown',
-                        chunkIndex: index
+                        chunkIndex: index,
+                        indexedAt
                     }
                 };
             });

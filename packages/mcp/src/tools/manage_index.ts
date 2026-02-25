@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 
-const actionEnum = z.enum(["create", "sync", "status", "clear"]);
+const actionEnum = z.enum(["create", "reindex", "sync", "status", "clear"]);
 
 const manageIndexInputSchema = z.object({
     action: actionEnum.describe("Required operation to run."),
@@ -16,7 +16,7 @@ const manageIndexInputSchema = z.object({
 export const manageIndexTool: McpTool = {
     name: "manage_index",
     description: () =>
-        "Manage index lifecycle operations (create/sync/status/clear) for a codebase path.",
+        "Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path.",
     inputSchemaZod: () => manageIndexInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = manageIndexInputSchema.safeParse(args || {});
@@ -35,6 +35,8 @@ export const manageIndexTool: McpTool = {
         switch (input.action) {
             case 'create':
                 return ctx.toolHandlers.handleIndexCodebase(input);
+            case 'reindex':
+                return ctx.toolHandlers.handleReindexCodebase(input);
             case 'sync':
                 return ctx.toolHandlers.handleSyncCodebase(input);
             case 'status':
@@ -45,7 +47,7 @@ export const manageIndexTool: McpTool = {
                 return {
                     content: [{
                         type: 'text',
-                        text: `Error: Unsupported action '${input.action}'. Use one of: create, sync, status, clear.`
+                        text: `Error: Unsupported action '${input.action}'. Use one of: create, reindex, sync, status, clear.`
                     }],
                     isError: true
                 };

@@ -14,14 +14,32 @@ function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> | T {
     });
 }
 
-function buildContext(readFileMaxLines: number): ToolContext {
+function buildContext(readFileMaxLines: number, overrides: Partial<ToolContext> = {}): ToolContext {
     return {
-        readFileMaxLines
+        readFileMaxLines,
+        snapshotManager: {
+            getAllCodebases: () => []
+        },
+        toolHandlers: {
+            handleFileOutline: async () => ({
+                content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        status: "requires_reindex",
+                        path: "/repo",
+                        file: "src/file.ts",
+                        outline: null,
+                        hasMore: false
+                    })
+                }]
+            })
+        },
+        ...overrides
     } as unknown as ToolContext;
 }
 
-async function runReadFile(args: unknown, readFileMaxLines = 1000) {
-    return readFileTool.execute(args, buildContext(readFileMaxLines));
+async function runReadFile(args: unknown, readFileMaxLines = 1000, overrides: Partial<ToolContext> = {}) {
+    return readFileTool.execute(args, buildContext(readFileMaxLines, overrides));
 }
 
 test('read_file schema rejects invalid line parameters', async () => {
@@ -118,5 +136,80 @@ test('read_file preserves missing-file and non-file errors', async () => {
         const nonFile = await runReadFile({ path: dir }, 1000);
         assert.equal(nonFile.isError, true);
         assert.match(nonFile.content[0].text, /is not a file/);
+    });
+});
+
+test('read_file annotated mode returns content and outline metadata when outline is available', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'export function run() {\n  return true;\n}\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            mode: 'annotated'
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as any,
+            toolHandlers: {
+                handleFileOutline: async () => ({
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'ok',
+                            path: repoPath,
+                            file: 'src/runtime.ts',
+                            outline: {
+                                symbols: [{
+                                    symbolId: 'sym_runtime_run',
+                                    symbolLabel: 'function run()',
+                                    span: { startLine: 1, endLine: 3 },
+                                    callGraphHint: {
+                                        supported: true,
+                                        symbolRef: {
+                                            file: 'src/runtime.ts',
+                                            symbolId: 'sym_runtime_run'
+                                        }
+                                    }
+                                }]
+                            },
+                            hasMore: false
+                        })
+                    }]
+                })
+            } as any
+        });
+
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.mode, 'annotated');
+        assert.match(payload.content, /export function run\(\)/);
+        assert.equal(payload.outlineStatus, 'ok');
+        assert.equal(payload.outline.symbols.length, 1);
+        assert.equal(payload.outline.symbols[0].symbolId, 'sym_runtime_run');
+    });
+});
+
+test('read_file annotated mode degrades gracefully when outline is unavailable', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'runtime.ts');
+        fs.writeFileSync(filePath, 'const value = 1;\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            mode: 'annotated'
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => []
+            } as any
+        });
+
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.mode, 'annotated');
+        assert.match(payload.content, /const value = 1;/);
+        assert.equal(payload.outlineStatus, 'requires_reindex');
+        assert.equal(payload.outline, null);
     });
 });

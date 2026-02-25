@@ -8,6 +8,9 @@ interface SearchDiagnostics {
     excludedByIgnore: number;
     resultsReturned: number;
     freshnessMode?: string;
+    searchPassCount?: number;
+    searchPassSuccessCount?: number;
+    searchPassFailureCount?: number;
 }
 
 function getProfile(ctx: ToolContext): string {
@@ -48,6 +51,9 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
             excludedByIgnore: safeNumber(metaDiagnostics.excludedByIgnore, 0),
             resultsReturned: afterFilter,
             freshnessMode: typeof metaDiagnostics.freshnessMode === "string" ? metaDiagnostics.freshnessMode : undefined,
+            searchPassCount: safeNumber(metaDiagnostics.searchPassCount, 0),
+            searchPassSuccessCount: safeNumber(metaDiagnostics.searchPassSuccessCount, 0),
+            searchPassFailureCount: safeNumber(metaDiagnostics.searchPassFailureCount, 0),
         };
     }
 
@@ -65,6 +71,9 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
             excludedByIgnore: safeNumber(parsed?.excludedByIgnore, 0),
             resultsReturned: results,
             freshnessMode: typeof parsed?.freshnessDecision?.mode === "string" ? parsed.freshnessDecision.mode : undefined,
+            searchPassCount: safeNumber(parsed?.searchPassCount, 0),
+            searchPassSuccessCount: safeNumber(parsed?.searchPassSuccessCount, 0),
+            searchPassFailureCount: safeNumber(parsed?.searchPassFailureCount, 0),
         };
     } catch {
         return fallback;
@@ -123,6 +132,10 @@ export const searchCodebaseTool: McpTool = {
             reranker_used: false,
             latency_ms: Date.now() - startedAt,
             freshness_mode: diagnostics.freshnessMode,
+            search_pass_count: diagnostics.searchPassCount,
+            search_pass_success_count: diagnostics.searchPassSuccessCount,
+            search_pass_failure_count: diagnostics.searchPassFailureCount,
+            parallel_fanout: true,
             ...(response.isError ? { error: getErrorMessage(response) } : {})
         });
 

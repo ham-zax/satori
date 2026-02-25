@@ -20,6 +20,10 @@ import {
 } from "./search-constants.js";
 import {
     CallGraphHint,
+    FileOutlineInput,
+    FileOutlineResponseEnvelope,
+    FileOutlineStatus,
+    FileOutlineSymbolResult,
     SearchChunkResult,
     SearchGroupResult,
     SearchRequestInput,
@@ -594,6 +598,52 @@ export class ToolHandlers {
                 span
             }
         };
+    }
+
+    private normalizeRelativeFilePath(relativeFilePath: string): string {
+        return relativeFilePath.replace(/\\/g, '/').replace(/^\.\/+/, '').trim();
+    }
+
+    private buildRequiresReindexFileOutlinePayload(
+        codebasePath: string,
+        input: FileOutlineInput,
+        detail?: string
+    ): FileOutlineResponseEnvelope {
+        const detailLine = detail ? `${detail}\n\n` : '';
+        return {
+            status: 'requires_reindex',
+            path: codebasePath,
+            file: input.file,
+            outline: null,
+            hasMore: false,
+            message: `${detailLine}Call graph sidecar is missing or incompatible. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
+            hints: {
+                reindex: this.buildReindexHint(codebasePath)
+            }
+        };
+    }
+
+    private getOutlineStatusForLanguage(relativeFilePath: string): FileOutlineStatus {
+        if (this.isCallGraphLanguageSupported('unknown', relativeFilePath)) {
+            return 'ok';
+        }
+        return 'unsupported';
+    }
+
+    private sortFileOutlineSymbols(symbols: FileOutlineSymbolResult[]): FileOutlineSymbolResult[] {
+        return [...symbols].sort((a, b) => {
+            const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+            if (startCmp !== 0) return startCmp;
+            const endCmp = this.compareNullableNumbersAsc(a.span?.endLine, b.span?.endLine);
+            if (endCmp !== 0) return endCmp;
+            const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+            if (labelCmp !== 0) return labelCmp;
+            return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+        });
+    }
+
+    private buildSearchPassWarning(passId: string): string {
+        return `SEARCH_PASS_FAILED:${passId} - ${passId} semantic search pass failed; results may be degraded.`;
     }
 
     private mapCallGraphStatus(graph: { supported: boolean; reason?: string }): 'ok' | 'not_found' | 'unsupported' | 'not_ready' {
@@ -1481,6 +1531,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             excludedBySubdirectory: 0,
             filterPass: 'expanded' as 'initial' | 'expanded',
             freshnessMode: undefined as string | undefined,
+            searchPassCount: 0,
+            searchPassSuccessCount: 0,
+            searchPassFailureCount: 0,
         };
 
         try {
@@ -1591,9 +1644,45 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
             const expandedQuery = `${input.query}\nimplementation runtime source entrypoint`;
+            const passDescriptors = [
+                { id: 'primary', query: input.query },
+                { id: 'expanded', query: expandedQuery },
+            ] as const;
+            searchDiagnostics.searchPassCount = passDescriptors.length;
 
-            const passOne = await this.context.semanticSearch(effectiveRoot, input.query, candidateLimit, 0.3);
-            const passTwo = await this.context.semanticSearch(effectiveRoot, expandedQuery, candidateLimit, 0.3);
+            const passSettled = await Promise.allSettled(passDescriptors.map((pass) => {
+                return this.context.semanticSearch(effectiveRoot, pass.query, candidateLimit, 0.3);
+            }));
+            const searchWarnings: string[] = [];
+
+            const successfulPasses: Array<{ id: string; results: any[] }> = [];
+            for (let idx = 0; idx < passSettled.length; idx++) {
+                const passResult = passSettled[idx];
+                const passDescriptor = passDescriptors[idx];
+                if (passResult.status === 'fulfilled' && Array.isArray(passResult.value)) {
+                    successfulPasses.push({
+                        id: passDescriptor.id,
+                        results: passResult.value
+                    });
+                    continue;
+                }
+
+                searchWarnings.push(this.buildSearchPassWarning(passDescriptor.id));
+            }
+
+            searchDiagnostics.searchPassSuccessCount = successfulPasses.length;
+            searchDiagnostics.searchPassFailureCount = searchDiagnostics.searchPassCount - successfulPasses.length;
+
+            if (successfulPasses.length === 0) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: "Error searching code: all semantic search passes failed. Please retry and verify embedding/vector backends are reachable."
+                    }],
+                    isError: true,
+                    meta: { searchDiagnostics }
+                };
+            }
 
             type Candidate = {
                 result: any;
@@ -1631,8 +1720,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
             };
 
-            addPass(passOne, 1);
-            addPass(passTwo, 1);
+            for (const pass of successfulPasses) {
+                addPass(pass.results, 1);
+            }
 
             const beforeFilter = byChunkKey.size;
             const scored: Candidate[] = [];
@@ -1697,6 +1787,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit,
                     resultMode: "raw",
                     freshnessDecision,
+                    ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {}),
                     results: rawResults
                 };
 
@@ -1806,6 +1897,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 limit: input.limit,
                 resultMode: "grouped",
                 freshnessDecision,
+                ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {}),
                 results: groupedResults.slice(0, input.limit)
             };
 
@@ -1826,6 +1918,217 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 content: [{
                     type: "text",
                     text: `Error searching code: ${errorMessage} Please check if the codebase has been indexed first.`
+                }],
+                isError: true
+            };
+        }
+    }
+
+    public async handleFileOutline(args: FileOutlineInput) {
+        const limitSymbols = Number.isFinite(args?.limitSymbols)
+            ? Math.max(1, Number(args.limitSymbols))
+            : 500;
+        const requestedStartLine = Number.isFinite(args?.start_line) ? Math.max(1, Number(args.start_line)) : undefined;
+        const requestedEndLine = Number.isFinite(args?.end_line) ? Math.max(1, Number(args.end_line)) : undefined;
+
+        try {
+            await this.syncIndexedCodebasesFromCloud();
+
+            const absoluteRoot = ensureAbsolutePath(args.path);
+            const normalizedFile = this.normalizeRelativeFilePath(args.file);
+            const absoluteFile = path.resolve(absoluteRoot, normalizedFile);
+            const relativeToRoot = path.relative(absoluteRoot, absoluteFile);
+
+            if (!fs.existsSync(absoluteRoot)) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: Path '${absoluteRoot}' does not exist.`
+                    }],
+                    isError: true
+                };
+            }
+
+            const rootStat = fs.statSync(absoluteRoot);
+            if (!rootStat.isDirectory()) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: Path '${absoluteRoot}' is not a directory`
+                    }],
+                    isError: true
+                };
+            }
+
+            if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: File '${normalizedFile}' must be inside codebase root '${absoluteRoot}'.`
+                    }],
+                    isError: true
+                };
+            }
+
+            trackCodebasePath(absoluteRoot);
+
+            const blockedRoot = this.getMatchingBlockedRoot(absoluteRoot);
+            if (blockedRoot) {
+                const payload = this.buildRequiresReindexFileOutlinePayload(blockedRoot.path, {
+                    ...args,
+                    file: normalizedFile
+                }, blockedRoot.message);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            const gateResult = this.enforceFingerprintGate(absoluteRoot);
+            if (gateResult.blockedResponse) {
+                const payload = this.buildRequiresReindexFileOutlinePayload(absoluteRoot, {
+                    ...args,
+                    file: normalizedFile
+                }, gateResult.message);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            const sidecarInfo = this.snapshotManager.getCodebaseCallGraphSidecar(absoluteRoot);
+            if (!sidecarInfo || sidecarInfo.version !== 'v3') {
+                const payload = this.buildRequiresReindexFileOutlinePayload(absoluteRoot, {
+                    ...args,
+                    file: normalizedFile
+                });
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            if (!fs.existsSync(absoluteFile)) {
+                const payload: FileOutlineResponseEnvelope = {
+                    status: 'not_found',
+                    path: absoluteRoot,
+                    file: normalizedFile,
+                    outline: null,
+                    hasMore: false,
+                    message: `File '${normalizedFile}' does not exist under codebase root '${absoluteRoot}'.`
+                };
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            const fileStat = fs.statSync(absoluteFile);
+            if (!fileStat.isFile()) {
+                const payload: FileOutlineResponseEnvelope = {
+                    status: 'not_found',
+                    path: absoluteRoot,
+                    file: normalizedFile,
+                    outline: null,
+                    hasMore: false,
+                    message: `'${normalizedFile}' is not a file.`
+                };
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            const languageStatus = this.getOutlineStatusForLanguage(normalizedFile);
+            if (languageStatus !== 'ok') {
+                const payload: FileOutlineResponseEnvelope = {
+                    status: 'unsupported',
+                    path: absoluteRoot,
+                    file: normalizedFile,
+                    outline: null,
+                    hasMore: false,
+                    message: `File '${normalizedFile}' is not supported for sidecar outline. Supported extensions: .ts, .tsx, .py.`
+                };
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            const sidecar = this.callGraphManager.loadSidecar(absoluteRoot);
+            if (!sidecar) {
+                const payload = this.buildRequiresReindexFileOutlinePayload(absoluteRoot, {
+                    ...args,
+                    file: normalizedFile
+                });
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            const windowStart = requestedStartLine;
+            const windowEnd = requestedEndLine && requestedStartLine
+                ? Math.max(requestedEndLine, requestedStartLine)
+                : requestedEndLine;
+
+            const byFile = sidecar.nodes.filter((node) => this.normalizeRelativeFilePath(node.file) === normalizedFile);
+            const windowed = byFile.filter((node) => {
+                if (!windowStart && !windowEnd) {
+                    return true;
+                }
+
+                const startsBeforeWindowEnd = windowEnd === undefined || node.span.startLine <= windowEnd;
+                const endsAfterWindowStart = windowStart === undefined || node.span.endLine >= windowStart;
+                return startsBeforeWindowEnd && endsAfterWindowStart;
+            });
+
+            const symbols = this.sortFileOutlineSymbols(windowed.map((node) => {
+                const symbolLabel = (typeof node.symbolLabel === 'string' && node.symbolLabel.trim().length > 0)
+                    ? node.symbolLabel
+                    : node.symbolId;
+                return {
+                    symbolId: node.symbolId,
+                    symbolLabel,
+                    span: {
+                        startLine: node.span.startLine,
+                        endLine: node.span.endLine
+                    },
+                    callGraphHint: {
+                        supported: true,
+                        symbolRef: {
+                            file: normalizedFile,
+                            symbolId: node.symbolId,
+                            symbolLabel,
+                            span: {
+                                startLine: node.span.startLine,
+                                endLine: node.span.endLine
+                            }
+                        }
+                    }
+                } as FileOutlineSymbolResult;
+            }));
+
+            const hasMore = symbols.length > limitSymbols;
+            const missingSymbolMetadataCount = sidecar.notes.filter((note) => {
+                return note.type === 'missing_symbol_metadata' && this.normalizeRelativeFilePath(note.file) === normalizedFile;
+            }).length;
+            const warnings = missingSymbolMetadataCount > 0
+                ? [`OUTLINE_MISSING_SYMBOL_METADATA:${missingSymbolMetadataCount}`]
+                : undefined;
+
+            const payload: FileOutlineResponseEnvelope = {
+                status: 'ok',
+                path: absoluteRoot,
+                file: normalizedFile,
+                outline: {
+                    symbols: symbols.slice(0, limitSymbols)
+                },
+                hasMore,
+                ...(warnings ? { warnings } : {})
+            };
+
+            return {
+                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+            };
+        } catch (error: any) {
+            return {
+                content: [{
+                    type: "text",
+                    text: `Error building file outline: ${error?.message || error}`
                 }],
                 isError: true
             };

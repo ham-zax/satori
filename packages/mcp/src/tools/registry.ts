@@ -3,6 +3,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { manageIndexTool } from "./manage_index.js";
 import { searchCodebaseTool } from "./search_codebase.js";
 import { callGraphTool } from "./call_graph.js";
+import { fileOutlineTool } from "./file_outline.js";
 import { readFileTool } from "./read_file.js";
 import { listCodebasesTool } from "./list_codebases.js";
 import { McpTool, ToolContext } from "./types.js";
@@ -11,6 +12,7 @@ export const toolList: McpTool[] = [
     manageIndexTool,
     searchCodebaseTool,
     callGraphTool,
+    fileOutlineTool,
     readFileTool,
     listCodebasesTool,
 ];

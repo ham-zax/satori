@@ -11,6 +11,10 @@ export interface SearchTelemetryEvent {
     reranker_used: boolean;
     latency_ms: number;
     freshness_mode?: string;
+    search_pass_count?: number;
+    search_pass_success_count?: number;
+    search_pass_failure_count?: number;
+    parallel_fanout?: boolean;
     error?: string;
 }
 

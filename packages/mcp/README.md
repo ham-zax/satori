@@ -7,13 +7,14 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 - Capability-driven execution via `CapabilityResolver`
 - Runtime-first `search_codebase` with explicit `scope`, `resultMode`, `groupBy`, and optional `debug` traces
 - First-class `call_graph` tool with deterministic node/edge sorting and TS/Python support
+- Sidecar-backed `file_outline` tool for per-file symbol navigation and direct call_graph jump handles
 - Snapshot v3 safety with index fingerprints and strict `requires_reindex` access gates
 - Deterministic train-in-the-error responses for incompatible or legacy index states
 - Query-time exclusion support with `.gitignore`-style matching
 - Structured search telemetry logs (`[TELEMETRY]` JSON to `stderr`)
 - Zod-first tool schemas converted to MCP JSON Schema for `ListTools`
 - Auto-generated tool docs from live tool schemas
-- `read_file` line-range retrieval with default large-file truncation guard
+- `read_file` line-range retrieval with default large-file truncation guard and optional `mode="annotated"` metadata envelope
 - Optional proactive sync watcher mode (debounced filesystem events)
 - Index-time AST scope breadcrumbs (TS/JS/Python) rendered in search output as `🧬 Scope`
 - Fingerprint schema `dense_v3`/`hybrid_v3` with hard gate for all pre-v3 indexes
@@ -24,19 +25,20 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 [MCP Client]
     -> [index.ts bootstrap + ListTools/CallTool]
     -> [tool registry]
-    -> [manage_index | search_codebase | call_graph | read_file | list_codebases]
+    -> [manage_index | search_codebase | call_graph | file_outline | read_file | list_codebases]
     -> [ToolContext DI]
        -> [CapabilityResolver]
        -> [SnapshotManager v3 + access gate]
        -> [Context / Vector store / Embedding / Reranker adapters]
 ```
 
-Tool surface is hard-broken to 5 tools. This keeps routing explicit while exposing call-chain traversal as a first-class operation.
+Tool surface is hard-broken to 6 tools. This keeps routing explicit while exposing call-chain traversal and file-level navigation as first-class operations.
 
 ## read_file Behavior
 
 - Supports optional `start_line` and `end_line` (1-based, inclusive)
 - When no range is provided and file length exceeds `READ_FILE_MAX_LINES` (default `1000`), output is truncated and includes a continuation hint with `path` and next `start_line`
+- Optional `mode="annotated"` returns content plus `outlineStatus`, `outline`, `hasMore`, and reindex hints when sidecar data is unavailable
 
 ## Proactive Sync
 
@@ -93,6 +95,18 @@ Traverse the prebuilt TS/Python call graph sidecar for callers/callees/bidirecti
 | `depth` | integer | no | `1` | Traversal depth (max 3). |
 | `limit` | integer | no | `20` | Maximum number of returned edges. |
 
+### `file_outline`
+
+Return a sidecar-backed symbol outline for one file, including call_graph jump handles.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `path` | string | yes |  | ABSOLUTE path to the indexed codebase root. |
+| `file` | string | yes |  | Relative file path inside the codebase root. |
+| `start_line` | integer | no |  | Optional start line filter (1-based, inclusive). |
+| `end_line` | integer | no |  | Optional end line filter (1-based, inclusive). |
+| `limitSymbols` | integer | no | `500` | Maximum number of returned symbols after line filtering. |
+
 ### `read_file`
 
 Read file content from the local filesystem, with optional 1-based inclusive line ranges and safe truncation.
@@ -102,6 +116,7 @@ Read file content from the local filesystem, with optional 1-based inclusive lin
 | `path` | string | yes |  | ABSOLUTE path to the file. |
 | `start_line` | integer | no |  | Optional start line (1-based, inclusive). |
 | `end_line` | integer | no |  | Optional end line (1-based, inclusive). |
+| `mode` | enum("plain", "annotated") | no | `"plain"` | Output mode. plain returns text only; annotated returns content plus sidecar-backed outline metadata. |
 
 ### `list_codebases`
 

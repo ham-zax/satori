@@ -718,7 +718,7 @@
             </div>
             <pre><code id="codex-config-top">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@2.0.0"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.0.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
           </div>
@@ -735,7 +735,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
     "npx",
     "-y",
     "--prefer-offline",
-    "@zokizuan/satori-mcp@2.0.0"
+    "@zokizuan/satori-mcp@3.0.0"
   ],
   "enabled": true,
   "timeout": 30000,
@@ -826,8 +826,9 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
               >satori.read_file({"path":"...","start_line":1,"end_line":220})</code
             >
             <p>
-              If a path is missing, run a new semantic query and pivot to the
-              current canonical path.
+              Use <code>mode:"annotated"</code> for content plus outline
+              metadata. If a path is missing, run a new semantic query and
+              pivot to the current canonical path.
             </p>
           </div>
         </div>
@@ -852,7 +853,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
                   </div>
                   <pre><code id="codex-config">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@2.0.0"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.0.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
                 </div>
@@ -869,7 +870,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
     "npx",
     "-y",
     "--prefer-offline",
-    "@zokizuan/satori-mcp@2.0.0"
+    "@zokizuan/satori-mcp@3.0.0"
   ],
   "enabled": true,
   "timeout": 30000,
@@ -914,18 +915,19 @@ satori.call_graph({"path":"/repo","symbolRef":{"file":"src/auth.ts","symbolId":"
               Real Agent Trace (Docs Investigation + Missing Path Recovery)
             </summary>
             <div class="details-body">
-              <pre><code>Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/CLI_COMMANDS.md","start_line":1,"end_line":220})
+              <pre><code>Called satori.file_outline({"path":"/home/hamza/repo/tradingview_ratio","file":"src/auth/session.ts","limitSymbols":50})
+Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/CLI_COMMANDS.md","start_line":1,"end_line":220,"mode":"annotated"})
 Result: "QAP CLI Command Reference ..."
 
 Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"MASTER_AUDIT.md location current path archived","scope":"docs","resultMode":"raw","limit":10})
 Hit: docs/research/PHASES_OVERVIEW.md:322-371
 
-Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220})
+Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220,"mode":"annotated"})
 Error: File not found
 
 Fallback:
 satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch","scope":"docs","resultMode":"raw","limit":10})
-satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620})</code></pre>
+satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620,"mode":"annotated"})</code></pre>
             </div>
           </details>
         </div>
@@ -1069,7 +1071,8 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
         "Extracted callGraphHint.symbolRef",
         "Called satori.call_graph({direction: both, depth: 2, limit: 20})",
         "Graph: 6 nodes | 8 edges | 1 unresolved note",
-        "Called satori.read_file({path: src/auth/session.ts, start_line: 88, end_line: 141})",
+        "Called satori.file_outline({path: /repo, file: src/auth/session.ts, limitSymbols: 50})",
+        "Called satori.read_file({path: src/auth/session.ts, start_line: 88, end_line: 141, mode: annotated})",
       ];
 
       const replayBtn = document.getElementById("replay-btn");

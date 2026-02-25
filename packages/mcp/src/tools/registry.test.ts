@@ -27,16 +27,16 @@ function buildContext(overrides: Partial<ContextMcpConfig> = {}): ToolContext {
     } as ToolContext;
 }
 
-test('tool registry exposes exactly five public tools', () => {
+test('tool registry exposes exactly six public tools', () => {
     const names = Object.keys(toolRegistry);
-    assert.deepEqual(names, ['manage_index', 'search_codebase', 'call_graph', 'read_file', 'list_codebases']);
+    assert.deepEqual(names, ['manage_index', 'search_codebase', 'call_graph', 'file_outline', 'read_file', 'list_codebases']);
 });
 
-test('generated ListTools payload returns exactly five tools', () => {
+test('generated ListTools payload returns exactly six tools', () => {
     const list = getMcpToolList(buildContext());
     const names = list.map((tool) => tool.name);
 
-    assert.deepEqual(names, ['manage_index', 'search_codebase', 'call_graph', 'read_file', 'list_codebases']);
+    assert.deepEqual(names, ['manage_index', 'search_codebase', 'call_graph', 'file_outline', 'read_file', 'list_codebases']);
 });
 
 test('search_codebase schema exposes scoped grouped/raw controls', () => {
@@ -67,11 +67,30 @@ test('read_file schema includes optional start_line and end_line parameters', ()
     assert.ok(properties.path);
     assert.ok(properties.start_line);
     assert.ok(properties.end_line);
+    assert.ok(properties.mode);
+    assert.equal(properties.mode.default, 'plain');
 
     const required = readFileTool!.inputSchema.required as string[];
     assert.deepEqual(required, ['path']);
     assert.equal(Object.prototype.hasOwnProperty.call(properties.start_line, 'default'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(properties.end_line, 'default'), false);
+});
+
+test('file_outline schema exposes path/file and line window controls', () => {
+    const tools = getMcpToolList(buildContext());
+    const fileOutlineTool = tools.find((tool) => tool.name === 'file_outline');
+    assert.ok(fileOutlineTool);
+
+    const properties = fileOutlineTool!.inputSchema.properties as Record<string, any>;
+    assert.ok(properties.path);
+    assert.ok(properties.file);
+    assert.ok(properties.start_line);
+    assert.ok(properties.end_line);
+    assert.ok(properties.limitSymbols);
+    assert.equal(properties.limitSymbols.default, 500);
+
+    const required = fileOutlineTool!.inputSchema.required as string[];
+    assert.deepEqual(required, ['path', 'file']);
 });
 
 test('call_graph schema exposes symbolRef, direction, depth, and limit controls', () => {

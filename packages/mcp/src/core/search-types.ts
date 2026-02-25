@@ -68,6 +68,7 @@ interface SearchBaseResponseEnvelope {
     groupBy: SearchGroupBy;
     limit: number;
     freshnessDecision: FreshnessDecision | { mode: "skipped_requires_reindex" } | null;
+    warnings?: string[];
     message?: string;
     hints?: Record<string, unknown>;
 }
@@ -92,4 +93,32 @@ export interface SearchRequestInput {
     groupBy: SearchGroupBy;
     limit: number;
     debug?: boolean;
+}
+
+export interface FileOutlineInput {
+    path: string;
+    file: string;
+    start_line?: number;
+    end_line?: number;
+    limitSymbols?: number;
+}
+
+export type FileOutlineStatus = "ok" | "not_found" | "requires_reindex" | "unsupported";
+
+export interface FileOutlineSymbolResult {
+    symbolId: string;
+    symbolLabel: string;
+    span: SearchSpan;
+    callGraphHint: { supported: true; symbolRef: CallGraphSymbolRef };
+}
+
+export interface FileOutlineResponseEnvelope {
+    status: FileOutlineStatus;
+    path: string;
+    file: string;
+    outline: { symbols: FileOutlineSymbolResult[] } | null;
+    hasMore: boolean;
+    warnings?: string[];
+    message?: string;
+    hints?: Record<string, unknown>;
 }

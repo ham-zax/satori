@@ -2,6 +2,45 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Navigation-First Fast Path
+
+### Added
+- New first-class `file_outline` MCP tool:
+  - Input: `{ path: <codebaseRoot>, file: <relativePath>, start_line?, end_line?, limitSymbols? }`
+  - Output statuses: `ok | not_found | requires_reindex | unsupported`
+  - Sidecar-backed symbol navigation with deterministic ordering and per-symbol `callGraphHint`
+  - `hasMore` flag for truncation awareness after line-window filtering
+- New handler-level and tool-level regression tests for `file_outline`.
+
+### Modified
+- `read_file` now supports `mode: "plain" | "annotated"`:
+  - `plain` behavior remains backward-compatible text output.
+  - `annotated` returns content plus `outlineStatus`, `outline`, and `hasMore`.
+  - Content reads no longer fail when outline metadata is unavailable (`requires_reindex`/`unsupported` graceful degradation).
+- `search_codebase` internal two-pass retrieval is now concurrent via `Promise.allSettled`:
+  - deterministic fusion order preserved
+  - partial-pass degradation is explicit via `warnings[]`
+  - full pass failure returns structured tool error
+- Search telemetry now includes pass diagnostics:
+  - `search_pass_count`
+  - `search_pass_success_count`
+  - `search_pass_failure_count`
+  - `parallel_fanout`
+- Search response envelope now formally includes optional `warnings?: string[]`.
+
+### Docs
+- Updated:
+  - `README.md`
+  - `docs/ARCHITECTURE.md`
+  - `packages/mcp/README.md`
+  - `satori-landing/index.html`
+  - `satori-landing/architecture.html`
+- Documentation now reflects:
+  - 6-tool MCP surface
+  - `file_outline` workflow
+  - `read_file(mode="annotated")`
+  - parallel search pass warning behavior
+
 ## [2026-02-25] Satori UX Overhaul
 
 ### Release Versions

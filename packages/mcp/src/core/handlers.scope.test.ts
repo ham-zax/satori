@@ -257,3 +257,115 @@ test('handleSearchCode grouped sorting places null symbolLabel last for determin
         assert.equal(payload.results[1].symbolId, 'sym_without_label');
     });
 });
+
+test('handleSearchCode runs semantic passes concurrently and emits warnings on partial failure', async () => {
+    await withTempRepo(async (repoPath) => {
+        const started: string[] = [];
+        let releaseSearchPasses: (() => void) | undefined;
+        const gate = new Promise<void>((resolve) => {
+            releaseSearchPasses = resolve;
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async (_root: string, query: string) => {
+                const passId = query.includes('implementation runtime source entrypoint') ? 'expanded' : 'primary';
+                started.push(passId);
+                await gate;
+                if (passId === 'expanded') {
+                    throw new Error('expanded failed');
+                }
+                return [{
+                    content: 'return session.isValid();',
+                    relativePath: 'src/auth.ts',
+                    startLine: 3,
+                    endLine: 6,
+                    language: 'typescript',
+                    score: 0.99,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_auth_validate',
+                    symbolLabel: 'method validateSession(token: string)'
+                }];
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const responsePromise = handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(new Set(started), new Set(['primary', 'expanded']));
+
+        releaseSearchPasses?.();
+        const response = await responsePromise;
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.ok(Array.isArray(payload.warnings));
+        assert.equal(payload.warnings[0], 'SEARCH_PASS_FAILED:expanded - expanded semantic search pass failed; results may be degraded.');
+    });
+});
+
+test('handleSearchCode returns error when all semantic passes fail', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                throw new Error('backend unavailable');
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        assert.equal(response.isError, true);
+        assert.match(response.content[0]?.text || '', /all semantic search passes failed/i);
+    });
+});

@@ -129,8 +129,8 @@ MCP Client
   v
 +---------------------------------------------------------------+
 | MCP Server (`packages/mcp`)                                  |
-|  - Tool Registry (5 tools)                                   |
-|    manage_index, search_codebase, call_graph, read_file, list_codebases |
+|  - Tool Registry (6 tools)                                   |
+|    manage_index, search_codebase, call_graph, file_outline, read_file, list_codebases |
 |  - ToolHandlers                                               |
 |  - CapabilityResolver                                         |
 |  - SnapshotManager / SyncManager                              |
@@ -195,6 +195,16 @@ Grouped search output includes:
 - TS/Python supported
 - deterministic ordering for nodes/edges/notes
 - structured unsupported/not_found/requires_reindex responses
+
+`file_outline` is sidecar-backed and file-scoped:
+- input uses `path` (absolute codebase root) + `file` (relative path)
+- returns deterministic symbol ordering and `hasMore` truncation signal
+- emits `requires_reindex` (with `hints.reindex`) when sidecar is missing/incompatible
+
+`read_file` now supports `mode="annotated"`:
+- plain mode remains text-only and backward compatible
+- annotated mode returns content plus `outlineStatus` and optional outline metadata
+- content reads degrade gracefully even when outline is unavailable
 
 ## 8. Capability Model
 

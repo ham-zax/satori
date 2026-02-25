@@ -558,7 +558,7 @@
           to 5 codebases (one collection per codebase).
         </p>
         <div class="hero-meta">
-          5 tools. Runtime-first retrieval. Call-graph sidecar. Snapshot gates.
+          6 tools. Runtime-first retrieval. Call-graph sidecar. Snapshot gates.
           Merkle sync. MCP-compatible for any agent.
         </div>
       </section>
@@ -573,7 +573,7 @@
           <div class="mermaid">
 flowchart TD
     client["MCP Client<br/>Claude / Cursor / Windsurf / Codex / custom"]
-    mcp["@zokizuan/satori-mcp<br/>Tool Registry (5 tools)<br/>CapabilityResolver<br/>SnapshotManager v3<br/>SyncManager"]
+    mcp["@zokizuan/satori-mcp<br/>Tool Registry (6 tools)<br/>CapabilityResolver<br/>SnapshotManager v3<br/>SyncManager"]
     core["@zokizuan/satori-core<br/>Context Orchestrator<br/>AST/LangChain Splitter<br/>Embeddings<br/>Vector Adapters<br/>FileSynchronizer (Merkle DAG)"]
     milvus["Milvus / Zilliz"]
     local["~/.satori state"]
@@ -592,7 +592,7 @@ flowchart TD
           <article class="card">
             <h3>MCP Runtime (@zokizuan/satori-mcp)</h3>
             <ul>
-              <li>Defines the 5-tool MCP contract.</li>
+              <li>Defines the 6-tool MCP contract.</li>
               <li>Validates tool inputs via Zod-derived JSON Schema.</li>
               <li>Enforces snapshot fingerprint compatibility.</li>
               <li>Schedules background sync and optional watcher sync.</li>
@@ -617,8 +617,9 @@ flowchart TD
       <section class="section">
         <h2>Tool Surface</h2>
         <p class="intro">
-          Satori intentionally exposes only five MCP tools to reduce routing
-          ambiguity while keeping call-chain traversal first-class.
+          Satori intentionally exposes only six MCP tools to reduce routing
+          ambiguity while keeping call-chain traversal and file navigation
+          first-class.
         </p>
         <div class="table-wrap">
           <table>
@@ -662,13 +663,23 @@ flowchart TD
                 <td>Uses prebuilt sidecar index; deterministic node/edge order.</td>
               </tr>
               <tr>
+                <td><code>file_outline</code></td>
+                <td>Sidecar-backed symbol outline for one file.</td>
+                <td>
+                  <code>path</code>, <code>file</code>,
+                  <code>start_line</code>, <code>end_line</code>,
+                  <code>limitSymbols</code>
+                </td>
+                <td>Returns per-symbol callGraphHint handles and hasMore truncation signal.</td>
+              </tr>
+              <tr>
                 <td><code>read_file</code></td>
-                <td>Safe file reads with optional line ranges.</td>
+                <td>Safe file reads with optional line ranges and annotated mode.</td>
                 <td>
                   <code>path</code>, <code>start_line</code>,
-                  <code>end_line</code>
+                  <code>end_line</code>, <code>mode</code>
                 </td>
-                <td>Used for exact span verification before edits.</td>
+                <td>Annotated mode returns content + outlineStatus without failing content reads.</td>
               </tr>
               <tr>
                 <td><code>list_codebases</code></td>
@@ -808,12 +819,15 @@ Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","quer
 Called satori.call_graph({"path":"/home/hamza/repo/tradingview_ratio","symbolRef":{"file":"src/auth/session.ts","symbolId":"sym_auth_refresh"},"direction":"both","depth":1,"limit":20})
 -> nodes: 6, edges: 8, notes: 1
 
-Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220})
+Called satori.file_outline({"path":"/home/hamza/repo/tradingview_ratio","file":"src/auth/session.ts","limitSymbols":50})
+-> symbols: 7, hasMore: false
+
+Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220,"mode":"annotated"})
 -> Error: File not found
 
 Fallback:
 Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"invariants reference mismatch","scope":"docs","resultMode":"raw","limit":10})
-Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620})</code></pre>
+Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620,"mode":"annotated"})</code></pre>
       </section>
 
       <footer class="footer">

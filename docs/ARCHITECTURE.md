@@ -80,7 +80,7 @@ stateDiagram-v2
     
     Searchable --> requires_reindex : Fingerprint Mismatch Gate<br/>(Provider/Model/Dim/Schema changed)
     
-    requires_reindex --> indexing : Force Rebuild
+    requires_reindex --> indexing : manage_index:reindex
     
     Searchable --> [*] : manage_index:clear
     indexfailed --> [*] : manage_index:clear
@@ -129,7 +129,8 @@ MCP Client
   v
 +---------------------------------------------------------------+
 | MCP Server (`packages/mcp`)                                  |
-|  - Tool Registry (4 tools)                                   |
+|  - Tool Registry (5 tools)                                   |
+|    manage_index, search_codebase, call_graph, read_file, list_codebases |
 |  - ToolHandlers                                               |
 |  - CapabilityResolver                                         |
 |  - SnapshotManager / SyncManager                              |
@@ -175,7 +176,27 @@ Gate reasons:
 - missing fingerprint
 - fingerprint mismatch
 
-## 7. Capability Model
+## 7. Search + Call Graph Contract
+
+`search_codebase` now uses explicit runtime-first controls:
+- `scope`: `runtime | mixed | docs`
+- `resultMode`: `grouped | raw`
+- `groupBy`: `symbol | file`
+- `limit`: max groups (grouped) or max chunks (raw)
+- optional `debug`: ranking breakdowns/traces
+
+Grouped search output includes:
+- stable `groupId`
+- `symbolId` / `symbolLabel` (nullable when metadata is missing)
+- `indexedAt` (aggregated max), `stalenessBucket`, `collapsedChunkCount`
+- `callGraphHint` discriminated union (`supported: true|false`)
+
+`call_graph` is first-class and consumes `callGraphHint.symbolRef`:
+- TS/Python supported
+- deterministic ordering for nodes/edges/notes
+- structured unsupported/not_found/requires_reindex responses
+
+## 8. Capability Model
 
 ```text
 Embedding locality/profile:
@@ -189,7 +210,4 @@ Search limits:
   slow     default 10, max 15
 ```
 
-Rerank decision:
-- `useReranker=true` -> force (error if unavailable)
-- `useReranker=false` -> disable
-- omitted -> capability-driven default
+Rerank decision is internal and profile-driven. The public `search_codebase` contract no longer exposes `useReranker`.

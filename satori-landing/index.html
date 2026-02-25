@@ -718,7 +718,7 @@
             </div>
             <pre><code id="codex-config-top">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@1.0.4"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@2.0.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
           </div>
@@ -735,7 +735,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
     "npx",
     "-y",
     "--prefer-offline",
-    "@zokizuan/satori-mcp@1.0.4"
+    "@zokizuan/satori-mcp@2.0.0"
   ],
   "enabled": true,
   "timeout": 30000,
@@ -763,8 +763,8 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
           <article class="card">
             <h4>Predictable Agent Behavior</h4>
             <p>
-              Exactly four MCP tools reduce routing confusion and loop-prone
-              workflows.
+              Exactly five MCP tools reduce routing confusion while keeping
+              call-chain analysis first-class.
             </p>
           </article>
           <article class="card">
@@ -812,11 +812,12 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
           <div class="step">
             <strong>2. Run Semantic Queries</strong>
             <code
-              >satori.search_codebase({"path":"/abs/repo","query":"architecture
-              guides","limit":8})</code
+              >satori.search_codebase({"path":"/abs/repo","query":"auth
+              refresh flow","scope":"runtime","resultMode":"grouped","groupBy":"symbol","limit":5})</code
             >
             <p>
-              Review ranked results with relevance scores and file line ranges.
+              Review grouped results and pass returned <code>callGraphHint</code>
+              directly into <code>call_graph</code>.
             </p>
           </div>
           <div class="step">
@@ -851,7 +852,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
                   </div>
                   <pre><code id="codex-config">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@1.0.4"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@2.0.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
                 </div>
@@ -868,7 +869,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
     "npx",
     "-y",
     "--prefer-offline",
-    "@zokizuan/satori-mcp@1.0.4"
+    "@zokizuan/satori-mcp@2.0.0"
   ],
   "enabled": true,
   "timeout": 30000,
@@ -888,22 +889,22 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
           </details>
 
           <details>
-            <summary>Search Options (Rerank, Ignore, Filters)</summary>
+            <summary>Search Options (Scope, Grouping, Graph Jump)</summary>
             <div class="details-body">
-              <pre><code># Rerank modes
-satori.search_codebase({"path":"/repo","query":"auth flow","useReranker":true})
-satori.search_codebase({"path":"/repo","query":"auth flow","useReranker":false})
-satori.search_codebase({"path":"/repo","query":"auth flow"})  # auto by capability
+              <pre><code># Runtime-first grouped search (default mode)
+satori.search_codebase({"path":"/repo","query":"auth flow","scope":"runtime","resultMode":"grouped","groupBy":"symbol","limit":10})
 
-# Ignore and excludes
-satori.search_codebase({"path":"/repo","query":"retry logic","useIgnoreFiles":true,"excludePatterns":["**/dist/**"]})
+# Docs-only investigation
+satori.search_codebase({"path":"/repo","query":"migration guide","scope":"docs","resultMode":"raw","limit":10})
 
-# Filters and output shape
-satori.search_codebase({"path":"/repo","query":"validator","extensionFilter":[".ts",".py"],"limit":25,"showScores":true,"returnRaw":true})</code></pre>
+# File-level grouping + debug traces
+satori.search_codebase({"path":"/repo","query":"retry policy","scope":"mixed","resultMode":"grouped","groupBy":"file","limit":12,"debug":true})
+
+# Call graph jump from grouped result hint
+satori.call_graph({"path":"/repo","symbolRef":{"file":"src/auth.ts","symbolId":"sym_auth_refresh"},"direction":"both","depth":2,"limit":20})</code></pre>
               <p>
-                Ignore behavior respects <code>.gitignore</code>,
-                <code>.satoriignore</code>, and global
-                <code>~/.satori/.satoriignore</code>.
+                Grouped mode returns freshness + symbol metadata and a
+                discriminated <code>callGraphHint</code> (`supported: true|false`).
               </p>
             </div>
           </details>
@@ -916,15 +917,14 @@ satori.search_codebase({"path":"/repo","query":"validator","extensionFilter":[".
               <pre><code>Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/CLI_COMMANDS.md","start_line":1,"end_line":220})
 Result: "QAP CLI Command Reference ..."
 
-Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"MASTER_AUDIT.md location current path archived","limit":10})
-Reranker: rerank-2.5 (auto-enabled by capability resolver)
+Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"MASTER_AUDIT.md location current path archived","scope":"docs","resultMode":"raw","limit":10})
 Hit: docs/research/PHASES_OVERVIEW.md:322-371
 
 Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220})
 Error: File not found
 
 Fallback:
-satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch","limit":10})
+satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch","scope":"docs","resultMode":"raw","limit":10})
 satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620})</code></pre>
             </div>
           </details>
@@ -1064,13 +1064,12 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
         "Ready: /home/hamza/repo/tradingview_ratio",
         "Called satori.manage_index({action: status, path: /home/hamza/repo/tradingview_ratio})",
         "sync completed | +0 added, -0 removed, ~0 modified",
-        "Called satori.search_codebase({query: architecture guides, limit: 8})",
-        "Reranker: rerank-2.5 auto-enabled",
-        "Hit: docs/investigations/project/structure.md:357-406",
-        "Called satori.read_file({path: archive/docs/northstar/core/INVARIANTS.md})",
-        "Error: File not found",
-        "Fallback query: northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch",
-        "Called satori.read_file({path: docs/INVARIANTS.md, start_line: 480, end_line: 620})",
+        "Called satori.search_codebase({query: auth refresh flow, scope: runtime, resultMode: grouped, groupBy: symbol, limit: 5})",
+        "Hit: src/auth/session.ts:88-141",
+        "Extracted callGraphHint.symbolRef",
+        "Called satori.call_graph({direction: both, depth: 2, limit: 20})",
+        "Graph: 6 nodes | 8 edges | 1 unresolved note",
+        "Called satori.read_file({path: src/auth/session.ts, start_line: 88, end_line: 141})",
       ];
 
       const replayBtn = document.getElementById("replay-btn");

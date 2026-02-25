@@ -5,10 +5,8 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 ## Features
 
 - Capability-driven execution via `CapabilityResolver`
-- Unified `search_codebase` flow with optional reranker override:
-  - `useReranker=true`: force rerank (errors if capability missing)
-  - `useReranker=false`: disable rerank
-  - `useReranker` omitted: auto behavior by capability/profile
+- Runtime-first `search_codebase` with explicit `scope`, `resultMode`, `groupBy`, and optional `debug` traces
+- First-class `call_graph` tool with deterministic node/edge sorting and TS/Python support
 - Snapshot v3 safety with index fingerprints and strict `requires_reindex` access gates
 - Deterministic train-in-the-error responses for incompatible or legacy index states
 - Query-time exclusion support with `.gitignore`-style matching
@@ -18,7 +16,7 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 - `read_file` line-range retrieval with default large-file truncation guard
 - Optional proactive sync watcher mode (debounced filesystem events)
 - Index-time AST scope breadcrumbs (TS/JS/Python) rendered in search output as `🧬 Scope`
-- Fingerprint schema `dense_v2`/`hybrid_v2` with strict reindex gate for legacy `*_v1` indexes
+- Fingerprint schema `dense_v3`/`hybrid_v3` with hard gate for all pre-v3 indexes
 
 ## Architecture
 
@@ -26,14 +24,14 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 [MCP Client]
     -> [index.ts bootstrap + ListTools/CallTool]
     -> [tool registry]
-    -> [manage_index | search_codebase | read_file | list_codebases]
+    -> [manage_index | search_codebase | call_graph | read_file | list_codebases]
     -> [ToolContext DI]
        -> [CapabilityResolver]
        -> [SnapshotManager v3 + access gate]
        -> [Context / Vector store / Embedding / Reranker adapters]
 ```
 
-Tool surface is hard-broken to 4 tools. This reduces agent tool-selection ambiguity compared to larger, overlapping tool sets.
+Tool surface is hard-broken to 5 tools. This keeps routing explicit while exposing call-chain traversal as a first-class operation.
 
 ## read_file Behavior
 

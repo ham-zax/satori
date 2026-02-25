@@ -16,7 +16,7 @@ Reference for how requests, indexing, and sync flow through the Satori monorepo.
   |                                                                   |
   |  +---------------+  +------------------+  +-------------------+  |
   |  | Tool Registry |  | Capability       |  | Snapshot          |  |
-  |  | (4 tools)     |->| Resolver         |  | Manager v3        |  |
+  |  | (5 tools)     |->| Resolver         |  | Manager v3        |  |
   |  | Zod -> JSON   |  | fast|std|slow    |  | fingerprint gate  |  |
   |  +-------+-------+  +------------------+  +--------+----------+  |
   |          |                                          |             |
@@ -198,8 +198,9 @@ reindexByChange:
 ### 4.2 Tool Surface
 
 ```
-manage_index     create | sync | status | clear
-search_codebase  semantic search (+ optional rerank)
+manage_index     create | reindex | sync | status | clear
+search_codebase  runtime-first semantic search (scope + grouped/raw)
+call_graph       callers/callees traversal from symbolRef
 read_file        safe read with optional line ranges
 list_codebases   tracked state summary
 ```
@@ -223,9 +224,8 @@ Provider mapping:
   Others (Gemini)     -> cloud / standard -> limit 25, max 30
 
 Rerank decision:
-  useReranker=true    -> force (error if unavailable)
-  useReranker=false   -> disable
-  omitted             -> capability-driven default
+  driven internally by capability profile
+  (no public `useReranker` input on `search_codebase`)
 ```
 
 ### 4.5 Search Telemetry
@@ -279,7 +279,7 @@ Rerank decision:
   embeddingModel       "voyage-4-large"
   embeddingDimension   1024
   vectorStoreProvider  "Milvus"
-  schemaVersion        "dense_v2" | "hybrid_v2"
+  schemaVersion        "dense_v3" | "hybrid_v3"
 }
 ```
 
@@ -291,7 +291,7 @@ Legacy v1/v2 snapshots auto-migrate on load but get flagged as legacy.
 - Legacy assumed fingerprint (pre-v3 snapshot)
 - Missing fingerprint field
 - Provider, model, or dimension mismatch
-- Schema version mismatch (`*_v1` -> `*_v2`)
+- Schema version mismatch (any non-v3 fingerprint)
 
 ---
 
@@ -325,16 +325,20 @@ Terminal:
 
 ```
 search_codebase
-  -> rerank policy decision (CapabilityResolver)
+  -> enforce fingerprint gate (pre-v3 -> requires_reindex envelope)
   -> handleSearchCode
-      -> fingerprint gate check
       -> ensureFreshness (sync-on-read)
-      -> semantic/hybrid search (Milvus)
-      -> filter by ignore patterns + extensions
-      -> merge adjacent same-file chunks
-      -> render "Scope: class Foo > method bar" for breadcrumbed results
-  -> optional VoyageAI rerank
+      -> 2-pass semantic retrieval + RRF fusion
+      -> scope hard filters (runtime/docs/mixed) + path priors
+      -> grouped or raw response shaping
+      -> grouped mode emits callGraphHint + freshnessDecision
   -> telemetry emit
+
+call_graph
+  -> enforce fingerprint gate (pre-v3 -> requires_reindex envelope)
+  -> resolve indexed root + sidecar
+  -> traverse callers/callees/both with deterministic ordering
+  -> return nodes/edges/notes (+ unresolved/dynamic diagnostics)
 ```
 
 ### 6.3 Sync

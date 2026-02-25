@@ -558,8 +558,8 @@
           to 5 codebases (one collection per codebase).
         </p>
         <div class="hero-meta">
-          4 tools. Hybrid retrieval. Snapshot gates. Merkle sync. MCP-compatible
-          for any agent.
+          5 tools. Runtime-first retrieval. Call-graph sidecar. Snapshot gates.
+          Merkle sync. MCP-compatible for any agent.
         </div>
       </section>
 
@@ -573,7 +573,7 @@
           <div class="mermaid">
 flowchart TD
     client["MCP Client<br/>Claude / Cursor / Windsurf / Codex / custom"]
-    mcp["@zokizuan/satori-mcp<br/>Tool Registry (4 tools)<br/>CapabilityResolver<br/>SnapshotManager v3<br/>SyncManager"]
+    mcp["@zokizuan/satori-mcp<br/>Tool Registry (5 tools)<br/>CapabilityResolver<br/>SnapshotManager v3<br/>SyncManager"]
     core["@zokizuan/satori-core<br/>Context Orchestrator<br/>AST/LangChain Splitter<br/>Embeddings<br/>Vector Adapters<br/>FileSynchronizer (Merkle DAG)"]
     milvus["Milvus / Zilliz"]
     local["~/.satori state"]
@@ -592,7 +592,7 @@ flowchart TD
           <article class="card">
             <h3>MCP Runtime (@zokizuan/satori-mcp)</h3>
             <ul>
-              <li>Defines the 4-tool MCP contract.</li>
+              <li>Defines the 5-tool MCP contract.</li>
               <li>Validates tool inputs via Zod-derived JSON Schema.</li>
               <li>Enforces snapshot fingerprint compatibility.</li>
               <li>Schedules background sync and optional watcher sync.</li>
@@ -617,8 +617,8 @@ flowchart TD
       <section class="section">
         <h2>Tool Surface</h2>
         <p class="intro">
-          Satori intentionally exposes only four MCP tools to reduce routing
-          ambiguity.
+          Satori intentionally exposes only five MCP tools to reduce routing
+          ambiguity while keeping call-chain traversal first-class.
         </p>
         <div class="table-wrap">
           <table>
@@ -642,12 +642,24 @@ flowchart TD
               </tr>
               <tr>
                 <td><code>search_codebase</code></td>
-                <td>Semantic search with optional rerank and filters.</td>
                 <td>
-                  <code>query</code>, <code>path</code>, <code>limit</code>,
-                  <code>useReranker</code>, filters
+                  Runtime-first semantic search with grouped/raw output.
                 </td>
-                <td>Returns path/range/snippet/scope metadata.</td>
+                <td>
+                  <code>query</code>, <code>scope</code>,
+                  <code>resultMode</code>, <code>groupBy</code>,
+                  <code>limit</code>, optional <code>debug</code>
+                </td>
+                <td>Grouped mode emits callGraphHint for direct graph jumps.</td>
+              </tr>
+              <tr>
+                <td><code>call_graph</code></td>
+                <td>Traverse callers/callees from a symbolRef.</td>
+                <td>
+                  <code>symbolRef</code>, <code>direction</code>,
+                  <code>depth</code>, <code>limit</code>
+                </td>
+                <td>Uses prebuilt sidecar index; deterministic node/edge order.</td>
               </tr>
               <tr>
                 <td><code>read_file</code></td>
@@ -689,7 +701,7 @@ stateDiagram-v2
 
     indexed --> requires_reindex: fingerprint mismatch
     sync_completed --> requires_reindex: fingerprint mismatch
-    requires_reindex --> indexing: create(force=true)
+    requires_reindex --> indexing: manage_index(reindex)
 
     indexed --> [*]: clear
     sync_completed --> [*]: clear
@@ -720,13 +732,12 @@ stateDiagram-v2
           <details>
             <summary>Search Pipeline</summary>
             <div class="details-body">
-              <pre><code>query -> embed(query)
-  -> dense retrieval + BM25 sparse retrieval
-  -> RRF merge
-  -> ignore/filter pruning
-  -> adjacent chunk merge
-  -> optional reranker
-  -> formatted output (path + lines + snippet + scope)</code></pre>
+              <pre><code>query -> pass1 + expanded pass2 retrieval
+  -> RRF fusion
+  -> scope hard filter (runtime/docs/mixed)
+  -> path priors (entrypoint/core/docs/tests)
+  -> grouped/raw shaping
+  -> grouped result includes callGraphHint + freshnessDecision</code></pre>
             </div>
           </details>
 
@@ -739,8 +750,8 @@ stateDiagram-v2
 4) Repo ignore files (.gitignore, .satoriignore)
 5) Global ignore (~/.satori/.satoriignore)</code></pre>
               <p class="intro">
-                Query-time filters add <code>excludePatterns</code>,
-                <code>extensionFilter</code>, and <code>useIgnoreFiles</code>.
+                Runtime-first defaults reduce docs/test noise without requiring
+                aggressive query-time excludes.
               </p>
             </div>
           </details>
@@ -748,9 +759,10 @@ stateDiagram-v2
           <details>
             <summary>Capability Resolver + Rerank</summary>
             <div class="details-body">
-              <pre><code>useReranker=true  -> force (error if unavailable)
-useReranker=false -> disable
-omitted           -> capability default (auto)</code></pre>
+              <pre><code>capability profile (fast/standard/slow)
+  -> default candidate limits
+  -> rerank behavior decided internally
+  -> no public useReranker toggle on search_codebase</code></pre>
               <p class="intro">
                 Default limit ranges vary by profile (fast/standard/slow) and
                 provider locality.
@@ -789,15 +801,18 @@ added/modified   -> split + embed + insert</code></pre>
 Called satori.manage_index({"action":"status","path":"/home/hamza/repo/tradingview_ratio"})
 -> sync completed, +0/-0/~0
 
-Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"project documentation overview README architecture guides","limit":8})
--> Reranker: rerank-2.5 (auto-enabled by capability resolver)
--> Hit: docs/investigations/project/structure.md:357-406
+Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"auth refresh flow","scope":"runtime","resultMode":"grouped","groupBy":"symbol","limit":5})
+-> Hit: src/auth/session.ts:88-141
+-> callGraphHint: { supported: true, symbolRef: {...} }
+
+Called satori.call_graph({"path":"/home/hamza/repo/tradingview_ratio","symbolRef":{"file":"src/auth/session.ts","symbolId":"sym_auth_refresh"},"direction":"both","depth":1,"limit":20})
+-> nodes: 6, edges: 8, notes: 1
 
 Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220})
 -> Error: File not found
 
 Fallback:
-Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch","limit":10})
+Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"invariants reference mismatch","scope":"docs","resultMode":"raw","limit":10})
 Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620})</code></pre>
       </section>
 

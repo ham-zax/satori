@@ -1,6 +1,6 @@
 # Satori
 
-**Semantic code search for AI agents: hybrid retrieval, incremental sync, and a tight MCP tool surface.**
+**Semantic code search for AI agents: runtime-first retrieval, call-graph traversal, incremental sync, and strict safety gates.**
 
 <p align="left">
   <img src="https://img.shields.io/badge/Built%20by-Hamza-blueviolet" alt="Built by Hamza">
@@ -29,7 +29,7 @@ What users usually notice first:
 - Better first-hit relevance for cross-module questions
 - Less duplicate/noisy context returned to the model
 - Faster path from search result to safe code edit (`search_codebase` -> `read_file`)
-- Simple, constrained MCP surface (4 tools) with predictable behavior
+- Simple, constrained MCP surface (5 tools) with predictable behavior
 
 ---
 
@@ -86,8 +86,8 @@ Free-tier availability and limits can change, so check current provider pricing 
   +------------------------------------------------------------------+
   |  MCP Server  (@zokizuan/satori-mcp)                              |
   |                                                                   |
-  |  4 Tools:                                                         |
-  |    manage_index | search_codebase | read_file | list_codebases    |
+  |  5 Tools:                                                         |
+  |    manage_index | search_codebase | call_graph | read_file | list_codebases |
   |                                                                   |
   |  CapabilityResolver     SnapshotManager v3     SyncManager        |
   |  (fast|standard|slow)   (fingerprint gate)     (3-min loop +      |
@@ -128,8 +128,8 @@ File-level SHA-256 hashing + Merkle DAG diffing means only changed files are re-
 **Fingerprint Safety Gates**
 Every index stores `{ provider, model, dimension, vectorStore, schemaVersion }`. On each search/sync call, runtime fingerprint is checked against stored fingerprint. If they differ, state flips to `requires_reindex` and queries are blocked. Errors include deterministic recovery steps ("train in the error").
 
-**4-Tool Hard-Break API**
-The MCP surface is intentionally constrained to 4 tools. Smaller surface area makes agent routing safer and more predictable. `manage_index` uses a single `action` parameter for create/sync/status/clear to keep behavior explicit.
+**5-Tool Hard-Break API**
+The MCP surface is intentionally constrained to 5 tools. Smaller surface area keeps routing predictable while preserving first-class graph traversal. `manage_index` uses a single `action` parameter for create/reindex/sync/status/clear to keep behavior explicit.
 
 ---
 
@@ -144,7 +144,7 @@ The MCP surface is intentionally constrained to 4 tools. Smaller surface area ma
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "--prefer-offline", "@zokizuan/satori-mcp@1.0.4"],
+      "args": ["-y", "--prefer-offline", "@zokizuan/satori-mcp@2.0.0"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -165,7 +165,7 @@ The MCP surface is intentionally constrained to 4 tools. Smaller surface area ma
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@1.0.4"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@2.0.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
@@ -177,7 +177,8 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
 ```
 > list_codebases                                    # verify connection
 > manage_index  action="create" path="/your/repo"   # index a codebase
-> search_codebase  query="authentication flow"      # semantic search
+> search_codebase  path="/your/repo" query="authentication flow" scope="runtime" resultMode="grouped" groupBy="symbol"
+> call_graph  path="/your/repo" symbolRef={"file":"src/auth.ts","symbolId":"sym_auth_validate"} direction="both" depth=1
 ```
 
 Results include file paths, line ranges, code snippets, and structural scope annotations.
@@ -287,9 +288,9 @@ SYNC
       |             (from indexed or sync_completed)
       |                     |
       |                     v
-      +-- create --- requires_reindex
-         (force)     Blocks: search, sync
-                     Recovery: create with force=true
+      +-- manage_index(action=reindex) --- requires_reindex
+                                      Blocks: search, sync
+                                      Recovery: manage_index(action=reindex)
 ```
 
 ---
@@ -313,8 +314,9 @@ SYNC
 
 | Tool | Description |
 |---|---|
-| `manage_index` | Create, sync, check status, or clear a codebase index |
-| `search_codebase` | Hybrid semantic search with optional reranking and query-time excludes |
+| `manage_index` | Create, reindex, sync, check status, or clear a codebase index |
+| `search_codebase` | Runtime-first semantic search with `scope`, grouped/raw modes, symbol/file grouping, and freshness decisions |
+| `call_graph` | Traverse prebuilt TS/Python symbol relationships (callers/callees/both) using `callGraphHint` symbol refs |
 | `read_file` | Read file content with optional line ranges and truncation guard |
 | `list_codebases` | List all tracked codebases and their indexing state |
 
@@ -355,7 +357,7 @@ pnpm --filter @zokizuan/satori-mcp start        # run MCP server locally
 
 If MCP startup fails (`initialize response` closed), check:
 
-1. Pin a published version: `@zokizuan/satori-mcp@1.0.4`
+1. Pin a published version: `@zokizuan/satori-mcp@2.0.0`
 2. Increase startup timeout to `180000` (cold start package download can be slow)
 3. Remove local link shadowing: `npm unlink -g @zokizuan/satori-mcp` (and local `npm unlink @zokizuan/satori-mcp` if needed)
 4. Restart MCP client

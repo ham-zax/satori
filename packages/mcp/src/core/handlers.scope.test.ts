@@ -113,6 +113,15 @@ test('handleSearchCode runtime scope excludes docs and tests', async () => {
                 language: 'typescript',
                 score: 0.94,
                 indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: 'export const offlineFixture = true;',
+                relativePath: 'tests/fixtures/offline-corpus/credit-fallback.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z'
             }
         ]);
 
@@ -155,6 +164,15 @@ test('handleSearchCode docs scope only returns docs and tests', async () => {
                 indexedAt: '2026-01-01T00:30:00.000Z'
             },
             {
+                content: 'export const docHelper = true;',
+                relativePath: 'docs/runtime-helper.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.93,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
                 content: 'describe("runtime", () => {})',
                 relativePath: 'src/runtime.test.ts',
                 startLine: 1,
@@ -176,7 +194,7 @@ test('handleSearchCode docs scope only returns docs and tests', async () => {
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const files = payload.results.map((r: any) => r.file).sort();
-        assert.deepEqual(files, ['docs/runtime.md', 'src/runtime.test.ts']);
+        assert.deepEqual(files, ['docs/runtime-helper.ts', 'docs/runtime.md', 'src/runtime.test.ts']);
     });
 });
 

@@ -477,16 +477,26 @@ export class ToolHandlers {
         return relativePath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
     }
 
+    private hasPathSegment(normalizedPath: string, segment: string): boolean {
+        return normalizedPath === segment
+            || normalizedPath.startsWith(`${segment}/`)
+            || normalizedPath.includes(`/${segment}/`);
+    }
+
     private isTestPath(normalizedPath: string): boolean {
-        return normalizedPath.includes('/test/')
-            || normalizedPath.includes('/tests/')
-            || normalizedPath.includes('/__tests__/')
+        return this.hasPathSegment(normalizedPath, 'test')
+            || this.hasPathSegment(normalizedPath, 'tests')
+            || this.hasPathSegment(normalizedPath, '__tests__')
             || /\.test\.[^/]+$/.test(normalizedPath)
             || /\.spec\.[^/]+$/.test(normalizedPath);
     }
 
     private isDocPath(normalizedPath: string): boolean {
-        return normalizedPath.includes('/docs/')
+        return this.hasPathSegment(normalizedPath, 'docs')
+            || this.hasPathSegment(normalizedPath, 'doc')
+            || this.hasPathSegment(normalizedPath, 'documentation')
+            || this.hasPathSegment(normalizedPath, 'guide')
+            || this.hasPathSegment(normalizedPath, 'guides')
             || normalizedPath.endsWith('.md')
             || normalizedPath.endsWith('.mdx')
             || normalizedPath.endsWith('.rst')

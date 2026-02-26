@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { COLLECTION_LIMIT_MESSAGE } from '@zokizuan/satori-core';
 import { ToolHandlers } from './handlers.js';
+import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
@@ -15,6 +16,13 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3'
 };
+
+const CAPABILITIES = new CapabilityResolver({
+    name: 'test',
+    version: '0.0.0',
+    encoderProvider: 'VoyageAI',
+    encoderModel: 'voyage-4-large',
+});
 
 type BackendProvider = 'zilliz' | 'milvus';
 
@@ -107,7 +115,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): { handl
         unregisterCodebaseWatcher: async () => undefined,
     } as any;
 
-    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT);
+    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     (handlers as any).startBackgroundIndexing = async () => undefined;
     return { handlers, droppedCollections };

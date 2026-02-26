@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
+import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
@@ -13,6 +14,13 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3'
 };
+
+const CAPABILITIES = new CapabilityResolver({
+    name: 'test',
+    version: '0.0.0',
+    encoderProvider: 'VoyageAI',
+    encoderModel: 'voyage-4-large',
+});
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-call-graph-handler-'));
@@ -46,7 +54,7 @@ function createHandlers(repoPath: string) {
 
     const syncManager = {} as any;
 
-    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT);
+    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }
@@ -113,7 +121,7 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
         } as any;
 
         const syncManager = {} as any;
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT);
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
@@ -182,7 +190,7 @@ test('handleCallGraph returns status ok for v3-compatible indexed call graph que
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
@@ -240,7 +248,7 @@ test('handleCallGraph maps missing_symbol to status not_found', async () => {
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
@@ -299,7 +307,7 @@ test('handleCallGraph maps unsupported_language to status unsupported', async ()
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({

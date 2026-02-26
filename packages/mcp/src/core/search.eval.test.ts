@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
+import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
@@ -13,6 +14,13 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3'
 };
+
+const CAPABILITIES = new CapabilityResolver({
+    name: 'test',
+    version: '0.0.0',
+    encoderProvider: 'VoyageAI',
+    encoderModel: 'voyage-4-large',
+});
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-eval-'));
@@ -44,7 +52,7 @@ function createHandlers(repoPath: string, searchResults: any[]) {
         })
     } as any;
 
-    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, () => Date.parse('2026-01-01T01:00:00.000Z'));
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }

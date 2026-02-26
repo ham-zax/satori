@@ -17,7 +17,10 @@ All notable changes to this repository are documented in this file.
   - transient git-status failures now reuse cached changed-file state instead of flipping boost availability to empty.
 - Added reranker control input:
   - `useReranker` (`true` force, `false` disable, omitted = auto),
+  - auto mode is performance-profile-aware via `CapabilityResolver`,
   - auto mode skips `scope:"docs"` by default unless explicitly forced.
+- Improved reranker debuggability without leaking exceptions:
+  - under `debug:true`, rerank failures include `hints.debugSearch.rerank.errorCode` and `failurePhase`.
 - Added deterministic reranker configuration constants:
   - `SEARCH_RERANK_TOP_K = 50`,
   - `SEARCH_RERANK_RRF_K = 10`,

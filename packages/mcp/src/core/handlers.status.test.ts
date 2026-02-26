@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
+import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
@@ -13,6 +14,13 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3'
 };
+
+const CAPABILITIES = new CapabilityResolver({
+    name: 'test',
+    version: '0.0.0',
+    encoderProvider: 'VoyageAI',
+    encoderModel: 'voyage-4-large',
+});
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-status-handler-'));
@@ -48,7 +56,7 @@ test('handleGetIndexingStatus includes fingerprint diagnostics for requires_rein
         } as any;
         const syncManager = {} as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT);
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const text = response.content[0]?.text || '';
 
@@ -89,7 +97,7 @@ test('handleGetIndexingStatus includes fingerprint diagnostics when access gate 
         } as any;
         const syncManager = {} as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT);
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const text = response.content[0]?.text || '';
 

@@ -11,6 +11,7 @@ import {
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForLanguage,
 } from "@zokizuan/satori-core";
+import { CapabilityResolver } from "./capabilities.js";
 import { SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
 import { SyncManager } from "./sync.js";
@@ -236,6 +237,7 @@ export class ToolHandlers {
     private context: Context;
     private snapshotManager: SnapshotManager;
     private syncManager: SyncManager;
+    private readonly capabilities: CapabilityResolver;
     private runtimeFingerprint: IndexFingerprint;
     private indexingStats: { indexedFiles: number; totalChunks: number } | null = null;
     private currentWorkspace: string;
@@ -253,6 +255,7 @@ export class ToolHandlers {
         snapshotManager: SnapshotManager,
         syncManager: SyncManager,
         runtimeFingerprint: IndexFingerprint,
+        capabilities: CapabilityResolver,
         now: () => number = () => Date.now(),
         callGraphManager?: CallGraphSidecarManager,
         reranker?: VoyageAIReranker | null
@@ -260,6 +263,7 @@ export class ToolHandlers {
         this.context = context;
         this.snapshotManager = snapshotManager;
         this.syncManager = syncManager;
+        this.capabilities = capabilities;
         this.runtimeFingerprint = runtimeFingerprint;
         this.currentWorkspace = process.cwd();
         this.now = now;
@@ -917,23 +921,8 @@ export class ToolHandlers {
         scopeSkippedByDefault: boolean;
         blockedByMissingCapability: boolean;
     } {
-        if (useReranker === false) {
-            return {
-                enabled: false,
-                scopeSkippedByDefault: false,
-                blockedByMissingCapability: false
-            };
-        }
-
-        if (useReranker === true) {
-            return {
-                enabled: this.reranker !== null,
-                scopeSkippedByDefault: false,
-                blockedByMissingCapability: this.reranker === null
-            };
-        }
-
-        if (scope === 'docs') {
+        // Docs-scope reranking is skipped by default; forcing requires explicit `useReranker:true`.
+        if (scope === 'docs' && useReranker === undefined) {
             return {
                 enabled: false,
                 scopeSkippedByDefault: true,
@@ -941,10 +930,14 @@ export class ToolHandlers {
             };
         }
 
+        const decision = this.capabilities.resolveRerankDecision(useReranker);
+        const enabled = decision.enabled && this.reranker !== null;
+        const blockedByMissingCapability =
+            decision.blockedByMissingCapability || (decision.enabled && this.reranker === null);
         return {
-            enabled: this.reranker !== null,
+            enabled,
             scopeSkippedByDefault: false,
-            blockedByMissingCapability: false
+            blockedByMissingCapability
         };
     }
 
@@ -2508,6 +2501,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const rerankDecision = this.resolveRerankDecision(input.useReranker, input.scope);
             let rerankerApplied = false;
             let rerankerAttempted = false;
+            let rerankerFailurePhase: 'api_call' | 'parse_results' | undefined;
             if (rerankDecision.blockedByMissingCapability) {
                 searchWarnings.push('RERANKER_BLOCKED_NO_CAPABILITY');
             }
@@ -2518,17 +2512,29 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     const rerankCount = Math.min(SEARCH_RERANK_TOP_K, scored.length);
                     const rerankSlice = scored.slice(0, rerankCount);
                     const rerankDocuments = rerankSlice.map((candidate) => this.buildRerankDocument(candidate.result));
-                    const rerankResults = await this.reranker.rerank(semanticQuery, rerankDocuments, {
-                        topK: rerankCount,
-                        truncation: true,
-                        returnDocuments: false
-                    });
+                    let rerankResults: Array<{ index: number }> = [];
+                    try {
+                        rerankResults = await this.reranker.rerank(semanticQuery, rerankDocuments, {
+                            topK: rerankCount,
+                            truncation: true,
+                            returnDocuments: false
+                        });
+                    } catch {
+                        rerankerFailurePhase = 'api_call';
+                        throw new Error('reranker_api_call_failed');
+                    }
+
                     const rerankRanks = new Map<number, number>();
-                    for (let idx = 0; idx < rerankResults.length; idx++) {
-                        const originalIndex = rerankResults[idx]?.index;
-                        if (Number.isInteger(originalIndex) && originalIndex >= 0 && originalIndex < rerankCount && !rerankRanks.has(originalIndex)) {
-                            rerankRanks.set(originalIndex, idx + 1);
+                    try {
+                        for (let idx = 0; idx < rerankResults.length; idx++) {
+                            const originalIndex = (rerankResults as any)[idx]?.index;
+                            if (Number.isInteger(originalIndex) && originalIndex >= 0 && originalIndex < rerankCount && !rerankRanks.has(originalIndex)) {
+                                rerankRanks.set(originalIndex, idx + 1);
+                            }
                         }
+                    } catch {
+                        rerankerFailurePhase = 'parse_results';
+                        throw new Error('reranker_parse_failed');
                     }
 
                     for (let idx = 0; idx < rerankSlice.length; idx++) {
@@ -2553,6 +2559,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     });
                     rerankerApplied = true;
                 } catch {
+                    if (!rerankerFailurePhase) {
+                        rerankerFailurePhase = 'parse_results';
+                    }
                     searchWarnings.push('RERANKER_FAILED');
                 }
             }
@@ -2600,6 +2609,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         weight: SEARCH_RERANK_WEIGHT,
                         docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
                         docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+                        ...(rerankerFailurePhase ? { errorCode: 'RERANKER_FAILED', failurePhase: rerankerFailurePhase } : {}),
                     },
                 }
                 : undefined;

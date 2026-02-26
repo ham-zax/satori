@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
+import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 import { SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES } from './search-constants.js';
 
@@ -14,6 +15,13 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3'
 };
+
+const CAPABILITIES_NO_RERANK = new CapabilityResolver({
+    name: 'test',
+    version: '0.0.0',
+    encoderProvider: 'VoyageAI',
+    encoderModel: 'voyage-4-large',
+});
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-handlers-'));
@@ -69,7 +77,15 @@ function createHandlers(repoPath: string, searchResults: any[], reranker?: any) 
         })
     } as any;
 
-    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'), undefined, reranker || null);
+    const capabilities = new CapabilityResolver({
+        name: 'test',
+        version: '0.0.0',
+        encoderProvider: 'VoyageAI',
+        encoderModel: 'voyage-4-large',
+        ...(reranker ? { voyageKey: 'test' } : {}),
+    });
+
+    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, capabilities, () => Date.parse('2026-01-01T01:00:00.000Z'), undefined, reranker || null);
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }
@@ -319,7 +335,7 @@ test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', asy
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
@@ -373,7 +389,7 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
@@ -757,6 +773,81 @@ test('handleSearchCode degrades gracefully when reranker fails', async () => {
         assert.equal(payload.warnings.includes('RERANKER_FAILED'), true);
         assert.equal(payload.hints?.debugSearch?.rerank?.attempted, true);
         assert.equal(payload.hints?.debugSearch?.rerank?.applied, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.errorCode, 'RERANKER_FAILED');
+        assert.equal(payload.hints?.debugSearch?.rerank?.failurePhase, 'api_call');
+    });
+});
+
+test('handleSearchCode marks rerank.enabled=false when reranker instance is missing', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => ([
+                {
+                    content: 'runtime one',
+                    relativePath: 'src/one.ts',
+                    startLine: 1,
+                    endLine: 2,
+                    language: 'typescript',
+                    score: 0.99,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_one',
+                    symbolLabel: 'one'
+                }
+            ])
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const capabilities = new CapabilityResolver({
+            name: 'test',
+            version: '0.0.0',
+            encoderProvider: 'VoyageAI',
+            encoderModel: 'voyage-4-large',
+            voyageKey: 'test'
+        });
+
+        // No reranker instance provided => should clamp enabled=false.
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            capabilities,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+            undefined,
+            null
+        );
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabled, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.attempted, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.applied, false);
     });
 });
 
@@ -1117,7 +1208,7 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const responsePromise = handlers.handleSearchCode({
@@ -1166,7 +1257,7 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
@@ -1234,7 +1325,7 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
                 })
             } as any;
 
-            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
             (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
             const response = await handlers.handleSearchCode({
@@ -1309,7 +1400,7 @@ test('handleSearchCode ignores fault injection env outside test mode', { concurr
                 })
             } as any;
 
-            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
             (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
             const response = await handlers.handleSearchCode({
@@ -1366,7 +1457,7 @@ test('handleSearchCode returns deterministic all-pass error when test fault inje
                 })
             } as any;
 
-            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+            const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
             (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
             const response = await handlers.handleSearchCode({
@@ -1433,7 +1524,7 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({

@@ -134,6 +134,8 @@ export interface SearchDebugHint {
         attempted: boolean;
         applied: boolean;
         scopeSkippedByDefault: boolean;
+        errorCode?: "RERANKER_FAILED";
+        failurePhase?: "api_call" | "parse_results";
         topK: number;
         rankK: number;
         weight: number;

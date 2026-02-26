@@ -47,6 +47,7 @@ function isNormalizedRelPath(value) {
   return typeof value === 'string'
     && value.length > 0
     && !value.includes('\\')
+    && !value.includes('//')
     && !value.startsWith('./')
     && !value.startsWith('/')
     && !value.includes('/./')
@@ -323,6 +324,7 @@ test('integration: normalization SSOT applies to snapshot keys and diff outputs 
   const codebasePath = createTempCodebase({
     'src/main.ts': 'export const main = true;\n',
     'a/b.ts': 'export const nested = true;\n',
+    'a/c/d.ts': 'export const deep = true;\n',
   });
 
   try {
@@ -330,17 +332,25 @@ test('integration: normalization SSOT applies to snapshot keys and diff outputs 
     const snapshotPath = getSnapshotPath(codebasePath);
     await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
 
+    const normalizationFixtures = [
+      { raw: './src\\main.ts', expected: 'src/main.ts' },
+      { raw: 'a//b.ts', expected: 'a/b.ts' },
+      { raw: './a//c\\d.ts', expected: 'a/c/d.ts' },
+    ];
+    const rejectedFixtures = [
+      '../escape.ts',
+      'a/../escape.ts',
+    ];
+
     const dirtySnapshot = {
       snapshotVersion: 2,
       fileHashes: [
-        ['./src\\main.ts', 'hash-main'],
-        ['a\\\\b.ts', 'hash-ab'],
-        ['../escape.ts', 'hash-escape'],
+        ...normalizationFixtures.map(({ raw, expected }) => [raw, `hash-${expected}`]),
+        ...rejectedFixtures.map((raw) => [raw, `hash-rejected-${raw}`]),
       ],
       fileStats: [
-        ['./src\\main.ts', { size: 1, mtimeMs: 0, ctimeMs: 0 }],
-        ['a\\\\b.ts', { size: 1, mtimeMs: 0, ctimeMs: 0 }],
-        ['../escape.ts', { size: 1, mtimeMs: 0, ctimeMs: 0 }],
+        ...normalizationFixtures.map(({ raw }) => [raw, { size: 1, mtimeMs: 0, ctimeMs: 0 }]),
+        ...rejectedFixtures.map((raw) => [raw, { size: 1, mtimeMs: 0, ctimeMs: 0 }]),
       ],
       merkleRoot: '',
       partialScan: false,
@@ -361,10 +371,13 @@ test('integration: normalization SSOT applies to snapshot keys and diff outputs 
     const persistedSnapshot = await readSnapshot(codebasePath);
     const persistedKeys = persistedSnapshot.fileHashes.map(([key]) => key);
     assert.ok(persistedKeys.every((key) => isNormalizedRelPath(key)));
+    assert.ok(!persistedKeys.some((key) => key.includes('//')));
     assert.ok(!persistedKeys.some((key) => key.includes('..')));
     assert.ok(!persistedKeys.some((key) => key.includes('\\')));
-    assert.ok(persistedKeys.includes('src/main.ts'));
-    assert.ok(persistedKeys.includes('a/b.ts'));
+    for (const { expected } of normalizationFixtures) {
+      assert.ok(persistedKeys.includes(expected));
+    }
+    assert.ok(!persistedKeys.some((key) => key.includes('escape.ts')));
   } finally {
     await cleanupCodebase(codebasePath);
   }

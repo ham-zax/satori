@@ -111,7 +111,6 @@ export class SyncManager {
 
             if (typeof persistedIgnoreControlSignature === 'string') {
                 if (persistedIgnoreControlSignature !== currentIgnoreControlSignature) {
-                    console.log(`[SYNC] 🔁 Ignore control files changed for '${codebasePath}', running reconciliation.`);
                     return this.runIgnoreReconcile(codebasePath, 1, currentIgnoreControlSignature);
                 }
             } else if (
@@ -195,6 +194,7 @@ export class SyncManager {
         const checkedAt = new Date(checkedAtMs).toISOString();
 
         if (inFlight) {
+            console.log(`[SYNC] 🛡️ Ignore-rule reconcile coalesced for '${codebasePath}'.`);
             const inFlightResult = await inFlight;
             return {
                 ...inFlightResult,
@@ -203,6 +203,7 @@ export class SyncManager {
             };
         }
 
+        console.log(`[SYNC] 🔁 Ignore control files changed for '${codebasePath}', running reconciliation.`);
         const promise = this.reconcileIgnoreRulesChange(codebasePath, coalescedEdits, nextIgnoreControlSignature);
         this.activeIgnoreReconciles.set(reconcileKey, promise);
         try {

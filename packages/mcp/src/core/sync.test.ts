@@ -18,6 +18,7 @@ function createTempDir(): string {
 function createSnapshot(statusByPath: Map<string, CodebaseStatus>) {
     const indexManifestByPath = new Map<string, string[]>();
     const ignoreRulesVersionByPath = new Map<string, number>();
+    const ignoreControlSignatureByPath = new Map<string, string>();
 
     return {
         getCodebaseStatus(codebasePath: string): CodebaseStatus {
@@ -41,11 +42,18 @@ function createSnapshot(statusByPath: Map<string, CodebaseStatus>) {
         getCodebaseIgnoreRulesVersion(codebasePath: string): number | undefined {
             return ignoreRulesVersionByPath.get(codebasePath);
         },
+        setCodebaseIgnoreControlSignature(codebasePath: string, signature: string) {
+            ignoreControlSignatureByPath.set(codebasePath, signature);
+        },
+        getCodebaseIgnoreControlSignature(codebasePath: string): string | undefined {
+            return ignoreControlSignatureByPath.get(codebasePath);
+        },
         saveCodebaseSnapshot() { },
         removeIndexedCodebase(codebasePath: string) {
             statusByPath.delete(codebasePath);
             indexManifestByPath.delete(codebasePath);
             ignoreRulesVersionByPath.delete(codebasePath);
+            ignoreControlSignatureByPath.delete(codebasePath);
         }
     };
 }
@@ -163,6 +171,111 @@ test('watch filter allowlists .satoriignore', async () => {
         path.join(codebasePath, 'nested/.gitignore')
     );
     assert.equal(shouldIgnoreNestedGitIgnore, true);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness baselines ignore control signature without forcing reconcile on first run', async () => {
+    const codebasePath = createTempDir();
+    fs.writeFileSync(path.join(codebasePath, '.satoriignore'), 'dist/**\n', 'utf8');
+
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    let syncCalls = 0;
+    let reloadCalls = 0;
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return ['node_modules/**'];
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async reloadIgnoreRulesForCodebase() {
+            reloadCalls += 1;
+            return ['node_modules/**', 'dist/**'];
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+        }
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 60_000);
+    assert.equal(decision.mode, 'synced');
+    assert.equal(syncCalls, 1);
+    assert.equal(reloadCalls, 0);
+    assert.equal(typeof snapshot.getCodebaseIgnoreControlSignature(codebasePath), 'string');
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness detects ignore control signature changes and reconciles before skipped_recent', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    snapshot.setCodebaseIndexManifest(codebasePath, ['src/keep.ts', 'src/ignored.ts']);
+
+    let activePatterns: string[] = [];
+    let trackedPaths = ['src/keep.ts', 'src/ignored.ts'];
+    let syncCalls = 0;
+    const deletedPaths: string[][] = [];
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return activePatterns;
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async reloadIgnoreRulesForCodebase() {
+            activePatterns = ['src/ignored.ts'];
+            trackedPaths = ['src/keep.ts'];
+            return activePatterns;
+        },
+        async recreateSynchronizerForCodebase() {
+            return;
+        },
+        async deleteIndexedPathsByRelativePaths(_codebasePath: string, relativePaths: string[]) {
+            deletedPaths.push(relativePaths.slice());
+            return relativePaths.length;
+        },
+        getTrackedRelativePaths() {
+            return trackedPaths.slice();
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+        }
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const baseline = await manager.ensureFreshness(codebasePath, 0);
+    assert.equal(baseline.mode, 'synced');
+    const baselineSignature = snapshot.getCodebaseIgnoreControlSignature(codebasePath);
+    assert.equal(typeof baselineSignature, 'string');
+    assert.equal(syncCalls, 1);
+
+    fs.writeFileSync(path.join(codebasePath, '.satoriignore'), 'src/ignored.ts\n', 'utf8');
+
+    const decision = await manager.ensureFreshness(codebasePath, 60_000);
+    assert.equal(decision.mode, 'reconciled_ignore_change');
+    assert.equal(decision.deletedFiles, 1);
+    assert.deepEqual(deletedPaths, [['src/ignored.ts']]);
+    assert.equal(syncCalls, 2);
+
+    const updatedSignature = snapshot.getCodebaseIgnoreControlSignature(codebasePath);
+    assert.equal(typeof updatedSignature, 'string');
+    assert.notEqual(updatedSignature, baselineSignature);
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });

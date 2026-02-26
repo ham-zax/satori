@@ -268,6 +268,7 @@ export class SnapshotManager {
             callGraphSidecar: existing?.callGraphSidecar,
             indexManifest: existing?.indexManifest,
             ignoreRulesVersion: existing?.ignoreRulesVersion,
+            ignoreControlSignature: existing?.ignoreControlSignature,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -291,6 +292,7 @@ export class SnapshotManager {
             callGraphSidecar: existing?.callGraphSidecar,
             indexManifest: existing?.indexManifest,
             ignoreRulesVersion: existing?.ignoreRulesVersion,
+            ignoreControlSignature: existing?.ignoreControlSignature,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -308,6 +310,7 @@ export class SnapshotManager {
             callGraphSidecar: existing?.callGraphSidecar,
             indexManifest: existing?.indexManifest,
             ignoreRulesVersion: existing?.ignoreRulesVersion,
+            ignoreControlSignature: existing?.ignoreControlSignature,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -333,6 +336,7 @@ export class SnapshotManager {
             callGraphSidecar: existing?.callGraphSidecar,
             indexManifest: existing?.indexManifest,
             ignoreRulesVersion: existing?.ignoreRulesVersion,
+            ignoreControlSignature: existing?.ignoreControlSignature,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -354,6 +358,7 @@ export class SnapshotManager {
             callGraphSidecar: existing?.callGraphSidecar,
             indexManifest: existing?.indexManifest,
             ignoreRulesVersion: existing?.ignoreRulesVersion,
+            ignoreControlSignature: existing?.ignoreControlSignature,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -411,6 +416,24 @@ export class SnapshotManager {
         this.codebaseInfoMap.set(codebasePath, {
             ...existing,
             ignoreRulesVersion: Number.isFinite(version) ? version : existing.ignoreRulesVersion,
+            lastUpdated: new Date().toISOString(),
+        });
+        this.refreshDerivedState();
+    }
+
+    public getCodebaseIgnoreControlSignature(codebasePath: string): string | undefined {
+        return this.codebaseInfoMap.get(codebasePath)?.ignoreControlSignature;
+    }
+
+    public setCodebaseIgnoreControlSignature(codebasePath: string, signature: string): void {
+        const existing = this.codebaseInfoMap.get(codebasePath);
+        if (!existing) {
+            return;
+        }
+
+        this.codebaseInfoMap.set(codebasePath, {
+            ...existing,
+            ignoreControlSignature: typeof signature === 'string' ? signature : existing.ignoreControlSignature,
             lastUpdated: new Date().toISOString(),
         });
         this.refreshDerivedState();

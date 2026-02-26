@@ -70,6 +70,7 @@ interface CodebaseInfoBase {
     callGraphSidecar?: CallGraphSidecarInfo;
     indexManifest?: CodebaseIndexManifest;
     ignoreRulesVersion?: number;
+    ignoreControlSignature?: string;
 }
 
 // Indexing state - when indexing is in progress

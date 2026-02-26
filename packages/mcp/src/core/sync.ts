@@ -50,6 +50,7 @@ type WatchSyncReason = 'watch_event' | 'ignore_rules_changed';
 interface EnsureFreshnessOptions {
     reason?: 'default' | 'ignore_change';
     coalescedEdits?: number;
+    skipIgnoreControlCheck?: boolean;
 }
 
 interface IgnoreReloadResult {
@@ -102,6 +103,21 @@ export class SyncManager {
 
         const checkedAtMs = this.now();
         const checkedAt = new Date(checkedAtMs).toISOString();
+
+        if (options.skipIgnoreControlCheck !== true) {
+            const currentIgnoreControlSignature = await this.computeIgnoreControlSignature(codebasePath);
+            const persistedIgnoreControlSignature = this.snapshotManager.getCodebaseIgnoreControlSignature?.(codebasePath);
+
+            if (typeof persistedIgnoreControlSignature === 'string') {
+                if (persistedIgnoreControlSignature !== currentIgnoreControlSignature) {
+                    console.log(`[SYNC] 🔁 Ignore control files changed for '${codebasePath}', running reconciliation.`);
+                    return this.reconcileIgnoreRulesChange(codebasePath, 1, currentIgnoreControlSignature);
+                }
+            } else if (typeof this.snapshotManager.setCodebaseIgnoreControlSignature === 'function') {
+                this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
+                this.snapshotManager.saveCodebaseSnapshot();
+            }
+        }
 
         // 1. Coalescing: Join existing in-flight sync
         if (this.activeSyncs.has(codebasePath)) {
@@ -163,10 +179,15 @@ export class SyncManager {
         };
     }
 
-    private async reconcileIgnoreRulesChange(codebasePath: string, coalescedEdits: number = 1): Promise<FreshnessDecision> {
+    private async reconcileIgnoreRulesChange(
+        codebasePath: string,
+        coalescedEdits: number = 1,
+        nextIgnoreControlSignature?: string
+    ): Promise<FreshnessDecision> {
         const checkedAtMs = this.now();
         const checkedAt = new Date(checkedAtMs).toISOString();
         const startedAt = checkedAtMs;
+        const resolvedIgnoreControlSignature = nextIgnoreControlSignature ?? await this.computeIgnoreControlSignature(codebasePath);
 
         try {
             if (this.activeSyncs.has(codebasePath)) {
@@ -207,12 +228,17 @@ export class SyncManager {
             }
             this.snapshotManager.saveCodebaseSnapshot();
 
-            const syncDecision = await this.ensureFreshness(codebasePath, 0);
+            const syncDecision = await this.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
             const lastSyncAt = syncDecision.lastSyncAt;
             const lastSyncMs = lastSyncAt ? Date.parse(lastSyncAt) : undefined;
             const newlyIgnoredCount = previousMatcher
                 ? indexedPathsBeforeReload.filter((relativePath) => !this.matcherIgnoresRelativePath(previousMatcher, relativePath) && this.matcherIgnoresRelativePath(matcher, relativePath)).length
                 : toDelete.length;
+
+            if (typeof this.snapshotManager.setCodebaseIgnoreControlSignature === 'function') {
+                this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, resolvedIgnoreControlSignature);
+            }
+            this.snapshotManager.saveCodebaseSnapshot();
 
             return {
                 mode: 'reconciled_ignore_change',
@@ -234,7 +260,7 @@ export class SyncManager {
             let fallbackSyncExecuted = false;
             let fallbackStats: { added: number; removed: number; modified: number } | undefined;
             try {
-                const fallbackDecision = await this.ensureFreshness(codebasePath, 0);
+                const fallbackDecision = await this.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
                 fallbackSyncExecuted = true;
                 fallbackStats = fallbackDecision.stats;
             } catch {
@@ -401,6 +427,28 @@ export class SyncManager {
         const basePatterns = this.context.getActiveIgnorePatterns?.(codebasePath) || [];
         matcher.add([...new Set(basePatterns)]);
         return matcher;
+    }
+
+    private async computeIgnoreControlSignature(codebasePath: string): Promise<string> {
+        const signatureParts: string[] = [];
+
+        for (const controlFile of IGNORE_RULE_CONTROL_FILES) {
+            const controlPath = path.join(codebasePath, controlFile);
+            try {
+                const stat = await fs.promises.stat(controlPath);
+                if (!stat.isFile()) {
+                    signatureParts.push(`${controlFile}:missing`);
+                    continue;
+                }
+
+                // Round to keep the signature deterministic across fs precision differences.
+                signatureParts.push(`${controlFile}:${Math.round(stat.mtimeMs)}:${stat.size}`);
+            } catch {
+                signatureParts.push(`${controlFile}:missing`);
+            }
+        }
+
+        return signatureParts.join('|');
     }
 
     private normalizeRelativePath(codebasePath: string, candidatePath: string): string {

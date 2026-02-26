@@ -50,12 +50,14 @@ const COLLECTION_LIMIT_PATTERNS = [
 const SATORI_COLLECTION_PREFIXES = ['code_chunks_', 'hybrid_code_chunks_'];
 const ZILLIZ_FREE_TIER_COLLECTION_LIMIT = 5;
 const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability('fileOutline');
+const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
 
 interface CandidateCollection {
     name: string;
     createdAt?: string;
     codebasePath?: string;
     isTargetCollection: boolean;
+    sortTimestampMs?: number;
 }
 
 interface CollectionDetailsView {
@@ -915,6 +917,37 @@ export class ToolHandlers {
         return new Date(timestamp).toISOString();
     }
 
+    private parseTimestampMs(timestamp?: string): number | undefined {
+        if (!timestamp) {
+            return undefined;
+        }
+
+        const parsed = Date.parse(timestamp);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    private resolveCollectionSortTimestampMs(
+        createdAt: string | undefined,
+        codebasePath: string | undefined,
+        snapshotLastUpdatedByPath: Map<string, number>
+    ): number | undefined {
+        const createdAtMs = this.parseTimestampMs(createdAt);
+        const snapshotMs = codebasePath ? snapshotLastUpdatedByPath.get(codebasePath) : undefined;
+
+        // Prefer collection metadata when it looks reliable.
+        if (createdAtMs !== undefined && createdAtMs >= MIN_RELIABLE_COLLECTION_CREATED_AT_MS) {
+            return createdAtMs;
+        }
+
+        // Fallback to snapshot timestamps when collection metadata is missing or suspicious.
+        if (snapshotMs !== undefined) {
+            return snapshotMs;
+        }
+
+        // Last resort for deterministic ordering when nothing else is available.
+        return createdAtMs;
+    }
+
     private async buildZillizCollectionLimitGuidance(targetCodebasePath: string): Promise<string> {
         const targetCollectionName = this.context.resolveCollectionName(targetCodebasePath);
         const vectorDb = this.getVectorStore();
@@ -926,6 +959,13 @@ export class ToolHandlers {
         for (const codebasePath of trackedCodebases) {
             byCollectionName.set(this.context.resolveCollectionName(codebasePath), codebasePath);
         }
+        const snapshotLastUpdatedByPath = new Map<string, number>();
+        for (const entry of this.snapshotManager.getAllCodebases()) {
+            const lastUpdatedMs = this.parseTimestampMs(entry.info.lastUpdated);
+            if (lastUpdatedMs !== undefined) {
+                snapshotLastUpdatedByPath.set(entry.path, lastUpdatedMs);
+            }
+        }
 
         const candidates: CandidateCollection[] = [];
         for (const detail of codeCollections) {
@@ -935,16 +975,19 @@ export class ToolHandlers {
                 createdAt: detail.createdAt,
                 codebasePath,
                 isTargetCollection: detail.name === targetCollectionName,
+                sortTimestampMs: this.resolveCollectionSortTimestampMs(
+                    detail.createdAt,
+                    codebasePath,
+                    snapshotLastUpdatedByPath
+                ),
             });
         }
 
         candidates.sort((a, b) => {
-            const aTime = a.createdAt ? Date.parse(a.createdAt) : NaN;
-            const bTime = b.createdAt ? Date.parse(b.createdAt) : NaN;
-            const aValid = Number.isFinite(aTime);
-            const bValid = Number.isFinite(bTime);
+            const aValid = Number.isFinite(a.sortTimestampMs);
+            const bValid = Number.isFinite(b.sortTimestampMs);
             if (aValid && bValid) {
-                return aTime - bTime;
+                return (a.sortTimestampMs as number) - (b.sortTimestampMs as number);
             }
             if (aValid) return -1;
             if (bValid) return 1;

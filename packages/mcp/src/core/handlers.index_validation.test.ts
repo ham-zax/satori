@@ -23,6 +23,7 @@ interface ValidationHarnessOptions {
     backendProvider?: BackendProvider;
     collectionDetails?: Array<{ name: string; createdAt?: string }>;
     metadataByCollection?: Record<string, { codebasePath?: string }>;
+    snapshotCodebases?: Array<{ path: string; info: { lastUpdated: string; status?: string } }>;
     hasIndexedCollectionImpl?: (codebasePath: string) => Promise<boolean>;
     hasCollectionImpl?: (collectionName: string) => Promise<boolean>;
     dropCollectionImpl?: (collectionName: string) => Promise<void>;
@@ -48,6 +49,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): { handl
     const backendProvider = options.backendProvider || 'milvus';
     const collectionDetails = options.collectionDetails || [];
     const metadataByCollection = options.metadataByCollection || {};
+    const snapshotCodebases = options.snapshotCodebases || [];
 
     const vectorStore = {
         checkCollectionLimit: options.checkCollectionLimitImpl,
@@ -98,7 +100,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): { handl
         removeCodebaseCompletely: () => undefined,
         setCodebaseIndexing: () => undefined,
         saveCodebaseSnapshot: () => undefined,
-        getAllCodebases: () => [],
+        getAllCodebases: () => snapshotCodebases,
     } as any;
 
     const syncManager = {
@@ -143,6 +145,51 @@ test('handleIndexCodebase returns Zilliz eviction guidance with free-tier reason
         assert.match(text, /manage_index \{"action":"create","path":".*","zillizDropCollection":"<collection_name>"\}/i);
         assert.match(text, /Agent instructions:/i);
         assert.match(text, /Do not auto-delete without explicit user confirmation/i);
+    });
+});
+
+test('handleIndexCodebase ordering falls back to snapshot lastUpdated when collection createdAt is unreliable', async () => {
+    await withTempRepo(async (repoPath) => {
+        const tradingCollection = 'hybrid_code_chunks_trade1234';
+        const promptReadyCollection = 'hybrid_code_chunks_prompt5678';
+
+        const { handlers } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => false,
+            collectionDetails: [
+                { name: tradingCollection, createdAt: '1970-01-01T01:52:39.000Z' },
+                { name: promptReadyCollection, createdAt: '1970-01-01T01:52:39.000Z' },
+            ],
+            metadataByCollection: {
+                [tradingCollection]: { codebasePath: '/home/hamza/repo/tradingview_ratio' },
+                [promptReadyCollection]: { codebasePath: '/home/hamza/repo/promptready_extension' },
+            },
+            snapshotCodebases: [
+                {
+                    path: '/home/hamza/repo/tradingview_ratio',
+                    info: { lastUpdated: '2026-02-10T10:00:00.000Z', status: 'indexed' }
+                },
+                {
+                    path: '/home/hamza/repo/promptready_extension',
+                    info: { lastUpdated: '2026-02-26T07:15:35.000Z', status: 'sync_completed' }
+                },
+            ]
+        });
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        assert.equal(response.isError, true);
+        const text = response.content[0]?.text || '';
+
+        const tradingIndex = text.indexOf(tradingCollection);
+        const promptReadyIndex = text.indexOf(promptReadyCollection);
+        assert.ok(tradingIndex >= 0, 'expected trading collection to be listed');
+        assert.ok(promptReadyIndex >= 0, 'expected promptready collection to be listed');
+        assert.ok(
+            tradingIndex < promptReadyIndex,
+            'expected trading collection to appear before promptready collection (older snapshot fallback)'
+        );
+        assert.match(text, new RegExp(`1\\. ${tradingCollection} \\[oldest\\]`));
+        assert.match(text, new RegExp(`2\\. ${promptReadyCollection} \\[newest\\]`));
     });
 });
 

@@ -50,6 +50,11 @@ export interface CallGraphSidecarInfo {
     fingerprint: IndexFingerprint;
 }
 
+export interface CodebaseIndexManifest {
+    indexedPaths: string[];
+    updatedAt: string;
+}
+
 // Legacy format (v1) - for backward compatibility
 export interface CodebaseSnapshotV1 {
     indexedCodebases: string[];
@@ -63,6 +68,8 @@ interface CodebaseInfoBase {
     fingerprintSource?: FingerprintSource;
     reindexReason?: 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint';
     callGraphSidecar?: CallGraphSidecarInfo;
+    indexManifest?: CodebaseIndexManifest;
+    ignoreRulesVersion?: number;
 }
 
 // Indexing state - when indexing is in progress

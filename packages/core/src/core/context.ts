@@ -36,13 +36,20 @@ export interface ContextConfig {
     customIgnorePatterns?: string[]; // New: custom ignore patterns from MCP
 }
 
+interface CodebaseIgnoreState {
+    fileBasedPatterns: string[];
+    effectivePatterns: string[];
+    matcher: ReturnType<typeof ignore> | null;
+}
+
 export class Context {
     private embedding: Embedding;
     private vectorDatabase: VectorDatabase;
     private codeSplitter: Splitter;
     private supportedExtensions: string[];
-    private ignorePatterns: string[];
-    private ignoreMatcher: ReturnType<typeof ignore> | null = null;
+    private baseIgnorePatterns: string[];
+    private runtimeCustomIgnorePatterns: string[];
+    private ignoreStateByCollection: Map<string, CodebaseIgnoreState>;
     private synchronizers = new Map<string, FileSynchronizer>();
 
     constructor(config: ContextConfig = {}) {
@@ -76,18 +83,19 @@ export class Context {
         // Load custom ignore patterns from environment variables
         const envCustomIgnorePatterns = this.getCustomIgnorePatternsFromEnv();
 
-        // Start with default ignore patterns
+        // Base ignore patterns (defaults + static config + env)
         const allIgnorePatterns = [
             ...DEFAULT_IGNORE_PATTERNS,
             ...(config.ignorePatterns || []),
             ...(config.customIgnorePatterns || []),
             ...envCustomIgnorePatterns
         ];
-        // Remove duplicates
-        this.ignorePatterns = [...new Set(allIgnorePatterns)];
-        this.invalidateIgnoreMatcher();
+        // Runtime custom ignore patterns added via MCP/manage_index
+        this.baseIgnorePatterns = [...new Set(allIgnorePatterns)];
+        this.runtimeCustomIgnorePatterns = [];
+        this.ignoreStateByCollection = new Map();
 
-        console.log(`[Context] 🔧 Initialized with ${this.supportedExtensions.length} supported extensions and ${this.ignorePatterns.length} ignore patterns`);
+        console.log(`[Context] 🔧 Initialized with ${this.supportedExtensions.length} supported extensions and ${this.baseIgnorePatterns.length + this.runtimeCustomIgnorePatterns.length} base/runtime ignore patterns`);
         if (envCustomExtensions.length > 0) {
             console.log(`[Context] 📎 Loaded ${envCustomExtensions.length} custom extensions from environment: ${envCustomExtensions.join(', ')}`);
         }
@@ -125,10 +133,15 @@ export class Context {
     }
 
     /**
-     * Get ignore patterns
+     * Get effective ignore patterns.
+     * When codebasePath is provided, returns per-codebase effective rules.
+     * Without a codebase path, returns global base+runtime layers only.
      */
-    getActiveIgnorePatterns(): string[] {
-        return [...this.ignorePatterns];
+    getActiveIgnorePatterns(codebasePath?: string): string[] {
+        if (!codebasePath) {
+            return [...new Set([...this.baseIgnorePatterns, ...this.runtimeCustomIgnorePatterns])];
+        }
+        return [...this.getOrCreateIgnoreState(codebasePath).effectivePatterns];
     }
 
     /**
@@ -153,10 +166,61 @@ export class Context {
     }
 
     /**
+     * Reload ignore rules for a codebase and return the effective pattern list.
+     * This is deterministic (replace semantics), not append-only.
+     */
+    async reloadIgnoreRulesForCodebase(codebasePath: string): Promise<string[]> {
+        await this.loadIgnorePatterns(codebasePath);
+        return this.getActiveIgnorePatterns(codebasePath);
+    }
+
+    /**
      * Public wrapper for prepareCollection private method
      */
     async ensureCollectionPrepared(codebasePath: string): Promise<void> {
         return this.prepareCollection(codebasePath);
+    }
+
+    /**
+     * Recreate synchronizer for a codebase using currently active ignore patterns.
+     * This is used when ignore rules change and we need deterministic reconciliation.
+     */
+    async recreateSynchronizerForCodebase(codebasePath: string): Promise<void> {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const synchronizer = new FileSynchronizer(codebasePath, this.getActiveIgnorePatterns(codebasePath));
+        await synchronizer.initialize();
+        this.synchronizers.set(collectionName, synchronizer);
+    }
+
+    /**
+     * Return currently tracked (indexable under active ignore rules) relative paths
+     * from the active synchronizer snapshot for this codebase.
+     */
+    getTrackedRelativePaths(codebasePath: string): string[] {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const synchronizer = this.synchronizers.get(collectionName);
+        if (!synchronizer) {
+            return [];
+        }
+        return this.normalizeRelativePathsForCodebase(codebasePath, synchronizer.getTrackedRelativePaths());
+    }
+
+    hasSynchronizerForCodebase(codebasePath: string): boolean {
+        return this.synchronizers.has(this.resolveCollectionName(codebasePath));
+    }
+
+    /**
+     * Delete indexed chunks for a list of relative paths in a codebase.
+     * Returns the number of file paths processed for deletion.
+     */
+    async deleteIndexedPathsByRelativePaths(codebasePath: string, relativePaths: string[]): Promise<number> {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const uniquePaths = Array.from(new Set(this.normalizeRelativePathsForCodebase(codebasePath, relativePaths)));
+
+        for (const relativePath of uniquePaths) {
+            await this.deleteFileChunks(collectionName, relativePath);
+        }
+        return uniquePaths.length;
     }
 
     /**
@@ -175,8 +239,8 @@ export class Context {
      */
     public resolveCollectionName(codebasePath: string): string {
         const isHybrid = this.getIsHybrid();
-        const normalizedPath = path.resolve(codebasePath);
-        const hash = crypto.createHash('md5').update(normalizedPath).digest('hex');
+        const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
+        const hash = crypto.createHash('md5').update(canonicalPath).digest('hex');
         const prefix = isHybrid === true ? 'hybrid_code_chunks' : 'code_chunks';
         return `${prefix}_${hash.substring(0, 8)}`;
     }
@@ -266,7 +330,7 @@ export class Context {
             await this.loadIgnorePatterns(codebasePath);
 
             // To be safe, let's initialize if it's not there.
-            const newSynchronizer = new FileSynchronizer(codebasePath, this.ignorePatterns);
+            const newSynchronizer = new FileSynchronizer(codebasePath, this.getActiveIgnorePatterns(codebasePath));
             await newSynchronizer.initialize();
             this.synchronizers.set(collectionName, newSynchronizer);
         }
@@ -522,18 +586,13 @@ export class Context {
     }
 
     /**
-     * Update ignore patterns (merges with default patterns and existing patterns)
-     * @param ignorePatterns Array of ignore patterns to add to defaults
+     * Update base ignore patterns (replace semantics, then rebuild effective set).
+     * @param ignorePatterns Array of base ignore patterns
      */
     updateIgnorePatterns(ignorePatterns: string[]): void {
-        // Merge with default patterns and any existing custom patterns, avoiding duplicates
-        const mergedPatterns = [...DEFAULT_IGNORE_PATTERNS, ...ignorePatterns];
-        const uniquePatterns: string[] = [];
-        const patternSet = new Set(mergedPatterns);
-        patternSet.forEach(pattern => uniquePatterns.push(pattern));
-        this.ignorePatterns = uniquePatterns;
-        this.invalidateIgnoreMatcher();
-        console.log(`[Context] 🚫 Updated ignore patterns: ${ignorePatterns.length} new + ${DEFAULT_IGNORE_PATTERNS.length} default = ${this.ignorePatterns.length} total patterns`);
+        this.baseIgnorePatterns = [...new Set([...DEFAULT_IGNORE_PATTERNS, ...ignorePatterns])];
+        this.rebuildAllIgnoreStates();
+        console.log(`[Context] 🚫 Updated base ignore patterns. Base total: ${this.baseIgnorePatterns.length}`);
     }
 
     /**
@@ -543,23 +602,146 @@ export class Context {
     addCustomIgnorePatterns(customPatterns: string[]): void {
         if (customPatterns.length === 0) return;
 
-        // Merge current patterns with new custom patterns, avoiding duplicates
-        const mergedPatterns = [...this.ignorePatterns, ...customPatterns];
-        const uniquePatterns: string[] = [];
-        const patternSet = new Set(mergedPatterns);
-        patternSet.forEach(pattern => uniquePatterns.push(pattern));
-        this.ignorePatterns = uniquePatterns;
-        this.invalidateIgnoreMatcher();
-        console.log(`[Context] 🚫 Added ${customPatterns.length} custom ignore patterns. Total: ${this.ignorePatterns.length} patterns`);
+        this.runtimeCustomIgnorePatterns = [
+            ...new Set([...this.runtimeCustomIgnorePatterns, ...customPatterns])
+        ];
+        this.rebuildAllIgnoreStates();
+        console.log(`[Context] 🚫 Added ${customPatterns.length} custom ignore patterns. Runtime total: ${this.runtimeCustomIgnorePatterns.length}`);
     }
 
     /**
      * Reset ignore patterns to defaults only
      */
     resetIgnorePatternsToDefaults(): void {
-        this.ignorePatterns = [...DEFAULT_IGNORE_PATTERNS];
-        this.invalidateIgnoreMatcher();
-        console.log(`[Context] 🔄 Reset ignore patterns to defaults: ${this.ignorePatterns.length} patterns`);
+        this.baseIgnorePatterns = [...DEFAULT_IGNORE_PATTERNS];
+        this.runtimeCustomIgnorePatterns = [];
+        this.rebuildAllIgnoreStates();
+        console.log(`[Context] 🔄 Reset ignore patterns to defaults: ${this.baseIgnorePatterns.length} patterns`);
+    }
+
+    private buildEffectiveIgnorePatterns(fileBasedPatterns: string[]): string[] {
+        return [
+            ...new Set([
+                ...this.baseIgnorePatterns,
+                ...this.runtimeCustomIgnorePatterns,
+                ...fileBasedPatterns
+            ])
+        ];
+    }
+
+    private rebuildAllIgnoreStates(): void {
+        for (const [collectionName, state] of this.ignoreStateByCollection.entries()) {
+            this.ignoreStateByCollection.set(collectionName, {
+                ...state,
+                effectivePatterns: this.buildEffectiveIgnorePatterns(state.fileBasedPatterns),
+                matcher: null,
+            });
+        }
+    }
+
+    private getOrCreateIgnoreState(codebasePath: string): CodebaseIgnoreState {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const existing = this.ignoreStateByCollection.get(collectionName);
+        if (existing) {
+            return existing;
+        }
+
+        const initial: CodebaseIgnoreState = {
+            fileBasedPatterns: [],
+            effectivePatterns: this.buildEffectiveIgnorePatterns([]),
+            matcher: null,
+        };
+        this.ignoreStateByCollection.set(collectionName, initial);
+        return initial;
+    }
+
+    private setFileBasedPatternsForCodebase(codebasePath: string, fileBasedPatterns: string[]): void {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const normalizedFileBased = [
+            ...new Set(
+                fileBasedPatterns
+                    .filter((pattern): pattern is string => typeof pattern === 'string')
+                    .map((pattern) => pattern.trim())
+                    .filter((pattern) => pattern.length > 0)
+            )
+        ];
+
+        const nextState: CodebaseIgnoreState = {
+            fileBasedPatterns: normalizedFileBased,
+            effectivePatterns: this.buildEffectiveIgnorePatterns(normalizedFileBased),
+            matcher: null,
+        };
+        this.ignoreStateByCollection.set(collectionName, nextState);
+    }
+
+    private getIgnoreMatcherForCodebase(codebasePath: string): ReturnType<typeof ignore> {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const state = this.getOrCreateIgnoreState(codebasePath);
+        if (!state.matcher) {
+            const matcher = ignore();
+            matcher.add(state.effectivePatterns);
+            state.matcher = matcher;
+            this.ignoreStateByCollection.set(collectionName, state);
+        }
+        return state.matcher;
+    }
+
+    private canonicalizeCodebasePath(codebasePath: string): string {
+        const resolved = path.resolve(codebasePath);
+        try {
+            const realPath = typeof (fs as any).realpathSync?.native === 'function'
+                ? (fs as any).realpathSync.native(resolved)
+                : fs.realpathSync(resolved);
+            return this.trimTrailingSeparators(path.normalize(realPath));
+        } catch {
+            return this.trimTrailingSeparators(path.normalize(resolved));
+        }
+    }
+
+    private trimTrailingSeparators(inputPath: string): string {
+        const parsedRoot = path.parse(inputPath).root;
+        if (inputPath === parsedRoot) {
+            return inputPath;
+        }
+        return inputPath.replace(/[\\/]+$/, '');
+    }
+
+    private normalizeRelativePathForCodebase(codebasePath: string, candidatePath: string): string | null {
+        if (typeof candidatePath !== 'string') {
+            return null;
+        }
+
+        const trimmed = candidatePath.trim();
+        if (trimmed.length === 0) {
+            return null;
+        }
+
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const normalizedCandidate = trimmed.replace(/\\/g, '/');
+        let relativePath = normalizedCandidate;
+
+        if (path.isAbsolute(trimmed)) {
+            relativePath = path.relative(canonicalRoot, path.resolve(trimmed)).replace(/\\/g, '/');
+        }
+
+        relativePath = relativePath.replace(/^\/+/, '');
+        if (!relativePath || relativePath === '.' || relativePath.startsWith('..')) {
+            return null;
+        }
+
+        return relativePath;
+    }
+
+    private normalizeRelativePathsForCodebase(codebasePath: string, relativePaths: string[]): string[] {
+        const normalized: string[] = [];
+        for (const candidatePath of relativePaths) {
+            const normalizedPath = this.normalizeRelativePathForCodebase(codebasePath, candidatePath);
+            if (!normalizedPath) {
+                continue;
+            }
+            normalized.push(normalizedPath);
+        }
+        return Array.from(new Set(normalized)).sort();
     }
 
     /**
@@ -891,9 +1073,8 @@ export class Context {
     }
 
     /**
-     * Load ignore patterns from various ignore files in the codebase
-     * This method preserves any existing custom patterns that were added before
-     * @param codebasePath Path to the codebase
+     * Load ignore patterns from various ignore files in the codebase.
+     * This uses replace semantics for file-based patterns to avoid stale rules.
      */
     private async loadIgnorePatterns(codebasePath: string): Promise<void> {
         try {
@@ -910,21 +1091,21 @@ export class Context {
             const globalIgnorePatterns = await this.loadGlobalIgnoreFile();
             fileBasedPatterns.push(...globalIgnorePatterns);
 
-            // Merge file-based patterns with existing patterns (which may include custom MCP patterns)
+            this.setFileBasedPatternsForCodebase(codebasePath, fileBasedPatterns);
             if (fileBasedPatterns.length > 0) {
-                this.addCustomIgnorePatterns(fileBasedPatterns);
                 console.log(`[Context] 🚫 Loaded total ${fileBasedPatterns.length} ignore patterns from all ignore files`);
             } else {
-                console.log('📄 No ignore files found, keeping existing patterns');
+                console.log('📄 No ignore files found; effective rules reset to base + runtime custom');
             }
         } catch (error) {
             console.warn(`[Context] ⚠️ Failed to load ignore patterns: ${error}`);
-            // Continue with existing patterns on error - don't reset them
+            // Keep existing patterns on failure to avoid destructive behavior.
         }
     }
 
     /**
-     * Find all .xxxignore files in the codebase directory
+     * Find root-level .xxxignore files in the codebase directory.
+     * v1 policy: only root ignore files are loaded (nested .gitignore files are ignored).
      * @param codebasePath Path to the codebase
      * @returns Array of ignore file paths
      */
@@ -996,18 +1177,6 @@ export class Context {
         }
     }
 
-    private invalidateIgnoreMatcher(): void {
-        this.ignoreMatcher = null;
-    }
-
-    private getIgnoreMatcher(): ReturnType<typeof ignore> {
-        if (!this.ignoreMatcher) {
-            this.ignoreMatcher = ignore();
-            this.ignoreMatcher.add(this.ignorePatterns);
-        }
-        return this.ignoreMatcher;
-    }
-
     /**
      * Check if a path matches any ignore pattern
      * @param filePath Path to check
@@ -1016,7 +1185,8 @@ export class Context {
      * @returns True if path should be ignored
      */
     private matchesIgnorePattern(filePath: string, basePath: string, isDirectory: boolean = false): boolean {
-        if (this.ignorePatterns.length === 0) {
+        const effectivePatterns = this.getActiveIgnorePatterns(basePath);
+        if (effectivePatterns.length === 0) {
             return false;
         }
 
@@ -1025,7 +1195,7 @@ export class Context {
             return false;
         }
 
-        const matcher = this.getIgnoreMatcher();
+        const matcher = this.getIgnoreMatcherForCodebase(basePath);
 
         if (isDirectory) {
             const withSlash = relativePath.endsWith('/') ? relativePath : `${relativePath}/`;

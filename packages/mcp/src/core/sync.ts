@@ -17,7 +17,9 @@ export type FreshnessDecisionMode =
     | 'skipped_recent'
     | 'coalesced'
     | 'skipped_requires_reindex'
-    | 'skipped_missing_path';
+    | 'skipped_missing_path'
+    | 'reconciled_ignore_change'
+    | 'ignore_reload_failed';
 
 export interface FreshnessDecision {
     mode: FreshnessDecisionMode;
@@ -26,12 +28,38 @@ export interface FreshnessDecision {
     lastSyncAt?: string;
     ageMs?: number;
     stats?: { added: number; removed: number; modified: number };
+    ignoreRulesVersion?: number;
+    deletedFiles?: number;
+    newlyIgnoredFiles?: number;
+    addedFiles?: number;
+    pendingAdds?: number;
+    coalescedEdits?: number;
+    durationMs?: number;
+    errorMessage?: string;
+    fallbackSyncExecuted?: boolean;
+    fallbackStats?: { added: number; removed: number; modified: number };
 }
 
 interface SyncExecutionOutcome {
     mode: Exclude<FreshnessDecisionMode, 'coalesced' | 'skipped_recent'>;
     stats?: { added: number; removed: number; modified: number; changedFiles: string[] };
 }
+
+type WatchSyncReason = 'watch_event' | 'ignore_rules_changed';
+
+interface EnsureFreshnessOptions {
+    reason?: 'default' | 'ignore_change';
+    coalescedEdits?: number;
+}
+
+interface IgnoreReloadResult {
+    previousMatcher?: ReturnType<typeof ignore>;
+    matcher: ReturnType<typeof ignore>;
+    version: number;
+}
+
+// v1 policy: only root-level control files trigger ignore-rule reconciliation.
+const IGNORE_RULE_CONTROL_FILES = new Set(['.satoriignore', '.gitignore']);
 
 export class SyncManager {
     private context: Context;
@@ -45,6 +73,8 @@ export class SyncManager {
     private watchers: Map<string, FSWatcher> = new Map();
     private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
     private watcherIgnoreMatchers: Map<string, ReturnType<typeof ignore>> = new Map();
+    private ignoreRulesVersions: Map<string, number> = new Map();
+    private pendingIgnoreChangeEdits: Map<string, number> = new Map();
     private readonly now: () => number;
     private readonly onSyncCompleted?: (codebasePath: string, stats: { added: number; removed: number; modified: number; changedFiles: string[] }) => Promise<void> | void;
 
@@ -61,7 +91,15 @@ export class SyncManager {
      * Ensures the codebase is fresh before use.
      * Unified entry point for ALL sync operations (manual, periodic, and on-read).
      */
-    public async ensureFreshness(codebasePath: string, thresholdMs: number = 60000): Promise<FreshnessDecision> {
+    public async ensureFreshness(
+        codebasePath: string,
+        thresholdMs: number = 60000,
+        options: EnsureFreshnessOptions = {}
+    ): Promise<FreshnessDecision> {
+        if (options.reason === 'ignore_change') {
+            return this.reconcileIgnoreRulesChange(codebasePath, options.coalescedEdits);
+        }
+
         const checkedAtMs = this.now();
         const checkedAt = new Date(checkedAtMs).toISOString();
 
@@ -125,6 +163,98 @@ export class SyncManager {
         };
     }
 
+    private async reconcileIgnoreRulesChange(codebasePath: string, coalescedEdits: number = 1): Promise<FreshnessDecision> {
+        const checkedAtMs = this.now();
+        const checkedAt = new Date(checkedAtMs).toISOString();
+        const startedAt = checkedAtMs;
+
+        try {
+            if (this.activeSyncs.has(codebasePath)) {
+                console.log(`[SYNC] ⏳ Ignore-rule reconcile waiting for in-flight sync '${codebasePath}'`);
+                await this.activeSyncs.get(codebasePath);
+            }
+
+            const manifestIndexedPaths = typeof this.snapshotManager.getCodebaseIndexedPaths === 'function'
+                ? this.snapshotManager.getCodebaseIndexedPaths(codebasePath)
+                : [];
+            const hasSynchronizer = typeof this.context.hasSynchronizerForCodebase === 'function'
+                ? this.context.hasSynchronizerForCodebase(codebasePath)
+                : false;
+            let indexedPathsBeforeReload = manifestIndexedPaths;
+            if (indexedPathsBeforeReload.length === 0 && hasSynchronizer && typeof this.context.getTrackedRelativePaths === 'function') {
+                indexedPathsBeforeReload = this.context.getTrackedRelativePaths(codebasePath);
+            }
+            if (indexedPathsBeforeReload.length === 0 && !hasSynchronizer) {
+                throw new Error('missing_manifest_and_synchronizer');
+            }
+
+            const { previousMatcher, matcher, version } = await this.reloadIgnoreRulesForCodebase(codebasePath);
+
+            if (typeof this.context.recreateSynchronizerForCodebase === 'function') {
+                await this.context.recreateSynchronizerForCodebase(codebasePath);
+            }
+
+            // Self-healing delete rule: remove anything currently indexed that new matcher ignores.
+            const toDelete = indexedPathsBeforeReload.filter((relativePath) => this.matcherIgnoresRelativePath(matcher, relativePath));
+            const retainedPaths = indexedPathsBeforeReload.filter((relativePath) => !this.matcherIgnoresRelativePath(matcher, relativePath));
+
+            if (toDelete.length > 0 && typeof this.context.deleteIndexedPathsByRelativePaths === 'function') {
+                await this.context.deleteIndexedPathsByRelativePaths(codebasePath, toDelete);
+            }
+
+            if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
+                this.snapshotManager.setCodebaseIndexManifest(codebasePath, retainedPaths);
+            }
+            this.snapshotManager.saveCodebaseSnapshot();
+
+            const syncDecision = await this.ensureFreshness(codebasePath, 0);
+            const lastSyncAt = syncDecision.lastSyncAt;
+            const lastSyncMs = lastSyncAt ? Date.parse(lastSyncAt) : undefined;
+            const newlyIgnoredCount = previousMatcher
+                ? indexedPathsBeforeReload.filter((relativePath) => !this.matcherIgnoresRelativePath(previousMatcher, relativePath) && this.matcherIgnoresRelativePath(matcher, relativePath)).length
+                : toDelete.length;
+
+            return {
+                mode: 'reconciled_ignore_change',
+                checkedAt,
+                thresholdMs: 0,
+                lastSyncAt,
+                ageMs: lastSyncMs !== undefined ? Math.max(0, this.now() - lastSyncMs) : undefined,
+                stats: syncDecision.stats,
+                ignoreRulesVersion: version,
+                deletedFiles: toDelete.length,
+                addedFiles: syncDecision.stats?.added ?? 0,
+                pendingAdds: 0,
+                coalescedEdits: Math.max(1, coalescedEdits),
+                durationMs: Math.max(0, this.now() - startedAt),
+                newlyIgnoredFiles: newlyIgnoredCount,
+                fallbackSyncExecuted: false,
+            };
+        } catch (error: any) {
+            let fallbackSyncExecuted = false;
+            let fallbackStats: { added: number; removed: number; modified: number } | undefined;
+            try {
+                const fallbackDecision = await this.ensureFreshness(codebasePath, 0);
+                fallbackSyncExecuted = true;
+                fallbackStats = fallbackDecision.stats;
+            } catch {
+                // Preserve primary failure metadata even if fallback sync fails.
+            }
+
+            return {
+                mode: 'ignore_reload_failed',
+                checkedAt,
+                thresholdMs: 0,
+                ignoreRulesVersion: this.ignoreRulesVersions.get(codebasePath),
+                coalescedEdits: Math.max(1, coalescedEdits),
+                durationMs: Math.max(0, this.now() - startedAt),
+                errorMessage: String(error?.message || error || 'unknown_ignore_reload_error'),
+                fallbackSyncExecuted,
+                fallbackStats,
+            };
+        }
+    }
+
     private async syncCodebase(codebasePath: string): Promise<SyncExecutionOutcome> {
         if (this.snapshotManager.getCodebaseStatus(codebasePath) === 'requires_reindex') {
             console.log(`[SYNC] ⏭️  Skipping sync for '${codebasePath}' because it requires reindex.`);
@@ -150,6 +280,13 @@ export class SyncManager {
         try {
             // Incremental sync
             const stats = await this.context.reindexByChange(codebasePath);
+
+            if (typeof this.context.getTrackedRelativePaths === 'function') {
+                const trackedPaths = this.context.getTrackedRelativePaths(codebasePath);
+                if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
+                    this.snapshotManager.setCodebaseIndexManifest(codebasePath, trackedPaths);
+                }
+            }
 
             // Centralized State Update
             this.lastSyncTimes.set(codebasePath, this.now());
@@ -250,12 +387,73 @@ export class SyncManager {
         }
     }
 
+    private getIgnoreRuleVersion(codebasePath: string): number {
+        const current = this.ignoreRulesVersions.get(codebasePath);
+        if (Number.isFinite(current)) {
+            return Number(current);
+        }
+
+        if (typeof this.snapshotManager.getCodebaseInfo === 'function') {
+            const info = this.snapshotManager.getCodebaseInfo(codebasePath) as { ignoreRulesVersion?: number } | undefined;
+            if (info && Number.isFinite(info.ignoreRulesVersion)) {
+                return Number(info.ignoreRulesVersion);
+            }
+        }
+
+        return 0;
+    }
+
+    private async reloadIgnoreRulesForCodebase(codebasePath: string): Promise<IgnoreReloadResult> {
+        const previousMatcher = this.watcherIgnoreMatchers.get(codebasePath);
+
+        if (typeof this.context.reloadIgnoreRulesForCodebase === 'function') {
+            await this.context.reloadIgnoreRulesForCodebase(codebasePath);
+        }
+
+        const matcher = await this.buildIgnoreMatcherForCodebase(codebasePath);
+        this.watcherIgnoreMatchers.set(codebasePath, matcher);
+
+        const version = this.getIgnoreRuleVersion(codebasePath) + 1;
+        this.ignoreRulesVersions.set(codebasePath, version);
+        if (typeof this.snapshotManager.setCodebaseIgnoreRulesVersion === 'function') {
+            this.snapshotManager.setCodebaseIgnoreRulesVersion(codebasePath, version);
+        }
+
+        return { previousMatcher, matcher, version };
+    }
+
     private async buildIgnoreMatcherForCodebase(codebasePath: string): Promise<ReturnType<typeof ignore>> {
         const matcher = ignore();
-        const basePatterns = this.context.getActiveIgnorePatterns?.() || [];
+        const basePatterns = this.context.getActiveIgnorePatterns?.(codebasePath) || [];
         const repoPatterns = await this.loadRepoIgnorePatterns(codebasePath);
         matcher.add([...new Set([...basePatterns, ...repoPatterns])]);
         return matcher;
+    }
+
+    private normalizeRelativePath(codebasePath: string, candidatePath: string): string {
+        return path
+            .relative(codebasePath, path.resolve(candidatePath))
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '');
+    }
+
+    private isIgnoreRuleControlFile(relativePath: string): boolean {
+        if (!relativePath || relativePath === '.' || relativePath.startsWith('..')) {
+            return false;
+        }
+        return IGNORE_RULE_CONTROL_FILES.has(relativePath);
+    }
+
+    private matcherIgnoresRelativePath(matcher: ReturnType<typeof ignore>, relativePath: string): boolean {
+        const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+        if (!normalized || normalized === '.') {
+            return false;
+        }
+        if (matcher.ignores(normalized)) {
+            return true;
+        }
+        const withSlash = normalized.endsWith('/') ? normalized : `${normalized}/`;
+        return matcher.ignores(withSlash);
     }
 
     private getIgnoreMatcherForCodebase(codebasePath: string): ReturnType<typeof ignore> {
@@ -265,17 +463,14 @@ export class SyncManager {
         }
 
         const matcher = ignore();
-        const patterns = this.context.getActiveIgnorePatterns?.() || [];
+        const patterns = this.context.getActiveIgnorePatterns?.(codebasePath) || [];
         matcher.add(patterns);
         this.watcherIgnoreMatchers.set(codebasePath, matcher);
         return matcher;
     }
 
     private shouldIgnoreWatchPath(codebasePath: string, candidatePath: string): boolean {
-        const relativePath = path
-            .relative(codebasePath, path.resolve(candidatePath))
-            .replace(/\\/g, '/')
-            .replace(/^\/+/, '');
+        const relativePath = this.normalizeRelativePath(codebasePath, candidatePath);
 
         if (!relativePath || relativePath === '.') {
             return false;
@@ -283,6 +478,10 @@ export class SyncManager {
 
         if (relativePath.startsWith('..')) {
             return true;
+        }
+
+        if (this.isIgnoreRuleControlFile(relativePath)) {
+            return false;
         }
 
         // Hidden files/directories are intentionally excluded from sync.
@@ -300,7 +499,7 @@ export class SyncManager {
         return matcher.ignores(withSlash);
     }
 
-    public scheduleWatcherSync(codebasePath: string, reason: string = 'watch_event'): void {
+    public scheduleWatcherSync(codebasePath: string, reason: WatchSyncReason = 'watch_event'): void {
         if (!this.watchEnabled || !this.watcherModeStarted) {
             return;
         }
@@ -315,9 +514,29 @@ export class SyncManager {
             clearTimeout(activeTimer);
         }
 
+        if (reason === 'ignore_rules_changed') {
+            const current = this.pendingIgnoreChangeEdits.get(codebasePath) || 0;
+            this.pendingIgnoreChangeEdits.set(codebasePath, current + 1);
+        }
+
         const timer = setTimeout(async () => {
             this.debounceTimers.delete(codebasePath);
+            const coalescedIgnoreEdits = this.pendingIgnoreChangeEdits.get(codebasePath) || 0;
+            this.pendingIgnoreChangeEdits.delete(codebasePath);
             try {
+                if (coalescedIgnoreEdits > 0) {
+                    const decision = await this.ensureFreshness(codebasePath, 0, {
+                        reason: 'ignore_change',
+                        coalescedEdits: coalescedIgnoreEdits,
+                    });
+                    if (decision.mode === 'ignore_reload_failed') {
+                        console.warn(`[SYNC-WATCH] Ignore-rule reconcile failed for '${codebasePath}': ${decision.errorMessage || 'unknown_error'} (fallbackSyncExecuted=${decision.fallbackSyncExecuted === true})`);
+                    } else {
+                        console.log(`[SYNC-WATCH] Ignore-rule reconcile completed for '${codebasePath}' (version=${decision.ignoreRulesVersion ?? 'n/a'}, deleted=${decision.deletedFiles ?? 0}, added=${decision.addedFiles ?? 0}, coalesced=${decision.coalescedEdits ?? 1})`);
+                    }
+                    return;
+                }
+
                 await this.ensureFreshness(codebasePath, 0);
             } catch (error: any) {
                 console.error(`[SYNC-WATCH] Debounced sync failed for '${codebasePath}':`, error);
@@ -378,7 +597,13 @@ export class SyncManager {
             return;
         }
 
-        const onPathChange = () => this.scheduleWatcherSync(codebasePath, 'watch_event');
+        const onPathChange = (watchPath: string) => {
+            const relativePath = this.normalizeRelativePath(codebasePath, watchPath);
+            const reason: WatchSyncReason = this.isIgnoreRuleControlFile(relativePath)
+                ? 'ignore_rules_changed'
+                : 'watch_event';
+            this.scheduleWatcherSync(codebasePath, reason);
+        };
 
         watcher
             .on('add', onPathChange)
@@ -402,6 +627,7 @@ export class SyncManager {
         }
 
         this.watcherIgnoreMatchers.delete(codebasePath);
+        this.pendingIgnoreChangeEdits.delete(codebasePath);
 
         const watcher = this.watchers.get(codebasePath);
         if (!watcher) {
@@ -452,6 +678,7 @@ export class SyncManager {
         }
         this.debounceTimers.clear();
         this.watcherIgnoreMatchers.clear();
+        this.pendingIgnoreChangeEdits.clear();
 
         const watchers = Array.from(this.watchers.values());
         this.watchers.clear();

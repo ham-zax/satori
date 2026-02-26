@@ -124,7 +124,7 @@ class ContextMcpServer {
                     const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
                         codebasePath,
                         stats.changedFiles,
-                        this.context.getActiveIgnorePatterns()
+                        this.context.getActiveIgnorePatterns(codebasePath)
                     );
                     if (sidecar) {
                         this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);

@@ -208,6 +208,14 @@ export class FileSynchronizer {
         return this.fileHashes.get(filePath);
     }
 
+    /**
+     * Return tracked (currently considered indexable) relative file paths.
+     * This reflects the synchronizer snapshot under the active ignore rules.
+     */
+    public getTrackedRelativePaths(): string[] {
+        return Array.from(this.fileHashes.keys()).sort();
+    }
+
     private async saveSnapshot(): Promise<void> {
         const merkleDir = path.dirname(this.snapshotPath);
         await fs.mkdir(merkleDir, { recursive: true });

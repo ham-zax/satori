@@ -759,9 +759,9 @@ export class ToolHandlers {
         return 'not_ready';
     }
 
-    private getContextIgnorePatterns(): string[] {
+    private getContextIgnorePatterns(codebasePath: string): string[] {
         if (typeof (this.context as any).getActiveIgnorePatterns === 'function') {
-            const patterns = (this.context as any).getActiveIgnorePatterns();
+            const patterns = (this.context as any).getActiveIgnorePatterns(codebasePath);
             if (Array.isArray(patterns)) {
                 return patterns.filter((pattern) => typeof pattern === 'string');
             }
@@ -771,7 +771,7 @@ export class ToolHandlers {
 
     private async rebuildCallGraphForIndex(codebasePath: string): Promise<void> {
         try {
-            const sidecar = await this.callGraphManager.rebuildForCodebase(codebasePath, this.getContextIgnorePatterns());
+            const sidecar = await this.callGraphManager.rebuildForCodebase(codebasePath, this.getContextIgnorePatterns(codebasePath));
             this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
             this.snapshotManager.saveCodebaseSnapshot();
             console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
@@ -785,7 +785,7 @@ export class ToolHandlers {
             const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
                 codebasePath,
                 changedFiles,
-                this.getContextIgnorePatterns()
+                this.getContextIgnorePatterns(codebasePath)
             );
             if (!sidecar) {
                 return false;
@@ -1547,7 +1547,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Initialize file synchronizer with proper ignore patterns (including project-specific patterns)
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
-            const ignorePatterns = this.context.getActiveIgnorePatterns() || [];
+            const ignorePatterns = this.context.getActiveIgnorePatterns(absolutePath) || [];
             console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(', ')}`);
             const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns);
             await synchronizer.initialize();
@@ -1586,6 +1586,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Set codebase to indexed status with complete statistics
             this.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.runtimeFingerprint, 'verified');
+            if (typeof this.context.getTrackedRelativePaths === 'function') {
+                const trackedPaths = this.context.getTrackedRelativePaths(absolutePath);
+                if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
+                    this.snapshotManager.setCodebaseIndexManifest(absolutePath, trackedPaths);
+                }
+            }
             this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks };
 
             // Save snapshot after updating codebase lists
@@ -2769,6 +2775,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 removed: syncStats.removed,
                 modified: syncStats.modified
             };
+
+            if (typeof this.context.getTrackedRelativePaths === 'function') {
+                const trackedPaths = this.context.getTrackedRelativePaths(absolutePath);
+                if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
+                    this.snapshotManager.setCodebaseIndexManifest(absolutePath, trackedPaths);
+                }
+            }
 
             // Store sync result in snapshot
             this.snapshotManager.setCodebaseSyncCompleted(absolutePath, syncTotals, this.runtimeFingerprint, 'verified');

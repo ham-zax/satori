@@ -266,6 +266,8 @@ export class SnapshotManager {
             fingerprintSource: existing?.fingerprintSource,
             reindexReason: existing?.reindexReason,
             callGraphSidecar: existing?.callGraphSidecar,
+            indexManifest: existing?.indexManifest,
+            ignoreRulesVersion: existing?.ignoreRulesVersion,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -287,6 +289,8 @@ export class SnapshotManager {
             indexFingerprint: indexFingerprint || this.runtimeFingerprint,
             fingerprintSource,
             callGraphSidecar: existing?.callGraphSidecar,
+            indexManifest: existing?.indexManifest,
+            ignoreRulesVersion: existing?.ignoreRulesVersion,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -302,6 +306,8 @@ export class SnapshotManager {
             indexFingerprint: existing?.indexFingerprint,
             fingerprintSource: existing?.fingerprintSource,
             callGraphSidecar: existing?.callGraphSidecar,
+            indexManifest: existing?.indexManifest,
+            ignoreRulesVersion: existing?.ignoreRulesVersion,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -325,6 +331,8 @@ export class SnapshotManager {
             indexFingerprint: indexFingerprint || existing?.indexFingerprint || this.runtimeFingerprint,
             fingerprintSource: existing?.fingerprintSource || fingerprintSource,
             callGraphSidecar: existing?.callGraphSidecar,
+            indexManifest: existing?.indexManifest,
+            ignoreRulesVersion: existing?.ignoreRulesVersion,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -344,6 +352,8 @@ export class SnapshotManager {
             indexFingerprint: existing?.indexFingerprint,
             fingerprintSource: existing?.fingerprintSource,
             callGraphSidecar: existing?.callGraphSidecar,
+            indexManifest: existing?.indexManifest,
+            ignoreRulesVersion: existing?.ignoreRulesVersion,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.refreshDerivedState();
@@ -358,6 +368,49 @@ export class SnapshotManager {
         this.codebaseInfoMap.set(codebasePath, {
             ...existing,
             callGraphSidecar: sidecar,
+            lastUpdated: new Date().toISOString(),
+        });
+        this.refreshDerivedState();
+    }
+
+    public setCodebaseIndexManifest(codebasePath: string, indexedPaths: string[]): void {
+        const existing = this.codebaseInfoMap.get(codebasePath);
+        if (!existing) {
+            return;
+        }
+
+        const normalized = Array.from(
+            new Set(indexedPaths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0))
+        ).sort();
+
+        this.codebaseInfoMap.set(codebasePath, {
+            ...existing,
+            indexManifest: {
+                indexedPaths: normalized,
+                updatedAt: new Date().toISOString(),
+            },
+            lastUpdated: new Date().toISOString(),
+        });
+        this.refreshDerivedState();
+    }
+
+    public getCodebaseIndexedPaths(codebasePath: string): string[] {
+        const manifest = this.codebaseInfoMap.get(codebasePath)?.indexManifest;
+        if (!manifest || !Array.isArray(manifest.indexedPaths)) {
+            return [];
+        }
+        return manifest.indexedPaths.slice();
+    }
+
+    public setCodebaseIgnoreRulesVersion(codebasePath: string, version: number): void {
+        const existing = this.codebaseInfoMap.get(codebasePath);
+        if (!existing) {
+            return;
+        }
+
+        this.codebaseInfoMap.set(codebasePath, {
+            ...existing,
+            ignoreRulesVersion: Number.isFinite(version) ? version : existing.ignoreRulesVersion,
             lastUpdated: new Date().toISOString(),
         });
         this.refreshDerivedState();

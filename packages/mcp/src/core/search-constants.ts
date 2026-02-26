@@ -1,6 +1,15 @@
 export const SEARCH_RRF_K = 60;
 export const SEARCH_MAX_CANDIDATES = 80;
 export const SEARCH_PROXIMITY_WINDOW = 25;
+export const SEARCH_OPERATOR_PREFIX_MAX_CHARS = 200;
+export const SEARCH_MUST_RETRY_ROUNDS = 2;
+export const SEARCH_MUST_RETRY_MULTIPLIER = 2;
+export const SEARCH_DIVERSITY_MAX_PER_FILE = 2;
+export const SEARCH_DIVERSITY_MAX_PER_SYMBOL = 1;
+export const SEARCH_DIVERSITY_RELAXED_FILE_CAP = SEARCH_DIVERSITY_MAX_PER_FILE + 1;
+export const SEARCH_CHANGED_FILES_CACHE_TTL_MS = 5000;
+export const SEARCH_CHANGED_FIRST_MULTIPLIER = 1.10;
+export const SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES = 50;
 export const SEARCH_NOISE_HINT_TOP_K = 5;
 export const SEARCH_NOISE_HINT_THRESHOLD = 0.60;
 export const SEARCH_NOISE_HINT_PATTERNS = [
@@ -20,6 +29,7 @@ export const STALENESS_THRESHOLDS_MS = {
 export type SearchScope = 'runtime' | 'mixed' | 'docs';
 export type SearchResultMode = 'grouped' | 'raw';
 export type SearchGroupBy = 'symbol' | 'file';
+export type SearchRankingMode = 'default' | 'auto_changed_first';
 export type SearchNoiseCategory = 'tests' | 'fixtures' | 'docs' | 'generated' | 'runtime';
 
 export type PathCategory =

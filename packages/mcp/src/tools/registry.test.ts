@@ -50,6 +50,7 @@ test('search_codebase and manage_index descriptions include ignore-remediation g
     assert.match(searchTool!.description, /\.satoriignore/);
     assert.match(searchTool!.description, /scope=\"runtime\"/);
     assert.match(searchTool!.description, /scope=\"mixed\"/);
+    assert.match(searchTool!.description, /must:/);
     assert.match(searchTool!.description, /MCP_WATCH_DEBOUNCE_MS/);
     assert.match(searchTool!.description, /action\":\"sync\"/);
 
@@ -68,10 +69,12 @@ test('search_codebase schema exposes scoped grouped/raw controls', () => {
     assert.ok(properties.scope);
     assert.ok(properties.resultMode);
     assert.ok(properties.groupBy);
+    assert.ok(properties.rankingMode);
     assert.ok(properties.debug);
     assert.equal(properties.scope.default, 'runtime');
     assert.equal(properties.resultMode.default, 'grouped');
     assert.equal(properties.groupBy.default, 'symbol');
+    assert.equal(properties.rankingMode.default, 'auto_changed_first');
 
     const required = searchTool!.inputSchema.required as string[];
     assert.ok(required.includes('path'));

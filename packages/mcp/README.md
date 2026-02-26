@@ -6,6 +6,8 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 
 - Capability-driven execution via `CapabilityResolver`
 - Runtime-first `search_codebase` with explicit `scope`, `resultMode`, `groupBy`, and optional `debug` traces
+- Deterministic query-prefix operators in `search_codebase` (`lang:`, `path:`, `-path:`, `must:`, `exclude:`)
+- Default grouped-result diversity and auto changed-files ranking (`rankingMode="auto_changed_first"`)
 - First-class `call_graph` tool with deterministic node/edge sorting and TS/Python support
 - Sidecar-backed `file_outline` tool for per-file symbol navigation and direct call_graph jump handles
 - Snapshot v3 safety with index fingerprints and strict `requires_reindex` access gates
@@ -75,7 +77,7 @@ Manage index lifecycle operations (create/reindex/sync/status/clear) for a codeb
 
 ### `search_codebase`
 
-Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decisions. For runtime debugging, start with scope="runtime". If you need both runtime and docs context, use scope="mixed". If top results are dominated by tests/fixtures/docs, edit repo-root .satoriignore using your host/editor (examples, not exhaustive: **/*.test.*, **/*.spec.*, **/__tests__/**, **/__fixtures__/**, **/fixtures/**, coverage/**), wait one debounce window (MCP_WATCH_DEBOUNCE_MS, default 5000ms), then rerun search_codebase. For immediate convergence, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"}.
+Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decisions. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). For runtime debugging, start with scope="runtime". If you need both runtime and docs context, use scope="mixed". If top results are dominated by tests/fixtures/docs, edit repo-root .satoriignore using your host/editor (examples, not exhaustive: **/*.test.*, **/*.spec.*, **/__tests__/**, **/__fixtures__/**, **/fixtures/**, coverage/**), wait one debounce window (MCP_WATCH_DEBOUNCE_MS, default 5000ms), then rerun search_codebase. For immediate convergence, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"}.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -84,6 +86,7 @@ Unified semantic search with runtime/docs scope control, grouped/raw output mode
 | `scope` | enum("runtime", "mixed", "docs") | no | `"runtime"` | Search scope policy. runtime excludes docs/tests, docs returns docs/tests only, mixed includes all. |
 | `resultMode` | enum("grouped", "raw") | no | `"grouped"` | Output mode. grouped returns merged search groups, raw returns chunk hits. |
 | `groupBy` | enum("symbol", "file") | no | `"symbol"` | Grouping strategy in grouped mode. |
+| `rankingMode` | enum("default", "auto_changed_first") | no | `"auto_changed_first"` | Ranking policy. auto_changed_first boosts files changed in the current git working tree when available. |
 | `limit` | integer | no | `50` | Maximum groups (grouped mode) or chunks (raw mode). |
 | `debug` | boolean | no | `false` | Optional debug payload toggle for score and fusion breakdowns. |
 

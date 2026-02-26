@@ -17,6 +17,7 @@ import { DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint } from "../config.js";
 import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
+    SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_DIVERSITY_MAX_PER_FILE,
     SEARCH_DIVERSITY_MAX_PER_SYMBOL,
     SEARCH_DIVERSITY_RELAXED_FILE_CAP,
@@ -2243,7 +2244,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const changedFilesState = input.rankingMode === 'auto_changed_first'
                 ? this.getChangedFilesForCodebase(effectiveRoot)
                 : { available: false, files: new Set<string>() };
-            const changedFilesBoostEnabled = changedFilesState.available && changedFilesState.files.size > 0;
+            const changedFilesCount = changedFilesState.files.size;
+            const changedFilesBoostWithinThreshold = changedFilesCount > 0 && changedFilesCount <= SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES;
+            const changedFilesBoostEnabled = changedFilesState.available && changedFilesBoostWithinThreshold;
             let boostedCandidates = 0;
             let attemptsUsed = 0;
             const searchWarningsSet = new Set<string>();
@@ -2444,8 +2447,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     filterSummary,
                     changedFilesBoost: {
                         enabled: input.rankingMode === 'auto_changed_first',
+                        applied: changedFilesBoostEnabled,
                         available: changedFilesState.available,
-                        changedCount: changedFilesState.files.size,
+                        changedCount: changedFilesCount,
+                        maxChangedFilesForBoost: SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
+                        skippedForLargeChangeSet: changedFilesCount > SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
                         multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
                         boostedCandidates,
                     }

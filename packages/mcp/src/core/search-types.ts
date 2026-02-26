@@ -121,8 +121,11 @@ export interface SearchDebugHint {
     };
     changedFilesBoost: {
         enabled: boolean;
+        applied: boolean;
         available: boolean;
         changedCount: number;
+        maxChangedFilesForBoost: number;
+        skippedForLargeChangeSet: boolean;
         multiplier: number;
         boostedCandidates: number;
     };

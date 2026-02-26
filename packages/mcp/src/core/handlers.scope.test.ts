@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
 import { IndexFingerprint } from '../config.js';
+import { SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES } from './search-constants.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -517,6 +518,63 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
         });
         const defaultPayload = JSON.parse(defaultResponse.content[0]?.text || '{}');
         assert.equal(defaultPayload.results[0].file, 'src/unchanged.ts');
+    });
+});
+
+test('handleSearchCode auto_changed_first skips boost when changed file set exceeds threshold', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const unchanged = true;',
+                relativePath: 'src/unchanged.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_unchanged',
+                symbolLabel: 'const unchanged'
+            },
+            {
+                content: 'export const changed = true;',
+                relativePath: 'src/changed.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_changed',
+                symbolLabel: 'const changed'
+            }
+        ]);
+
+        const changedPaths = new Set<string>();
+        changedPaths.add('src/changed.ts');
+        for (let i = 0; i < SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES; i++) {
+            changedPaths.add(`src/extra-${i}.ts`);
+        }
+
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: changedPaths
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'changed symbol',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/unchanged.ts');
+        assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.enabled, true);
+        assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.applied, false);
+        assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.changedCount, SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES + 1);
+        assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.maxChangedFilesForBoost, SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES);
+        assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.skippedForLargeChangeSet, true);
     });
 });
 

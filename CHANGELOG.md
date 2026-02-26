@@ -2,6 +2,28 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Sole-User Retrieval Precision Upgrades (Deterministic)
+
+### Modified
+- Extended `search_codebase` query handling with deterministic prefix operators:
+  - `lang:`, `path:`, `-path:`, `must:`, `exclude:` (with quoted values and `\` escape for literal tokens).
+- Added bounded must-satisfaction retries with stable degraded warning:
+  - `FILTER_MUST_UNSATISFIED` when constraints remain unsatisfied after capped retries.
+- Added `rankingMode` input (`default` | `auto_changed_first`) and defaulted to `auto_changed_first` for changed-file-aware ranking.
+- Enabled deterministic grouped diversity selection by default (caps per file/symbol with one deterministic relaxation pass).
+- Added debug explainability payload under `debug:true` via `hints.debugSearch` (operator summary, filter summary, retries, changed-file boost, diversity summary).
+
+### Added
+- Added retrieval eval regression suite:
+  - `packages/mcp/src/core/search.eval.test.ts` with deterministic matrix checks for runtime/docs scope invariants and ranking determinism.
+
+### Tests
+- Added focused `handleSearchCode` coverage for:
+  - operator parsing + deterministic filter behavior,
+  - must retry degradation warning path,
+  - diversity default behavior,
+  - changed-files boost behavior vs `rankingMode:"default"`.
+
 ## [2026-02-26] Deterministic Jump Contract Tightening
 
 ### Release Versions

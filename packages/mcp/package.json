@@ -1,6 +1,6 @@
 {
     "name": "@zokizuan/satori-mcp",
-    "version": "3.5.0",
+    "version": "3.6.0",
     "description": "MCP server for Satori with agent-safe semantic search and indexing",
     "type": "module",
     "main": "dist/index.js",

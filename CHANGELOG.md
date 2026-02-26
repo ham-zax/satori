@@ -2,6 +2,25 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Ignore-Reconciliation Hardening (No-Reindex Path)
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.6.0`
+- `@zokizuan/satori-core`: `0.2.0`
+
+### Fixed
+- Hardened ignore-rule reconciliation to stay correct without full reindex in multi-codebase scenarios:
+  - ignore matcher state is now sourced from Context as the single authority (removed duplicate repo-ignore loading in SyncManager).
+  - reconciliation delete source is guaranteed from pre-reload indexed manifest state, preventing missed removals when post-reload synchronizer tracking changes.
+  - added self-healing delete behavior for paths now ignored by the active matcher.
+- Improved codebase identity and path normalization stability:
+  - canonical collection identity uses realpath-normalized roots.
+  - relative-path normalization now includes a symlink-safe fallback to resolved root when canonical-root relative calculation is invalid.
+
+### Tests
+- Added regression coverage for pre-reload manifest ordering during ignore reconciliation to prevent future deletion regressions.
+- Extended sync watcher/reconcile tests for ignore-change handling and deterministic outcomes.
+
 ## [2026-02-25] Language Adapter Registry and JavaScript Symbol Flow
 
 ### Release Versions

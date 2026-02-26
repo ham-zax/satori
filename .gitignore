@@ -67,6 +67,9 @@ CLAUDE.md
 .serena/
 .omc/
 
+# Local opencode config (may contain secrets)
+opencode.jsonc
+
 evaluation/repos
 repos
 

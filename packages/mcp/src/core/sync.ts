@@ -115,7 +115,8 @@ export class SyncManager {
                     return this.runIgnoreReconcile(codebasePath, 1, currentIgnoreControlSignature);
                 }
             } else if (
-                this.canScheduleWatchSync(codebasePath)
+                (this.snapshotManager.getCodebaseStatus(codebasePath) === 'indexed'
+                    || this.snapshotManager.getCodebaseStatus(codebasePath) === 'sync_completed')
                 && typeof this.snapshotManager.setCodebaseIgnoreControlSignature === 'function'
             ) {
                 this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
@@ -188,28 +189,26 @@ export class SyncManager {
         coalescedEdits: number = 1,
         nextIgnoreControlSignature?: string
     ): Promise<FreshnessDecision> {
-        const inFlight = this.activeIgnoreReconciles.get(codebasePath);
+        const reconcileKey = this.normalizeReconcileKey(codebasePath);
+        const inFlight = this.activeIgnoreReconciles.get(reconcileKey);
         const checkedAtMs = this.now();
         const checkedAt = new Date(checkedAtMs).toISOString();
 
         if (inFlight) {
-            await inFlight;
-            const lastSync = this.lastSyncTimes.get(codebasePath);
+            const inFlightResult = await inFlight;
             return {
+                ...inFlightResult,
                 mode: 'coalesced',
                 checkedAt,
-                thresholdMs: 0,
-                lastSyncAt: lastSync ? new Date(lastSync).toISOString() : undefined,
-                ageMs: lastSync ? Math.max(0, checkedAtMs - lastSync) : undefined,
             };
         }
 
         const promise = this.reconcileIgnoreRulesChange(codebasePath, coalescedEdits, nextIgnoreControlSignature);
-        this.activeIgnoreReconciles.set(codebasePath, promise);
+        this.activeIgnoreReconciles.set(reconcileKey, promise);
         try {
             return await promise;
         } finally {
-            this.activeIgnoreReconciles.delete(codebasePath);
+            this.activeIgnoreReconciles.delete(reconcileKey);
         }
     }
 
@@ -483,6 +482,15 @@ export class SyncManager {
         }
 
         return signatureParts.join('|');
+    }
+
+    private normalizeReconcileKey(codebasePath: string): string {
+        const resolved = path.resolve(codebasePath);
+        const root = path.parse(resolved).root;
+        if (resolved === root) {
+            return resolved;
+        }
+        return resolved.replace(/[\\/]+$/, '');
     }
 
     private normalizeRelativePath(codebasePath: string, candidatePath: string): string {

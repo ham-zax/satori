@@ -4,6 +4,9 @@ All notable changes to this repository are documented in this file.
 
 ## [2026-02-26] MCP Surface Simplification and Self-Healing Navigation
 
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.10.0`
+
 ### Modified
 - Simplified `search_codebase` rerank control to policy-only behavior:
   - removed public `useReranker` input from schema/handlers/docs/tests,

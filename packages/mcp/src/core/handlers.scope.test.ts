@@ -1203,6 +1203,18 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
     await withTempRepo(async (repoPath) => {
         const subdirPath = path.join(repoPath, 'src');
         fs.mkdirSync(subdirPath, { recursive: true });
+        const sidecarForPath = (requestedPath: string) => {
+            if (requestedPath === repoPath) {
+                return { version: 'v3' as const };
+            }
+            if (requestedPath === subdirPath) {
+                return undefined;
+            }
+            return undefined;
+        };
+        assert.deepEqual(sidecarForPath(repoPath), { version: 'v3' });
+        assert.equal(sidecarForPath(subdirPath), undefined);
+
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             semanticSearch: async () => ([
@@ -1223,9 +1235,7 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-            getCodebaseCallGraphSidecar: (requestedPath: string) => (
-                requestedPath === repoPath ? { version: 'v3' } : undefined
-            )
+            getCodebaseCallGraphSidecar: sidecarForPath
         } as any;
 
         const syncManager = {

@@ -76,6 +76,7 @@ export class SyncManager {
     private watcherIgnoreMatchers: Map<string, ReturnType<typeof ignore>> = new Map();
     private ignoreRulesVersions: Map<string, number> = new Map();
     private pendingIgnoreChangeEdits: Map<string, number> = new Map();
+    private activeIgnoreReconciles: Map<string, Promise<FreshnessDecision>> = new Map();
     private readonly now: () => number;
     private readonly onSyncCompleted?: (codebasePath: string, stats: { added: number; removed: number; modified: number; changedFiles: string[] }) => Promise<void> | void;
 
@@ -98,7 +99,7 @@ export class SyncManager {
         options: EnsureFreshnessOptions = {}
     ): Promise<FreshnessDecision> {
         if (options.reason === 'ignore_change') {
-            return this.reconcileIgnoreRulesChange(codebasePath, options.coalescedEdits);
+            return this.runIgnoreReconcile(codebasePath, options.coalescedEdits);
         }
 
         const checkedAtMs = this.now();
@@ -111,9 +112,12 @@ export class SyncManager {
             if (typeof persistedIgnoreControlSignature === 'string') {
                 if (persistedIgnoreControlSignature !== currentIgnoreControlSignature) {
                     console.log(`[SYNC] 🔁 Ignore control files changed for '${codebasePath}', running reconciliation.`);
-                    return this.reconcileIgnoreRulesChange(codebasePath, 1, currentIgnoreControlSignature);
+                    return this.runIgnoreReconcile(codebasePath, 1, currentIgnoreControlSignature);
                 }
-            } else if (typeof this.snapshotManager.setCodebaseIgnoreControlSignature === 'function') {
+            } else if (
+                this.canScheduleWatchSync(codebasePath)
+                && typeof this.snapshotManager.setCodebaseIgnoreControlSignature === 'function'
+            ) {
                 this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
                 this.snapshotManager.saveCodebaseSnapshot();
             }
@@ -177,6 +181,36 @@ export class SyncManager {
                 modified: outcome.stats.modified
             } : undefined,
         };
+    }
+
+    private async runIgnoreReconcile(
+        codebasePath: string,
+        coalescedEdits: number = 1,
+        nextIgnoreControlSignature?: string
+    ): Promise<FreshnessDecision> {
+        const inFlight = this.activeIgnoreReconciles.get(codebasePath);
+        const checkedAtMs = this.now();
+        const checkedAt = new Date(checkedAtMs).toISOString();
+
+        if (inFlight) {
+            await inFlight;
+            const lastSync = this.lastSyncTimes.get(codebasePath);
+            return {
+                mode: 'coalesced',
+                checkedAt,
+                thresholdMs: 0,
+                lastSyncAt: lastSync ? new Date(lastSync).toISOString() : undefined,
+                ageMs: lastSync ? Math.max(0, checkedAtMs - lastSync) : undefined,
+            };
+        }
+
+        const promise = this.reconcileIgnoreRulesChange(codebasePath, coalescedEdits, nextIgnoreControlSignature);
+        this.activeIgnoreReconciles.set(codebasePath, promise);
+        try {
+            return await promise;
+        } finally {
+            this.activeIgnoreReconciles.delete(codebasePath);
+        }
     }
 
     private async reconcileIgnoreRulesChange(
@@ -700,6 +734,7 @@ export class SyncManager {
         this.debounceTimers.clear();
         this.watcherIgnoreMatchers.clear();
         this.pendingIgnoreChangeEdits.clear();
+        this.activeIgnoreReconciles.clear();
 
         const watchers = Array.from(this.watchers.values());
         this.watchers.clear();

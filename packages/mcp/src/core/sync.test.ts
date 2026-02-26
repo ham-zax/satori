@@ -216,6 +216,26 @@ test('ensureFreshness baselines ignore control signature without forcing reconci
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
+test('ensureFreshness does not baseline ignore control signature for non-searchable states', async () => {
+    const codebasePath = createTempDir();
+    fs.writeFileSync(path.join(codebasePath, '.satoriignore'), 'dist/**\n', 'utf8');
+
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'requires_reindex']]);
+    const snapshot = createSnapshot(statusByPath);
+    const context = createContext();
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 60_000);
+    assert.equal(decision.mode, 'skipped_requires_reindex');
+    assert.equal(snapshot.getCodebaseIgnoreControlSignature(codebasePath), undefined);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
 test('ensureFreshness detects ignore control signature changes and reconciles before skipped_recent', async () => {
     const codebasePath = createTempDir();
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
@@ -276,6 +296,74 @@ test('ensureFreshness detects ignore control signature changes and reconciles be
     const updatedSignature = snapshot.getCodebaseIgnoreControlSignature(codebasePath);
     assert.equal(typeof updatedSignature, 'string');
     assert.notEqual(updatedSignature, baselineSignature);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness coalesces non-watcher ignore signature reconciles while one is in flight', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    snapshot.setCodebaseIndexManifest(codebasePath, ['src/keep.ts', 'src/ignored.ts']);
+
+    let activePatterns: string[] = [];
+    let trackedPaths = ['src/keep.ts', 'src/ignored.ts'];
+    let reloadCalls = 0;
+    let syncCalls = 0;
+    const deletedPaths: string[][] = [];
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return activePatterns;
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async reloadIgnoreRulesForCodebase() {
+            reloadCalls += 1;
+            activePatterns = ['src/ignored.ts'];
+            trackedPaths = ['src/keep.ts'];
+            await wait(40);
+            return activePatterns;
+        },
+        async recreateSynchronizerForCodebase() {
+            return;
+        },
+        async deleteIndexedPathsByRelativePaths(_codebasePath: string, relativePaths: string[]) {
+            deletedPaths.push(relativePaths.slice());
+            return relativePaths.length;
+        },
+        getTrackedRelativePaths() {
+            return trackedPaths.slice();
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+        }
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const baseline = await manager.ensureFreshness(codebasePath, 0);
+    assert.equal(baseline.mode, 'synced');
+    assert.equal(syncCalls, 1);
+
+    fs.writeFileSync(path.join(codebasePath, '.satoriignore'), 'src/ignored.ts\n', 'utf8');
+    const p1 = manager.ensureFreshness(codebasePath, 60_000);
+    await wait(5);
+    const p2 = manager.ensureFreshness(codebasePath, 60_000);
+
+    const first = await p1;
+    const second = await p2;
+
+    assert.equal(first.mode, 'reconciled_ignore_change');
+    assert.equal(second.mode, 'coalesced');
+    assert.equal(reloadCalls, 1);
+    assert.equal(syncCalls, 2);
+    assert.deepEqual(deletedPaths, [['src/ignored.ts']]);
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });

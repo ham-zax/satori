@@ -4,6 +4,10 @@ All notable changes to this repository are documented in this file.
 
 ## [2026-02-26] Deterministic Jump Contract Tightening
 
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.8.0`
+- `@zokizuan/satori-core`: `0.2.0`
+
 ### Modified
 - Hardened exact symbol resolution determinism in `file_outline(resolveMode:"exact")` by explicitly sorting exact matches before truncation/response emission.
 - Clarified `read_file.open_symbol` contract:

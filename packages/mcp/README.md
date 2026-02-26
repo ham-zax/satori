@@ -77,7 +77,7 @@ Manage index lifecycle operations (create/reindex/sync/status/clear) for a codeb
 
 ### `search_codebase`
 
-Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decisions. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). For runtime debugging, start with scope="runtime". If you need both runtime and docs context, use scope="mixed". If top results are dominated by tests/fixtures/docs, edit repo-root .satoriignore using your host/editor (examples, not exhaustive: **/*.test.*, **/*.spec.*, **/__tests__/**, **/__fixtures__/**, **/fixtures/**, coverage/**), wait one debounce window (MCP_WATCH_DEBOUNCE_MS, default 5000ms), then rerun search_codebase. For immediate convergence, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"}.
+Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decisions. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Neural reranker behavior can be controlled via useReranker (omit=auto, false=off, true=force when available). For runtime debugging, start with scope="runtime". If you need both runtime and docs context, use scope="mixed". If top results are dominated by tests/fixtures/docs, edit repo-root .satoriignore using your host/editor (examples, not exhaustive: **/*.test.*, **/*.spec.*, **/__tests__/**, **/__fixtures__/**, **/fixtures/**, coverage/**), wait one debounce window (MCP_WATCH_DEBOUNCE_MS, default 5000ms), then rerun search_codebase. For immediate convergence, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"}.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -87,6 +87,7 @@ Unified semantic search with runtime/docs scope control, grouped/raw output mode
 | `resultMode` | enum("grouped", "raw") | no | `"grouped"` | Output mode. grouped returns merged search groups, raw returns chunk hits. |
 | `groupBy` | enum("symbol", "file") | no | `"symbol"` | Grouping strategy in grouped mode. |
 | `rankingMode` | enum("default", "auto_changed_first") | no | `"auto_changed_first"` | Ranking policy. auto_changed_first boosts files changed in the current git working tree when available. |
+| `useReranker` | boolean | no |  | Optional neural reranker control. Omit for auto mode, set false to disable, set true to force enable when available. |
 | `limit` | integer | no | `50` | Maximum groups (grouped mode) or chunks (raw mode). |
 | `debug` | boolean | no | `false` | Optional debug payload toggle for score and fusion breakdowns. |
 

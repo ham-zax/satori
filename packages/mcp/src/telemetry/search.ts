@@ -8,6 +8,7 @@ export interface SearchTelemetryEvent {
     results_after_filter: number;
     results_returned: number;
     excluded_by_ignore: number;
+    reranker_attempted?: boolean;
     reranker_used: boolean;
     latency_ms: number;
     freshness_mode?: string;

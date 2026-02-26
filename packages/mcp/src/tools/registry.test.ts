@@ -70,11 +70,13 @@ test('search_codebase schema exposes scoped grouped/raw controls', () => {
     assert.ok(properties.resultMode);
     assert.ok(properties.groupBy);
     assert.ok(properties.rankingMode);
+    assert.ok(properties.useReranker);
     assert.ok(properties.debug);
     assert.equal(properties.scope.default, 'runtime');
     assert.equal(properties.resultMode.default, 'grouped');
     assert.equal(properties.groupBy.default, 'symbol');
     assert.equal(properties.rankingMode.default, 'auto_changed_first');
+    assert.equal(Object.prototype.hasOwnProperty.call(properties.useReranker, 'default'), false);
 
     const required = searchTool!.inputSchema.required as string[];
     assert.ok(required.includes('path'));

@@ -136,7 +136,6 @@ class ContextMcpServer {
                 }
             }
         });
-        this.toolHandlers = new ToolHandlers(this.context, this.snapshotManager, this.syncManager, this.runtimeFingerprint, () => Date.now(), this.callGraphManager);
 
         if (this.capabilities.hasReranker()) {
             this.reranker = new VoyageAIReranker({
@@ -145,6 +144,7 @@ class ContextMcpServer {
             });
             console.log(`[RERANKER] VoyageAI Reranker initialized with model: ${config.rankerModel || 'rerank-2.5'}`);
         }
+        this.toolHandlers = new ToolHandlers(this.context, this.snapshotManager, this.syncManager, this.runtimeFingerprint, () => Date.now(), this.callGraphManager, this.reranker);
 
         this.snapshotManager.loadCodebaseSnapshot();
 

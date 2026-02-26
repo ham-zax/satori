@@ -48,7 +48,7 @@ async function withEnv(vars: Record<string, string | undefined>, fn: () => Promi
     }
 }
 
-function createHandlers(repoPath: string, searchResults: any[]) {
+function createHandlers(repoPath: string, searchResults: any[], reranker?: any) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         semanticSearch: async () => searchResults
@@ -69,7 +69,7 @@ function createHandlers(repoPath: string, searchResults: any[]) {
         })
     } as any;
 
-    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'), undefined, reranker || null);
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }
@@ -575,6 +575,249 @@ test('handleSearchCode auto_changed_first skips boost when changed file set exce
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.changedCount, SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES + 1);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.maxChangedFilesForBoost, SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.skippedForLargeChangeSet, true);
+    });
+});
+
+test('getChangedFilesForCodebase ignores untracked git status entries for deterministic boost input', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, []);
+        const parsed = (handlers as any).parseGitStatusChangedPaths([
+            ' M src/changed.ts',
+            'R  src/old.ts -> src/renamed.ts',
+            '?? .satori/mcp-codebase-snapshot.json',
+            '?? coverage/lcov.info',
+        ].join('\n'));
+
+        assert.deepEqual(Array.from(parsed).sort(), ['src/changed.ts', 'src/renamed.ts']);
+    });
+});
+
+test('getChangedFilesForCodebase reuses stale cache on git status failure to avoid ranking flaps', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, []);
+        const cacheKey = path.resolve(repoPath);
+        (handlers as any).changedFilesCache.set(cacheKey, {
+            expiresAtMs: 0,
+            available: true,
+            files: new Set(['src/changed.ts'])
+        });
+
+        const state = (handlers as any).getChangedFilesForCodebase(repoPath);
+        assert.equal(state.available, true);
+        assert.deepEqual(Array.from(state.files).sort(), ['src/changed.ts']);
+    });
+});
+
+test('handleSearchCode auto mode skips reranker for docs scope unless explicitly enabled', async () => {
+    await withTempRepo(async (repoPath) => {
+        let rerankCalls = 0;
+        const reranker = {
+            rerank: async () => {
+                rerankCalls += 1;
+                return [
+                    { index: 1, relevanceScore: 0.9 },
+                    { index: 0, relevanceScore: 0.8 }
+                ];
+            }
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'first docs',
+                relativePath: 'docs/one.md',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_docs_one',
+                symbolLabel: 'docs one'
+            },
+            {
+                content: 'second docs',
+                relativePath: 'docs/two.md',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_docs_two',
+                symbolLabel: 'docs two'
+            }
+        ], reranker);
+
+        const autoResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'docs query',
+            scope: 'docs',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+        const autoPayload = JSON.parse(autoResponse.content[0]?.text || '{}');
+        assert.equal(rerankCalls, 0);
+        assert.equal(autoPayload.hints?.debugSearch?.rerank?.enabled, false);
+        assert.equal(autoPayload.hints?.debugSearch?.rerank?.scopeSkippedByDefault, true);
+        assert.equal(autoPayload.hints?.debugSearch?.rerank?.applied, false);
+
+        const forcedResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'docs query',
+            scope: 'docs',
+            useReranker: true,
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+        const forcedPayload = JSON.parse(forcedResponse.content[0]?.text || '{}');
+        assert.equal(rerankCalls, 1);
+        assert.equal(forcedPayload.hints?.debugSearch?.rerank?.enabled, true);
+        assert.equal(forcedPayload.hints?.debugSearch?.rerank?.applied, true);
+        assert.equal(forcedPayload.results[0].file, 'docs/two.md');
+    });
+});
+
+test('handleSearchCode emits warning when reranker is explicitly requested without capability', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'runtime one',
+                relativePath: 'src/one.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_one',
+                symbolLabel: 'one'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            useReranker: true,
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(Array.isArray(payload.warnings), true);
+        assert.equal(payload.warnings.includes('RERANKER_BLOCKED_NO_CAPABILITY'), true);
+    });
+});
+
+test('handleSearchCode degrades gracefully when reranker fails', async () => {
+    await withTempRepo(async (repoPath) => {
+        const reranker = {
+            rerank: async () => {
+                throw new Error('rerank failed');
+            }
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'runtime one',
+                relativePath: 'src/one.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_one',
+                symbolLabel: 'one'
+            },
+            {
+                content: 'runtime two',
+                relativePath: 'src/two.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_two',
+                symbolLabel: 'two'
+            }
+        ], reranker);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(Array.isArray(payload.warnings), true);
+        assert.equal(payload.warnings.includes('RERANKER_FAILED'), true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.attempted, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.applied, false);
+    });
+});
+
+test('handleSearchCode reranker can change grouped representative chunk selection before grouping', async () => {
+    await withTempRepo(async (repoPath) => {
+        const reranker = {
+            rerank: async () => [
+                { index: 1, relevanceScore: 0.9 },
+                { index: 0, relevanceScore: 0.8 }
+            ]
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'legacy auth flow',
+                relativePath: 'src/auth.ts',
+                startLine: 3,
+                endLine: 5,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_auth',
+                symbolLabel: 'function auth()'
+            },
+            {
+                content: 'critical token validation path',
+                relativePath: 'src/auth.ts',
+                startLine: 20,
+                endLine: 24,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_auth',
+                symbolLabel: 'function auth()'
+            }
+        ], reranker);
+
+        const baselineResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth path',
+            scope: 'runtime',
+            useReranker: false,
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1
+        });
+        const baselinePayload = JSON.parse(baselineResponse.content[0]?.text || '{}');
+        assert.equal(baselinePayload.results[0].preview.includes('legacy auth flow'), true);
+
+        const rerankedResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth path',
+            scope: 'runtime',
+            useReranker: true,
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1,
+            debug: true
+        });
+        const rerankedPayload = JSON.parse(rerankedResponse.content[0]?.text || '{}');
+        assert.equal(rerankedPayload.results[0].preview.includes('critical token validation path'), true);
+        assert.equal(rerankedPayload.hints?.debugSearch?.rerank?.applied, true);
     });
 });
 

@@ -2,6 +2,41 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Neural Reranker Integration (Post-Filter, Pre-Group)
+
+### Modified
+- Integrated VoyageAI neural reranking into `search_codebase` candidate flow:
+  - runs after hard filters (`scope/path/must/exclude`) and must-retry expansion settles,
+  - runs before grouping/diversity selection,
+  - applies rank-only rerank signal with deterministic tie-breaking.
+- Hardened deterministic response stability in `search_codebase` by:
+  - normalizing warnings with sorted unique ordering before envelope emission,
+  - using nullable-safe path tie-break comparators in candidate and group ranking sorts.
+- Stabilized `auto_changed_first` ranking inputs to reduce run-to-run ordering drift:
+  - git changed-file discovery now reads tracked changes only (`--untracked-files=no`),
+  - transient git-status failures now reuse cached changed-file state instead of flipping boost availability to empty.
+- Added reranker control input:
+  - `useReranker` (`true` force, `false` disable, omitted = auto),
+  - auto mode skips `scope:"docs"` by default unless explicitly forced.
+- Added deterministic reranker configuration constants:
+  - `SEARCH_RERANK_TOP_K = 50`,
+  - `SEARCH_RERANK_RRF_K = 10`,
+  - `SEARCH_RERANK_WEIGHT = 1.0`,
+  - bounded rerank document construction (`max lines/chars`).
+- Fixed MCP server initialization ordering so `ToolHandlers` receives initialized reranker instances (preventing silent no-rerank runtime behavior).
+- Updated telemetry to emit real reranker diagnostics:
+  - `reranker_attempted`,
+  - `reranker_used`.
+
+### Added
+- Added/expanded test coverage for reranker behavior:
+  - docs-scope auto skip + explicit enable,
+  - missing-capability warning path,
+  - reranker-failure degraded path,
+  - representative chunk change before grouping,
+  - telemetry reranker usage reporting,
+  - changed-files boost determinism guards (ignore untracked status entries + stale-cache fallback on git-status failures).
+
 ## [2026-02-26] Sole-User Retrieval Precision Upgrades (Deterministic)
 
 ### Modified

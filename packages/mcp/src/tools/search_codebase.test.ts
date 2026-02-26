@@ -87,12 +87,68 @@ test('search_codebase emits telemetry with diagnostics from handler meta', async
     assert.equal(telemetry.length, 1);
     const payload = JSON.parse(telemetry[0].replace(/^\[TELEMETRY\]\s*/, ''));
     assert.equal(payload.event, 'search_executed');
+    assert.equal(payload.reranker_attempted, false);
     assert.equal(payload.reranker_used, false);
     assert.equal(payload.results_before_filter, 5);
     assert.equal(payload.results_after_filter, 1);
     assert.equal(payload.results_returned, 1);
     assert.equal(payload.excluded_by_ignore, 4);
     assert.equal(payload.freshness_mode, 'skipped_recent');
+});
+
+test('search_codebase telemetry reports reranker_used when handler diagnostics indicate rerank applied', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+
+    const ctx = {
+        capabilities,
+        reranker: null,
+        toolHandlers: {
+            handleSearchCode: async () => ({
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        status: 'ok',
+                        path: '/repo',
+                        query: 'auth',
+                        scope: 'runtime',
+                        groupBy: 'symbol',
+                        resultMode: 'grouped',
+                        limit: 10,
+                        freshnessDecision: { mode: 'skipped_recent' },
+                        results: [{ kind: 'group', groupId: 'sym_auth', file: 'src/auth.ts' }]
+                    })
+                }],
+                meta: {
+                    searchDiagnostics: {
+                        resultsBeforeFilter: 3,
+                        resultsAfterFilter: 1,
+                        excludedByIgnore: 2,
+                        freshnessMode: 'skipped_recent',
+                        rerankerAttempted: true,
+                        rerankerUsed: true
+                    }
+                }
+            })
+        }
+    } as unknown as ToolContext;
+
+    const telemetry = await captureTelemetry(async () => {
+        const response = await searchCodebaseTool.execute({
+            path: '/repo',
+            query: 'auth',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 10
+        }, ctx);
+
+        assert.equal(response.isError, undefined);
+    });
+
+    assert.equal(telemetry.length, 1);
+    const payload = JSON.parse(telemetry[0].replace(/^\[TELEMETRY\]\s*/, ''));
+    assert.equal(payload.reranker_attempted, true);
+    assert.equal(payload.reranker_used, true);
 });
 
 test('search_codebase falls back to parsed JSON response for telemetry diagnostics', async () => {

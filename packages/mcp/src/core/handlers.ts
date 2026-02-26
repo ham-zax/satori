@@ -6,6 +6,7 @@ import ignore from "ignore";
 import {
     Context,
     COLLECTION_LIMIT_MESSAGE,
+    VoyageAIReranker,
     getSupportedExtensionsForCapability,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForLanguage,
@@ -29,6 +30,11 @@ import {
     SEARCH_NOISE_HINT_TOP_K,
     SEARCH_OPERATOR_PREFIX_MAX_CHARS,
     SEARCH_PROXIMITY_WINDOW,
+    SEARCH_RERANK_DOC_MAX_CHARS,
+    SEARCH_RERANK_DOC_MAX_LINES,
+    SEARCH_RERANK_RRF_K,
+    SEARCH_RERANK_TOP_K,
+    SEARCH_RERANK_WEIGHT,
     SEARCH_RRF_K,
     SCOPE_PATH_MULTIPLIERS,
     STALENESS_THRESHOLDS_MS,
@@ -235,6 +241,7 @@ export class ToolHandlers {
     private currentWorkspace: string;
     private readonly now: () => number;
     private readonly callGraphManager: CallGraphSidecarManager;
+    private readonly reranker: VoyageAIReranker | null;
     private readonly changedFilesCache = new Map<string, {
         expiresAtMs: number;
         available: boolean;
@@ -247,7 +254,8 @@ export class ToolHandlers {
         syncManager: SyncManager,
         runtimeFingerprint: IndexFingerprint,
         now: () => number = () => Date.now(),
-        callGraphManager?: CallGraphSidecarManager
+        callGraphManager?: CallGraphSidecarManager,
+        reranker?: VoyageAIReranker | null
     ) {
         this.context = context;
         this.snapshotManager = snapshotManager;
@@ -256,6 +264,7 @@ export class ToolHandlers {
         this.currentWorkspace = process.cwd();
         this.now = now;
         this.callGraphManager = callGraphManager || new CallGraphSidecarManager(runtimeFingerprint, { now });
+        this.reranker = reranker || null;
         console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`);
     }
 
@@ -903,6 +912,55 @@ export class ToolHandlers {
         return false;
     }
 
+    private resolveRerankDecision(useReranker: boolean | undefined, scope: SearchScope): {
+        enabled: boolean;
+        scopeSkippedByDefault: boolean;
+        blockedByMissingCapability: boolean;
+    } {
+        if (useReranker === false) {
+            return {
+                enabled: false,
+                scopeSkippedByDefault: false,
+                blockedByMissingCapability: false
+            };
+        }
+
+        if (useReranker === true) {
+            return {
+                enabled: this.reranker !== null,
+                scopeSkippedByDefault: false,
+                blockedByMissingCapability: this.reranker === null
+            };
+        }
+
+        if (scope === 'docs') {
+            return {
+                enabled: false,
+                scopeSkippedByDefault: true,
+                blockedByMissingCapability: false
+            };
+        }
+
+        return {
+            enabled: this.reranker !== null,
+            scopeSkippedByDefault: false,
+            blockedByMissingCapability: false
+        };
+    }
+
+    private buildRerankDocument(result: any): string {
+        const relativePath = typeof result?.relativePath === 'string' ? result.relativePath : '';
+        const language = typeof result?.language === 'string' ? result.language : 'unknown';
+        const symbolLabel = typeof result?.symbolLabel === 'string' ? result.symbolLabel : '';
+        const content = typeof result?.content === 'string' ? result.content : '';
+        const contentLines = content.split(/\r?\n/).slice(0, SEARCH_RERANK_DOC_MAX_LINES);
+        let normalizedContent = contentLines.join('\n');
+        if (normalizedContent.length > SEARCH_RERANK_DOC_MAX_CHARS) {
+            normalizedContent = normalizedContent.slice(0, SEARCH_RERANK_DOC_MAX_CHARS);
+        }
+        return `${relativePath}\n${language}\n${symbolLabel}\n${normalizedContent}`;
+    }
+
     private buildOperatorSummary(operators: ParsedSearchOperators): SearchOperatorSummary {
         return {
             prefixBlockChars: operators.prefixBlockChars,
@@ -912,6 +970,42 @@ export class ToolHandlers {
             must: [...operators.must],
             exclude: [...operators.exclude],
         };
+    }
+
+    private parseGitStatusChangedPaths(stdout: string): Set<string> {
+        const files = new Set<string>();
+        const lines = stdout.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.length > 0);
+        for (const line of lines) {
+            if (line.length < 4) {
+                continue;
+            }
+            const status = line.slice(0, 2);
+            if (status === '??' || status === '!!') {
+                continue;
+            }
+
+            let rawPath = line.slice(3).trim();
+            if (rawPath.length === 0) {
+                continue;
+            }
+
+            if (rawPath.includes(" -> ")) {
+                const parts = rawPath.split(" -> ");
+                rawPath = parts[parts.length - 1].trim();
+            }
+
+            if (rawPath.startsWith("\"") && rawPath.endsWith("\"") && rawPath.length >= 2) {
+                rawPath = rawPath.slice(1, -1).replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
+            }
+
+            const normalizedPath = rawPath.replace(/\\/g, "/").replace(/^\/+/, "");
+            if (normalizedPath.length === 0 || normalizedPath.startsWith("..")) {
+                continue;
+            }
+
+            files.add(normalizedPath);
+        }
+        return files;
     }
 
     private getChangedFilesForCodebase(codebasePath: string): { available: boolean; files: Set<string> } {
@@ -925,37 +1019,11 @@ export class ToolHandlers {
         try {
             const stdout = execFileSync(
                 "git",
-                ["-C", cacheKey, "status", "--porcelain"],
+                ["-C", cacheKey, "status", "--porcelain", "--untracked-files=no"],
                 { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
             );
 
-            const files = new Set<string>();
-            const lines = stdout.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.length > 0);
-            for (const line of lines) {
-                if (line.length < 4) {
-                    continue;
-                }
-                let rawPath = line.slice(3).trim();
-                if (rawPath.length === 0) {
-                    continue;
-                }
-
-                if (rawPath.includes(" -> ")) {
-                    const parts = rawPath.split(" -> ");
-                    rawPath = parts[parts.length - 1].trim();
-                }
-
-                if (rawPath.startsWith("\"") && rawPath.endsWith("\"") && rawPath.length >= 2) {
-                    rawPath = rawPath.slice(1, -1).replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
-                }
-
-                const normalizedPath = rawPath.replace(/\\/g, "/").replace(/^\/+/, "");
-                if (normalizedPath.length === 0 || normalizedPath.startsWith("..")) {
-                    continue;
-                }
-
-                files.add(normalizedPath);
-            }
+            const files = this.parseGitStatusChangedPaths(stdout);
 
             this.changedFilesCache.set(cacheKey, {
                 expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
@@ -964,6 +1032,14 @@ export class ToolHandlers {
             });
             return { available: true, files };
         } catch {
+            if (cached) {
+                this.changedFilesCache.set(cacheKey, {
+                    expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
+                    available: cached.available,
+                    files: new Set(cached.files),
+                });
+                return { available: cached.available, files: new Set(cached.files) };
+            }
             this.changedFilesCache.set(cacheKey, {
                 expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
                 available: false,
@@ -2080,6 +2156,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         const resultMode = (args?.resultMode || 'grouped') as SearchResultMode;
         const groupBy = (args?.groupBy || 'symbol') as SearchGroupBy;
         const rankingMode = (args?.rankingMode || 'auto_changed_first') as SearchRankingMode;
+        const useReranker = typeof args?.useReranker === 'boolean' ? args.useReranker : undefined;
         const debug = args?.debug === true;
         const input: SearchRequestInput = {
             path: args?.path,
@@ -2088,6 +2165,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             resultMode,
             groupBy,
             rankingMode,
+            useReranker,
             limit: Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 10,
             debug,
         };
@@ -2119,6 +2197,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             searchPassCount: 0,
             searchPassSuccessCount: 0,
             searchPassFailureCount: 0,
+            rerankerAttempted: false,
+            rerankerUsed: false,
         };
 
         try {
@@ -2405,7 +2485,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
                 scored.sort((a, b) => {
                     if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
-                    const fileCmp = a.result.relativePath.localeCompare(b.result.relativePath);
+                    const fileCmp = this.compareNullableStringsAsc(a.result.relativePath, b.result.relativePath);
                     if (fileCmp !== 0) return fileCmp;
                     const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
                     if (startCmp !== 0) return startCmp;
@@ -2424,13 +2504,68 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 );
             }
 
-            searchDiagnostics.excludedByIgnore = Math.max(0, searchDiagnostics.resultsBeforeFilter - searchDiagnostics.resultsAfterFilter);
             const searchWarnings = Array.from(searchWarningsSet);
+            const rerankDecision = this.resolveRerankDecision(input.useReranker, input.scope);
+            let rerankerApplied = false;
+            let rerankerAttempted = false;
+            if (rerankDecision.blockedByMissingCapability) {
+                searchWarnings.push('RERANKER_BLOCKED_NO_CAPABILITY');
+            }
+
+            if (rerankDecision.enabled && scored.length > 0 && this.reranker) {
+                rerankerAttempted = true;
+                try {
+                    const rerankCount = Math.min(SEARCH_RERANK_TOP_K, scored.length);
+                    const rerankSlice = scored.slice(0, rerankCount);
+                    const rerankDocuments = rerankSlice.map((candidate) => this.buildRerankDocument(candidate.result));
+                    const rerankResults = await this.reranker.rerank(semanticQuery, rerankDocuments, {
+                        topK: rerankCount,
+                        truncation: true,
+                        returnDocuments: false
+                    });
+                    const rerankRanks = new Map<number, number>();
+                    for (let idx = 0; idx < rerankResults.length; idx++) {
+                        const originalIndex = rerankResults[idx]?.index;
+                        if (Number.isInteger(originalIndex) && originalIndex >= 0 && originalIndex < rerankCount && !rerankRanks.has(originalIndex)) {
+                            rerankRanks.set(originalIndex, idx + 1);
+                        }
+                    }
+
+                    for (let idx = 0; idx < rerankSlice.length; idx++) {
+                        const rank = rerankRanks.get(idx);
+                        if (!rank) {
+                            continue;
+                        }
+                        const rerankRrf = 1 / (SEARCH_RERANK_RRF_K + rank);
+                        rerankSlice[idx].fusionScore += SEARCH_RERANK_WEIGHT * rerankRrf;
+                        rerankSlice[idx].finalScore = rerankSlice[idx].fusionScore * rerankSlice[idx].pathMultiplier * rerankSlice[idx].changedFilesMultiplier;
+                    }
+
+                    scored.sort((a, b) => {
+                        if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+                        const fileCmp = this.compareNullableStringsAsc(a.result.relativePath, b.result.relativePath);
+                        if (fileCmp !== 0) return fileCmp;
+                        const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
+                        if (startCmp !== 0) return startCmp;
+                        const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
+                        if (labelCmp !== 0) return labelCmp;
+                        return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
+                    });
+                    rerankerApplied = true;
+                } catch {
+                    searchWarnings.push('RERANKER_FAILED');
+                }
+            }
+
+            searchDiagnostics.excludedByIgnore = Math.max(0, searchDiagnostics.resultsBeforeFilter - searchDiagnostics.resultsAfterFilter);
+            searchDiagnostics.rerankerAttempted = rerankerAttempted;
+            searchDiagnostics.rerankerUsed = rerankerApplied;
             const mustApplied = parsedOperators.must.length > 0;
             const mustSatisfied = !mustApplied || scored.length > 0;
             if (mustApplied && !mustSatisfied) {
                 searchWarnings.push('FILTER_MUST_UNSATISFIED');
             }
+            const finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
 
             const debugHintBase: SearchDebugHint | undefined = input.debug
                 ? {
@@ -2454,7 +2589,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         skippedForLargeChangeSet: changedFilesCount > SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
                         multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
                         boostedCandidates,
-                    }
+                    },
+                    rerank: {
+                        enabled: rerankDecision.enabled,
+                        attempted: rerankerAttempted,
+                        applied: rerankerApplied,
+                        scopeSkippedByDefault: rerankDecision.scopeSkippedByDefault,
+                        topK: SEARCH_RERANK_TOP_K,
+                        rankK: SEARCH_RERANK_RRF_K,
+                        weight: SEARCH_RERANK_WEIGHT,
+                        docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
+                        docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+                    },
                 }
                 : undefined;
 
@@ -2505,7 +2651,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit,
                     resultMode: "raw",
                     freshnessDecision,
-                    ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {}),
+                    ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
                     ...(Object.keys(responseHints).length > 0 ? { hints: responseHints } : {}),
                     results: rawResults
                 };
@@ -2548,7 +2694,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         return a.passesMatchedMust ? -1 : 1;
                     }
                     if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
-                    const fileCmp = a.result.relativePath.localeCompare(b.result.relativePath);
+                    const fileCmp = this.compareNullableStringsAsc(a.result.relativePath, b.result.relativePath);
                     if (fileCmp !== 0) return fileCmp;
                     const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
                     if (startCmp !== 0) return startCmp;
@@ -2647,7 +2793,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 limit: input.limit,
                 resultMode: "grouped",
                 freshnessDecision,
-                ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {}),
+                ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
                 ...(Object.keys(responseHints).length > 0 ? { hints: responseHints } : {}),
                 results: visibleGroupedResults
             };

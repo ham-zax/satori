@@ -129,6 +129,17 @@ export interface SearchDebugHint {
         multiplier: number;
         boostedCandidates: number;
     };
+    rerank?: {
+        enabled: boolean;
+        attempted: boolean;
+        applied: boolean;
+        scopeSkippedByDefault: boolean;
+        topK: number;
+        rankK: number;
+        weight: number;
+        docMaxLines: number;
+        docMaxChars: number;
+    };
 }
 
 export interface SearchResponseHints extends Record<string, unknown> {
@@ -170,6 +181,7 @@ export interface SearchRequestInput {
     resultMode: SearchResultMode;
     groupBy: SearchGroupBy;
     rankingMode: SearchRankingMode;
+    useReranker?: boolean;
     limit: number;
     debug?: boolean;
 }

@@ -49,15 +49,14 @@ test('search_codebase and manage_index descriptions include ignore-remediation g
 
     assert.match(searchTool!.description, /\.satoriignore/);
     assert.match(searchTool!.description, /scope=\"runtime\"/);
-    assert.match(searchTool!.description, /scope=\"mixed\"/);
+    assert.match(searchTool!.description, /runtime-first/i);
     assert.match(searchTool!.description, /must:/);
-    assert.match(searchTool!.description, /MCP_WATCH_DEBOUNCE_MS/);
-    assert.match(searchTool!.description, /action\":\"sync\"/);
+    assert.match(searchTool!.description, /debug:true/i);
+    assert.match(searchTool!.description, /hints/i);
 
     assert.match(manageTool!.description, /Ignore-rule edits/i);
-    assert.match(manageTool!.description, /no full reindex required/i);
-    assert.match(manageTool!.description, /action=\"sync\"/);
-    assert.match(manageTool!.description, /action=\"reindex\"/);
+    assert.match(manageTool!.description, /normal sync path/i);
+    assert.match(manageTool!.description, /full rebuild recovery/i);
 });
 
 test('search_codebase schema exposes scoped grouped/raw controls', () => {
@@ -70,13 +69,12 @@ test('search_codebase schema exposes scoped grouped/raw controls', () => {
     assert.ok(properties.resultMode);
     assert.ok(properties.groupBy);
     assert.ok(properties.rankingMode);
-    assert.ok(properties.useReranker);
     assert.ok(properties.debug);
     assert.equal(properties.scope.default, 'runtime');
     assert.equal(properties.resultMode.default, 'grouped');
     assert.equal(properties.groupBy.default, 'symbol');
     assert.equal(properties.rankingMode.default, 'auto_changed_first');
-    assert.equal(Object.prototype.hasOwnProperty.call(properties.useReranker, 'default'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(properties, 'useReranker'), false);
 
     const required = searchTool!.inputSchema.required as string[];
     assert.ok(required.includes('path'));
@@ -100,6 +98,15 @@ test('read_file schema includes optional start_line and end_line parameters', ()
     assert.deepEqual(required, ['path']);
     assert.equal(Object.prototype.hasOwnProperty.call(properties.start_line, 'default'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(properties.end_line, 'default'), false);
+});
+
+test('manage_index schema does not expose deprecated splitter knob', () => {
+    const tools = getMcpToolList(buildContext());
+    const manageIndexTool = tools.find((tool) => tool.name === 'manage_index');
+    assert.ok(manageIndexTool);
+
+    const properties = manageIndexTool!.inputSchema.properties as Record<string, any>;
+    assert.equal(Object.prototype.hasOwnProperty.call(properties, 'splitter'), false);
 });
 
 test('file_outline schema exposes path/file and line window controls', () => {

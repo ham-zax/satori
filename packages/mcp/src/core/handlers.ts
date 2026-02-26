@@ -77,6 +77,7 @@ const ZILLIZ_FREE_TIER_COLLECTION_LIMIT = 5;
 const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability('fileOutline');
 const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
 const SEARCH_OPERATOR_KEYS = new Set(['lang', 'path', '-path', 'must', 'exclude']);
+const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
 
 type ParsedSearchOperators = {
     semanticQuery: string;
@@ -916,28 +917,23 @@ export class ToolHandlers {
         return false;
     }
 
-    private resolveRerankDecision(useReranker: boolean | undefined, scope: SearchScope): {
+    private resolveRerankDecision(scope: SearchScope): {
+        enabledByPolicy: boolean;
+        skippedByScopeDocs: boolean;
+        capabilityPresent: boolean;
+        rerankerPresent: boolean;
         enabled: boolean;
-        scopeSkippedByDefault: boolean;
-        blockedByMissingCapability: boolean;
     } {
-        // Docs-scope reranking is skipped by default; forcing requires explicit `useReranker:true`.
-        if (scope === 'docs' && useReranker === undefined) {
-            return {
-                enabled: false,
-                scopeSkippedByDefault: true,
-                blockedByMissingCapability: false
-            };
-        }
-
-        const decision = this.capabilities.resolveRerankDecision(useReranker);
-        const enabled = decision.enabled && this.reranker !== null;
-        const blockedByMissingCapability =
-            decision.blockedByMissingCapability || (decision.enabled && this.reranker === null);
+        const capabilityPresent = this.capabilities.hasReranker();
+        const enabledByPolicy = capabilityPresent && this.capabilities.getDefaultRerankEnabled();
+        const rerankerPresent = this.reranker !== null;
+        const skippedByScopeDocs = scope === 'docs';
         return {
-            enabled,
-            scopeSkippedByDefault: false,
-            blockedByMissingCapability
+            enabledByPolicy,
+            skippedByScopeDocs,
+            capabilityPresent,
+            rerankerPresent,
+            enabled: enabledByPolicy && rerankerPresent && !skippedByScopeDocs,
         };
     }
 
@@ -1176,6 +1172,71 @@ export class ToolHandlers {
                 span
             }
         };
+    }
+
+    private sanitizeIndexedRelativeFilePath(relativeFilePath: string): string | undefined {
+        const normalized = this.normalizeRelativeFilePath(relativeFilePath);
+        if (!normalized || path.isAbsolute(normalized)) {
+            return undefined;
+        }
+        const compact = path.posix.normalize(normalized).replace(/^\.\/+/, '').trim();
+        if (!compact || compact === '..' || compact.startsWith('../')) {
+            return undefined;
+        }
+        return compact;
+    }
+
+    private buildNavigationFallback(
+        codebaseRoot: string,
+        relativeFilePath: string,
+        span: SearchSpan,
+        callGraphHint: CallGraphHint,
+        sidecarReadyForOutline: boolean
+    ): SearchGroupResult['navigationFallback'] | undefined {
+        if (callGraphHint.supported) {
+            return undefined;
+        }
+
+        const normalizedFile = this.sanitizeIndexedRelativeFilePath(relativeFilePath);
+        if (!normalizedFile) {
+            return undefined;
+        }
+
+        const safeStartLine = Number.isFinite(span.startLine) ? Math.max(1, Number(span.startLine)) : 1;
+        const safeEndLine = Number.isFinite(span.endLine) ? Math.max(safeStartLine, Number(span.endLine)) : safeStartLine;
+        const absolutePath = path.resolve(codebaseRoot, normalizedFile);
+
+        const fallback: SearchGroupResult['navigationFallback'] = {
+            message: NAVIGATION_FALLBACK_MESSAGE,
+            context: {
+                codebaseRoot,
+                relativeFile: normalizedFile,
+                absolutePath,
+            },
+            readSpan: {
+                tool: 'read_file',
+                args: {
+                    path: absolutePath,
+                    start_line: safeStartLine,
+                    end_line: safeEndLine,
+                }
+            }
+        };
+
+        if (sidecarReadyForOutline && this.getOutlineStatusForLanguage(normalizedFile) === 'ok') {
+            fallback.fileOutlineWindow = {
+                tool: 'file_outline',
+                args: {
+                    path: codebaseRoot,
+                    file: normalizedFile,
+                    start_line: safeStartLine,
+                    end_line: safeEndLine,
+                    resolveMode: 'outline',
+                }
+            };
+        }
+
+        return fallback;
     }
 
     private normalizeRelativeFilePath(relativeFilePath: string): string {
@@ -1788,9 +1849,8 @@ Agent instructions:
     }
 
     public async handleIndexCodebase(args: any) {
-        const { path: codebasePath, force, splitter, customExtensions, ignorePatterns, zillizDropCollection } = args;
+        const { path: codebasePath, force, customExtensions, ignorePatterns, zillizDropCollection } = args;
         const forceReindex = force || false;
-        const splitterType = splitter || 'ast'; // Default to AST
         const customFileExtensions = customExtensions || [];
         const customIgnorePatterns = ignorePatterns || [];
         const requestedDropCollection = typeof zillizDropCollection === 'string' ? zillizDropCollection.trim() : undefined;
@@ -1800,16 +1860,6 @@ Agent instructions:
             // Sync indexed codebases from cloud first
             await this.syncIndexedCodebasesFromCloud();
 
-            // Validate splitter parameter
-            if (splitterType !== 'ast' && splitterType !== 'langchain') {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Invalid splitter type '${splitterType}'. Must be 'ast' or 'langchain'.`
-                    }],
-                    isError: true
-                };
-            }
             // Force absolute path resolution - warn if relative path provided
             const absolutePath = ensureAbsolutePath(codebasePath);
 
@@ -1994,7 +2044,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             trackCodebasePath(absolutePath);
 
             // Start background indexing - now safe to proceed
-            this.startBackgroundIndexing(absolutePath, forceReindex, splitterType);
+            this.startBackgroundIndexing(absolutePath, forceReindex);
 
             const pathInfo = codebasePath !== absolutePath
                 ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
@@ -2011,7 +2061,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             return {
                 content: [{
                     type: "text",
-                    text: `Started background indexing for codebase '${absolutePath}' using ${splitterType.toUpperCase()} splitter.${pathInfo}${dropSummaryLine}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`
+                    text: `Started background indexing for codebase '${absolutePath}'.${pathInfo}${dropSummaryLine}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`
                 }]
             };
 
@@ -2031,7 +2081,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         }
     }
 
-    private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean, splitterType: string) {
+    private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean) {
         const absolutePath = codebasePath;
         let lastSaveTime = 0; // Track last save timestamp
 
@@ -2043,11 +2093,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 console.log(`[BACKGROUND-INDEX] ℹ️  Force reindex mode - collection was already cleared during validation`);
             }
 
-            // Use the existing Context instance for indexing.
-            let contextForThisTask = this.context;
-            if (splitterType !== 'ast') {
-                console.warn(`[BACKGROUND-INDEX] Non-AST splitter '${splitterType}' requested; falling back to AST splitter`);
-            }
+            const contextForThisTask = this.context;
 
             // Load ignore patterns from files first (including .ignore, .gitignore, etc.)
             await this.context.loadResolvedIgnorePatterns(absolutePath);
@@ -2063,11 +2109,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             await this.context.ensureCollectionPrepared(absolutePath);
             const collectionName = this.context.resolveCollectionName(absolutePath);
             this.context.registerSynchronizer(collectionName, synchronizer);
-            if (contextForThisTask !== this.context) {
-                contextForThisTask.registerSynchronizer(collectionName, synchronizer);
-            }
 
-            console.log(`[BACKGROUND-INDEX] Starting indexing with ${splitterType} splitter for: ${absolutePath}`);
+            console.log(`[BACKGROUND-INDEX] Starting indexing for: ${absolutePath}`);
 
             // Log embedding provider information before indexing
             const encoderEngine = this.context.getEmbeddingEngine();
@@ -2106,7 +2149,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             await this.rebuildCallGraphForIndex(absolutePath);
             await this.syncManager.registerCodebaseWatcher(absolutePath);
 
-            let message = `Background indexing completed for '${absolutePath}' using ${splitterType.toUpperCase()} splitter.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`;
+            let message = `Background indexing completed for '${absolutePath}'.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`;
             if (stats.status === 'limit_reached') {
                 message += `\n⚠️  Warning: Indexing stopped because the chunk limit (450,000) was reached. The index may be incomplete.`;
             }
@@ -2133,11 +2176,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
     }
 
     public async handleReindexCodebase(args: any) {
-        const { path: codebasePath, splitter, customExtensions, ignorePatterns, zillizDropCollection } = args;
+        const { path: codebasePath, customExtensions, ignorePatterns, zillizDropCollection } = args;
         return this.handleIndexCodebase({
             path: codebasePath,
             force: true,
-            splitter,
             customExtensions,
             ignorePatterns,
             zillizDropCollection
@@ -2149,7 +2191,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         const resultMode = (args?.resultMode || 'grouped') as SearchResultMode;
         const groupBy = (args?.groupBy || 'symbol') as SearchGroupBy;
         const rankingMode = (args?.rankingMode || 'auto_changed_first') as SearchRankingMode;
-        const useReranker = typeof args?.useReranker === 'boolean' ? args.useReranker : undefined;
         const debug = args?.debug === true;
         const input: SearchRequestInput = {
             path: args?.path,
@@ -2158,7 +2199,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             resultMode,
             groupBy,
             rankingMode,
-            useReranker,
             limit: Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 10,
             debug,
         };
@@ -2498,18 +2538,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             const searchWarnings = Array.from(searchWarningsSet);
-            const rerankDecision = this.resolveRerankDecision(input.useReranker, input.scope);
+            const rerankDecision = this.resolveRerankDecision(input.scope);
             let rerankerApplied = false;
             let rerankerAttempted = false;
             let rerankerFailurePhase: 'api_call' | 'parse_results' | undefined;
-            if (rerankDecision.blockedByMissingCapability) {
-                searchWarnings.push('RERANKER_BLOCKED_NO_CAPABILITY');
-            }
+            let rerankerCandidatesIn = scored.length;
+            let rerankerCandidatesReranked = 0;
 
             if (rerankDecision.enabled && scored.length > 0 && this.reranker) {
                 rerankerAttempted = true;
                 try {
                     const rerankCount = Math.min(SEARCH_RERANK_TOP_K, scored.length);
+                    rerankerCandidatesReranked = rerankCount;
                     const rerankSlice = scored.slice(0, rerankCount);
                     const rerankDocuments = rerankSlice.map((candidate) => this.buildRerankDocument(candidate.result));
                     let rerankResults: Array<{ index: number }> = [];
@@ -2600,10 +2640,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         boostedCandidates,
                     },
                     rerank: {
+                        enabledByPolicy: rerankDecision.enabledByPolicy,
+                        skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
+                        capabilityPresent: rerankDecision.capabilityPresent,
+                        rerankerPresent: rerankDecision.rerankerPresent,
                         enabled: rerankDecision.enabled,
                         attempted: rerankerAttempted,
                         applied: rerankerApplied,
-                        scopeSkippedByDefault: rerankDecision.scopeSkippedByDefault,
+                        candidatesIn: rerankerCandidatesIn,
+                        candidatesReranked: rerankerCandidatesReranked,
                         topK: SEARCH_RERANK_TOP_K,
                         rankK: SEARCH_RERANK_RRF_K,
                         weight: SEARCH_RERANK_WEIGHT,
@@ -2697,6 +2742,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
             }
 
+            const sidecarInfo = typeof (this.snapshotManager as any).getCodebaseCallGraphSidecar === 'function'
+                ? (this.snapshotManager as any).getCodebaseCallGraphSidecar(effectiveRoot)
+                : undefined;
+            const sidecarReadyForOutline = Boolean(sidecarInfo && sidecarInfo.version === 'v3');
             const groupedResults: SearchGroupResult[] = [];
             for (const group of groups.values()) {
                 group.chunks.sort((a, b) => {
@@ -2738,6 +2787,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     repSymbolId || undefined,
                     repSymbolLabel || undefined
                 );
+                const navigationFallback = this.buildNavigationFallback(
+                    effectiveRoot,
+                    representative.result.relativePath,
+                    span,
+                    callGraphHint,
+                    sidecarReadyForOutline
+                );
 
                 groupedResults.push({
                     kind: "group",
@@ -2752,6 +2808,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     stalenessBucket: this.getStalenessBucket(indexedAtMax),
                     collapsedChunkCount: group.chunks.length,
                     callGraphHint,
+                    ...(navigationFallback ? { navigationFallback } : {}),
                     preview: truncateContent(String(representative.result.content || ''), 4000),
                     ...(input.debug ? {
                         debug: {

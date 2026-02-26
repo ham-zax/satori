@@ -54,6 +54,7 @@ export interface SearchGroupResult {
     stalenessBucket: StalenessBucket;
     collapsedChunkCount: number;
     callGraphHint: CallGraphHint;
+    navigationFallback?: SearchNavigationFallback;
     preview: string;
     debug?: {
         representativeChunkCount: number;
@@ -63,6 +64,39 @@ export interface SearchGroupResult {
         changedFilesMultiplier?: number;
         matchesMust?: boolean;
     };
+}
+
+export interface SearchNavigationFallbackContext {
+    codebaseRoot: string;
+    relativeFile: string;
+    absolutePath?: string;
+}
+
+export interface SearchNavigationFallbackReadSpan {
+    tool: "read_file";
+    args: {
+        path: string;
+        start_line: number;
+        end_line: number;
+    };
+}
+
+export interface SearchNavigationFallbackFileOutlineWindow {
+    tool: "file_outline";
+    args: {
+        path: string;
+        file: string;
+        start_line: number;
+        end_line: number;
+        resolveMode: "outline";
+    };
+}
+
+export interface SearchNavigationFallback {
+    message: string;
+    context: SearchNavigationFallbackContext;
+    readSpan: SearchNavigationFallbackReadSpan;
+    fileOutlineWindow?: SearchNavigationFallbackFileOutlineWindow;
 }
 
 export interface FingerprintCompatibilityDiagnostics {
@@ -130,10 +164,15 @@ export interface SearchDebugHint {
         boostedCandidates: number;
     };
     rerank?: {
+        enabledByPolicy: boolean;
+        skippedByScopeDocs: boolean;
+        capabilityPresent: boolean;
+        rerankerPresent: boolean;
         enabled: boolean;
         attempted: boolean;
         applied: boolean;
-        scopeSkippedByDefault: boolean;
+        candidatesIn: number;
+        candidatesReranked: number;
         errorCode?: "RERANKER_FAILED";
         failurePhase?: "api_call" | "parse_results";
         topK: number;
@@ -183,7 +222,6 @@ export interface SearchRequestInput {
     resultMode: SearchResultMode;
     groupBy: SearchGroupBy;
     rankingMode: SearchRankingMode;
-    useReranker?: boolean;
     limit: number;
     debug?: boolean;
 }

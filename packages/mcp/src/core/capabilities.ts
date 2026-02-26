@@ -91,28 +91,4 @@ export class CapabilityResolver {
     public getDefaultRerankEnabled(): boolean {
         return this.matrix.defaultRerankEnabled;
     }
-
-    public resolveRerankDecision(useReranker: boolean | undefined): {
-        enabled: boolean;
-        blockedByMissingCapability: boolean;
-    } {
-        if (useReranker === true) {
-            return {
-                enabled: this.hasReranker(),
-                blockedByMissingCapability: !this.hasReranker()
-            };
-        }
-
-        if (useReranker === false) {
-            return {
-                enabled: false,
-                blockedByMissingCapability: false
-            };
-        }
-
-        return {
-            enabled: this.getDefaultRerankEnabled(),
-            blockedByMissingCapability: false
-        };
-    }
 }

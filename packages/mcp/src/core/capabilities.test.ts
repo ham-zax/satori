@@ -18,41 +18,27 @@ function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig
     };
 }
 
-test('capability resolver auto-reranks when flag is omitted on fast profile', () => {
+test('capability resolver enables default rerank on fast profile with reranker capability', () => {
     const resolver = new CapabilityResolver(baseConfig());
-    const decision = resolver.resolveRerankDecision(undefined);
 
     assert.equal(resolver.hasReranker(), true);
     assert.equal(resolver.getPerformanceProfile(), 'fast');
-    assert.equal(decision.enabled, true);
-    assert.equal(decision.blockedByMissingCapability, false);
+    assert.equal(resolver.getDefaultRerankEnabled(), true);
 });
 
-test('capability resolver respects explicit useReranker=false', () => {
-    const resolver = new CapabilityResolver(baseConfig());
-    const decision = resolver.resolveRerankDecision(false);
-
-    assert.equal(decision.enabled, false);
-    assert.equal(decision.blockedByMissingCapability, false);
-});
-
-test('capability resolver blocks explicit rerank request when reranker capability is missing', () => {
+test('capability resolver disables default rerank when reranker capability is missing', () => {
     const resolver = new CapabilityResolver(baseConfig({ voyageKey: undefined }));
-    const decision = resolver.resolveRerankDecision(true);
 
     assert.equal(resolver.hasReranker(), false);
-    assert.equal(decision.enabled, false);
-    assert.equal(decision.blockedByMissingCapability, true);
+    assert.equal(resolver.getDefaultRerankEnabled(), false);
 });
 
-test('capability resolver disables auto-rerank on slow profile when omitted', () => {
+test('capability resolver disables default rerank on slow profile', () => {
     const resolver = new CapabilityResolver(baseConfig({
         encoderProvider: 'Ollama',
         voyageKey: 'voyage-key'
     }));
-    const decision = resolver.resolveRerankDecision(undefined);
 
     assert.equal(resolver.getPerformanceProfile(), 'slow');
-    assert.equal(decision.enabled, false);
-    assert.equal(decision.blockedByMissingCapability, false);
+    assert.equal(resolver.getDefaultRerankEnabled(), false);
 });

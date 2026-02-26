@@ -624,7 +624,7 @@ test('getChangedFilesForCodebase reuses stale cache on git status failure to avo
     });
 });
 
-test('handleSearchCode auto mode skips reranker for docs scope unless explicitly enabled', async () => {
+test('handleSearchCode policy mode skips reranker for docs scope even when capability is present', async () => {
     await withTempRepo(async (repoPath) => {
         let rerankCalls = 0;
         const reranker = {
@@ -672,29 +672,17 @@ test('handleSearchCode auto mode skips reranker for docs scope unless explicitly
         });
         const autoPayload = JSON.parse(autoResponse.content[0]?.text || '{}');
         assert.equal(rerankCalls, 0);
+        assert.equal(autoPayload.hints?.debugSearch?.rerank?.enabledByPolicy, true);
+        assert.equal(autoPayload.hints?.debugSearch?.rerank?.capabilityPresent, true);
+        assert.equal(autoPayload.hints?.debugSearch?.rerank?.rerankerPresent, true);
         assert.equal(autoPayload.hints?.debugSearch?.rerank?.enabled, false);
-        assert.equal(autoPayload.hints?.debugSearch?.rerank?.scopeSkippedByDefault, true);
+        assert.equal(autoPayload.hints?.debugSearch?.rerank?.skippedByScopeDocs, true);
+        assert.equal(autoPayload.hints?.debugSearch?.rerank?.attempted, false);
         assert.equal(autoPayload.hints?.debugSearch?.rerank?.applied, false);
-
-        const forcedResponse = await handlers.handleSearchCode({
-            path: repoPath,
-            query: 'docs query',
-            scope: 'docs',
-            useReranker: true,
-            resultMode: 'grouped',
-            groupBy: 'symbol',
-            limit: 2,
-            debug: true
-        });
-        const forcedPayload = JSON.parse(forcedResponse.content[0]?.text || '{}');
-        assert.equal(rerankCalls, 1);
-        assert.equal(forcedPayload.hints?.debugSearch?.rerank?.enabled, true);
-        assert.equal(forcedPayload.hints?.debugSearch?.rerank?.applied, true);
-        assert.equal(forcedPayload.results[0].file, 'docs/two.md');
     });
 });
 
-test('handleSearchCode emits warning when reranker is explicitly requested without capability', async () => {
+test('handleSearchCode debug exposes missing reranker capability without warning noise', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [
             {
@@ -714,15 +702,20 @@ test('handleSearchCode emits warning when reranker is explicitly requested witho
             path: repoPath,
             query: 'runtime',
             scope: 'runtime',
-            useReranker: true,
             resultMode: 'grouped',
             groupBy: 'symbol',
-            limit: 1
+            limit: 1,
+            debug: true
         });
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
-        assert.equal(Array.isArray(payload.warnings), true);
-        assert.equal(payload.warnings.includes('RERANKER_BLOCKED_NO_CAPABILITY'), true);
+        assert.equal(payload.warnings, undefined);
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabledByPolicy, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.capabilityPresent, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.rerankerPresent, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabled, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.attempted, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.applied, false);
     });
 });
 
@@ -771,6 +764,10 @@ test('handleSearchCode degrades gracefully when reranker fails', async () => {
         assert.equal(payload.status, 'ok');
         assert.equal(Array.isArray(payload.warnings), true);
         assert.equal(payload.warnings.includes('RERANKER_FAILED'), true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabledByPolicy, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.capabilityPresent, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.rerankerPresent, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabled, true);
         assert.equal(payload.hints?.debugSearch?.rerank?.attempted, true);
         assert.equal(payload.hints?.debugSearch?.rerank?.applied, false);
         assert.equal(payload.hints?.debugSearch?.rerank?.errorCode, 'RERANKER_FAILED');
@@ -845,6 +842,9 @@ test('handleSearchCode marks rerank.enabled=false when reranker instance is miss
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabledByPolicy, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.capabilityPresent, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.rerankerPresent, false);
         assert.equal(payload.hints?.debugSearch?.rerank?.enabled, false);
         assert.equal(payload.hints?.debugSearch?.rerank?.attempted, false);
         assert.equal(payload.hints?.debugSearch?.rerank?.applied, false);
@@ -859,7 +859,7 @@ test('handleSearchCode reranker can change grouped representative chunk selectio
                 { index: 0, relevanceScore: 0.8 }
             ]
         };
-        const handlers = createHandlers(repoPath, [
+        const searchResults = [
             {
                 content: 'legacy auth flow',
                 relativePath: 'src/auth.ts',
@@ -882,13 +882,14 @@ test('handleSearchCode reranker can change grouped representative chunk selectio
                 symbolId: 'sym_auth',
                 symbolLabel: 'function auth()'
             }
-        ], reranker);
+        ];
+        const handlersWithoutReranker = createHandlers(repoPath, searchResults);
+        const handlersWithReranker = createHandlers(repoPath, searchResults, reranker);
 
-        const baselineResponse = await handlers.handleSearchCode({
+        const baselineResponse = await handlersWithoutReranker.handleSearchCode({
             path: repoPath,
             query: 'auth path',
             scope: 'runtime',
-            useReranker: false,
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 1
@@ -896,11 +897,10 @@ test('handleSearchCode reranker can change grouped representative chunk selectio
         const baselinePayload = JSON.parse(baselineResponse.content[0]?.text || '{}');
         assert.equal(baselinePayload.results[0].preview.includes('legacy auth flow'), true);
 
-        const rerankedResponse = await handlers.handleSearchCode({
+        const rerankedResponse = await handlersWithReranker.handleSearchCode({
             path: repoPath,
             query: 'auth path',
             scope: 'runtime',
-            useReranker: true,
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 1,
@@ -908,6 +908,10 @@ test('handleSearchCode reranker can change grouped representative chunk selectio
         });
         const rerankedPayload = JSON.parse(rerankedResponse.content[0]?.text || '{}');
         assert.equal(rerankedPayload.results[0].preview.includes('critical token validation path'), true);
+        assert.equal(rerankedPayload.hints?.debugSearch?.rerank?.enabledByPolicy, true);
+        assert.equal(rerankedPayload.hints?.debugSearch?.rerank?.capabilityPresent, true);
+        assert.equal(rerankedPayload.hints?.debugSearch?.rerank?.rerankerPresent, true);
+        assert.equal(rerankedPayload.hints?.debugSearch?.rerank?.enabled, true);
         assert.equal(rerankedPayload.hints?.debugSearch?.rerank?.applied, true);
     });
 });
@@ -1117,6 +1121,150 @@ test('handleSearchCode grouped fallback emits stable hash groupId and unsupporte
         assert.equal(firstPayload.results[0].groupId, secondPayload.results[0].groupId);
         assert.equal(firstPayload.results[0].callGraphHint.supported, false);
         assert.equal(firstPayload.results[0].callGraphHint.reason, 'missing_symbol');
+        assert.equal(firstPayload.results[0].navigationFallback.message, 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.');
+        assert.equal(firstPayload.results[0].navigationFallback.context.codebaseRoot, repoPath);
+        assert.equal(firstPayload.results[0].navigationFallback.context.relativeFile, 'src/runtime.ts');
+        assert.equal(firstPayload.results[0].navigationFallback.context.absolutePath, path.resolve(repoPath, 'src/runtime.ts'));
+        assert.deepEqual(firstPayload.results[0].navigationFallback.readSpan, {
+            tool: 'read_file',
+            args: {
+                path: path.resolve(repoPath, 'src/runtime.ts'),
+                start_line: 42,
+                end_line: 45
+            }
+        });
+        assert.equal(firstPayload.results[0].navigationFallback.fileOutlineWindow, undefined);
+    });
+});
+
+test('handleSearchCode emits fileOutlineWindow navigation fallback when sidecar is v3 and file supports outline', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => ([
+                {
+                    content: 'const value = computeToken();',
+                    relativePath: 'src/runtime.ts',
+                    startLine: 10,
+                    endLine: 14,
+                    language: 'typescript',
+                    score: 0.88,
+                    indexedAt: '2026-01-01T00:30:00.000Z'
+                }
+            ])
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            getCodebaseCallGraphSidecar: () => ({ version: 'v3' })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'compute token',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 10
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].callGraphHint.supported, false);
+        assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol');
+        assert.deepEqual(payload.results[0].navigationFallback.fileOutlineWindow, {
+            tool: 'file_outline',
+            args: {
+                path: repoPath,
+                file: 'src/runtime.ts',
+                start_line: 10,
+                end_line: 14,
+                resolveMode: 'outline'
+            }
+        });
+    });
+});
+
+test('handleSearchCode subdirectory query builds navigationFallback from effectiveRoot and preserves relative file', async () => {
+    await withTempRepo(async (repoPath) => {
+        const subdirPath = path.join(repoPath, 'src');
+        fs.mkdirSync(subdirPath, { recursive: true });
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => ([
+                {
+                    content: 'const value = computeToken();',
+                    relativePath: 'src/runtime.ts',
+                    startLine: 10,
+                    endLine: 14,
+                    language: 'typescript',
+                    score: 0.88,
+                    indexedAt: '2026-01-01T00:30:00.000Z'
+                }
+            ])
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            getCodebaseCallGraphSidecar: (requestedPath: string) => (
+                requestedPath === repoPath ? { version: 'v3' } : undefined
+            )
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: subdirPath,
+            query: 'compute token',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 10
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, 'src/runtime.ts');
+        assert.equal(payload.results[0].navigationFallback.context.codebaseRoot, repoPath);
+        assert.equal(payload.results[0].navigationFallback.context.relativeFile, 'src/runtime.ts');
+        assert.equal(payload.results[0].navigationFallback.context.absolutePath, path.resolve(repoPath, 'src/runtime.ts'));
+        assert.equal(payload.results[0].navigationFallback.readSpan.args.path, path.resolve(repoPath, 'src/runtime.ts'));
+        assert.deepEqual(payload.results[0].navigationFallback.fileOutlineWindow, {
+            tool: 'file_outline',
+            args: {
+                path: repoPath,
+                file: 'src/runtime.ts',
+                start_line: 10,
+                end_line: 14,
+                resolveMode: 'outline'
+            }
+        });
     });
 });
 

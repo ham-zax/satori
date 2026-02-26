@@ -2,6 +2,37 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] MCP Surface Simplification and Self-Healing Navigation
+
+### Modified
+- Simplified `search_codebase` rerank control to policy-only behavior:
+  - removed public `useReranker` input from schema/handlers/docs/tests,
+  - docs-scope now deterministically skips reranking by policy,
+  - expanded debug observability under `hints.debugSearch.rerank` (`enabledByPolicy`, capability/instance flags, attempted/applied, candidate counts, and failure phase).
+- Removed `manage_index.splitter` from the public contract and indexing handlers:
+  - public create/reindex flow is AST-based without user-selectable splitter knobs,
+  - removed splitter validation/fallback log paths from MCP handler flow.
+- Added deterministic grouped-result navigation recovery when call graph traversal is unavailable:
+  - new `results[].navigationFallback` sibling field (kept separate from `callGraphHint`),
+  - always includes runnable `readSpan`,
+  - includes `fileOutlineWindow` only when outline extension support and v3 sidecar readiness are both present.
+- Hardened `read_file` annotated/open_symbol remediation hints:
+  - removed misleading `path.dirname(file)` reindex advice,
+  - emits structured runnable `hints.nextSteps` tool calls,
+  - treats `indexing` roots as discovery-only (status check suggested, no forced reindex step),
+  - filters non-searchable candidate roots out of remediation steps.
+
+### Compatibility Notes
+- `search_codebase.useReranker` and `manage_index.splitter` are removed from the public schema.
+- Older clients sending these fields are ignored by the non-strict input parsing path and receive no behavioral override from them.
+
+### Tests
+- Updated contract tests for schema/tool-description drift removal (`useReranker`, `splitter`).
+- Added deterministic coverage for:
+  - rerank policy debug-state contracts,
+  - grouped `navigationFallback` shape/gating,
+  - structured `read_file` remediation `nextSteps` behavior.
+
 ## [2026-02-26] Core Sync Determinism and Hash-on-Change Refactor
 
 ### Release Versions

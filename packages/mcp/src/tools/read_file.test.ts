@@ -211,6 +211,9 @@ test('read_file annotated mode degrades gracefully when outline is unavailable',
         assert.match(payload.content, /const value = 1;/);
         assert.equal(payload.outlineStatus, 'requires_reindex');
         assert.equal(payload.outline, null);
+        assert.deepEqual(payload.hints?.nextSteps, [
+            { tool: 'list_codebases', args: {} }
+        ]);
     });
 });
 
@@ -328,5 +331,87 @@ test('read_file open_symbol returns explicit error on ambiguous symbol resolutio
 
         assert.equal(response.isError, true);
         assert.match(response.content[0].text, /"status": "ambiguous"/);
+    });
+});
+
+test('read_file open_symbol unresolved root returns structured runnable nextSteps without placeholders', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => []
+            } as any
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'requires_reindex');
+        assert.deepEqual(payload.hints?.nextSteps, [
+            { tool: 'list_codebases', args: {} }
+        ]);
+    });
+});
+
+test('read_file annotated mode ignores non-searchable candidate roots in nextSteps', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'const value = 1;\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            mode: 'annotated'
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [
+                    { path: repoPath, info: { status: 'requires_reindex' } }
+                ]
+            } as any
+        });
+
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.outlineStatus, 'requires_reindex');
+        assert.deepEqual(payload.hints?.nextSteps, [
+            { tool: 'list_codebases', args: {} }
+        ]);
+    });
+});
+
+test('read_file open_symbol unresolved root with single indexing candidate omits reindex step', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [
+                    { path: repoPath, info: { status: 'indexing' } }
+                ]
+            } as any
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'requires_reindex');
+        assert.deepEqual(payload.hints?.nextSteps, [
+            { tool: 'manage_index', args: { action: 'status', path: repoPath } }
+        ]);
     });
 });

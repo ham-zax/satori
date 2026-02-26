@@ -50,32 +50,81 @@ function normalizeRelativePath(value: string): string {
     return value.replace(/\\/g, "/");
 }
 
+type ReadFileSearchableStatus = 'indexed' | 'sync_completed' | 'indexing';
+type ReadFileCodebaseCandidate = {
+    path: string;
+    status: ReadFileSearchableStatus;
+};
+
+const READ_FILE_DISCOVERY_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed', 'indexing']);
+const READ_FILE_RESOLVE_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed']);
+
+function toReadFileSearchableStatus(status: unknown): ReadFileSearchableStatus | undefined {
+    if (status === 'indexed' || status === 'sync_completed' || status === 'indexing') {
+        return status;
+    }
+    return undefined;
+}
+
+function collectCodebaseCandidatesForFile(
+    absolutePath: string,
+    ctx: ToolContext,
+    allowedStatuses: ReadonlySet<ReadFileSearchableStatus>
+): ReadFileCodebaseCandidate[] {
+    const allCodebases = typeof ctx.snapshotManager?.getAllCodebases === "function"
+        ? ctx.snapshotManager.getAllCodebases()
+        : [];
+    if (!Array.isArray(allCodebases)) {
+        return [];
+    }
+
+    const candidates: ReadFileCodebaseCandidate[] = [];
+    for (const item of allCodebases) {
+        if (!item || typeof item.path !== "string") {
+            continue;
+        }
+        const candidatePath = ensureAbsolutePath(item.path);
+        if (!(absolutePath === candidatePath || absolutePath.startsWith(`${candidatePath}${path.sep}`))) {
+            continue;
+        }
+        const status = toReadFileSearchableStatus(item.info?.status);
+        if (!status || !allowedStatuses.has(status)) {
+            continue;
+        }
+        candidates.push({ path: candidatePath, status });
+    }
+
+    candidates.sort((a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path));
+    return candidates;
+}
+
+function buildRootDiscoveryNextSteps(absolutePath: string, ctx: ToolContext): Array<{ tool: string; args: Record<string, unknown> }> {
+    const candidates = collectCodebaseCandidatesForFile(absolutePath, ctx, READ_FILE_DISCOVERY_STATUSES);
+    if (candidates.length !== 1) {
+        return [{ tool: "list_codebases", args: {} }];
+    }
+
+    const [{ path: candidateRoot, status }] = candidates;
+    const nextSteps: Array<{ tool: string; args: Record<string, unknown> }> = [
+        { tool: "manage_index", args: { action: "status", path: candidateRoot } }
+    ];
+    if (status !== 'indexing') {
+        nextSteps.push({ tool: "manage_index", args: { action: "reindex", path: candidateRoot } });
+    }
+    return nextSteps;
+}
+
 function isOutlineSupportedFile(absolutePath: string): boolean {
     const ext = path.extname(absolutePath).toLowerCase();
     return isLanguageCapabilitySupportedForExtension(ext, "fileOutline");
 }
 
 function resolveCodebaseRootForFile(absolutePath: string, ctx: ToolContext): string | undefined {
-    const allCodebases = typeof ctx.snapshotManager?.getAllCodebases === "function"
-        ? ctx.snapshotManager.getAllCodebases()
-        : [];
-    if (!Array.isArray(allCodebases)) {
+    const candidates = collectCodebaseCandidatesForFile(absolutePath, ctx, READ_FILE_RESOLVE_STATUSES);
+    if (candidates.length === 0) {
         return undefined;
     }
-
-    const matches = allCodebases
-        .map((item) => (item && typeof item.path === "string") ? ensureAbsolutePath(item.path) : undefined)
-        .filter((candidate): candidate is string => Boolean(candidate))
-        .filter((candidate) => {
-            return absolutePath === candidate || absolutePath.startsWith(`${candidate}${path.sep}`);
-        });
-
-    if (matches.length === 0) {
-        return undefined;
-    }
-
-    matches.sort((a, b) => b.length - a.length);
-    return matches[0];
+    return candidates[0].path;
 }
 
 export const readFileTool: McpTool = {
@@ -168,6 +217,7 @@ export const readFileTool: McpTool = {
                         ? normalizeRelativePath(path.relative(resolvedRoot, absolutePath))
                         : undefined;
                     if (!resolvedRoot || !relativeFile) {
+                        const nextSteps = buildRootDiscoveryNextSteps(absolutePath, ctx);
                         return {
                             content: [{
                                 type: "text",
@@ -175,11 +225,7 @@ export const readFileTool: McpTool = {
                                     status: "requires_reindex",
                                     message: "Cannot resolve codebase root for open_symbol. Resolve the indexed repo root first via list_codebases/manage_index status, then reindex that root and retry.",
                                     hints: {
-                                        nextSteps: [
-                                            "Call list_codebases or manage_index { action: \"status\", path: <repo-root> } to find the indexed root.",
-                                            "Run manage_index { action: \"reindex\", path: <repo-root> }.",
-                                            "Retry read_file with open_symbol."
-                                        ]
+                                        nextSteps
                                     }
                                 }, null, 2)
                             }],
@@ -257,14 +303,9 @@ export const readFileTool: McpTool = {
                 outlineStatus = "unsupported";
             } else if (!resolvedRoot || !relativeFile) {
                 outlineStatus = "requires_reindex";
+                const nextSteps = buildRootDiscoveryNextSteps(absolutePath, ctx);
                 hints = {
-                    reindex: {
-                        tool: "manage_index",
-                        args: {
-                            action: "reindex",
-                            path: path.dirname(absolutePath),
-                        },
-                    },
+                    nextSteps
                 };
             } else {
                 try {

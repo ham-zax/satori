@@ -224,14 +224,19 @@ test('integration: reindex_by_change tracks add/modify/remove deltas', async () 
     await context.indexCodebase(codebasePath);
 
     const baseline = await context.reindexByChange(codebasePath);
-    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0 });
+    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0, changedFiles: [] });
 
     fs.writeFileSync(path.join(codebasePath, 'src/service.ts'), 'export const version = 2;', 'utf8');
     fs.rmSync(path.join(codebasePath, 'src/obsolete.ts'));
     fs.writeFileSync(path.join(codebasePath, 'src/new.ts'), 'export const featureFlag = true;', 'utf8');
 
     const delta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(delta, { added: 1, removed: 1, modified: 1 });
+    assert.deepEqual(delta, {
+      added: 1,
+      removed: 1,
+      modified: 1,
+      changedFiles: ['src/new.ts', 'src/obsolete.ts', 'src/service.ts'],
+    });
 
     const results = await context.semanticSearch(codebasePath, 'feature flag', 5, 0);
     assert.ok(results.some((result) => result.relativePath === 'src/new.ts'));
@@ -277,11 +282,11 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
 
     fs.writeFileSync(path.join(codebasePath, 'generated/drop.ts'), 'export const dropped = false;', 'utf8');
     const ignoredOnlyDelta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(ignoredOnlyDelta, { added: 0, removed: 0, modified: 0 });
+    assert.deepEqual(ignoredOnlyDelta, { added: 0, removed: 0, modified: 0, changedFiles: [] });
 
     fs.writeFileSync(path.join(codebasePath, 'generated/keep.ts'), 'export const kept = 2;', 'utf8');
     const negatedDelta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(negatedDelta, { added: 0, removed: 0, modified: 1 });
+    assert.deepEqual(negatedDelta, { added: 0, removed: 0, modified: 1, changedFiles: ['generated/keep.ts'] });
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }

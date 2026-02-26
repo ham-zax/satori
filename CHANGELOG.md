@@ -2,6 +2,32 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Core Sync Determinism and Hash-on-Change Refactor
+
+### Modified
+- Replaced full-content rehash-on-every-sync in `@zokizuan/satori-core` `FileSynchronizer` with a stat-first flow:
+  - scans file metadata first,
+  - reuses prior hashes when stat signatures are unchanged,
+  - hashes bytes only for changed/new candidates.
+- Replaced Merkle DAG serialization/compare with deterministic `merkleRoot` computation from sorted `(relativePath, hash)` entries.
+- Added canonical codebase-path snapshot identity alignment (realpath-normalized path hashing), matching collection identity behavior.
+- Added deterministic partial-scan preservation semantics:
+  - unreadable paths/directories no longer create bogus `removed` churn,
+  - unscanned prefixes are normalized, segment-safe, sorted, and compressed.
+- Extended synchronizer diagnostics/controls:
+  - `checkForChanges` now emits `hashedCount`, `partialScan`, `unscannedDirPrefixes`, and `fullHashRun`,
+  - added optional env controls `SATORI_SYNC_HASH_CONCURRENCY` and `SATORI_SYNC_FULL_HASH_EVERY_N`.
+- Migrated synchronizer snapshot state to v2 (`fileHashes`, `fileStats`, `merkleRoot`, partial-scan metadata, counter) with backward-compatible load/migration behavior.
+
+### Tests
+- Added deterministic integration coverage in `tests/integration/synchronizer.integration.test.mjs` for:
+  - unchanged-run no-rehash behavior,
+  - restart detection correctness,
+  - binary hashing update detection,
+  - partial-scan preservation,
+  - segment-safe prefix handling (`a` vs `ab`).
+- Updated `reindex_by_change` integration assertions to include `changedFiles` in expected payloads.
+
 ## [2026-02-26] Neural Reranker Integration (Post-Filter, Pre-Group)
 
 ### Modified

@@ -4,6 +4,9 @@ All notable changes to this repository are documented in this file.
 
 ## [2026-02-26] Core Sync Determinism and Hash-on-Change Refactor
 
+### Release Versions
+- `@zokizuan/satori-core`: `0.3.0`
+
 ### Modified
 - Replaced full-content rehash-on-every-sync in `@zokizuan/satori-core` `FileSynchronizer` with a stat-first flow:
   - scans file metadata first,

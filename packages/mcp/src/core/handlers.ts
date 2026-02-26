@@ -12,15 +12,19 @@ import {
 import { SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
 import { SyncManager } from "./sync.js";
-import { IndexFingerprint } from "../config.js";
+import { DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint } from "../config.js";
 import {
     SEARCH_MAX_CANDIDATES,
+    SEARCH_NOISE_HINT_PATTERNS,
+    SEARCH_NOISE_HINT_THRESHOLD,
+    SEARCH_NOISE_HINT_TOP_K,
     SEARCH_PROXIMITY_WINDOW,
     SEARCH_RRF_K,
     SCOPE_PATH_MULTIPLIERS,
     STALENESS_THRESHOLDS_MS,
     PathCategory,
     SearchGroupBy,
+    SearchNoiseCategory,
     SearchResultMode,
     SearchScope
 } from "./search-constants.js";
@@ -33,6 +37,7 @@ import {
     FileOutlineSymbolResult,
     SearchChunkResult,
     SearchGroupResult,
+    SearchNoiseMitigationHint,
     SearchRequestInput,
     SearchResponseEnvelope,
     SearchSpan,
@@ -576,6 +581,11 @@ export class ToolHandlers {
             || normalizedPath.endsWith('.min.css');
     }
 
+    private isFixturePath(normalizedPath: string): boolean {
+        return this.hasPathSegment(normalizedPath, 'fixtures')
+            || this.hasPathSegment(normalizedPath, '__fixtures__');
+    }
+
     private isEntrypointPath(normalizedPath: string): boolean {
         const entryNames = ['main.', 'index.', 'app.', 'server.', 'cli.', 'entry.'];
         const baseName = normalizedPath.split('/').pop() || '';
@@ -591,6 +601,74 @@ export class ToolHandlers {
         if (normalized.includes('/src/core/') || normalized.includes('/core/')) return 'core';
         if (normalized.includes('/src/')) return 'srcRuntime';
         return 'neutral';
+    }
+
+    private classifyNoiseCategory(relativePath: string): SearchNoiseCategory {
+        const normalized = this.normalizeSearchPath(relativePath);
+
+        // Deterministic precedence: generated > tests > fixtures > docs > runtime.
+        if (this.isGeneratedPath(normalized)
+            || this.hasPathSegment(normalized, 'coverage')
+            || this.hasPathSegment(normalized, 'dist')
+            || this.hasPathSegment(normalized, 'build')) return 'generated';
+        if (this.isTestPath(normalized)) return 'tests';
+        if (this.isFixturePath(normalized)) return 'fixtures';
+        if (this.isDocPath(normalized)) return 'docs';
+        return 'runtime';
+    }
+
+    private roundRatio(value: number): number {
+        return Math.round(value * 100) / 100;
+    }
+
+    private buildNoiseMitigationHint(filesInOrder: string[]): SearchNoiseMitigationHint | undefined {
+        if (!Array.isArray(filesInOrder) || filesInOrder.length === 0) {
+            return undefined;
+        }
+
+        const topK = Math.min(SEARCH_NOISE_HINT_TOP_K, filesInOrder.length);
+        if (topK <= 0) {
+            return undefined;
+        }
+
+        const counts: Record<SearchNoiseCategory, number> = {
+            tests: 0,
+            fixtures: 0,
+            docs: 0,
+            generated: 0,
+            runtime: 0,
+        };
+
+        for (let i = 0; i < topK; i++) {
+            const category = this.classifyNoiseCategory(filesInOrder[i]);
+            counts[category] += 1;
+        }
+
+        const noisyRatio = (counts.tests + counts.fixtures + counts.docs + counts.generated) / topK;
+        if (noisyRatio < SEARCH_NOISE_HINT_THRESHOLD) {
+            return undefined;
+        }
+
+        const ratios: Record<SearchNoiseCategory, number> = {
+            tests: this.roundRatio(counts.tests / topK),
+            fixtures: this.roundRatio(counts.fixtures / topK),
+            docs: this.roundRatio(counts.docs / topK),
+            generated: this.roundRatio(counts.generated / topK),
+            runtime: this.roundRatio(counts.runtime / topK),
+        };
+        const debounceMs = typeof (this.syncManager as any)?.getWatchDebounceMs === 'function'
+            ? this.syncManager.getWatchDebounceMs()
+            : DEFAULT_WATCH_DEBOUNCE_MS;
+
+        return {
+            reason: 'top_results_noise_dominant',
+            topK,
+            ratios,
+            recommendedScope: 'runtime',
+            suggestedIgnorePatterns: [...SEARCH_NOISE_HINT_PATTERNS],
+            debounceMs,
+            nextStep: 'Use scope="runtime". If you still need docs context, use scope="mixed". Edit repo-root .satoriignore using your host/editor, wait one debounce window, rerun search_codebase, or run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.',
+        };
     }
 
     private shouldIncludeCategoryInScope(scope: SearchScope, category: PathCategory): boolean {
@@ -1925,6 +2003,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         }
                     } : {})
                 }));
+                const noiseMitigationHint = this.buildNoiseMitigationHint(rawResults.map((result) => result.file));
 
                 const envelope: SearchResponseEnvelope = {
                     status: "ok",
@@ -1936,6 +2015,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     resultMode: "raw",
                     freshnessDecision,
                     ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {}),
+                    ...(noiseMitigationHint ? { hints: { version: 1 as const, noiseMitigation: noiseMitigationHint } } : {}),
                     results: rawResults
                 };
 
@@ -2036,6 +2116,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
             });
 
+            const visibleGroupedResults = groupedResults.slice(0, input.limit);
+            const noiseMitigationHint = this.buildNoiseMitigationHint(visibleGroupedResults.map((result) => result.file));
+
             const envelope: SearchResponseEnvelope = {
                 status: "ok",
                 path: absolutePath,
@@ -2046,7 +2129,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 resultMode: "grouped",
                 freshnessDecision,
                 ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {}),
-                results: groupedResults.slice(0, input.limit)
+                ...(noiseMitigationHint ? { hints: { version: 1 as const, noiseMitigation: noiseMitigationHint } } : {}),
+                results: visibleGroupedResults
             };
 
             return {

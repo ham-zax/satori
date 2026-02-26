@@ -222,6 +222,178 @@ test('handleSearchCode docs scope only returns docs and tests', async () => {
     });
 });
 
+test('handleSearchCode emits deterministic noiseMitigation hint when top grouped results are noise-dominant', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'describe("auth", () => {})',
+                relativePath: 'tests/auth.test.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.95,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_test',
+                symbolLabel: 'function testAuth()'
+            },
+            {
+                content: 'export const fixture = true;',
+                relativePath: 'src/__fixtures__/auth-fixture.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.94,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_fixture',
+                symbolLabel: 'const fixture'
+            },
+            {
+                content: '# auth docs',
+                relativePath: 'docs/auth.md',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.93,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_docs',
+                symbolLabel: 'doc auth'
+            },
+            {
+                content: 'TN:coverage',
+                relativePath: 'coverage/lcov.info',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.92,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_generated',
+                symbolLabel: 'coverage'
+            },
+            {
+                content: 'export const runtime = true;',
+                relativePath: 'src/runtime.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.91,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime',
+                symbolLabel: 'const runtime'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth flow',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.hints?.version, 1);
+        assert.equal(payload.hints?.noiseMitigation?.reason, 'top_results_noise_dominant');
+        assert.equal(payload.hints?.noiseMitigation?.topK, 5);
+        assert.deepEqual(payload.hints?.noiseMitigation?.ratios, {
+            tests: 0.2,
+            fixtures: 0.2,
+            docs: 0.2,
+            generated: 0.2,
+            runtime: 0.2
+        });
+        assert.equal(payload.hints?.noiseMitigation?.recommendedScope, 'runtime');
+        assert.equal(payload.hints?.noiseMitigation?.debounceMs, 5000);
+        assert.deepEqual(payload.hints?.noiseMitigation?.suggestedIgnorePatterns, [
+            '**/*.test.*',
+            '**/*.spec.*',
+            '**/__tests__/**',
+            '**/__fixtures__/**',
+            '**/fixtures/**',
+            'coverage/**'
+        ]);
+        assert.match(payload.hints?.noiseMitigation?.nextStep || '', /scope=\"runtime\"/);
+        assert.match(payload.hints?.noiseMitigation?.nextStep || '', /scope=\"mixed\"/);
+        assert.match(payload.hints?.noiseMitigation?.nextStep || '', /\"action\":\"sync\"/);
+    });
+});
+
+test('handleSearchCode omits noiseMitigation hint when top grouped results are runtime-dominant', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const runtimeA = true;',
+                relativePath: 'src/runtime-a.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_a',
+                symbolLabel: 'const runtimeA'
+            },
+            {
+                content: 'export const runtimeB = true;',
+                relativePath: 'src/runtime-b.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_b',
+                symbolLabel: 'const runtimeB'
+            },
+            {
+                content: 'export const runtimeC = true;',
+                relativePath: 'src/runtime-c.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.97,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_c',
+                symbolLabel: 'const runtimeC'
+            },
+            {
+                content: 'export const runtimeD = true;',
+                relativePath: 'src/runtime-d.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.96,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_d',
+                symbolLabel: 'const runtimeD'
+            },
+            {
+                content: '# docs',
+                relativePath: 'docs/runtime.md',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.95,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_docs',
+                symbolLabel: 'docs'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime flow',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.hints?.noiseMitigation, undefined);
+    });
+});
+
 test('handleSearchCode grouped fallback emits stable hash groupId and unsupported callGraphHint when symbol is missing', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [{

@@ -16,7 +16,7 @@ const manageIndexInputSchema = z.object({
 export const manageIndexTool: McpTool = {
     name: "manage_index",
     description: () =>
-        "Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path.",
+        "Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path (no full reindex required). If you need immediate convergence after ignore edits, run action=\"sync\" and then rerun search_codebase. Use action=\"reindex\" for fingerprint/schema incompatibility or full rebuild recovery.",
     inputSchemaZod: () => manageIndexInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = manageIndexInputSchema.safeParse(args || {});

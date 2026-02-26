@@ -718,7 +718,7 @@
             </div>
             <pre><code id="codex-config-top">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.0.0"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.7.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
           </div>
@@ -735,7 +735,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
     "npx",
     "-y",
     "--prefer-offline",
-    "@zokizuan/satori-mcp@3.0.0"
+    "@zokizuan/satori-mcp@3.7.0"
   ],
   "enabled": true,
   "timeout": 30000,
@@ -819,7 +819,11 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
             >
             <p>
               Review grouped results and pass returned <code>callGraphHint</code>
-              directly into <code>call_graph</code>.
+              directly into <code>call_graph</code>. If tests/fixtures dominate
+              top results, add ignore patterns in repo-root
+              <code>.satoriignore</code>, wait one debounce window (default
+              5000ms), then rerun <code>search_codebase</code> or call
+              <code>manage_index {"action":"sync"}</code>.
             </p>
           </div>
           <div class="step">
@@ -855,7 +859,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
                   </div>
                   <pre><code id="codex-config">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.0.0"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.7.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
                 </div>
@@ -872,7 +876,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
     "npx",
     "-y",
     "--prefer-offline",
-    "@zokizuan/satori-mcp@3.0.0"
+    "@zokizuan/satori-mcp@3.7.0"
   ],
   "enabled": true,
   "timeout": 30000,

@@ -39,6 +39,26 @@ test('generated ListTools payload returns exactly six tools', () => {
     assert.deepEqual(names, ['manage_index', 'search_codebase', 'call_graph', 'file_outline', 'read_file', 'list_codebases']);
 });
 
+test('search_codebase and manage_index descriptions include ignore-remediation guidance', () => {
+    const tools = getMcpToolList(buildContext());
+    const searchTool = tools.find((tool) => tool.name === 'search_codebase');
+    const manageTool = tools.find((tool) => tool.name === 'manage_index');
+
+    assert.ok(searchTool);
+    assert.ok(manageTool);
+
+    assert.match(searchTool!.description, /\.satoriignore/);
+    assert.match(searchTool!.description, /scope=\"runtime\"/);
+    assert.match(searchTool!.description, /scope=\"mixed\"/);
+    assert.match(searchTool!.description, /MCP_WATCH_DEBOUNCE_MS/);
+    assert.match(searchTool!.description, /action\":\"sync\"/);
+
+    assert.match(manageTool!.description, /Ignore-rule edits/i);
+    assert.match(manageTool!.description, /no full reindex required/i);
+    assert.match(manageTool!.description, /action=\"sync\"/);
+    assert.match(manageTool!.description, /action=\"reindex\"/);
+});
+
 test('search_codebase schema exposes scoped grouped/raw controls', () => {
     const tools = getMcpToolList(buildContext());
     const searchTool = tools.find((tool) => tool.name === 'search_codebase');

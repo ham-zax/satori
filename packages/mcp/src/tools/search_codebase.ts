@@ -93,7 +93,7 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
 export const searchCodebaseTool: McpTool = {
     name: "search_codebase",
     description: () =>
-        "Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decision.",
+        "Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decisions. For runtime debugging, start with scope=\"runtime\". If you need both runtime and docs context, use scope=\"mixed\". If top results are dominated by tests/fixtures/docs, edit repo-root .satoriignore using your host/editor (examples, not exhaustive: **/*.test.*, **/*.spec.*, **/__tests__/**, **/__fixtures__/**, **/fixtures/**, coverage/**), wait one debounce window (MCP_WATCH_DEBOUNCE_MS, default 5000ms), then rerun search_codebase. For immediate convergence, run manage_index with {\"action\":\"sync\",\"path\":\"<same path used in search_codebase>\"}.",
     inputSchemaZod: (ctx: ToolContext) => buildSearchSchema(ctx),
     execute: async (args: unknown, ctx: ToolContext) => {
         const schema = buildSearchSchema(ctx);

@@ -1,5 +1,5 @@
 import { FreshnessDecision } from "./sync.js";
-import { SearchGroupBy, SearchResultMode, SearchScope } from "./search-constants.js";
+import { SearchGroupBy, SearchNoiseCategory, SearchResultMode, SearchScope } from "./search-constants.js";
 import { FingerprintSource, IndexFingerprint } from "../config.js";
 
 export type StalenessBucket = "fresh" | "aging" | "stale" | "unknown";
@@ -69,6 +69,21 @@ export interface FingerprintCompatibilityDiagnostics {
     statusAtCheck?: "indexed" | "indexing" | "indexfailed" | "sync_completed" | "requires_reindex" | "not_found";
 }
 
+export interface SearchNoiseMitigationHint {
+    reason: "top_results_noise_dominant";
+    topK: number;
+    ratios: Record<SearchNoiseCategory, number>;
+    recommendedScope: "runtime";
+    suggestedIgnorePatterns: string[];
+    debounceMs: number;
+    nextStep: string;
+}
+
+export interface SearchResponseHints extends Record<string, unknown> {
+    version?: 1;
+    noiseMitigation?: SearchNoiseMitigationHint;
+}
+
 interface SearchBaseResponseEnvelope {
     status: "ok" | "requires_reindex" | "not_indexed";
     path: string;
@@ -79,7 +94,7 @@ interface SearchBaseResponseEnvelope {
     freshnessDecision: FreshnessDecision | { mode: "skipped_requires_reindex" } | null;
     warnings?: string[];
     message?: string;
-    hints?: Record<string, unknown>;
+    hints?: SearchResponseHints;
     compatibility?: FingerprintCompatibilityDiagnostics;
 }
 

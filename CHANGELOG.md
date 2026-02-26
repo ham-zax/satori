@@ -2,6 +2,30 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Agent-Native Search Noise Mitigation Hints
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `3.7.0`
+- `@zokizuan/satori-core`: `0.2.0`
+
+### Added
+- Added deterministic `search_codebase` response hints for noisy top results:
+  - `hints.version = 1`
+  - `hints.noiseMitigation` with `topK`, category ratios, suggested `.satoriignore` patterns, debounce target, and next-step guidance.
+- Added category-based noise analysis with fixed precedence (`generated > tests > fixtures > docs > runtime`) to keep hint behavior stable across runs.
+
+### Modified
+- Updated MCP tool descriptions to teach zero-context agents the remediation flow directly from tool metadata:
+  - `search_codebase`: use `scope:"runtime"` first, use `scope:"mixed"` when docs + runtime are both needed, and mitigate persistent noise via repo-root `.satoriignore`.
+  - `manage_index`: clarifies `sync` as immediate convergence path after ignore edits and reserves `reindex` for rebuild/recovery.
+- Unified watch debounce fallback around a shared default constant to avoid drift in emitted guidance.
+
+### Tests
+- Added/extended regression coverage for:
+  - tool description remediation guidance
+  - noise-mitigation hint emission for noise-dominant top results
+  - omission of hints for runtime-dominant top results
+
 ## [2026-02-26] Ignore-Control Live Validation and Docs Alignment
 
 ### Validated

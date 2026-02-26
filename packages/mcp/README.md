@@ -61,7 +61,7 @@ Tool surface is hard-broken to 6 tools. This keeps routing explicit while exposi
 
 ### `manage_index`
 
-Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path.
+Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path (no full reindex required). If you need immediate convergence after ignore edits, run action="sync" and then rerun search_codebase. Use action="reindex" for fingerprint/schema incompatibility or full rebuild recovery.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -75,7 +75,7 @@ Manage index lifecycle operations (create/reindex/sync/status/clear) for a codeb
 
 ### `search_codebase`
 
-Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decision.
+Unified semantic search with runtime/docs scope control, grouped/raw output modes, deterministic ranking, and structured freshness decisions. For runtime debugging, start with scope="runtime". If you need both runtime and docs context, use scope="mixed". If top results are dominated by tests/fixtures/docs, edit repo-root .satoriignore using your host/editor (examples, not exhaustive: **/*.test.*, **/*.spec.*, **/__tests__/**, **/__fixtures__/**, **/fixtures/**, coverage/**), wait one debounce window (MCP_WATCH_DEBOUNCE_MS, default 5000ms), then rerun search_codebase. For immediate convergence, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"}.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|

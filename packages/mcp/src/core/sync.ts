@@ -4,6 +4,7 @@ import chokidar, { FSWatcher } from "chokidar";
 import ignore from "ignore";
 import { Context } from "@zokizuan/satori-core";
 import { SnapshotManager } from "./snapshot.js";
+import { DEFAULT_WATCH_DEBOUNCE_MS } from "../config.js";
 
 interface SyncManagerOptions {
     watchEnabled?: boolean;
@@ -84,7 +85,7 @@ export class SyncManager {
         this.context = context;
         this.snapshotManager = snapshotManager;
         this.watchEnabled = options.watchEnabled === true;
-        this.watchDebounceMs = Math.max(1, options.watchDebounceMs ?? 5000);
+        this.watchDebounceMs = Math.max(1, options.watchDebounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS);
         this.now = options.now || (() => Date.now());
         this.onSyncCompleted = options.onSyncCompleted;
     }
@@ -413,6 +414,10 @@ export class SyncManager {
             clearTimeout(this.backgroundSyncTimer);
             this.backgroundSyncTimer = null;
         }
+    }
+
+    public getWatchDebounceMs(): number {
+        return this.watchDebounceMs;
     }
 
     private canScheduleWatchSync(codebasePath: string): boolean {

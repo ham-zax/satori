@@ -147,7 +147,7 @@ The MCP surface is intentionally constrained to 6 tools. Smaller surface area ke
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.0.0"],
+      "args": ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.7.0"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -168,7 +168,7 @@ The MCP surface is intentionally constrained to 6 tools. Smaller surface area ke
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.0.0"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.7.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
@@ -200,6 +200,15 @@ Use intent-based queries (not filenames) to feel the difference:
 > search_codebase  query="where are retries, backoff, and timeout policies defined"
 > search_codebase  query="find database write path for user deletion"
 ```
+
+### Noise-Heavy Results (Tests/Fixtures) Quick Fix
+
+If top hits are dominated by tests/fixtures/docs:
+
+1. Run `search_codebase` with `scope:"runtime"` first.
+2. If noise persists, edit repo-root `.satoriignore` in your host editor (examples: `**/*.test.*`, `**/*.spec.*`, `**/__tests__/**`, `**/__fixtures__/**`, `**/fixtures/**`, `coverage/**`).
+3. Wait one debounce window (`MCP_WATCH_DEBOUNCE_MS`, default `5000ms`) and rerun `search_codebase`.
+4. For immediate convergence, run `manage_index` with `{"action":"sync","path":"<same path used in search_codebase>"}`.
 
 ---
 
@@ -368,7 +377,7 @@ pnpm --filter @zokizuan/satori-mcp start        # run MCP server locally
 
 If MCP startup fails (`initialize response` closed), check:
 
-1. Pin a published version: `@zokizuan/satori-mcp@3.0.0`
+1. Pin a published version: `@zokizuan/satori-mcp@3.7.0`
 2. Increase startup timeout to `180000` (cold start package download can be slow)
 3. Remove local link shadowing: `npm unlink -g @zokizuan/satori-mcp` (and local `npm unlink @zokizuan/satori-mcp` if needed)
 4. Restart MCP client

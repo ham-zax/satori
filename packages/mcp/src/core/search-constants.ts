@@ -1,6 +1,16 @@
 export const SEARCH_RRF_K = 60;
 export const SEARCH_MAX_CANDIDATES = 80;
 export const SEARCH_PROXIMITY_WINDOW = 25;
+export const SEARCH_NOISE_HINT_TOP_K = 5;
+export const SEARCH_NOISE_HINT_THRESHOLD = 0.60;
+export const SEARCH_NOISE_HINT_PATTERNS = [
+    '**/*.test.*',
+    '**/*.spec.*',
+    '**/__tests__/**',
+    '**/__fixtures__/**',
+    '**/fixtures/**',
+    'coverage/**',
+] as const;
 
 export const STALENESS_THRESHOLDS_MS = {
     fresh: 30 * 60 * 1000,
@@ -10,6 +20,7 @@ export const STALENESS_THRESHOLDS_MS = {
 export type SearchScope = 'runtime' | 'mixed' | 'docs';
 export type SearchResultMode = 'grouped' | 'raw';
 export type SearchGroupBy = 'symbol' | 'file';
+export type SearchNoiseCategory = 'tests' | 'fixtures' | 'docs' | 'generated' | 'runtime';
 
 export type PathCategory =
     | 'entrypoint'

@@ -3,6 +3,7 @@ import { envManager } from "@zokizuan/satori-core";
 export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama';
 export type VectorStoreProvider = 'Milvus';
 export type FingerprintSource = 'verified' | 'assumed_v2';
+export const DEFAULT_WATCH_DEBOUNCE_MS = 5000;
 
 export interface IndexFingerprint {
     embeddingProvider: EmbeddingProvider;
@@ -190,7 +191,6 @@ export function buildRuntimeIndexFingerprint(config: ContextMcpConfig, embedding
 export function createMcpConfig(): ContextMcpConfig {
     const defaultProvider = (envManager.get('EMBEDDING_PROVIDER') as EmbeddingProvider) || 'VoyageAI';
     const defaultReadFileMaxLines = 1000;
-    const defaultWatchDebounceMs = 5000;
 
     // Parse output dimension from env var
     const outputDimensionStr = envManager.get('EMBEDDING_OUTPUT_DIMENSION');
@@ -232,14 +232,14 @@ export function createMcpConfig(): ContextMcpConfig {
         ? watchSyncEnabledRaw.toLowerCase() === 'true'
         : true;
 
-    let watchDebounceMs = defaultWatchDebounceMs;
+    let watchDebounceMs = DEFAULT_WATCH_DEBOUNCE_MS;
     const watchDebounceRaw = envManager.get('MCP_WATCH_DEBOUNCE_MS');
     if (watchDebounceRaw) {
         const parsed = Number.parseInt(watchDebounceRaw, 10);
         if (Number.isFinite(parsed) && parsed > 0) {
             watchDebounceMs = parsed;
         } else {
-            console.warn(`[WARN] Invalid MCP_WATCH_DEBOUNCE_MS value: ${watchDebounceRaw}. Using default ${defaultWatchDebounceMs}.`);
+            console.warn(`[WARN] Invalid MCP_WATCH_DEBOUNCE_MS value: ${watchDebounceRaw}. Using default ${DEFAULT_WATCH_DEBOUNCE_MS}.`);
         }
     }
 
@@ -282,7 +282,7 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
     console.log(`[MCP]   Embedding Provider: ${config.encoderProvider}`);
     console.log(`[MCP]   Embedding Model: ${config.encoderModel}`);
     console.log(`[MCP]   Milvus Address: ${config.milvusEndpoint || (config.milvusApiToken ? '[Auto-resolve from token]' : '[Not configured]')}`);
-    console.log(`[MCP]   Proactive Watcher: ${config.watchSyncEnabled ? `enabled (${config.watchDebounceMs || 5000}ms debounce)` : 'disabled'}`);
+    console.log(`[MCP]   Proactive Watcher: ${config.watchSyncEnabled ? `enabled (${config.watchDebounceMs || DEFAULT_WATCH_DEBOUNCE_MS}ms debounce)` : 'disabled'}`);
 
     // Log provider-specific configuration without exposing sensitive data
     switch (config.encoderProvider) {

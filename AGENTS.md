@@ -31,6 +31,15 @@ You do not write or accept code without a clear architectural vector.
 
 ---
 
+## Search Guiding Principles (Canonical)
+
+- **Eval harness first**: Before changing retrieval/ranking defaults, add/update a retrieval regression harness (golden queries + expected files/symbols) so quality changes are measurable and non-random.
+- **Hybrid + operators default-on**: Hybrid retrieval and query operators are baseline behavior. Do not require opt-in flags to get correct results. (Optional: allow opt-out toggles for debugging only.)
+- **Determinism + explainability mandatory**: Same index + query must yield stable ordering. Any ranking change must have a deterministic tie-break and `debug:true` must produce a stable score/explanation breakdown.
+- **Strict semantics over backwards compatibility**: Prefer clean, unambiguous contracts even if schemas change. Update docs/tests in the same patch; treat compatibility shims as temporary and explicitly documented.
+
+---
+
 ## Tooling Heuristics (Leverage > Effort)
 
 Use tools in descending order of conceptual leverage. *(Note: If a tool is unavailable in the environment, immediately fall back to the next tool in the hierarchy).*
@@ -70,10 +79,21 @@ Use tools in descending order of conceptual leverage. *(Note: If a tool is unava
 - `scope:"docs"`: strict include docs/tests only.
 - `scope:"mixed"`: include both runtime and docs/tests.
 - Prefer scope controls first; do not depend on legacy exclude-pattern assumptions.
+- `search_codebase` supports deterministic query-prefix operators: `lang:`, `path:`, `-path:`, `must:`, `exclude:` (escape with `\` to force literal text).
+
+### Persistent Noise Elimination (`.satoriignore`)
+
+- If top results are dominated by tests/fixtures/docs/generated files, persistently remove that noise by editing repo-root `.satoriignore`.
+- Recommended starter patterns: `**/*.test.*`, `**/*.spec.*`, `**/__tests__/**`, `**/__fixtures__/**`, `**/fixtures/**`, `coverage/**`.
+- Ignore changes reconcile automatically after one debounce window (default ~5s via `MCP_WATCH_DEBOUNCE_MS`).
+- For immediate convergence, run `manage_index { action:"sync", path:"<same codebase path>" }` and rerun `search_codebase`.
+- For code-first investigations, prefer `search_codebase` with `scope:"runtime"`, `resultMode:"grouped"`, and `groupBy:"symbol"` after ignore updates.
+- If the active MCP surface cannot write files, request the `.satoriignore` edit explicitly, then continue after debounce or a manual `sync`.
 
 ### Optimal Usage Patterns
 
 - Start symbol-first: use grouped search (`resultMode:"grouped"`, `groupBy:"symbol"`) and pick `callGraphHint.supported:true` results before expanding query breadth.
+- Grouped diversity is default-on; expect per-file/per-symbol caps to reduce single-file domination in broad queries.
 - Keep graph traversal tight by default: `call_graph` with `direction:"both"`, `depth:1`, `limit:20`; only increase depth when the first hop is insufficient.
 - Use `file_outline` before full reads to lock symbol boundaries, then `read_file` with `start_line/end_line` around selected spans.
 - Treat freshness as a trust signal:
@@ -87,6 +107,9 @@ Use tools in descending order of conceptual leverage. *(Note: If a tool is unava
   - use the provided `hints.reindex` and run `manage_index { action:"reindex", path }`.
 - `search_codebase` grouped mode returns group-level navigation fields:
   - `groupId`, `symbolId`/`symbolLabel` (nullable fallback allowed), `indexedAt`, `stalenessBucket`, `collapsedChunkCount`, `callGraphHint`.
+- `search_codebase` default ranking mode is `auto_changed_first`:
+  - boosts changed files when git metadata is available,
+  - behaves like default ranking when no changed-file signal exists.
 - `search_codebase` may include `warnings[]` on partial pass failure; treat as degraded-but-usable output.
 - `file_outline` is sidecar-backed and returns `status: "ok" | "not_found" | "requires_reindex" | "unsupported"` with deterministic symbol ordering and `hasMore`.
 - `call_graph` returns structured statuses (`ok`, `not_found`, `unsupported`, `requires_reindex`) and deterministic node/edge ordering.

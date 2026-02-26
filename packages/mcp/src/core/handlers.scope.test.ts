@@ -222,6 +222,304 @@ test('handleSearchCode docs scope only returns docs and tests', async () => {
     });
 });
 
+test('handleSearchCode parses operators from query prefix and applies deterministic filters', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'throw new Error("ERR_CODE_42");',
+                relativePath: 'src/auth.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.96,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_auth',
+                symbolLabel: 'function auth()'
+            },
+            {
+                content: 'ERR_CODE_42 explained in docs',
+                relativePath: 'docs/auth.md',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_docs',
+                symbolLabel: 'auth docs'
+            },
+            {
+                content: 'legacy fallback',
+                relativePath: 'src/legacy.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_legacy',
+                symbolLabel: 'function legacy()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'lang:typescript path:"src/**" must:ERR_CODE_42 exclude:legacy\n\nauth failure',
+            scope: 'mixed',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 10,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, 'src/auth.ts');
+        assert.equal(Array.isArray(payload.warnings) && payload.warnings.includes('FILTER_MUST_UNSATISFIED'), false);
+        assert.equal(payload.hints?.debugSearch?.operatorSummary?.lang?.[0], 'typescript');
+        assert.equal(payload.hints?.debugSearch?.operatorSummary?.path?.[0], 'src/**');
+        assert.equal(payload.hints?.debugSearch?.operatorSummary?.must?.[0], 'ERR_CODE_42');
+        assert.equal(payload.hints?.debugSearch?.operatorSummary?.exclude?.[0], 'legacy');
+        assert.equal(payload.hints?.debugSearch?.mustRetry?.satisfied, true);
+        assert.equal(payload.hints?.debugSearch?.mustRetry?.finalCount, 1);
+    });
+});
+
+test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const denseResults = Array.from({ length: 140 }, (_, idx) => ({
+            content: `candidate ${idx}`,
+            relativePath: `src/candidate-${idx}.ts`,
+            startLine: 1,
+            endLine: 2,
+            language: 'typescript',
+            score: 0.99 - (idx * 0.0001),
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: `sym_candidate_${idx}`,
+            symbolLabel: `function candidate${idx}()`
+        }));
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async (_root: string, _query: string, topK: number) => denseResults.slice(0, topK)
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'must:NEVER_PRESENT runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 0);
+        assert.ok(Array.isArray(payload.warnings));
+        assert.equal(payload.warnings.includes('FILTER_MUST_UNSATISFIED'), true);
+    });
+});
+
+test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds after retry expansion', async () => {
+    await withTempRepo(async (repoPath) => {
+        const denseResults = Array.from({ length: 80 }, (_, idx) => ({
+            content: idx === 40 ? 'contains NEEDLE_TOKEN' : `candidate ${idx}`,
+            relativePath: `src/retry-${idx}.ts`,
+            startLine: 1,
+            endLine: 2,
+            language: 'typescript',
+            score: 0.99 - (idx * 0.0001),
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: `sym_retry_${idx}`,
+            symbolLabel: `function retry${idx}()`
+        }));
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async (_root: string, _query: string, topK: number) => denseResults.slice(0, topK)
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'must:NEEDLE_TOKEN runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, 'src/retry-40.ts');
+        assert.equal(Array.isArray(payload.warnings) && payload.warnings.includes('FILTER_MUST_UNSATISFIED'), false);
+        assert.equal(payload.hints?.debugSearch?.mustRetry?.attempts, 2);
+        assert.equal(payload.hints?.debugSearch?.mustRetry?.satisfied, true);
+        assert.equal(payload.hints?.debugSearch?.mustRetry?.finalCount, 1);
+    });
+});
+
+test('handleSearchCode grouped diversity keeps multi-file coverage by default', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const a = 1;',
+                relativePath: 'src/one.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_one_a',
+                symbolLabel: 'const a'
+            },
+            {
+                content: 'export const b = 2;',
+                relativePath: 'src/one.ts',
+                startLine: 10,
+                endLine: 12,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_one_b',
+                symbolLabel: 'const b'
+            },
+            {
+                content: 'export const c = 3;',
+                relativePath: 'src/one.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.97,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_one_c',
+                symbolLabel: 'const c'
+            },
+            {
+                content: 'export const z = 9;',
+                relativePath: 'src/two.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.96,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_two_z',
+                symbolLabel: 'const z'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'constants',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const files = payload.results.map((result: any) => result.file);
+        assert.equal(files.includes('src/two.ts'), true);
+        assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerFile, 2);
+        assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerSymbol, 1);
+    });
+});
+
+test('handleSearchCode applies changed-files boost in auto mode and skips boost in default mode', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const unchanged = true;',
+                relativePath: 'src/unchanged.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_unchanged',
+                symbolLabel: 'const unchanged'
+            },
+            {
+                content: 'export const changed = true;',
+                relativePath: 'src/changed.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_changed',
+                symbolLabel: 'const changed'
+            }
+        ]);
+
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set(['src/changed.ts'])
+        });
+
+        const autoResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'changed symbol',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2
+        });
+        const autoPayload = JSON.parse(autoResponse.content[0]?.text || '{}');
+        assert.equal(autoPayload.results[0].file, 'src/changed.ts');
+
+        const defaultResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'changed symbol',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            rankingMode: 'default',
+            limit: 2
+        });
+        const defaultPayload = JSON.parse(defaultResponse.content[0]?.text || '{}');
+        assert.equal(defaultPayload.results[0].file, 'src/unchanged.ts');
+    });
+});
+
 test('handleSearchCode emits deterministic noiseMitigation hint when top grouped results are noise-dominant', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [

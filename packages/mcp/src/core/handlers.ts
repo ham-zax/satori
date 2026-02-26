@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import ignore from "ignore";
 import {
     Context,
@@ -14,10 +15,18 @@ import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils
 import { SyncManager } from "./sync.js";
 import { DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint } from "../config.js";
 import {
+    SEARCH_CHANGED_FILES_CACHE_TTL_MS,
+    SEARCH_CHANGED_FIRST_MULTIPLIER,
+    SEARCH_DIVERSITY_MAX_PER_FILE,
+    SEARCH_DIVERSITY_MAX_PER_SYMBOL,
+    SEARCH_DIVERSITY_RELAXED_FILE_CAP,
     SEARCH_MAX_CANDIDATES,
+    SEARCH_MUST_RETRY_MULTIPLIER,
+    SEARCH_MUST_RETRY_ROUNDS,
     SEARCH_NOISE_HINT_PATTERNS,
     SEARCH_NOISE_HINT_THRESHOLD,
     SEARCH_NOISE_HINT_TOP_K,
+    SEARCH_OPERATOR_PREFIX_MAX_CHARS,
     SEARCH_PROXIMITY_WINDOW,
     SEARCH_RRF_K,
     SCOPE_PATH_MULTIPLIERS,
@@ -25,6 +34,7 @@ import {
     PathCategory,
     SearchGroupBy,
     SearchNoiseCategory,
+    SearchRankingMode,
     SearchResultMode,
     SearchScope
 } from "./search-constants.js";
@@ -36,8 +46,10 @@ import {
     FileOutlineStatus,
     FileOutlineSymbolResult,
     SearchChunkResult,
+    SearchDebugHint,
     SearchGroupResult,
     SearchNoiseMitigationHint,
+    SearchOperatorSummary,
     SearchRequestInput,
     SearchResponseEnvelope,
     SearchSpan,
@@ -56,6 +68,46 @@ const SATORI_COLLECTION_PREFIXES = ['code_chunks_', 'hybrid_code_chunks_'];
 const ZILLIZ_FREE_TIER_COLLECTION_LIMIT = 5;
 const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability('fileOutline');
 const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
+const SEARCH_OPERATOR_KEYS = new Set(['lang', 'path', '-path', 'must', 'exclude']);
+
+type ParsedSearchOperators = {
+    semanticQuery: string;
+    prefixBlockChars: number;
+    lang: string[];
+    path: string[];
+    excludePath: string[];
+    must: string[];
+    exclude: string[];
+};
+
+type SearchCandidate = {
+    result: any;
+    baseScore: number;
+    fusionScore: number;
+    finalScore: number;
+    pathCategory: PathCategory;
+    pathMultiplier: number;
+    changedFilesMultiplier: number;
+    passesMatchedMust: boolean;
+};
+
+type SearchFilterSummary = {
+    removedByScope: number;
+    removedByLanguage: number;
+    removedByPathInclude: number;
+    removedByPathExclude: number;
+    removedByMust: number;
+    removedByExclude: number;
+};
+
+type SearchDiversitySummary = {
+    maxPerFile: number;
+    maxPerSymbol: number;
+    relaxedFileCap: number;
+    skippedByFileCap: number;
+    skippedBySymbolCap: number;
+    usedRelaxedCap: boolean;
+};
 
 interface CandidateCollection {
     name: string;
@@ -182,6 +234,11 @@ export class ToolHandlers {
     private currentWorkspace: string;
     private readonly now: () => number;
     private readonly callGraphManager: CallGraphSidecarManager;
+    private readonly changedFilesCache = new Map<string, {
+        expiresAtMs: number;
+        available: boolean;
+        files: Set<string>;
+    }>();
 
     constructor(
         context: Context,
@@ -669,6 +726,308 @@ export class ToolHandlers {
             debounceMs,
             nextStep: 'Use scope="runtime". If you still need docs context, use scope="mixed". Edit repo-root .satoriignore using your host/editor, wait one debounce window, rerun search_codebase, or run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.',
         };
+    }
+
+    private tokenizeQueryPrefix(prefix: string): string[] {
+        const tokens: string[] = [];
+        let current = "";
+        let inQuotes = false;
+        let escaped = false;
+
+        for (let i = 0; i < prefix.length; i++) {
+            const ch = prefix[i];
+            if (escaped) {
+                current += ch;
+                escaped = false;
+                continue;
+            }
+
+            if (ch === "\\") {
+                current += ch;
+                escaped = true;
+                continue;
+            }
+
+            if (ch === "\"") {
+                inQuotes = !inQuotes;
+                current += ch;
+                continue;
+            }
+
+            if (!inQuotes && /\s/.test(ch)) {
+                if (current.length > 0) {
+                    tokens.push(current);
+                    current = "";
+                }
+                continue;
+            }
+
+            current += ch;
+        }
+
+        if (current.length > 0) {
+            tokens.push(current);
+        }
+
+        return tokens;
+    }
+
+    private unquoteOperatorValue(value: string): string {
+        const trimmed = value.trim();
+        if (trimmed.length < 2) {
+            return trimmed;
+        }
+
+        if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+            const inner = trimmed.slice(1, -1);
+            return inner.replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
+        }
+
+        return trimmed;
+    }
+
+    private parseSearchOperators(query: string): ParsedSearchOperators {
+        const trimmedQuery = query.trim();
+        if (trimmedQuery.length === 0) {
+            return {
+                semanticQuery: "",
+                prefixBlockChars: 0,
+                lang: [],
+                path: [],
+                excludePath: [],
+                must: [],
+                exclude: [],
+            };
+        }
+
+        const maxPrefixChars = Math.min(SEARCH_OPERATOR_PREFIX_MAX_CHARS, query.length);
+        const prefixWindow = query.slice(0, maxPrefixChars);
+        const blankLineOffset = prefixWindow.indexOf("\n\n");
+        const prefixChars = blankLineOffset >= 0 ? blankLineOffset : maxPrefixChars;
+        const prefixBlock = query.slice(0, prefixChars);
+        const suffixText = blankLineOffset >= 0
+            ? query.slice(blankLineOffset + 2)
+            : query.slice(prefixChars);
+
+        const operators: ParsedSearchOperators = {
+            semanticQuery: "",
+            prefixBlockChars: prefixChars,
+            lang: [],
+            path: [],
+            excludePath: [],
+            must: [],
+            exclude: [],
+        };
+
+        const semanticTokens: string[] = [];
+        const tokens = this.tokenizeQueryPrefix(prefixBlock);
+        for (const token of tokens) {
+            if (token.startsWith("\\") && token.length > 1) {
+                semanticTokens.push(token.slice(1));
+                continue;
+            }
+
+            const separator = token.indexOf(":");
+            if (separator <= 0) {
+                semanticTokens.push(token);
+                continue;
+            }
+
+            const key = token.slice(0, separator);
+            if (!SEARCH_OPERATOR_KEYS.has(key)) {
+                semanticTokens.push(token);
+                continue;
+            }
+
+            const rawValue = token.slice(separator + 1);
+            const value = this.unquoteOperatorValue(rawValue);
+            if (value.length === 0) {
+                continue;
+            }
+
+            if (key === "lang") {
+                operators.lang.push(value.toLowerCase());
+                continue;
+            }
+            if (key === "path") {
+                operators.path.push(value.replace(/\\/g, "/"));
+                continue;
+            }
+            if (key === "-path") {
+                operators.excludePath.push(value.replace(/\\/g, "/"));
+                continue;
+            }
+            if (key === "must") {
+                operators.must.push(value);
+                continue;
+            }
+            if (key === "exclude") {
+                operators.exclude.push(value);
+                continue;
+            }
+
+            semanticTokens.push(token);
+        }
+
+        const semanticFromPrefix = semanticTokens.join(" ").trim();
+        const semanticSuffix = suffixText.trim();
+        const semanticParts = [semanticFromPrefix, semanticSuffix].filter((part) => part.length > 0);
+        operators.semanticQuery = semanticParts.length > 0 ? semanticParts.join("\n") : trimmedQuery;
+        return operators;
+    }
+
+    private pathMatchesAnyPattern(relativePath: string, patterns: string[]): boolean {
+        if (patterns.length === 0) return false;
+        const normalizedPath = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+        for (const pattern of patterns) {
+            try {
+                const matcher = ignore();
+                matcher.add(pattern);
+                if (matcher.ignores(normalizedPath)) {
+                    return true;
+                }
+            } catch {
+                continue;
+            }
+        }
+        return false;
+    }
+
+    private tokenMatchesAnyField(token: string, fields: string[]): boolean {
+        for (const field of fields) {
+            if (field.includes(token)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private buildOperatorSummary(operators: ParsedSearchOperators): SearchOperatorSummary {
+        return {
+            prefixBlockChars: operators.prefixBlockChars,
+            lang: [...operators.lang],
+            path: [...operators.path],
+            excludePath: [...operators.excludePath],
+            must: [...operators.must],
+            exclude: [...operators.exclude],
+        };
+    }
+
+    private getChangedFilesForCodebase(codebasePath: string): { available: boolean; files: Set<string> } {
+        const cacheKey = path.resolve(codebasePath);
+        const nowMs = this.now();
+        const cached = this.changedFilesCache.get(cacheKey);
+        if (cached && cached.expiresAtMs > nowMs) {
+            return { available: cached.available, files: new Set(cached.files) };
+        }
+
+        try {
+            const stdout = execFileSync(
+                "git",
+                ["-C", cacheKey, "status", "--porcelain"],
+                { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+            );
+
+            const files = new Set<string>();
+            const lines = stdout.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.length > 0);
+            for (const line of lines) {
+                if (line.length < 4) {
+                    continue;
+                }
+                let rawPath = line.slice(3).trim();
+                if (rawPath.length === 0) {
+                    continue;
+                }
+
+                if (rawPath.includes(" -> ")) {
+                    const parts = rawPath.split(" -> ");
+                    rawPath = parts[parts.length - 1].trim();
+                }
+
+                if (rawPath.startsWith("\"") && rawPath.endsWith("\"") && rawPath.length >= 2) {
+                    rawPath = rawPath.slice(1, -1).replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
+                }
+
+                const normalizedPath = rawPath.replace(/\\/g, "/").replace(/^\/+/, "");
+                if (normalizedPath.length === 0 || normalizedPath.startsWith("..")) {
+                    continue;
+                }
+
+                files.add(normalizedPath);
+            }
+
+            this.changedFilesCache.set(cacheKey, {
+                expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
+                available: true,
+                files,
+            });
+            return { available: true, files };
+        } catch {
+            this.changedFilesCache.set(cacheKey, {
+                expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
+                available: false,
+                files: new Set<string>(),
+            });
+            return { available: false, files: new Set<string>() };
+        }
+    }
+
+    private applyGroupDiversity(
+        grouped: SearchGroupResult[],
+        limit: number,
+        groupBy: SearchGroupBy
+    ): { selected: SearchGroupResult[]; summary: SearchDiversitySummary } {
+        const summary: SearchDiversitySummary = {
+            maxPerFile: SEARCH_DIVERSITY_MAX_PER_FILE,
+            maxPerSymbol: SEARCH_DIVERSITY_MAX_PER_SYMBOL,
+            relaxedFileCap: SEARCH_DIVERSITY_RELAXED_FILE_CAP,
+            skippedByFileCap: 0,
+            skippedBySymbolCap: 0,
+            usedRelaxedCap: false,
+        };
+
+        const selected: SearchGroupResult[] = [];
+        const selectedIds = new Set<string>();
+        const fileCounts = new Map<string, number>();
+        const symbolCounts = new Map<string, number>();
+
+        const applyPass = (fileCap: number): void => {
+            for (const group of grouped) {
+                if (selected.length >= limit) {
+                    return;
+                }
+                if (selectedIds.has(group.groupId)) {
+                    continue;
+                }
+
+                const fileCount = fileCounts.get(group.file) || 0;
+                if (fileCount >= fileCap) {
+                    summary.skippedByFileCap += 1;
+                    continue;
+                }
+
+                if (groupBy === "symbol" && typeof group.symbolId === "string") {
+                    const symbolCount = symbolCounts.get(group.symbolId) || 0;
+                    if (symbolCount >= SEARCH_DIVERSITY_MAX_PER_SYMBOL) {
+                        summary.skippedBySymbolCap += 1;
+                        continue;
+                    }
+                    symbolCounts.set(group.symbolId, symbolCount + 1);
+                }
+
+                selected.push(group);
+                selectedIds.add(group.groupId);
+                fileCounts.set(group.file, fileCount + 1);
+            }
+        };
+
+        applyPass(SEARCH_DIVERSITY_MAX_PER_FILE);
+        if (selected.length < Math.min(limit, grouped.length)) {
+            summary.usedRelaxedCap = true;
+            applyPass(SEARCH_DIVERSITY_RELAXED_FILE_CAP);
+        }
+
+        return { selected: selected.slice(0, limit), summary };
     }
 
     private shouldIncludeCategoryInScope(scope: SearchScope, category: PathCategory): boolean {
@@ -1719,6 +2078,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         const scope = (args?.scope || 'runtime') as SearchScope;
         const resultMode = (args?.resultMode || 'grouped') as SearchResultMode;
         const groupBy = (args?.groupBy || 'symbol') as SearchGroupBy;
+        const rankingMode = (args?.rankingMode || 'auto_changed_first') as SearchRankingMode;
         const debug = args?.debug === true;
         const input: SearchRequestInput = {
             path: args?.path,
@@ -1726,6 +2086,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             scope,
             resultMode,
             groupBy,
+            rankingMode,
             limit: Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 10,
             debug,
         };
@@ -1733,12 +2094,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         const isScopeValid = input.scope === 'runtime' || input.scope === 'mixed' || input.scope === 'docs';
         const isResultModeValid = input.resultMode === 'grouped' || input.resultMode === 'raw';
         const isGroupByValid = input.groupBy === 'symbol' || input.groupBy === 'file';
+        const isRankingModeValid = input.rankingMode === 'default' || input.rankingMode === 'auto_changed_first';
 
-        if (!isScopeValid || !isResultModeValid || !isGroupByValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
+        if (!isScopeValid || !isResultModeValid || !isGroupByValid || !isRankingModeValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
             return {
                 content: [{
                     type: "text",
-                    text: "Error: Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file."
+                    text: "Error: Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file. Valid rankingMode: default|auto_changed_first."
                 }],
                 isError: true
             };
@@ -1864,120 +2226,231 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             console.log(`[SEARCH] Indexing status: ${isIndexing ? 'In Progress' : 'Completed'}`);
             console.log(`[SEARCH] 🧠 Using embedding provider: ${encoderEngine.getProvider()} for search`);
 
-            const candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
-            const expandedQuery = `${input.query}\nimplementation runtime source entrypoint`;
-            const passDescriptors = [
-                { id: 'primary', query: input.query },
-                { id: 'expanded', query: expandedQuery },
-            ] as const;
-            searchDiagnostics.searchPassCount = passDescriptors.length;
-
-            const passSettled = await Promise.allSettled(passDescriptors.map(async (pass) => {
-                const passId = pass.id as 'primary' | 'expanded';
-                if (this.shouldForceSearchPassFailure(passId)) {
-                    throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${passId}`);
-                }
-                return this.context.semanticSearch(effectiveRoot, pass.query, candidateLimit, 0.3);
-            }));
-            const searchWarnings: string[] = [];
-
-            const successfulPasses: Array<{ id: string; results: any[] }> = [];
-            for (let idx = 0; idx < passSettled.length; idx++) {
-                const passResult = passSettled[idx];
-                const passDescriptor = passDescriptors[idx];
-                if (passResult.status === 'fulfilled' && Array.isArray(passResult.value)) {
-                    successfulPasses.push({
-                        id: passDescriptor.id,
-                        results: passResult.value
-                    });
-                    continue;
-                }
-
-                searchWarnings.push(this.buildSearchPassWarning(passDescriptor.id));
-            }
-
-            searchDiagnostics.searchPassSuccessCount = successfulPasses.length;
-            searchDiagnostics.searchPassFailureCount = searchDiagnostics.searchPassCount - successfulPasses.length;
-
-            if (successfulPasses.length === 0) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: "Error searching code: all semantic search passes failed. Please retry and verify embedding/vector backends are reachable."
-                    }],
-                    isError: true,
-                    meta: { searchDiagnostics }
-                };
-            }
-
-            type Candidate = {
-                result: any;
-                baseScore: number;
-                fusionScore: number;
-                finalScore: number;
-                pathCategory: PathCategory;
-                pathMultiplier: number;
+            const parsedOperators = this.parseSearchOperators(input.query);
+            const semanticQuery = parsedOperators.semanticQuery;
+            const expandedQuery = `${semanticQuery}\nimplementation runtime source entrypoint`;
+            const maxAttempts = parsedOperators.must.length > 0 ? 1 + SEARCH_MUST_RETRY_ROUNDS : 1;
+            let candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
+            const operatorSummary = this.buildOperatorSummary(parsedOperators);
+            let filterSummary: SearchFilterSummary = {
+                removedByScope: 0,
+                removedByLanguage: 0,
+                removedByPathInclude: 0,
+                removedByPathExclude: 0,
+                removedByMust: 0,
+                removedByExclude: 0,
             };
+            const changedFilesState = input.rankingMode === 'auto_changed_first'
+                ? this.getChangedFilesForCodebase(effectiveRoot)
+                : { available: false, files: new Set<string>() };
+            const changedFilesBoostEnabled = changedFilesState.available && changedFilesState.files.size > 0;
+            let boostedCandidates = 0;
+            let attemptsUsed = 0;
+            const searchWarningsSet = new Set<string>();
+            const passesUsed = new Set<string>();
+            let scored: SearchCandidate[] = [];
 
-            const byChunkKey = new Map<string, Candidate>();
-            const addPass = (results: any[], passWeight = 1) => {
-                for (let i = 0; i < results.length; i++) {
-                    const result = results[i];
-                    if (!result || typeof result.relativePath !== 'string') continue;
-                    const key = `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || 'unknown'}`;
-                    const rank = i + 1;
-                    const rrf = passWeight * (1 / (SEARCH_RRF_K + rank));
-                    const existing = byChunkKey.get(key);
-                    if (!existing) {
-                        byChunkKey.set(key, {
-                            result,
-                            baseScore: typeof result.score === 'number' ? result.score : 0,
-                            fusionScore: rrf,
-                            finalScore: 0,
-                            pathCategory: 'neutral',
-                            pathMultiplier: 1.0,
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                attemptsUsed = attempt + 1;
+                const passDescriptors = [
+                    { id: 'primary', query: semanticQuery },
+                    { id: 'expanded', query: expandedQuery },
+                ] as const;
+                searchDiagnostics.searchPassCount += passDescriptors.length;
+
+                const passSettled = await Promise.allSettled(passDescriptors.map(async (pass) => {
+                    const passId = pass.id as 'primary' | 'expanded';
+                    if (this.shouldForceSearchPassFailure(passId)) {
+                        throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${passId}`);
+                    }
+                    return this.context.semanticSearch(effectiveRoot, pass.query, candidateLimit, 0.3);
+                }));
+
+                const successfulPasses: Array<{ id: string; results: any[] }> = [];
+                for (let idx = 0; idx < passSettled.length; idx++) {
+                    const passResult = passSettled[idx];
+                    const passDescriptor = passDescriptors[idx];
+                    if (passResult.status === 'fulfilled' && Array.isArray(passResult.value)) {
+                        successfulPasses.push({
+                            id: passDescriptor.id,
+                            results: passResult.value
                         });
-                    } else {
-                        existing.fusionScore += rrf;
-                        if (typeof result.score === 'number') {
-                            existing.baseScore = Math.max(existing.baseScore, result.score);
+                        passesUsed.add(passDescriptor.id);
+                        continue;
+                    }
+
+                    searchWarningsSet.add(this.buildSearchPassWarning(passDescriptor.id));
+                }
+
+                searchDiagnostics.searchPassSuccessCount += successfulPasses.length;
+                searchDiagnostics.searchPassFailureCount += passDescriptors.length - successfulPasses.length;
+
+                if (successfulPasses.length === 0) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Error searching code: all semantic search passes failed. Please retry and verify embedding/vector backends are reachable."
+                        }],
+                        isError: true,
+                        meta: { searchDiagnostics }
+                    };
+                }
+
+                const byChunkKey = new Map<string, SearchCandidate>();
+                const attemptFilterSummary: SearchFilterSummary = {
+                    removedByScope: 0,
+                    removedByLanguage: 0,
+                    removedByPathInclude: 0,
+                    removedByPathExclude: 0,
+                    removedByMust: 0,
+                    removedByExclude: 0,
+                };
+                const addPass = (results: any[], passWeight = 1) => {
+                    for (let i = 0; i < results.length; i++) {
+                        const result = results[i];
+                        if (!result || typeof result.relativePath !== 'string') continue;
+                        const key = `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || 'unknown'}`;
+                        const rank = i + 1;
+                        const rrf = passWeight * (1 / (SEARCH_RRF_K + rank));
+                        const existing = byChunkKey.get(key);
+                        if (!existing) {
+                            byChunkKey.set(key, {
+                                result,
+                                baseScore: typeof result.score === 'number' ? result.score : 0,
+                                fusionScore: rrf,
+                                finalScore: 0,
+                                pathCategory: 'neutral',
+                                pathMultiplier: 1.0,
+                                changedFilesMultiplier: 1.0,
+                                passesMatchedMust: false,
+                            });
+                        } else {
+                            existing.fusionScore += rrf;
+                            if (typeof result.score === 'number') {
+                                existing.baseScore = Math.max(existing.baseScore, result.score);
+                            }
                         }
                     }
-                }
-            };
+                };
 
-            for (const pass of successfulPasses) {
-                addPass(pass.results, 1);
+                for (const pass of successfulPasses) {
+                    addPass(pass.results, 1);
+                }
+
+                const beforeFilter = byChunkKey.size;
+                const scoredAttempt: SearchCandidate[] = [];
+                for (const candidate of byChunkKey.values()) {
+                    const category = this.classifyPathCategory(candidate.result.relativePath);
+                    if (!this.shouldIncludeCategoryInScope(input.scope, category)) {
+                        attemptFilterSummary.removedByScope += 1;
+                        continue;
+                    }
+
+                    const languageValue = typeof candidate.result.language === 'string'
+                        ? candidate.result.language.toLowerCase()
+                        : 'unknown';
+                    if (parsedOperators.lang.length > 0 && !parsedOperators.lang.includes(languageValue)) {
+                        attemptFilterSummary.removedByLanguage += 1;
+                        continue;
+                    }
+
+                    const relativePath = String(candidate.result.relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+                    if (parsedOperators.path.length > 0 && !this.pathMatchesAnyPattern(relativePath, parsedOperators.path)) {
+                        attemptFilterSummary.removedByPathInclude += 1;
+                        continue;
+                    }
+
+                    if (parsedOperators.excludePath.length > 0 && this.pathMatchesAnyPattern(relativePath, parsedOperators.excludePath)) {
+                        attemptFilterSummary.removedByPathExclude += 1;
+                        continue;
+                    }
+
+                    const symbolLabel = typeof candidate.result.symbolLabel === 'string' ? candidate.result.symbolLabel : '';
+                    const content = typeof candidate.result.content === 'string' ? candidate.result.content : '';
+                    const fields = [symbolLabel, relativePath, content];
+                    const matchesMust = parsedOperators.must.every((token) => this.tokenMatchesAnyField(token, fields));
+                    if (!matchesMust) {
+                        attemptFilterSummary.removedByMust += 1;
+                        continue;
+                    }
+
+                    const matchesExclude = parsedOperators.exclude.some((token) => this.tokenMatchesAnyField(token, fields));
+                    if (matchesExclude) {
+                        attemptFilterSummary.removedByExclude += 1;
+                        continue;
+                    }
+
+                    const pathMultiplier = SCOPE_PATH_MULTIPLIERS[input.scope][category];
+                    let changedFilesMultiplier = 1.0;
+                    if (changedFilesBoostEnabled && changedFilesState.files.has(relativePath)) {
+                        changedFilesMultiplier = SEARCH_CHANGED_FIRST_MULTIPLIER;
+                        boostedCandidates += 1;
+                    }
+
+                    candidate.pathCategory = category;
+                    candidate.pathMultiplier = pathMultiplier;
+                    candidate.changedFilesMultiplier = changedFilesMultiplier;
+                    candidate.passesMatchedMust = matchesMust;
+                    candidate.finalScore = candidate.fusionScore * pathMultiplier * changedFilesMultiplier;
+                    scoredAttempt.push(candidate);
+                }
+
+                searchDiagnostics.resultsBeforeFilter = beforeFilter;
+                searchDiagnostics.resultsAfterFilter = scoredAttempt.length;
+                filterSummary = attemptFilterSummary;
+                scored = scoredAttempt;
+
+                scored.sort((a, b) => {
+                    if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+                    const fileCmp = a.result.relativePath.localeCompare(b.result.relativePath);
+                    if (fileCmp !== 0) return fileCmp;
+                    const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
+                    if (startCmp !== 0) return startCmp;
+                    const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
+                    if (labelCmp !== 0) return labelCmp;
+                    return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
+                });
+
+                if (parsedOperators.must.length === 0 || scored.length >= input.limit || attempt === maxAttempts - 1 || candidateLimit >= SEARCH_MAX_CANDIDATES) {
+                    break;
+                }
+
+                candidateLimit = Math.min(
+                    SEARCH_MAX_CANDIDATES,
+                    Math.max(candidateLimit + 1, candidateLimit * SEARCH_MUST_RETRY_MULTIPLIER)
+                );
             }
 
-            const beforeFilter = byChunkKey.size;
-            const scored: Candidate[] = [];
-            for (const candidate of byChunkKey.values()) {
-                const category = this.classifyPathCategory(candidate.result.relativePath);
-                if (!this.shouldIncludeCategoryInScope(input.scope, category)) {
-                    continue;
-                }
-                const multiplier = SCOPE_PATH_MULTIPLIERS[input.scope][category];
-                candidate.pathCategory = category;
-                candidate.pathMultiplier = multiplier;
-                candidate.finalScore = candidate.fusionScore * multiplier;
-                scored.push(candidate);
+            searchDiagnostics.excludedByIgnore = Math.max(0, searchDiagnostics.resultsBeforeFilter - searchDiagnostics.resultsAfterFilter);
+            const searchWarnings = Array.from(searchWarningsSet);
+            const mustApplied = parsedOperators.must.length > 0;
+            const mustSatisfied = !mustApplied || scored.length > 0;
+            if (mustApplied && !mustSatisfied) {
+                searchWarnings.push('FILTER_MUST_UNSATISFIED');
             }
 
-            searchDiagnostics.resultsBeforeFilter = beforeFilter;
-            searchDiagnostics.resultsAfterFilter = scored.length;
-            searchDiagnostics.excludedByIgnore = Math.max(0, beforeFilter - scored.length);
-
-            scored.sort((a, b) => {
-                if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
-                const fileCmp = a.result.relativePath.localeCompare(b.result.relativePath);
-                if (fileCmp !== 0) return fileCmp;
-                const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
-                if (startCmp !== 0) return startCmp;
-                const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
-                if (labelCmp !== 0) return labelCmp;
-                return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
-            });
+            const debugHintBase: SearchDebugHint | undefined = input.debug
+                ? {
+                    passesUsed: Array.from(passesUsed).sort(),
+                    candidateLimit,
+                    mustRetry: {
+                        attempts: attemptsUsed,
+                        maxAttempts,
+                        applied: mustApplied,
+                        satisfied: mustSatisfied,
+                        finalCount: scored.length,
+                    },
+                    operatorSummary,
+                    filterSummary,
+                    changedFilesBoost: {
+                        enabled: input.rankingMode === 'auto_changed_first',
+                        available: changedFilesState.available,
+                        changedCount: changedFilesState.files.size,
+                        multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
+                        boostedCandidates,
+                    }
+                }
+                : undefined;
 
             if (input.resultMode === 'raw') {
                 const rawResults: SearchChunkResult[] = scored.slice(0, input.limit).map((candidate) => ({
@@ -1999,11 +2472,23 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             baseScore: candidate.baseScore,
                             fusionScore: candidate.fusionScore,
                             pathMultiplier: candidate.pathMultiplier,
-                            pathCategory: candidate.pathCategory
+                            pathCategory: candidate.pathCategory,
+                            changedFilesMultiplier: candidate.changedFilesMultiplier,
+                            matchesMust: candidate.passesMatchedMust
                         }
                     } : {})
                 }));
                 const noiseMitigationHint = this.buildNoiseMitigationHint(rawResults.map((result) => result.file));
+                const responseHints: Record<string, unknown> = {};
+                if (noiseMitigationHint || debugHintBase) {
+                    responseHints.version = 1 as const;
+                }
+                if (noiseMitigationHint) {
+                    responseHints.noiseMitigation = noiseMitigationHint;
+                }
+                if (debugHintBase) {
+                    responseHints.debugSearch = debugHintBase;
+                }
 
                 const envelope: SearchResponseEnvelope = {
                     status: "ok",
@@ -2015,7 +2500,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     resultMode: "raw",
                     freshnessDecision,
                     ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {}),
-                    ...(noiseMitigationHint ? { hints: { version: 1 as const, noiseMitigation: noiseMitigationHint } } : {}),
+                    ...(Object.keys(responseHints).length > 0 ? { hints: responseHints } : {}),
                     results: rawResults
                 };
 
@@ -2026,7 +2511,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             type GroupAccumulator = {
-                chunks: Candidate[];
+                chunks: SearchCandidate[];
             };
 
             const groups = new Map<string, GroupAccumulator>();
@@ -2052,7 +2537,19 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const groupedResults: SearchGroupResult[] = [];
             for (const group of groups.values()) {
-                group.chunks.sort((a, b) => b.finalScore - a.finalScore);
+                group.chunks.sort((a, b) => {
+                    if (a.passesMatchedMust !== b.passesMatchedMust) {
+                        return a.passesMatchedMust ? -1 : 1;
+                    }
+                    if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+                    const fileCmp = a.result.relativePath.localeCompare(b.result.relativePath);
+                    if (fileCmp !== 0) return fileCmp;
+                    const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
+                    if (startCmp !== 0) return startCmp;
+                    const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
+                    if (labelCmp !== 0) return labelCmp;
+                    return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
+                });
                 const representative = group.chunks[0];
                 const spanStart = Math.min(...group.chunks.map((c) => c.result.startLine || 0));
                 const spanEnd = Math.max(...group.chunks.map((c) => c.result.endLine || 0));
@@ -2099,7 +2596,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             representativeChunkCount: group.chunks.length,
                             pathCategory: representative.pathCategory,
                             pathMultiplier: representative.pathMultiplier,
-                            topChunkScore: representative.finalScore
+                            topChunkScore: representative.finalScore,
+                            changedFilesMultiplier: representative.changedFilesMultiplier,
+                            matchesMust: representative.passesMatchedMust
                         }
                     } : {})
                 });
@@ -2116,8 +2615,22 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
             });
 
-            const visibleGroupedResults = groupedResults.slice(0, input.limit);
+            const diversityApplied = this.applyGroupDiversity(groupedResults, input.limit, input.groupBy);
+            const visibleGroupedResults = diversityApplied.selected;
             const noiseMitigationHint = this.buildNoiseMitigationHint(visibleGroupedResults.map((result) => result.file));
+            const responseHints: Record<string, unknown> = {};
+            if (noiseMitigationHint || debugHintBase) {
+                responseHints.version = 1 as const;
+            }
+            if (noiseMitigationHint) {
+                responseHints.noiseMitigation = noiseMitigationHint;
+            }
+            if (debugHintBase) {
+                responseHints.debugSearch = {
+                    ...debugHintBase,
+                    diversitySummary: diversityApplied.summary
+                };
+            }
 
             const envelope: SearchResponseEnvelope = {
                 status: "ok",
@@ -2129,7 +2642,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 resultMode: "grouped",
                 freshnessDecision,
                 ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {}),
-                ...(noiseMitigationHint ? { hints: { version: 1 as const, noiseMitigation: noiseMitigationHint } } : {}),
+                ...(Object.keys(responseHints).length > 0 ? { hints: responseHints } : {}),
                 results: visibleGroupedResults
             };
 

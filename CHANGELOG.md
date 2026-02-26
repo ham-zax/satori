@@ -2,6 +2,21 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Ignore-Control Live Validation and Docs Alignment
+
+### Validated
+- Verified live in `/home/hamza/repo/satori` that `.satoriignore` updates reconcile without full reindex:
+  - Newly ignored file disappeared from `search_codebase` results after the debounce window.
+  - Removing ignore rules made the same file searchable again via normal sync/reconcile flow.
+  - No `manage_index action:"reindex"` was required during the roundtrip.
+
+### Docs
+- Updated documentation surfaces to reflect no-reindex ignore reconciliation behavior and debounce expectations:
+  - `README.md`
+  - `ARCHITECTURE.md`
+  - `satori-landing/index.html`
+  - `satori-landing/architecture.html`
+
 ## [2026-02-26] Ignore-Reconciliation Hardening (No-Reindex Path)
 
 ### Release Versions

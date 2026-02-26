@@ -596,6 +596,7 @@ flowchart TD
               <li>Validates tool inputs via Zod-derived JSON Schema.</li>
               <li>Enforces snapshot fingerprint compatibility.</li>
               <li>Schedules background sync and optional watcher sync.</li>
+              <li>Runs ignore-rule reconciliation without forcing full reindex.</li>
               <li>
                 Applies capability-based defaults (including rerank behavior).
               </li>
@@ -762,7 +763,9 @@ stateDiagram-v2
 5) Global ignore (~/.satori/.satoriignore)</code></pre>
               <p class="intro">
                 Runtime-first defaults reduce docs/test noise without requiring
-                aggressive query-time excludes.
+                aggressive query-time excludes. Ignore-control edits trigger
+                reconciliation (delete newly ignored, sync newly unignored)
+                without a full reindex.
               </p>
             </div>
           </details>
@@ -784,12 +787,14 @@ stateDiagram-v2
           <details>
             <summary>Incremental Sync</summary>
             <div class="details-body">
-              <pre><code>hash files -> diff Merkle DAG -> {added, removed, modified}
+              <pre><code>ignore signature check -> reconcile if changed
+hash files -> diff Merkle DAG -> {added, removed, modified}
 removed/modified -> delete old chunks
 added/modified   -> split + embed + insert</code></pre>
               <p class="intro">
                 Polling loop runs every 3 minutes, optional watcher reuses the
-                same delta pipeline.
+                same delta pipeline, and watcher debounce defaults to 5000ms for
+                near-real-time reconcile.
               </p>
             </div>
           </details>

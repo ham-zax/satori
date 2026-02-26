@@ -16,7 +16,7 @@ Reference for how requests, indexing, and sync flow through the Satori monorepo.
   |                                                                   |
   |  +---------------+  +------------------+  +-------------------+  |
   |  | Tool Registry |  | Capability       |  | Snapshot          |  |
-  |  | (5 tools)     |->| Resolver         |  | Manager v3        |  |
+  |  | (6 tools)     |->| Resolver         |  | Manager v3        |  |
   |  | Zod -> JSON   |  | fast|std|slow    |  | fingerprint gate  |  |
   |  +-------+-------+  +------------------+  +--------+----------+  |
   |          |                                          |             |
@@ -181,6 +181,19 @@ reindexByChange:
   added/modified   -> re-split, re-embed, insert
 ```
 
+### 3.8 Ignore-Rule Reconciliation (No-Reindex Path)
+
+Ignore control files are first-class sync inputs:
+- Repo-root `.satoriignore`
+- Repo-root `.gitignore` (v1 scope: root only)
+
+Behavior contract:
+- Ignore control signatures are checked in `ensureFreshness()` before freshness throttle returns.
+- On signature change, Satori runs reconciliation without full reindex:
+  - delete indexed paths now ignored by the active matcher
+  - run incremental sync to pick up newly unignored files
+- Watcher mode and non-watcher mode both converge through the same reconcile path.
+
 ---
 
 ## 4. MCP Runtime
@@ -201,6 +214,7 @@ reindexByChange:
 manage_index     create | reindex | sync | status | clear
 search_codebase  runtime-first semantic search (scope + grouped/raw)
 call_graph       callers/callees traversal from symbolRef
+file_outline     sidecar-backed per-file symbol navigation
 read_file        safe read with optional line ranges
 list_codebases   tracked state summary
 ```
@@ -357,6 +371,9 @@ Trigger (3-min timer / chokidar event / manual sync call)
      |
      v
 SyncManager.ensureFreshness(codebasePath)
+     |
+     +-- Ignore control signature changed?
+     |      -> reconcile ignore rules (no full reindex)
      |
      +-- In-flight coalescing: already syncing this path? -> skip
      +-- Freshness throttle: synced recently? -> skip

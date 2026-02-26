@@ -45,6 +45,10 @@ Tool surface is hard-broken to 6 tools. This keeps routing explicit while exposi
 - Enabled by default. Set `MCP_ENABLE_WATCHER=false` to disable
 - Debounce window via `MCP_WATCH_DEBOUNCE_MS` (default `5000`)
 - Watch events reuse the same incremental sync pipeline (`reindexByChange`)
+- Ignore control files (`.satoriignore`, root `.gitignore`) trigger no-reindex reconciliation:
+  - delete indexed paths now ignored by active rules
+  - incremental sync picks up newly unignored files
+  - signature checks in `ensureFreshness` keep this working even when watcher events are missed
 - Safety gates:
   - Watch-triggered sync only runs for `indexed`/`sync_completed` codebases
   - Events are dropped for `indexing`, `indexfailed`, and `requires_reindex`

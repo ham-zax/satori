@@ -125,6 +125,9 @@ Tree-sitter splits code at function/class boundaries instead of arbitrary charac
 **Incremental Merkle Sync**
 File-level SHA-256 hashing + Merkle DAG diffing means only changed files are re-embedded. If 3 files change in a 10,000-file repo, only 3 files are processed. Background polling runs every 3 minutes, with an optional chokidar watcher for near-real-time updates.
 
+**Ignore-Rule Reconciliation (No-Reindex Normal Path)**
+Editing repo-root `.satoriignore` or `.gitignore` triggers reconciliation in the normal sync path: newly ignored files are removed from indexed results, and newly unignored files are picked up by incremental sync. This works even when watcher events are missed because sync-on-read checks an ignore-control signature before freshness early returns.
+
 **Fingerprint Safety Gates**
 Every index stores `{ provider, model, dimension, vectorStore, schemaVersion }`. On each search/sync call, runtime fingerprint is checked against stored fingerprint. If they differ, state flips to `requires_reindex` and queries are blocked. Errors include deterministic recovery steps ("train in the error").
 
@@ -256,6 +259,11 @@ SYNC
   Trigger (3-min timer / fs watcher / manual)
        |
        v
+  Ignore-control signature check
+       |
+       +-- changed? -> reconcile ignore rules (delete newly ignored, sync newly unignored)
+       |
+       v
   Hash all files --> diff against stored Merkle DAG
        |
        v
@@ -310,7 +318,7 @@ SYNC
 | `HYBRID_MODE` | no | `true` | Dense + BM25 hybrid search |
 | `READ_FILE_MAX_LINES` | no | `1000` | Truncation guard for `read_file` |
 | `MCP_ENABLE_WATCHER` | no | `true` | Auto-sync on file changes |
-| `MCP_WATCH_DEBOUNCE_MS` | no | `5000` | Watcher debounce interval |
+| `MCP_WATCH_DEBOUNCE_MS` | no | `5000` | Watcher debounce interval (also the near-real-time target for ignore-rule reconcile when watch events drive sync) |
 
 ## Tool Reference
 

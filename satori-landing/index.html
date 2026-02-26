@@ -763,15 +763,17 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
           <article class="card">
             <h4>Predictable Agent Behavior</h4>
             <p>
-              Exactly five MCP tools reduce routing confusion while keeping
+              Exactly six MCP tools reduce routing confusion while keeping
               call-chain analysis first-class.
             </p>
           </article>
           <article class="card">
             <h4>Fresh Context</h4>
             <p>
-              Incremental Merkle sync re-embeds only changed files. Polling and
-              watcher modes are supported.
+              Incremental Merkle sync re-embeds only changed files. Ignore-rule
+              edits (`.satoriignore`/`.gitignore`) reconcile without full
+              reindex, with near-real-time convergence under the debounce
+              window.
             </p>
           </article>
           <article class="card">

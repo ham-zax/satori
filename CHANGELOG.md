@@ -2,6 +2,25 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] MCP Determinism and Documentation Alignment
+
+### Modified
+- Enforced deterministic `list_codebases` presentation ordering:
+  - fixed section order (`Ready`, `Indexing`, `Requires Reindex`, `Failed`),
+  - lexicographic path ordering inside each section with locale-independent string comparison.
+- Updated `call_graph` tool description and MCP README wording to capability-driven language support phrasing (current default support: TS/JS/Python via `callGraphQuery` capability set).
+- Updated the authoritative end-to-end behavior spec to:
+  - mark hand-maintained contract expectations explicitly,
+  - reflect verified deterministic `list_codebases` ordering,
+  - remove resolved drift items from “Known Gaps”.
+
+### Tests
+- Added `packages/mcp/src/tools/list_codebases.test.ts`:
+  - asserts deterministic bucket order and intra-bucket sorted paths from unsorted snapshot input,
+  - validates indexing progress formatting remains stable,
+  - validates no cross-bucket path duplication,
+  - preserves empty-state output contract.
+
 ## [2026-02-26] P0 Sync Identity and Determinism Hardening
 
 ### Modified

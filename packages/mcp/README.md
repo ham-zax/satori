@@ -8,7 +8,7 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 - Runtime-first `search_codebase` with explicit `scope`, `resultMode`, `groupBy`, and optional `debug` traces
 - Deterministic query-prefix operators in `search_codebase` (`lang:`, `path:`, `-path:`, `must:`, `exclude:`)
 - Default grouped-result diversity and auto changed-files ranking (`rankingMode="auto_changed_first"`)
-- First-class `call_graph` tool with deterministic node/edge sorting and TS/Python support
+- First-class `call_graph` tool with deterministic node/edge sorting and capability-driven language support (currently TS/JS/Python)
 - Sidecar-backed `file_outline` tool for per-file symbol navigation and direct call_graph jump handles
 - Snapshot v3 safety with index fingerprints and strict `requires_reindex` access gates
 - Deterministic train-in-the-error responses for incompatible or legacy index states
@@ -91,7 +91,7 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 
 ### `call_graph`
 
-Traverse the prebuilt TS/JS/Python call graph sidecar for callers/callees/bidirectional symbol relationships.
+Traverse the prebuilt call graph sidecar for callers/callees/bidirectional symbol relationships (language support follows the core callGraphQuery capability set; currently TS/JS/Python).
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|

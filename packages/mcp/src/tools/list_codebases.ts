@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 
 const listCodebasesInputSchema = z.object({}).strict();
+const comparePathAsc = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 export const listCodebasesTool: McpTool = {
     name: "list_codebases",
@@ -36,10 +37,18 @@ export const listCodebasesTool: McpTool = {
         lines.push('');
 
         const byStatus = {
-            indexed: all.filter((e) => e.info.status === 'indexed' || e.info.status === 'sync_completed'),
-            indexing: all.filter((e) => e.info.status === 'indexing'),
-            requiresReindex: all.filter((e) => e.info.status === 'requires_reindex'),
-            failed: all.filter((e) => e.info.status === 'indexfailed'),
+            indexed: all
+                .filter((e) => e.info.status === 'indexed' || e.info.status === 'sync_completed')
+                .sort((a, b) => comparePathAsc(a.path, b.path)),
+            indexing: all
+                .filter((e) => e.info.status === 'indexing')
+                .sort((a, b) => comparePathAsc(a.path, b.path)),
+            requiresReindex: all
+                .filter((e) => e.info.status === 'requires_reindex')
+                .sort((a, b) => comparePathAsc(a.path, b.path)),
+            failed: all
+                .filter((e) => e.info.status === 'indexfailed')
+                .sort((a, b) => comparePathAsc(a.path, b.path)),
         };
 
         if (byStatus.indexed.length > 0) {

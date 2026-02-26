@@ -2162,6 +2162,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             : 500;
         const requestedStartLine = Number.isFinite(args?.start_line) ? Math.max(1, Number(args.start_line)) : undefined;
         const requestedEndLine = Number.isFinite(args?.end_line) ? Math.max(1, Number(args.end_line)) : undefined;
+        const resolveMode = args?.resolveMode === 'exact' ? 'exact' : 'outline';
+        const symbolIdExact = typeof args?.symbolIdExact === 'string' ? args.symbolIdExact.trim() : undefined;
+        const symbolLabelExact = typeof args?.symbolLabelExact === 'string' ? args.symbolLabelExact.trim() : undefined;
 
         try {
             await this.syncIndexedCodebasesFromCloud();
@@ -2334,7 +2337,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 } as FileOutlineSymbolResult;
             }));
 
-            const hasMore = symbols.length > limitSymbols;
             const missingSymbolMetadataCount = sidecar.notes.filter((note) => {
                 return note.type === 'missing_symbol_metadata' && this.normalizeRelativeFilePath(note.file) === normalizedFile;
             }).length;
@@ -2342,6 +2344,52 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? [`OUTLINE_MISSING_SYMBOL_METADATA:${missingSymbolMetadataCount}`]
                 : undefined;
 
+            if (resolveMode === 'exact') {
+                const exactMatches = this.sortFileOutlineSymbols(symbols.filter((symbol) => {
+                    if (symbolIdExact && symbol.symbolId !== symbolIdExact) {
+                        return false;
+                    }
+                    if (symbolLabelExact && symbol.symbolLabel !== symbolLabelExact) {
+                        return false;
+                    }
+                    return true;
+                }));
+
+                if (exactMatches.length === 0) {
+                    const payload: FileOutlineResponseEnvelope = {
+                        status: 'not_found',
+                        path: absoluteRoot,
+                        file: normalizedFile,
+                        outline: null,
+                        hasMore: false,
+                        message: 'No exact symbol match found in file outline.',
+                        ...(warnings ? { warnings } : {})
+                    };
+                    return {
+                        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    };
+                }
+
+                const hasMoreExact = exactMatches.length > limitSymbols;
+                const exactPayload: FileOutlineResponseEnvelope = {
+                    status: exactMatches.length > 1 ? 'ambiguous' : 'ok',
+                    path: absoluteRoot,
+                    file: normalizedFile,
+                    outline: {
+                        symbols: exactMatches.slice(0, limitSymbols)
+                    },
+                    hasMore: hasMoreExact,
+                    ...(exactMatches.length > 1 ? {
+                        message: `Multiple exact symbol matches found (${exactMatches.length}). Narrow with symbolIdExact for deterministic selection.`
+                    } : {}),
+                    ...(warnings ? { warnings } : {})
+                };
+                return {
+                    content: [{ type: "text", text: JSON.stringify(exactPayload, null, 2) }]
+                };
+            }
+
+            const hasMore = symbols.length > limitSymbols;
             const payload: FileOutlineResponseEnvelope = {
                 status: 'ok',
                 path: absoluteRoot,

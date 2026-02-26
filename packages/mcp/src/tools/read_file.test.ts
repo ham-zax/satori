@@ -234,3 +234,99 @@ test('read_file annotated mode treats JavaScript files as outline-capable', asyn
         assert.equal(payload.outline, null);
     });
 });
+
+test('read_file open_symbol resolves exact symbol span via file_outline and returns deterministic window', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as any,
+            toolHandlers: {
+                handleFileOutline: async (args: any) => {
+                    assert.equal(args.resolveMode, 'exact');
+                    assert.equal(args.symbolIdExact, 'sym_runtime');
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'ok',
+                                path: repoPath,
+                                file: 'src/runtime.ts',
+                                outline: {
+                                    symbols: [{
+                                        symbolId: 'sym_runtime',
+                                        symbolLabel: 'function run()',
+                                        span: { startLine: 2, endLine: 3 },
+                                        callGraphHint: {
+                                            supported: true,
+                                            symbolRef: { file: 'src/runtime.ts', symbolId: 'sym_runtime' }
+                                        }
+                                    }]
+                                },
+                                hasMore: false
+                            })
+                        }]
+                    };
+                }
+            } as any
+        });
+
+        assert.equal(response.isError, undefined);
+        assert.equal(response.content[0].text, 'line2\nline3');
+    });
+});
+
+test('read_file open_symbol returns explicit error on ambiguous symbol resolution', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolLabel: 'function same()'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as any,
+            toolHandlers: {
+                handleFileOutline: async () => ({
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'ambiguous',
+                            path: repoPath,
+                            file: 'src/runtime.ts',
+                            message: 'Multiple exact symbol matches found (2).',
+                            outline: {
+                                symbols: [
+                                    { symbolId: 'sym_a', symbolLabel: 'function same()', span: { startLine: 1, endLine: 1 } },
+                                    { symbolId: 'sym_b', symbolLabel: 'function same()', span: { startLine: 3, endLine: 3 } }
+                                ]
+                            },
+                            hasMore: false
+                        })
+                    }]
+                })
+            } as any
+        });
+
+        assert.equal(response.isError, true);
+        assert.match(response.content[0].text, /"status": "ambiguous"/);
+    });
+});

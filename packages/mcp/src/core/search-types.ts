@@ -126,9 +126,12 @@ export interface FileOutlineInput {
     start_line?: number;
     end_line?: number;
     limitSymbols?: number;
+    resolveMode?: "outline" | "exact";
+    symbolIdExact?: string;
+    symbolLabelExact?: string;
 }
 
-export type FileOutlineStatus = "ok" | "not_found" | "requires_reindex" | "unsupported";
+export type FileOutlineStatus = "ok" | "not_found" | "requires_reindex" | "unsupported" | "ambiguous";
 
 export interface FileOutlineSymbolResult {
     symbolId: string;

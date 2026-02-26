@@ -2,6 +2,22 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] Deterministic Jump Contract Tightening
+
+### Modified
+- Hardened exact symbol resolution determinism in `file_outline(resolveMode:"exact")` by explicitly sorting exact matches before truncation/response emission.
+- Clarified `read_file.open_symbol` contract:
+  - exact symbol resolution is scoped to the same file passed in `read_file.path`.
+  - unresolved repo-root cases now return a safer structured `requires_reindex` guidance flow (discover root via `list_codebases` / `manage_index status`, then reindex that root), without guessing `path.dirname(file)` as repo root.
+- Updated generated MCP docs text to align with the exact-file `open_symbol` behavior.
+
+### Added
+- Added explicit README reference for `read_file.open_symbol` object fields (`symbolId`, `symbolLabel`, `start_line`, `end_line`) outside generated tool blocks to avoid doc drift.
+
+### Tests
+- Added `file_outline` exact-mode regression for unmatched symbol queries in existing files (`status:"not_found"` + `outline:null`).
+- Strengthened ambiguity determinism coverage by feeding unsorted sidecar nodes and asserting stable candidate order.
+
 ## [2026-02-26] Agent-Native Search Noise Mitigation Hints
 
 ### Release Versions

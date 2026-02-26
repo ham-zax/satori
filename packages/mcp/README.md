@@ -110,6 +110,9 @@ Return a sidecar-backed symbol outline for one file, including call_graph jump h
 | `start_line` | integer | no |  | Optional start line filter (1-based, inclusive). |
 | `end_line` | integer | no |  | Optional end line filter (1-based, inclusive). |
 | `limitSymbols` | integer | no | `500` | Maximum number of returned symbols after line filtering. |
+| `resolveMode` | enum("outline", "exact") | no | `"outline"` | Outline mode returns all symbols (windowed/limited). Exact mode resolves deterministic symbol matches in this file. |
+| `symbolIdExact` | string | no |  | Used with resolveMode="exact": exact symbolId match in the target file. |
+| `symbolLabelExact` | string | no |  | Used with resolveMode="exact": exact symbol label match in the target file. |
 
 ### `read_file`
 
@@ -121,6 +124,7 @@ Read file content from the local filesystem, with optional 1-based inclusive lin
 | `start_line` | integer | no |  | Optional start line (1-based, inclusive). |
 | `end_line` | integer | no |  | Optional end line (1-based, inclusive). |
 | `mode` | enum("plain", "annotated") | no | `"plain"` | Output mode. plain returns text only; annotated returns content plus sidecar-backed outline metadata. |
+| `open_symbol` | object | no |  | Optional deterministic symbol jump request for this file path. Uses exact symbol resolution within `path` when symbolId/symbolLabel is provided. |
 
 ### `list_codebases`
 
@@ -130,6 +134,15 @@ No parameters.
 
 
 <!-- TOOLS_END -->
+
+### `read_file.open_symbol` Fields
+
+`open_symbol` resolves symbols inside the same file passed in `read_file.path`.
+
+- `symbolId` (string, optional): deterministic symbol id to resolve in `path`.
+- `symbolLabel` (string, optional): exact symbol label to resolve in `path`.
+- `start_line` (integer, optional): direct 1-based start line for span-based jump.
+- `end_line` (integer, optional): direct 1-based end line (inclusive).
 
 ## MCP Config Examples
 

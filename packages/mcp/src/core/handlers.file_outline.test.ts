@@ -176,6 +176,145 @@ test('handleFileOutline returns deterministic symbols with hasMore and warning c
     });
 });
 
+test('handleFileOutline exact mode resolves a unique symbol deterministically', async () => {
+    await withTempRepo(async (repoPath) => {
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => ({
+                version: 'v3',
+                sidecarPath: '/tmp/sidecar.json',
+                builtAt: '2026-01-01T00:00:00.000Z',
+                nodeCount: 2,
+                edgeCount: 0,
+                noteCount: 0,
+                fingerprint: RUNTIME_FINGERPRINT
+            }),
+        } as any;
+        const callGraphManager = {
+            loadSidecar: () => ({
+                formatVersion: 'v3',
+                codebasePath: repoPath,
+                builtAt: '2026-01-01T00:00:00.000Z',
+                fingerprint: RUNTIME_FINGERPRINT,
+                nodes: [
+                    { symbolId: 'sym_alpha', symbolLabel: 'function alpha()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 4, endLine: 7 } },
+                    { symbolId: 'sym_beta', symbolLabel: 'function beta()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 10, endLine: 13 } },
+                ],
+                edges: [],
+                notes: []
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolLabelExact: 'function beta()'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.outline.symbols.length, 1);
+        assert.equal(payload.outline.symbols[0].symbolId, 'sym_beta');
+    });
+});
+
+test('handleFileOutline exact mode returns ambiguous with deterministic candidates', async () => {
+    await withTempRepo(async (repoPath) => {
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => ({
+                version: 'v3',
+                sidecarPath: '/tmp/sidecar.json',
+                builtAt: '2026-01-01T00:00:00.000Z',
+                nodeCount: 2,
+                edgeCount: 0,
+                noteCount: 0,
+                fingerprint: RUNTIME_FINGERPRINT
+            }),
+        } as any;
+        const callGraphManager = {
+            loadSidecar: () => ({
+                formatVersion: 'v3',
+                codebasePath: repoPath,
+                builtAt: '2026-01-01T00:00:00.000Z',
+                fingerprint: RUNTIME_FINGERPRINT,
+                nodes: [
+                    { symbolId: 'sym_b', symbolLabel: 'function same()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 20, endLine: 21 } },
+                    { symbolId: 'sym_a', symbolLabel: 'function same()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 2, endLine: 3 } },
+                ],
+                edges: [],
+                notes: []
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolLabelExact: 'function same()'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ambiguous');
+        assert.equal(payload.outline.symbols.length, 2);
+        assert.equal(payload.outline.symbols[0].symbolId, 'sym_a');
+        assert.equal(payload.outline.symbols[1].symbolId, 'sym_b');
+    });
+});
+
+test('handleFileOutline exact mode returns not_found when no exact symbol matches exist in file', async () => {
+    await withTempRepo(async (repoPath) => {
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => ({
+                version: 'v3',
+                sidecarPath: '/tmp/sidecar.json',
+                builtAt: '2026-01-01T00:00:00.000Z',
+                nodeCount: 2,
+                edgeCount: 0,
+                noteCount: 0,
+                fingerprint: RUNTIME_FINGERPRINT
+            }),
+        } as any;
+        const callGraphManager = {
+            loadSidecar: () => ({
+                formatVersion: 'v3',
+                codebasePath: repoPath,
+                builtAt: '2026-01-01T00:00:00.000Z',
+                fingerprint: RUNTIME_FINGERPRINT,
+                nodes: [
+                    { symbolId: 'sym_alpha', symbolLabel: 'function alpha()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 4, endLine: 7 } },
+                    { symbolId: 'sym_beta', symbolLabel: 'function beta()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 10, endLine: 13 } },
+                ],
+                edges: [],
+                notes: []
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, undefined, callGraphManager);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolLabelExact: 'function gamma()'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_found');
+        assert.equal(payload.outline, null);
+        assert.equal(payload.hasMore, false);
+    });
+});
+
 test('handleFileOutline returns not_found for missing files under root', async () => {
     await withTempRepo(async (repoPath) => {
         const snapshotManager = {

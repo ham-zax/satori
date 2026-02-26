@@ -88,6 +88,7 @@ test('read_file schema includes optional start_line and end_line parameters', ()
     assert.ok(properties.start_line);
     assert.ok(properties.end_line);
     assert.ok(properties.mode);
+    assert.ok(properties.open_symbol);
     assert.equal(properties.mode.default, 'plain');
 
     const required = readFileTool!.inputSchema.required as string[];
@@ -107,7 +108,11 @@ test('file_outline schema exposes path/file and line window controls', () => {
     assert.ok(properties.start_line);
     assert.ok(properties.end_line);
     assert.ok(properties.limitSymbols);
+    assert.ok(properties.resolveMode);
+    assert.ok(properties.symbolIdExact);
+    assert.ok(properties.symbolLabelExact);
     assert.equal(properties.limitSymbols.default, 500);
+    assert.equal(properties.resolveMode.default, 'outline');
 
     const required = fileOutlineTool!.inputSchema.required as string[];
     assert.deepEqual(required, ['path', 'file']);

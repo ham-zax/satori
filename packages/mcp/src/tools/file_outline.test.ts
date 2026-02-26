@@ -32,6 +32,17 @@ test('file_outline validates required fields', async () => {
     assert.match(response.content[0]?.text || '', /file/);
 });
 
+test('file_outline validates resolveMode=exact requirements', async () => {
+    const response = await fileOutlineTool.execute({
+        path: '/repo',
+        file: 'src/runtime.ts',
+        resolveMode: 'exact'
+    }, buildContext());
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /symbolIdExact|resolveMode/);
+});
+
 test('file_outline delegates to handlers with parsed input', async () => {
     let receivedArgs: Record<string, unknown> | undefined;
     const ctx = {
@@ -53,11 +64,15 @@ test('file_outline delegates to handlers with parsed input', async () => {
         file: 'src/runtime.ts',
         start_line: 1,
         end_line: 20,
-        limitSymbols: 25
+        limitSymbols: 25,
+        resolveMode: 'exact',
+        symbolLabelExact: 'function run()'
     }, ctx);
 
     assert.equal(response.isError, undefined);
     assert.equal(receivedArgs?.path, '/repo');
     assert.equal(receivedArgs?.file, 'src/runtime.ts');
     assert.equal(receivedArgs?.limitSymbols, 25);
+    assert.equal(receivedArgs?.resolveMode, 'exact');
+    assert.equal(receivedArgs?.symbolLabelExact, 'function run()');
 });

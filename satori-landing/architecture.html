@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Satori Architecture | MCP Runtime + Core Engine</title>
+    <title>Satori | Architecture</title>
+    <meta
+      name="description"
+      content="How Satori works under the hood — from file change to agent result: packages/core trust layer, packages/mcp runtime, vector store, call-graph sidecar, and deterministic six-tool MCP surface."
+    />
     <link
       rel="preconnect"
       href="https://fonts.googleapis.com"
@@ -172,6 +176,34 @@
         font-weight: 300;
       }
 
+      .hero p .sel {
+        display: inline-block;
+        padding: 0.02rem 0.24rem;
+        margin: 0 0.06rem;
+        border-radius: 0.14rem;
+        line-height: 1.35;
+      }
+
+      .hero p .sel-core {
+        background: rgba(105, 216, 255, 0.22);
+        color: #bdefff;
+      }
+
+      .hero p .sel-mcp {
+        background: rgba(223, 255, 0, 0.22);
+        color: #eaff9b;
+      }
+
+      .hero p .sel-safety {
+        background: rgba(255, 140, 107, 0.22);
+        color: #ffc5b5;
+      }
+
+      .hero p .sel-data {
+        background: rgba(180, 142, 255, 0.24);
+        color: #d8beff;
+      }
+
       .hero-meta {
         margin-top: 2rem;
         font-family: var(--mono);
@@ -288,6 +320,40 @@
         opacity: 0.5;
         font-family: var(--mono);
         font-size: 0.8rem;
+      }
+
+      .runtime-card {
+        border-color: rgba(255, 255, 255, 0.2);
+      }
+
+      .runtime-card h3 {
+        color: var(--runtime-accent);
+      }
+
+      .runtime-card li::before {
+        color: var(--runtime-accent);
+        opacity: 0.9;
+      }
+
+      .runtime-card li {
+        padding-left: 1.7rem;
+      }
+
+      .runtime-card code {
+        color: var(--runtime-accent);
+        background: var(--runtime-bg);
+      }
+
+      .runtime-mcp {
+        --runtime-accent: #dfff00;
+        --runtime-bg: rgba(223, 255, 0, 0.08);
+        --runtime-line: rgba(223, 255, 0, 0.35);
+      }
+
+      .runtime-core {
+        --runtime-accent: #69d8ff;
+        --runtime-bg: rgba(105, 216, 255, 0.1);
+        --runtime-line: rgba(105, 216, 255, 0.35);
       }
 
       .table-wrap {
@@ -527,7 +593,7 @@
       <nav>
         <div class="nav-brand">
           <div class="status-dot"></div>
-          <span>Satori // Architecture</span>
+          <span>Satori // Architecture // Six Tools • One Workflow</span>
         </div>
         <div class="nav-links">
           <a href="https://satori-mcp.vercel.app" target="_blank">[ Live ]</a>
@@ -551,37 +617,54 @@
       <section class="hero">
         <h1>Satori Architecture</h1>
         <p>
-          Satori separates control plane and compute plane. The MCP runtime
-          handles tool contracts, state, sync orchestration, and access gates.
-          The core engine handles chunking, embedding, vector search, and delta
-          reindexing. On Zilliz Cloud (Milvus) free tier, Satori can index up
-          to 5 codebases (one collection per codebase).
+          Two packages work in concert:
+          <span class="sel sel-core"><code>packages/core</code></span> is the
+          <span class="sel sel-core">trust layer</span>
+          (<span class="sel sel-safety">merkle/hash-on-change sync</span>,
+          <span class="sel sel-safety">partial-scan safety</span>,
+          <span class="sel sel-safety">path-normalization SSOT</span>).
+          <span class="sel sel-mcp"><code>packages/mcp</code></span> is the
+          agent interface
+          (<span class="sel sel-mcp">six-tool contract</span>,
+          <span class="sel sel-mcp">freshness gating</span>,
+          <span class="sel sel-mcp">search orchestration</span>,
+          <span class="sel sel-mcp">sidecar lifecycle</span>,
+          <span class="sel sel-safety">snapshot/fingerprint gates</span>).
+          <span class="sel sel-data">Zilliz Cloud (Milvus)</span> and a
+          <span class="sel sel-data">call-graph sidecar</span> provide the
+          <span class="sel sel-data">retrieval substrate</span>.
         </p>
         <div class="hero-meta">
-          6 tools. Runtime-first retrieval. Call-graph sidecar. Snapshot gates.
-          Merkle sync. MCP-compatible for any agent.
+          Six MCP tools • Sync-on-read for search • Fingerprint gates • Merkle
+          incremental sync • Call-graph sidecar
+        </div>
+        <div class="hero-meta">
+          Six tools = six eyes into your repo: search → outline → graph → read.
         </div>
       </section>
 
       <section class="section">
         <h2>System Overview</h2>
         <p class="intro">
-          Request flow from MCP client to MCP runtime, then into the core
-          engine and storage layers.
+          Agent requests route through a fixed six-tool registry. The MCP
+          runtime enforces freshness/fingerprint gates and orchestrates search.
+          Core sync provides deterministic file-state truth for indexing.
         </p>
         <div class="diagram-wrap">
           <div class="mermaid">
 flowchart TD
-    client["MCP Client<br/>Claude / Cursor / Windsurf / Codex / custom"]
-    mcp["@zokizuan/satori-mcp<br/>Tool Registry (6 tools)<br/>CapabilityResolver<br/>SnapshotManager v3<br/>SyncManager"]
-    core["@zokizuan/satori-core<br/>Context Orchestrator<br/>AST/LangChain Splitter<br/>Embeddings<br/>Vector Adapters<br/>FileSynchronizer (Merkle DAG)"]
-    milvus["Milvus / Zilliz"]
-    local["~/.satori state"]
+    client["Agent<br/>Claude / Codex / Cursor"]
+    registry["Tool Registry<br/>(6 MCP tools)"]
+    mcp["packages/mcp Runtime<br/>ToolHandlers<br/>Search Orchestration<br/>Freshness Gate<br/>Snapshot + Fingerprint Gates"]
+    vector["Zilliz / Milvus<br/>Vector Store"]
+    sidecar["Call-Graph Sidecar<br/>AST graph artifacts"]
+    core["packages/core<br/>File Sync / Merkle / Hash"]
 
-    client --> mcp
+    client --> registry
+    registry --> mcp
+    mcp --> vector
+    mcp --> sidecar
     mcp --> core
-    core --> milvus
-    core --> local
           </div>
         </div>
       </section>
@@ -589,27 +672,57 @@ flowchart TD
       <section class="section">
         <h2>Runtime Boundaries</h2>
         <div class="grid-2">
-          <article class="card">
+          <article class="card runtime-card runtime-mcp">
             <h3>MCP Runtime (@zokizuan/satori-mcp)</h3>
             <ul>
-              <li>Defines the 6-tool MCP contract.</li>
-              <li>Validates tool inputs via Zod-derived JSON Schema.</li>
-              <li>Enforces snapshot fingerprint compatibility.</li>
-              <li>Schedules background sync and optional watcher sync.</li>
-              <li>Runs ignore-rule reconciliation without forcing full reindex.</li>
+              <li>Owns the six-tool MCP contract and schema validation.</li>
               <li>
-                Applies capability-based defaults (including rerank behavior).
+                Runs freshness gating: sync-on-read is executed for
+                <code>search_codebase</code>.
+              </li>
+              <li>
+                Applies snapshot/fingerprint compatibility gates with
+                deterministic <code>requires_reindex</code> envelopes.
+              </li>
+              <li>
+                Schedules background periodic sync and optional debounced
+                watcher sync.
+              </li>
+              <li>
+                Reconciles <code>.satoriignore</code>/<code>.gitignore</code>
+                edits without full reindex.
+              </li>
+              <li>
+                Reconciles cloud snapshot metadata before handler execution to
+                keep local state aligned.
+              </li>
+              <li>
+                Manages sidecar lifecycle and fallback behavior when graph data
+                is unavailable.
               </li>
             </ul>
           </article>
-          <article class="card">
+          <article class="card runtime-card runtime-core">
             <h3>Core Engine (@zokizuan/satori-core)</h3>
             <ul>
-              <li>Parses files and splits code at structural boundaries.</li>
-              <li>Generates embeddings and performs dense/hybrid retrieval.</li>
-              <li>Maintains deterministic chunk IDs and line metadata.</li>
-              <li>Computes Merkle-diff file deltas for incremental reindex.</li>
-              <li>Stays MCP-agnostic and reusable outside MCP.</li>
+              <li>
+                Maintains the sync trust layer: stat-first, hash-on-change,
+                deterministic merkle root.
+              </li>
+              <li>
+                Preserves prior entries under partial scans (unreadable files
+                and directories).
+              </li>
+              <li>
+                Enforces path normalization SSOT for scan/snapshot/diff flows.
+              </li>
+              <li>
+                Re-embeds only changed files for incremental indexing
+                performance.
+              </li>
+              <li>
+                Performs AST-aware chunking/splitting and remains MCP-agnostic.
+              </li>
             </ul>
           </article>
         </div>
@@ -634,13 +747,26 @@ flowchart TD
             </thead>
             <tbody>
               <tr>
+                <td><code>list_codebases</code></td>
+                <td>Inventory tracked roots and indexing state.</td>
+                <td>None</td>
+                <td>
+                  Deterministic bucket order with lexicographically sorted paths
+                  per bucket.
+                </td>
+              </tr>
+              <tr>
                 <td><code>manage_index</code></td>
-                <td>Create/sync/status/clear index lifecycle.</td>
+                <td>Index lifecycle and recovery operations.</td>
                 <td>
                   <code>action</code>, <code>path</code>, optional
-                  <code>force</code>, <code>splitter</code>
+                  <code>force</code>, <code>customExtensions</code>,
+                  <code>ignorePatterns</code>, <code>zillizDropCollection</code>
                 </td>
-                <td>Primary state transition entrypoint.</td>
+                <td>
+                  Actions: <code>create|reindex|sync|status|clear</code>. No
+                  public splitter knob.
+                </td>
               </tr>
               <tr>
                 <td><code>search_codebase</code></td>
@@ -650,43 +776,58 @@ flowchart TD
                 <td>
                   <code>query</code>, <code>scope</code>,
                   <code>resultMode</code>, <code>groupBy</code>,
-                  <code>limit</code>, optional <code>debug</code>
+                  <code>rankingMode</code>, <code>limit</code>, optional
+                  <code>debug</code>
                 </td>
-                <td>Grouped mode emits callGraphHint for direct graph jumps.</td>
+                <td>
+                  Defaults:
+                  <code>scope=runtime,resultMode=grouped,groupBy=symbol,rankingMode=auto_changed_first</code>.
+                  Includes <code>freshnessDecision</code> and grouped
+                  <code>callGraphHint</code>.
+                </td>
+              </tr>
+              <tr>
+                <td><code>file_outline</code></td>
+                <td>Sidecar-backed symbol outline and exact resolver.</td>
+                <td>
+                  <code>path</code>, <code>file</code>,
+                  <code>start_line</code>, <code>end_line</code>,
+                  <code>limitSymbols</code>, <code>resolveMode</code>,
+                  <code>symbolIdExact</code>, <code>symbolLabelExact</code>
+                </td>
+                <td>
+                  Exact mode returns deterministic statuses:
+                  <code>ok|ambiguous|not_found</code>; includes
+                  <code>hasMore</code>.
+                </td>
               </tr>
               <tr>
                 <td><code>call_graph</code></td>
                 <td>Traverse callers/callees from a symbolRef.</td>
                 <td>
-                  <code>symbolRef</code>, <code>direction</code>,
-                  <code>depth</code>, <code>limit</code>
+                  <code>path</code>, <code>symbolRef</code>,
+                  <code>direction</code>, <code>depth</code>,
+                  <code>limit</code>
                 </td>
-                <td>Uses prebuilt sidecar index; deterministic node/edge order.</td>
-              </tr>
-              <tr>
-                <td><code>file_outline</code></td>
-                <td>Sidecar-backed symbol outline for one file.</td>
                 <td>
-                  <code>path</code>, <code>file</code>,
-                  <code>start_line</code>, <code>end_line</code>,
-                  <code>limitSymbols</code>
+                  Uses prebuilt sidecar; deterministic node/edge ordering.
+                  Alias <code>bidirectional</code> is normalized to
+                  <code>both</code>.
                 </td>
-                <td>Returns per-symbol callGraphHint handles and hasMore truncation signal.</td>
               </tr>
               <tr>
                 <td><code>read_file</code></td>
                 <td>Safe file reads with optional line ranges and annotated mode.</td>
                 <td>
                   <code>path</code>, <code>start_line</code>,
-                  <code>end_line</code>, <code>mode</code>
+                  <code>end_line</code>, <code>mode</code>,
+                  <code>open_symbol</code>
                 </td>
-                <td>Annotated mode returns content + outlineStatus without failing content reads.</td>
-              </tr>
-              <tr>
-                <td><code>list_codebases</code></td>
-                <td>List tracked roots and state.</td>
-                <td>None</td>
-                <td>Fast readiness and inventory check.</td>
+                <td>
+                  <code>mode=annotated</code> returns content +
+                  <code>outlineStatus</code>. Large reads are truncated by
+                  <code>READ_FILE_MAX_LINES</code>.
+                </td>
               </tr>
             </tbody>
           </table>
@@ -696,29 +837,30 @@ flowchart TD
       <section class="section">
         <h2>State and Safety</h2>
         <p class="intro">
-          Snapshot state controls searchable access. Compatibility mismatches
-          are blocked until explicit reindex.
+          Snapshot state controls searchable access. Fingerprint mismatches are
+          hard-gated into deterministic <code>requires_reindex</code> outcomes
+          until explicit recovery.
         </p>
         <div class="diagram-wrap">
           <div class="mermaid">
 stateDiagram-v2
-    [*] --> not_found
+    [*] --> not_indexed
 
-    not_found --> indexing: manage_index(create)
-    indexing --> indexed: success
-    indexing --> indexfailed: failure
+    not_indexed --> indexing: manage_index(create)
+    indexing --> ready: success
+    indexing --> failed: failure
 
-    indexed --> sync_completed: sync
+    ready --> sync_completed: manage_index(sync) / auto-sync
     sync_completed --> sync_completed: subsequent sync
 
-    indexed --> requires_reindex: fingerprint mismatch
-    sync_completed --> requires_reindex: fingerprint mismatch
+    ready --> requires_reindex: fingerprint mismatch gate
+    sync_completed --> requires_reindex: fingerprint mismatch gate
     requires_reindex --> indexing: manage_index(reindex)
 
-    indexed --> [*]: clear
-    sync_completed --> [*]: clear
-    indexfailed --> [*]: clear
-    requires_reindex --> [*]: clear
+    ready --> not_indexed: clear
+    sync_completed --> not_indexed: clear
+    failed --> not_indexed: clear
+    requires_reindex --> not_indexed: clear
           </div>
         </div>
         <div class="grid-2">
@@ -726,14 +868,18 @@ stateDiagram-v2
             <h3>Fingerprint Fields</h3>
             <p>
               <code
-                >{ provider, model, dimension, vectorStore, schemaVersion
+                >{ embeddingProvider, embeddingModel, embeddingDimension,
+                vectorStoreProvider, schemaVersion
                 }</code
               >
             </p>
           </article>
           <article class="card">
             <h3>Safety Result</h3>
-            <p>No silent serving of stale or incompatible embeddings.</p>
+            <p>
+              Prevents silent reads from incompatible embedding
+              models/dimensions or schema-mode mismatches.
+            </p>
           </article>
         </div>
       </section>
@@ -744,29 +890,37 @@ stateDiagram-v2
           <details>
             <summary>Search Pipeline</summary>
             <div class="details-body">
-              <pre><code>query -> pass1 + expanded pass2 retrieval
-  -> RRF fusion
-  -> scope hard filter (runtime/docs/mixed)
-  -> path priors (entrypoint/core/docs/tests)
-  -> grouped/raw shaping
-  -> grouped result includes callGraphHint + freshnessDecision
-  -> optional hints.noiseMitigation when top results are tests/fixtures/docs-heavy</code></pre>
+              <pre><code>freshness gate (search_codebase sync-on-read, ~3m staleness window)
+  -> operator parse (lang:, path:, -path:, must:, exclude:)
+       path operators use gitignore-style matching over normalized relative paths
+  -> bounded candidate retrieval (SEARCH_MAX_CANDIDATES)
+  -> deterministic filter precedence:
+       scope -> lang -> path include -> path exclude -> must -> exclude
+  -> rerank policy (docs scope skipped by default; graceful degradation on failure)
+  -> changed-files boost (git status cache TTL ~5s, max changed-files threshold 50)
+  -> grouping + diversity caps (deterministic relaxed pass)
+  -> tie-break chain:
+       score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc
+  -> noise hint emission when visible top-K crosses noise threshold</code></pre>
             </div>
           </details>
 
           <details>
             <summary>Ignore Model</summary>
             <div class="details-body">
-              <pre><code>1) Built-in defaults
-2) Constructor overrides
-3) Env custom values
-4) Repo ignore files (.gitignore, .satoriignore)
-5) Global ignore (~/.satori/.satoriignore)</code></pre>
+              <pre><code>ignore sources:
+  .gitignore + .satoriignore + configured ignore patterns
+
+reconcile flow:
+  control-file signature change detected
+    -> delete newly ignored indexed paths
+    -> reload synchronizer
+    -> forced incremental sync
+    -> update signature/version
+    -> coalesce concurrent reconcile requests</code></pre>
               <p class="intro">
-                Runtime-first defaults reduce docs/test noise without requiring
-                aggressive query-time excludes. Ignore-control edits trigger
-                reconciliation (delete newly ignored, sync newly unignored)
-                without a full reindex.
+                Non-watcher convergence is still guaranteed via signature checks
+                during <code>ensureFreshness</code>.
               </p>
             </div>
           </details>
@@ -774,13 +928,15 @@ stateDiagram-v2
           <details>
             <summary>Capability Resolver + Rerank</summary>
             <div class="details-body">
-              <pre><code>capability profile (fast/standard/slow)
-  -> default candidate limits
-  -> rerank behavior decided internally
-  -> no public useReranker toggle on search_codebase</code></pre>
+              <pre><code>capability profile (fast / standard / slow)
+  -> default and max search limits
+  -> rerank policy decision
+  -> docs scope skips rerank by policy in current public surface
+  -> no public useReranker override knob</code></pre>
               <p class="intro">
-                Default limit ranges vary by profile (fast/standard/slow) and
-                provider locality.
+                If rerank is attempted and fails, responses degrade with
+                <code>RERANKER_FAILED</code> warnings and deterministic ordering
+                is preserved.
               </p>
             </div>
           </details>
@@ -788,14 +944,16 @@ stateDiagram-v2
           <details>
             <summary>Incremental Sync</summary>
             <div class="details-body">
-              <pre><code>ignore signature check -> reconcile if changed
-hash files -> diff Merkle DAG -> {added, removed, modified}
-removed/modified -> delete old chunks
-added/modified   -> split + embed + insert</code></pre>
+              <pre><code>stat-first scan (size + mtime signature)
+  -> reuse prior hash when unchanged
+  -> hash bytes only for changed/new candidates
+  -> deterministic merkleRoot from sorted (relativePath, hash)
+  -> diff {added, removed, modified}
+  -> apply vector updates incrementally</code></pre>
               <p class="intro">
-                Polling loop runs every 3 minutes, optional watcher reuses the
-                same delta pipeline, and watcher debounce defaults to 5000ms for
-                near-real-time reconcile.
+                Partial scans preserve prior entries for unreadable files/dirs
+                to avoid false removals; true removals under unreadable prefixes
+                are delayed until readability returns.
               </p>
             </div>
           </details>
@@ -816,32 +974,43 @@ added/modified   -> split + embed + insert</code></pre>
           style="margin-top: 0"
         ><code id="trace-block">Called satori.list_codebases({})
 Called satori.manage_index({"action":"status","path":"/home/hamza/repo/tradingview_ratio"})
--> sync completed, +0/-0/~0
+-> sync completed | +0 added, -0 removed, ~0 modified
 
-Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"auth refresh flow","scope":"runtime","resultMode":"grouped","groupBy":"symbol","limit":5})
+Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"auth refresh token flow","scope":"runtime","resultMode":"grouped","groupBy":"symbol","limit":5})
 -> Hit: src/auth/session.ts:88-141
--> callGraphHint: { supported: true, symbolRef: {...} }
+-> callGraphHint.symbolRef: {"file":"src/auth/session.ts","symbolId":"sym_auth_refresh"}
 
-Called satori.call_graph({"path":"/home/hamza/repo/tradingview_ratio","symbolRef":{"file":"src/auth/session.ts","symbolId":"sym_auth_refresh"},"direction":"both","depth":1,"limit":20})
+Called satori.call_graph({"path":"/home/hamza/repo/tradingview_ratio","symbolRef":{"file":"src/auth/session.ts","symbolId":"sym_auth_refresh"},"direction":"both","depth":2,"limit":20})
 -> nodes: 6, edges: 8, notes: 1
 
 Called satori.file_outline({"path":"/home/hamza/repo/tradingview_ratio","file":"src/auth/session.ts","limitSymbols":50})
--> symbols: 7, hasMore: false
+-> 12 symbols resolved | spans locked
 
-Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220,"mode":"annotated"})
--> Error: File not found
+Called satori.read_file({"path":"src/auth/session.ts","open_symbol":"refreshToken","mode":"annotated"})
+-> lines 88-141 | outlineStatus: ok | no warnings
 
-Fallback:
-Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"invariants reference mismatch","scope":"docs","resultMode":"raw","limit":10})
+File not found recovery:
+Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"INVARIANTS.md canonical path","scope":"docs","resultMode":"raw","limit":10})
 Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620,"mode":"annotated"})</code></pre>
       </section>
 
       <footer class="footer">
         <span
-          >Source of truth: README.md, ARCHITECTURE.md, and
-          packages/mcp/README.md.</span
+          >Landing: <a href="index.html">index.html</a> · Source:
+          <a href="https://github.com/ham-zax/satori" target="_blank"
+            >github.com/ham-zax/satori</a
+          >
+          · Docs:
+          <a
+            href="https://github.com/ham-zax/satori/blob/main/README.md"
+            target="_blank"
+            >README.md</a
+          ></span
         >
-        <span><a href="index.html">Back to Landing</a></span>
+        <span
+          >This page describes behavior. If it’s here, there should be a test
+          for it. · <a href="index.html">Back to Landing</a></span
+        >
       </footer>
     </div>
 

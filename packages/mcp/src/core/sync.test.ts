@@ -230,6 +230,64 @@ test('ignore-change reconciliation deletes newly ignored indexed paths and force
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
+test('ignore-change reconcile uses manifest paths captured before reload even when post-reload synchronizer excludes them', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+
+    let activePatterns = ['dist/**'];
+    const snapshot = createSnapshot(statusByPath);
+    snapshot.setCodebaseIndexManifest(codebasePath, ['src/keep.ts', 'src/ignored.ts']);
+
+    const deletedPaths: string[][] = [];
+    let syncCalls = 0;
+    const context = {
+        getActiveIgnorePatterns() {
+            return activePatterns;
+        },
+        hasSynchronizerForCodebase() {
+            return true;
+        },
+        async reloadIgnoreRulesForCodebase() {
+            activePatterns = ['dist/**', 'src/ignored.ts'];
+            return activePatterns;
+        },
+        async recreateSynchronizerForCodebase() {
+            return;
+        },
+        getTrackedRelativePaths() {
+            // Post-reload view no longer includes ignored file; reconcile must still delete it from manifest.
+            return ['src/keep.ts'];
+        },
+        async deleteIndexedPathsByRelativePaths(_codebasePath: string, relativePaths: string[]) {
+            deletedPaths.push(relativePaths.slice());
+            return relativePaths.length;
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+        },
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: true,
+        watchDebounceMs: 20,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 0, {
+        reason: 'ignore_change',
+        coalescedEdits: 1,
+    });
+
+    assert.equal(decision.mode, 'reconciled_ignore_change');
+    assert.equal(decision.deletedFiles, 1);
+    assert.deepEqual(deletedPaths, [['src/ignored.ts']]);
+    assert.equal(syncCalls, 1);
+    assert.deepEqual(snapshot.getCodebaseIndexedPaths(codebasePath), ['src/keep.ts']);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
 test('ignore-change reconciliation runs after in-flight sync and is not skipped by freshness window', async () => {
     const codebasePath = createTempDir();
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);

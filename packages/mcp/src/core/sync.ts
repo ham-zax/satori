@@ -360,33 +360,6 @@ export class SyncManager {
         return status === 'indexed' || status === 'sync_completed';
     }
 
-    private async loadRepoIgnorePatterns(codebasePath: string): Promise<string[]> {
-        try {
-            const entries = await fs.promises.readdir(codebasePath, { withFileTypes: true });
-            const ignoreFiles = entries
-                .filter((entry) => entry.isFile() && entry.name.startsWith('.') && entry.name.endsWith('ignore'))
-                .map((entry) => path.join(codebasePath, entry.name));
-
-            if (ignoreFiles.length === 0) {
-                return [];
-            }
-
-            const collected: string[] = [];
-            for (const ignoreFile of ignoreFiles) {
-                try {
-                    const patterns = await Context.getIgnorePatternsFromFile(ignoreFile);
-                    collected.push(...patterns);
-                } catch {
-                    // ignore file parse failures should not break watcher startup
-                }
-            }
-
-            return collected;
-        } catch {
-            return [];
-        }
-    }
-
     private getIgnoreRuleVersion(codebasePath: string): number {
         const current = this.ignoreRulesVersions.get(codebasePath);
         if (Number.isFinite(current)) {
@@ -424,9 +397,9 @@ export class SyncManager {
 
     private async buildIgnoreMatcherForCodebase(codebasePath: string): Promise<ReturnType<typeof ignore>> {
         const matcher = ignore();
+        // Context is the single source of truth for effective ignore rules.
         const basePatterns = this.context.getActiveIgnorePatterns?.(codebasePath) || [];
-        const repoPatterns = await this.loadRepoIgnorePatterns(codebasePath);
-        matcher.add([...new Set([...basePatterns, ...repoPatterns])]);
+        matcher.add([...new Set(basePatterns)]);
         return matcher;
     }
 

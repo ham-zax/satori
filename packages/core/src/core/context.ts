@@ -689,8 +689,8 @@ export class Context {
     private canonicalizeCodebasePath(codebasePath: string): string {
         const resolved = path.resolve(codebasePath);
         try {
-            const realPath = typeof (fs as any).realpathSync?.native === 'function'
-                ? (fs as any).realpathSync.native(resolved)
+            const realPath = typeof fs.realpathSync.native === 'function'
+                ? fs.realpathSync.native(resolved)
                 : fs.realpathSync(resolved);
             return this.trimTrailingSeparators(path.normalize(realPath));
         } catch {
@@ -721,7 +721,14 @@ export class Context {
         let relativePath = normalizedCandidate;
 
         if (path.isAbsolute(trimmed)) {
-            relativePath = path.relative(canonicalRoot, path.resolve(trimmed)).replace(/\\/g, '/');
+            const resolvedCandidate = path.resolve(trimmed);
+            relativePath = path.relative(canonicalRoot, resolvedCandidate).replace(/\\/g, '/');
+            // Symlink-safe fallback: if canonical-root relative path is invalid,
+            // retry against resolved (non-realpathed) root before dropping.
+            if (!relativePath || relativePath.startsWith('..')) {
+                const resolvedRoot = this.trimTrailingSeparators(path.normalize(path.resolve(codebasePath)));
+                relativePath = path.relative(resolvedRoot, resolvedCandidate).replace(/\\/g, '/');
+            }
         }
 
         relativePath = relativePath.replace(/^\/+/, '');
@@ -1180,22 +1187,22 @@ export class Context {
     /**
      * Check if a path matches any ignore pattern
      * @param filePath Path to check
-     * @param basePath Base path for relative pattern matching
+     * @param codebasePath Codebase root path used for relative pattern matching
      * @param isDirectory Whether the path is a directory
      * @returns True if path should be ignored
      */
-    private matchesIgnorePattern(filePath: string, basePath: string, isDirectory: boolean = false): boolean {
-        const effectivePatterns = this.getActiveIgnorePatterns(basePath);
+    private matchesIgnorePattern(filePath: string, codebasePath: string, isDirectory: boolean = false): boolean {
+        const effectivePatterns = this.getActiveIgnorePatterns(codebasePath);
         if (effectivePatterns.length === 0) {
             return false;
         }
 
-        const relativePath = path.relative(basePath, filePath).replace(/\\/g, '/').replace(/^\/+/, '');
+        const relativePath = path.relative(codebasePath, filePath).replace(/\\/g, '/').replace(/^\/+/, '');
         if (!relativePath || relativePath.startsWith('..')) {
             return false;
         }
 
-        const matcher = this.getIgnoreMatcherForCodebase(basePath);
+        const matcher = this.getIgnoreMatcherForCodebase(codebasePath);
 
         if (isDirectory) {
             const withSlash = relativePath.endsWith('/') ? relativePath : `${relativePath}/`;

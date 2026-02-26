@@ -4,36 +4,13 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { FileSynchronizer } = require('../../packages/core/dist/sync/synchronizer.js');
 
-function trimTrailingSeparators(inputPath) {
-  const parsedRoot = path.parse(inputPath).root;
-  if (inputPath === parsedRoot) {
-    return inputPath;
-  }
-  return inputPath.replace(/[\\/]+$/, '');
-}
-
-function canonicalizeCodebasePath(codebasePath) {
-  const resolved = path.resolve(codebasePath);
-  try {
-    const realPath = typeof fs.realpathSync.native === 'function'
-      ? fs.realpathSync.native(resolved)
-      : fs.realpathSync(resolved);
-    return trimTrailingSeparators(path.normalize(realPath));
-  } catch {
-    return trimTrailingSeparators(path.normalize(resolved));
-  }
-}
-
 function getSnapshotPath(codebasePath) {
-  const canonicalPath = canonicalizeCodebasePath(codebasePath);
-  const hash = crypto.createHash('md5').update(canonicalPath).digest('hex');
-  return path.join(os.homedir(), '.satori', 'merkle', `${hash}.json`);
+  return FileSynchronizer.getSnapshotPathForCodebase(codebasePath);
 }
 
 function createTempCodebase(files) {
@@ -66,6 +43,76 @@ function resetSyncEnv() {
   delete process.env.SATORI_SYNC_HASH_CONCURRENCY;
 }
 
+function isNormalizedRelPath(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && !value.includes('\\')
+    && !value.startsWith('./')
+    && !value.startsWith('/')
+    && !value.includes('/./')
+    && !value.split('/').includes('..')
+    && !value.endsWith('/');
+}
+
+test('integration: snapshot identity parity across path variants and deleteSnapshot SSOT', async () => {
+  resetSyncEnv();
+  const codebasePath = createTempCodebase({
+    'src/main.ts': 'export const value = 1;\n',
+  });
+
+  const variants = [
+    codebasePath,
+    `${codebasePath}${path.sep}`,
+    path.resolve(codebasePath, '.'),
+    path.resolve(codebasePath, '..', path.basename(codebasePath)),
+  ];
+
+  const symlinkPath = `${codebasePath}-symlink`;
+  let hasSymlinkVariant = false;
+  try {
+    fs.symlinkSync(codebasePath, symlinkPath, 'dir');
+    variants.push(symlinkPath);
+    hasSymlinkVariant = true;
+  } catch {
+    // Symlink creation may be restricted on some environments.
+  }
+
+  try {
+    await FileSynchronizer.deleteSnapshot(codebasePath);
+
+    const snapshotPaths = new Set(variants.map((candidate) => getSnapshotPath(candidate)));
+    assert.equal(snapshotPaths.size, 1);
+
+    const firstSynchronizer = new FileSynchronizer(variants[0], []);
+    await firstSynchronizer.initialize();
+    const firstRun = await firstSynchronizer.checkForChanges();
+    assert.deepEqual(firstRun.added, []);
+    assert.deepEqual(firstRun.removed, []);
+    assert.deepEqual(firstRun.modified, []);
+    assert.equal(firstRun.hashedCount, 0);
+
+    for (const variant of variants) {
+      const synchronizer = new FileSynchronizer(variant, []);
+      await synchronizer.initialize();
+      const result = await synchronizer.checkForChanges();
+      assert.deepEqual(result.added, []);
+      assert.deepEqual(result.removed, []);
+      assert.deepEqual(result.modified, []);
+      assert.equal(result.hashedCount, 0);
+    }
+
+    const snapshotPath = getSnapshotPath(variants[0]);
+    assert.equal(fs.existsSync(snapshotPath), true);
+    await FileSynchronizer.deleteSnapshot(variants[variants.length - 1]);
+    assert.equal(fs.existsSync(snapshotPath), false);
+  } finally {
+    if (hasSymlinkVariant) {
+      fs.rmSync(symlinkPath, { recursive: true, force: true });
+    }
+    await cleanupCodebase(codebasePath);
+  }
+});
+
 test('integration: unchanged files do not rehash and touch-only changes settle', async () => {
   resetSyncEnv();
   const codebasePath = createTempCodebase({
@@ -83,6 +130,7 @@ test('integration: unchanged files do not rehash and touch-only changes settle',
     assert.deepEqual(baseline.removed, []);
     assert.deepEqual(baseline.modified, []);
     assert.equal(baseline.hashedCount, 0);
+    assert.equal(baseline.partialScan, false);
 
     const filePath = path.join(codebasePath, 'src/main.ts');
     const now = new Date();
@@ -100,6 +148,29 @@ test('integration: unchanged files do not rehash and touch-only changes settle',
     assert.deepEqual(settled.removed, []);
     assert.deepEqual(settled.modified, []);
     assert.equal(settled.hashedCount, 0);
+  } finally {
+    await cleanupCodebase(codebasePath);
+  }
+});
+
+test('integration: true file removals are detected deterministically', async () => {
+  resetSyncEnv();
+  const codebasePath = createTempCodebase({
+    'src/remove-me.ts': 'export const removeMe = true;\n',
+    'src/keep.ts': 'export const keep = true;\n',
+  });
+
+  try {
+    await FileSynchronizer.deleteSnapshot(codebasePath);
+
+    const synchronizer = new FileSynchronizer(codebasePath, []);
+    await synchronizer.initialize();
+    await synchronizer.checkForChanges();
+
+    fs.rmSync(path.join(codebasePath, 'src/remove-me.ts'));
+    const delta = await synchronizer.checkForChanges();
+    assert.deepEqual(delta.removed, ['src/remove-me.ts']);
+    assert.ok(!delta.modified.includes('src/remove-me.ts'));
   } finally {
     await cleanupCodebase(codebasePath);
   }
@@ -164,6 +235,48 @@ test('integration: binary files are hashed as bytes and modifications are detect
   }
 });
 
+test('integration: unreadable file hash-fail triggers partial scan and preserves prior file state', async () => {
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  resetSyncEnv();
+  const codebasePath = createTempCodebase({
+    'src/locked.ts': 'export const locked = true;\n',
+    'src/readable.ts': 'export const readable = true;\n',
+  });
+
+  const lockedFile = path.join(codebasePath, 'src/locked.ts');
+
+  try {
+    await FileSynchronizer.deleteSnapshot(codebasePath);
+
+    const synchronizer = new FileSynchronizer(codebasePath, []);
+    await synchronizer.initialize();
+    await synchronizer.checkForChanges();
+
+    const now = new Date();
+    const next = new Date(now.getTime() + 5000);
+    fs.utimesSync(lockedFile, next, next);
+    fs.chmodSync(lockedFile, 0o000);
+
+    const partial = await synchronizer.checkForChanges();
+    assert.equal(partial.partialScan, true);
+    assert.ok(!partial.removed.includes('src/locked.ts'));
+    assert.ok(!partial.modified.includes('src/locked.ts'));
+
+    fs.chmodSync(lockedFile, 0o644);
+    const restored = await synchronizer.checkForChanges();
+    assert.ok(!restored.added.includes('src/locked.ts'));
+    assert.ok(!restored.removed.includes('src/locked.ts'));
+  } finally {
+    if (fs.existsSync(lockedFile)) {
+      fs.chmodSync(lockedFile, 0o644);
+    }
+    await cleanupCodebase(codebasePath);
+  }
+});
+
 test('integration: unreadable directory triggers partial scan and preserves prior state', async () => {
   if (process.platform === 'win32') {
     return;
@@ -205,6 +318,58 @@ test('integration: unreadable directory triggers partial scan and preserves prio
   }
 });
 
+test('integration: normalization SSOT applies to snapshot keys and diff outputs including backslashes', async () => {
+  resetSyncEnv();
+  const codebasePath = createTempCodebase({
+    'src/main.ts': 'export const main = true;\n',
+    'a/b.ts': 'export const nested = true;\n',
+  });
+
+  try {
+    await FileSynchronizer.deleteSnapshot(codebasePath);
+    const snapshotPath = getSnapshotPath(codebasePath);
+    await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
+
+    const dirtySnapshot = {
+      snapshotVersion: 2,
+      fileHashes: [
+        ['./src\\main.ts', 'hash-main'],
+        ['a\\\\b.ts', 'hash-ab'],
+        ['../escape.ts', 'hash-escape'],
+      ],
+      fileStats: [
+        ['./src\\main.ts', { size: 1, mtimeMs: 0, ctimeMs: 0 }],
+        ['a\\\\b.ts', { size: 1, mtimeMs: 0, ctimeMs: 0 }],
+        ['../escape.ts', { size: 1, mtimeMs: 0, ctimeMs: 0 }],
+      ],
+      merkleRoot: '',
+      partialScan: false,
+      unscannedDirPrefixes: ['a//', './a/b', '../bad'],
+      fullHashCounter: 0,
+    };
+
+    await fsp.writeFile(snapshotPath, JSON.stringify(dirtySnapshot), 'utf8');
+
+    const synchronizer = new FileSynchronizer(codebasePath, []);
+    await synchronizer.initialize();
+    const changes = await synchronizer.checkForChanges();
+
+    for (const relPath of [...changes.added, ...changes.removed, ...changes.modified]) {
+      assert.equal(isNormalizedRelPath(relPath), true);
+    }
+
+    const persistedSnapshot = await readSnapshot(codebasePath);
+    const persistedKeys = persistedSnapshot.fileHashes.map(([key]) => key);
+    assert.ok(persistedKeys.every((key) => isNormalizedRelPath(key)));
+    assert.ok(!persistedKeys.some((key) => key.includes('..')));
+    assert.ok(!persistedKeys.some((key) => key.includes('\\')));
+    assert.ok(persistedKeys.includes('src/main.ts'));
+    assert.ok(persistedKeys.includes('a/b.ts'));
+  } finally {
+    await cleanupCodebase(codebasePath);
+  }
+});
+
 test('integration: segment-safe prefix handling does not preserve sibling directories', async () => {
   if (process.platform === 'win32') {
     return;
@@ -236,6 +401,22 @@ test('integration: segment-safe prefix handling does not preserve sibling direct
     assert.ok(!changes.removed.includes('a/one.ts'));
   } finally {
     fs.chmodSync(unreadableDir, 0o755);
+    await cleanupCodebase(codebasePath);
+  }
+});
+
+test('integration: prefix normalization and compression are deterministic', async () => {
+  resetSyncEnv();
+  const codebasePath = createTempCodebase({
+    'src/main.ts': 'export const main = true;\n',
+  });
+
+  try {
+    await FileSynchronizer.deleteSnapshot(codebasePath);
+    const synchronizer = new FileSynchronizer(codebasePath, []);
+    const compressed = synchronizer.normalizeAndCompressPrefixes(new Set(['a', 'a/', 'a//', 'a/b', 'ab', 'a/b/c']));
+    assert.deepEqual(compressed, ['a', 'ab']);
+  } finally {
     await cleanupCodebase(codebasePath);
   }
 });

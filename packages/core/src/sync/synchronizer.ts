@@ -70,8 +70,8 @@ export class FileSynchronizer {
     private fullHashCounter: number;
 
     constructor(rootDir: string, ignorePatterns: string[] = []) {
-        this.rootDir = this.canonicalizeCodebasePath(rootDir);
-        this.snapshotPath = this.getSnapshotPath(this.rootDir);
+        this.rootDir = FileSynchronizer.canonicalizeSnapshotIdentityPath(rootDir);
+        this.snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(this.rootDir);
         this.fileHashes = new Map();
         this.fileStats = new Map();
         this.merkleRoot = '';
@@ -83,27 +83,7 @@ export class FileSynchronizer {
         this.fullHashCounter = 0;
     }
 
-    private canonicalizeCodebasePath(codebasePath: string): string {
-        const resolved = path.resolve(codebasePath);
-        try {
-            const realPath = typeof fsSync.realpathSync.native === 'function'
-                ? fsSync.realpathSync.native(resolved)
-                : fsSync.realpathSync(resolved);
-            return this.trimTrailingSeparators(path.normalize(realPath));
-        } catch {
-            return this.trimTrailingSeparators(path.normalize(resolved));
-        }
-    }
-
-    private trimTrailingSeparators(inputPath: string): string {
-        const parsedRoot = path.parse(inputPath).root;
-        if (inputPath === parsedRoot) {
-            return inputPath;
-        }
-        return inputPath.replace(/[\\/]+$/, '');
-    }
-
-    private static canonicalizeCodebasePath(codebasePath: string): string {
+    public static canonicalizeSnapshotIdentityPath(codebasePath: string): string {
         const resolved = path.resolve(codebasePath);
         try {
             const realPath = typeof fsSync.realpathSync.native === 'function'
@@ -115,20 +95,24 @@ export class FileSynchronizer {
         }
     }
 
+    public static snapshotPathFromCanonicalPath(canonicalPath: string): string {
+        const homeDir = os.homedir();
+        const merkleDir = path.join(homeDir, '.satori', 'merkle');
+        const hash = crypto.createHash('md5').update(canonicalPath).digest('hex');
+        return path.join(merkleDir, `${hash}.json`);
+    }
+
+    public static getSnapshotPathForCodebase(codebasePath: string): string {
+        const canonicalPath = FileSynchronizer.canonicalizeSnapshotIdentityPath(codebasePath);
+        return FileSynchronizer.snapshotPathFromCanonicalPath(canonicalPath);
+    }
+
     private static trimTrailingSeparators(inputPath: string): string {
         const parsedRoot = path.parse(inputPath).root;
         if (inputPath === parsedRoot) {
             return inputPath;
         }
         return inputPath.replace(/[\\/]+$/, '');
-    }
-
-    private getSnapshotPath(codebasePath: string): string {
-        const homeDir = os.homedir();
-        const merkleDir = path.join(homeDir, '.satori', 'merkle');
-        const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
-        const hash = crypto.createHash('md5').update(canonicalPath).digest('hex');
-        return path.join(merkleDir, `${hash}.json`);
     }
 
     private normalizeRelPath(candidatePath: string): string {
@@ -697,11 +681,7 @@ export class FileSynchronizer {
      * Delete snapshot file for a given codebase path.
      */
     static async deleteSnapshot(codebasePath: string): Promise<void> {
-        const homeDir = os.homedir();
-        const merkleDir = path.join(homeDir, '.satori', 'merkle');
-        const canonicalPath = FileSynchronizer.canonicalizeCodebasePath(codebasePath);
-        const hash = crypto.createHash('md5').update(canonicalPath).digest('hex');
-        const snapshotPath = path.join(merkleDir, `${hash}.json`);
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(codebasePath);
 
         try {
             await fsp.unlink(snapshotPath);

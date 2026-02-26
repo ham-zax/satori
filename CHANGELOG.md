@@ -2,6 +2,29 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-26] P0 Sync Identity and Determinism Hardening
+
+### Modified
+- Enforced snapshot-path SSOT in `@zokizuan/satori-core` `FileSynchronizer`:
+  - added explicit identity helpers (`canonicalizeSnapshotIdentityPath`, `snapshotPathFromCanonicalPath`, `getSnapshotPathForCodebase`),
+  - routed constructor snapshot initialization and `deleteSnapshot(...)` through the same identity path flow.
+- Added a dedicated CI gate job for core sync invariants:
+  - `core_sync_gate` on Ubuntu/Node 20,
+  - runs `pnpm --filter @zokizuan/satori-core build` and `pnpm --filter @zokizuan/satori-core test:integration`.
+- Clarified docs-scope rerank policy text in MCP docs/schema descriptions:
+  - `scope:"docs"` skips reranking by policy in the current public tool surface.
+- Updated core package README sync description to reflect stat-first + hash-on-change behavior.
+
+### Tests
+- Expanded `tests/integration/synchronizer.integration.test.mjs` with P0 determinism/identity coverage:
+  - snapshot identity parity across real/trailing-slash/resolve/symlink variants,
+  - deleteSnapshot parity across path variants (A deletes B),
+  - true file removal detection (no over-preservation),
+  - unreadable file hash-fail preservation with `partialScan` assertions,
+  - unreadable directory preservation (no bogus removals),
+  - normalization SSOT checks for persisted snapshot keys and diff outputs (including backslash forms and `..` rejection),
+  - deterministic prefix normalization/compression vector coverage.
+
 ## [2026-02-26] MCP Surface Simplification and Self-Healing Navigation
 
 ### Release Versions

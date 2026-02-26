@@ -11,7 +11,7 @@ Maintained by: `ham-zax` (`@zokizuan`).
 - code splitting (AST + LangChain fallback)
 - embedding generation
 - vector persistence and search via Milvus
-- incremental sync via Merkle-based change detection
+- incremental sync via stat-first change detection with hash-on-change verification
 
 ## Install
 

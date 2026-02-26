@@ -7,6 +7,35 @@ on:
     branches: [master, main, claude_context]
 
 jobs:
+  core_sync_gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core package
+        run: pnpm --filter @zokizuan/satori-core build
+
+      - name: Run core integration tests
+        run: pnpm --filter @zokizuan/satori-core test:integration
+
   lint_and_build:
     runs-on: ${{ matrix.os }}
 

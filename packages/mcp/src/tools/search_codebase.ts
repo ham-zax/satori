@@ -89,7 +89,7 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
 const buildSearchSchema = (ctx: ToolContext) => z.object({
     path: z.string().min(1).describe("ABSOLUTE path to an indexed codebase or subdirectory."),
     query: z.string().min(1).describe("Natural-language query."),
-    scope: z.enum(["runtime", "mixed", "docs"]).default("runtime").optional().describe("Search scope policy. runtime excludes docs/tests, docs returns docs/tests only, mixed includes all."),
+    scope: z.enum(["runtime", "mixed", "docs"]).default("runtime").optional().describe("Search scope policy. runtime excludes docs/tests, docs returns docs/tests only, mixed includes all. Docs scope skips reranker by policy in the current tool surface."),
     resultMode: z.enum(["grouped", "raw"]).default("grouped").optional().describe("Output mode. grouped returns merged search groups, raw returns chunk hits."),
     groupBy: z.enum(["symbol", "file"]).default("symbol").optional().describe("Grouping strategy in grouped mode."),
     rankingMode: z.enum(["default", "auto_changed_first"]).default("auto_changed_first").optional().describe("Ranking policy. auto_changed_first boosts files changed in the current git working tree when available."),

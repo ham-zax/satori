@@ -2,6 +2,18 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-27] Indexing Lock Hardening Plan Contract Finalization
+
+### Modified
+- Added and finalized [`docs/INDEXING_LOCK_HARDENING_PLAN.md`](/home/hamza/repo/satori/docs/INDEXING_LOCK_HARDENING_PLAN.md) as the execution contract for indexing-state hardening.
+- Locked deterministic decisions in the plan for:
+  - per-codebase indexing lock behavior,
+  - stable non-`ok` reason codes (`indexing`, `requires_reindex`, `not_indexed`),
+  - single completion SSOT (`marker_doc`),
+  - deterministic call-graph note capping/truncation metadata.
+- Added explicit actionable tasks (`T1`-`T14`) and enforced red-green-refactor execution order.
+- Updated the plan checklist to completion and aligned validation checklist status with executed test/build gates.
+
 ## [2026-02-26] MCP Determinism and Documentation Alignment
 
 ### Modified

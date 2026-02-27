@@ -37,6 +37,10 @@ Anything else is treated as a tool name.
 - `satori-cli tool call <toolName> --args-json @-` (read JSON from stdin)
 - `satori-cli <toolName> [schema-driven flags...]` (schema subset; otherwise instruct `--args-json` / `--args-file`)
 
+`help` and `version` must preserve the stdout JSON-only invariant:
+- stdout emits JSON payloads
+- human-readable text (if any) goes to stderr only
+
 ### Global flags
 - `--startup-timeout-ms <n>` default `180000`
 - `--call-timeout-ms <n>` default `600000`
@@ -52,6 +56,8 @@ Anything else is treated as a tool name.
 - `1` tool-level error (`CallTool` response `isError === true`)
 - `2` CLI usage error (bad JSON, missing args in wrapper mode, unknown flags)
 - `3` startup/transport/call timeout or protocol failure
+
+Exit code `1` also applies to structured non-ok tool envelopes (`status !== "ok"`) even when MCP `isError === false`.
 
 ### Stable stderr error tokens
 - `E_SCHEMA_UNSUPPORTED`
@@ -90,6 +96,7 @@ Because ESM executes imported modules before importer module body, `src/index.ts
 
 ### `packages/mcp/src/index.ts` bootstrap contract
 - No static imports from project code.
+- Restrict bootstrap static imports to Node built-ins only.
 - Read `SATORI_RUN_MODE` (default `mcp`).
 - Capture protocol stdout capability before patch:
   - capture `originalStdoutWrite = process.stdout.write.bind(process.stdout)`
@@ -97,8 +104,11 @@ Because ESM executes imported modules before importer module body, `src/index.ts
   - do not pass raw `write/once` captures directly into server start contract
 - Install stdio safety patch:
   - Patch `console.log/info/warn/error/debug` to `process.stderr.write`.
-  - In `SATORI_RUN_MODE=cli`, patch `process.stdout.write` to redirect/drop accidental non-protocol writes.
-  - In `SATORI_RUN_MODE=cli`, patch `process.stdout.end` (and `writev` when present) to prevent bypass.
+  - In `SATORI_RUN_MODE=cli`, patch `process.stdout.write` to block accidental non-protocol writes.
+  - In `SATORI_RUN_MODE=cli`, patch `process.stdout.end` and `process.stdout.writev` (when present) to prevent bypass.
+  - In `SATORI_RUN_MODE=cli`, patch `process.stdout._write` and `process.stdout._writev` (when present) to prevent bypass.
+  - Default guard behavior is `drop` (not redirect), with deterministic stderr markers.
+  - Optional override: `SATORI_CLI_STDOUT_GUARD=redirect|drop` (default `drop`).
   - For binary/non-text blocked stdout chunks, emit deterministic stderr marker instead of raw binary spill.
 - Dynamic-import `./server/start-server.js` after patch.
 - Call `startMcpServerFromEnv({ runMode, protocolStdout })`.
@@ -113,12 +123,13 @@ Because ESM executes imported modules before importer module body, `src/index.ts
 ### `packages/mcp/src/server/start-server.ts`
 - Export `startMcpServerFromEnv(options)`:
   - `runMode: "mcp" | "cli"`
-  - `protocolStdout` for cli mode transport wiring
+  - `protocolStdout: NodeJS.WritableStream` for cli mode transport wiring
   - optional test hooks/deps for deterministic startup assertions
 - Build current server components (config, embedding, context, snapshot, sync, handlers).
 - Connect transport:
   - `new StdioServerTransport(process.stdin, protocolStdoutLike)` for `cli` mode
   - `new StdioServerTransport()` for normal mode
+- In `cli` mode, missing `protocolStdout` is a deterministic startup failure (`E_PROTOCOL_FAILURE`, exit `3`).
 - Minimal-mode invariants in `runMode=cli`:
   - Do not start `syncManager.startBackgroundSync()`
   - Do not start watcher mode
@@ -159,8 +170,21 @@ Because ESM executes imported modules before importer module body, `src/index.ts
 
 ### Tool reflection flow
 - Call `client.listTools()` once per invocation and cache in-memory.
-- Wrapper mode parses using returned `inputSchema` subset.
+- Wrapper mode parses using normalized schema from `tools/list` (`inputSchema` or equivalent normalized field).
+- If schema is missing/non-object/unsupported, wrapper mode is disabled with deterministic error `E_SCHEMA_UNSUPPORTED` and fallback guidance.
 - Execute with `client.callTool({ name, arguments })`.
+
+### Tool result interpretation (indexing-lock aligned)
+After `callTool`:
+1. If `result.isError === true`, treat as tool error (`E_TOOL_ERROR`, exit `1`).
+2. Else parse `content[0].text` as JSON when possible.
+3. If parsed payload includes `status` and `status !== "ok"`, treat as tool error (`E_TOOL_ERROR`, exit `1`), and surface `status` + `reason` + `hints.status` on stderr summary when available.
+4. If payload is not a structured envelope, treat as success unless transport/protocol errors occurred.
+
+This preserves MCP-as-SSOT while keeping CLI automation-safe for indexing-lock envelopes:
+- `status: "not_ready"` with `reason: "indexing"`
+- `status: "requires_reindex"` with `reason: "requires_reindex"`
+- `status: "not_indexed"` with `reason: "not_indexed"`
 
 ### Timeouts
 - Apply `--startup-timeout-ms` around `client.connect(transport)`.
@@ -169,6 +193,16 @@ Because ESM executes imported modules before importer module body, `src/index.ts
   - best-effort `transport.close()`
   - exit code `3`
 - Ensure timers are `unref()` to avoid hanging tests.
+
+### Long-running manage actions (ephemeral-safe)
+For `manage_index` with `action=create|reindex`:
+1. Do not terminate immediately after first call response.
+2. Poll `manage_index { action: "status", path }` on the same child process at deterministic interval.
+3. Exit polling when terminal envelope/state is reached (`ok/indexed`, `indexfailed`, or `requires_reindex`).
+4. Respect timeout budget (`--call-timeout-ms` or explicit wait timeout if introduced).
+5. Only then close transport/process.
+
+This prevents CLI from killing in-flight indexing before marker-based completion.
 
 ## Wrapper Flag Parsing (Schema Subset + Deterministic Fallback)
 Supported subset:
@@ -202,6 +236,7 @@ Determinism rules:
 - Deterministic precedence and array ordering.
 - `--args-json @-` stdin parsing behavior.
 - stdout JSON-only enforcement in output layer.
+- Envelope interpretation tests: `isError:false` + `status:not_ready|requires_reindex|not_indexed` must exit `1`.
 
 ### Fake MCP integration tests (primary regression guard)
 Case A: well-behaved fake server (success path)
@@ -212,6 +247,7 @@ Case A: well-behaved fake server (success path)
 - Assert:
   - CLI stdout remains valid JSON
   - stderr noise does not fail command unless tool returns `isError: true`
+  - tool assertions validate expected tool names as subset presence, not exact-count equality
 
 Case B: intentionally corrupted fake server (failure path)
 - Fake server emits non-protocol stdout noise before/around protocol messages.
@@ -219,6 +255,17 @@ Case B: intentionally corrupted fake server (failure path)
   - exit code `3`
   - stderr contains `E_PROTOCOL_FAILURE`
   - stdout is empty or deterministic error JSON, but never mixed human output
+
+Case D: indexing-lock envelope behavior
+- Fake server returns `isError:false` with structured envelope payloads:
+  - `status:not_ready, reason:indexing`
+  - `status:requires_reindex, reason:requires_reindex`
+  - `status:not_indexed, reason:not_indexed`
+- Assert CLI exits `1` and emits `E_TOOL_ERROR`.
+
+Case E: manage_index create/reindex wait behavior
+- Fake server simulates `manage_index create` then status transitions over polls.
+- Assert CLI keeps process alive until terminal state or timeout and does not exit immediately after first create call.
 
 Case C: server-side stdout protection unit test
 - Unit-test `installCliStdoutRedirect()` directly.
@@ -237,6 +284,7 @@ Case C: server-side stdout protection unit test
   - `MILVUS_ADDRESS=localhost:19530`
 - CI policy:
   - CI-enabled only after startup is guaranteed lazy and does not require external services
+  - prerequisite proof test: `startMcpServerFromEnv(runMode=cli)` does not initialize embedding/vector backends during startup path
   - until that guarantee exists, keep this as non-CI/local smoke and rely in CI on:
     - fake-server integration tests
     - stdio-safety unit tests
@@ -272,7 +320,12 @@ Case C: server-side stdout protection unit test
 ### E2. Minimal CLI happy path
 1. Write failing tests for `tools list` and `tool call` using fake server.
 2. Implement transport + routing + JSON output.
-3. Add timeout handling, exit-code assertions, and stable stderr error tokens.
+3. Add timeout handling, exit-code assertions, stable stderr error tokens, and envelope-aware non-ok detection.
+
+### E2.1. Indexing-lock integration behavior
+1. Write failing tests for `status != ok` envelope exit mapping.
+2. Write failing tests for `manage_index create|reindex` wait/poll behavior.
+3. Implement polling on same child process and timeout-safe termination.
 
 ### E3. Wrapper subset parser
 1. Write failing tests for supported schema parsing.

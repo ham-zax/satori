@@ -1,93 +1,97 @@
 ---
 name: satori-mcp
-description: Deterministic Satori MCP workflow for indexing, runtime-first semantic search, call graph traversal, and exact symbol/file navigation with strict reindex and noise-remediation rules.
+description: Semantic code search + symbol navigation for Satori MCP. Use when users ask to search codebases (for example lazy loading, prefetch/preload, “where is X implemented”, trace callers/callees), and prefer search_codebase/file_outline/call_graph/read_file over ad-hoc grep.
 ---
 
-# Satori MCP (Deterministic Contract)
+# Satori MCP (Semantic Search + Symbol Navigation)
 
-Use this skill when working with Satori’s MCP tools for code discovery/navigation.
+Use this skill for codebase discovery/navigation requests, especially:
+- "search my codebase"
+- "where is X implemented"
+- "find lazy loading / prefetch / preload"
+- "trace call path / callers / callees"
 
-## Hard Rules (must follow)
+## Tool Surface (fixed)
 
-1. Satori exposes **exactly 6 tools**:
-   - `list_codebases`
-   - `manage_index`
-   - `search_codebase`
-   - `file_outline`
-   - `call_graph`
-   - `read_file`
-2. If any response indicates `requires_reindex` (status and/or `hints.reindex`):
-   - Run `manage_index` with `action="reindex"` on hinted path (or same indexed root).
-   - Retry the original tool call.
-   - **Do not substitute `sync` for this.**
-3. Never call `manage_index(action="clear")` unless user explicitly requested destructive wipe/reset.
-4. When `navigationFallback` is returned, treat it as authoritative and execute its args exactly.
+Use exactly these 6 tools:
+1. `list_codebases`
+2. `manage_index`
+3. `search_codebase`
+4. `file_outline`
+5. `call_graph`
+6. `read_file`
 
-## Output Shapes (important)
+## Semantic-First Execution Plan
 
-- `list_codebases` -> plain text buckets.
-- `manage_index` -> plain text action responses.
-- `search_codebase` -> JSON envelope (`status`, `results`, `warnings`, `hints`, `freshnessDecision`).
-- `file_outline` -> JSON envelope (`ok|ambiguous|not_found|unsupported|requires_reindex`).
-- `call_graph` -> JSON envelope (`ok|not_found|unsupported|not_ready|not_indexed|requires_reindex`).
-- `read_file`:
-  - `mode=plain` (default): plain text with truncation continuation hints.
-  - `mode=annotated`: JSON with `content`, `outlineStatus`, `outline`, `hasMore`, `warnings/hints`.
-  - `open_symbol`: deterministic exact open; no guessing on ambiguity.
-
-## Default Workflow
-
-1. **Inventory**
-   - `list_codebases`
-2. **Ensure index exists/healthy**
+1. Check/index status for target path:
    - `manage_index(action="status", path=...)`
-   - If not indexed: `manage_index(action="create", path=...)`
-3. **Search first (runtime-first defaults)**
+   - if needed: `manage_index(action="create", path=...)`
+2. Run semantic retrieval first (not grep-first):
    - `search_codebase(path, query, scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`
-4. **Navigate deterministically**
-   - If `callGraphHint.supported=true`: run `call_graph(path, symbolRef, direction="both", depth=1)`.
-   - Else: run `read_file` from `navigationFallback.readSpan.args` exactly.
-5. **Lock symbol spans**
-   - `file_outline(path, file, resolveMode="exact", symbolIdExact|symbolLabelExact)`
-6. **Open exact symbol**
-   - `read_file(path, open_symbol={...})`
+3. Use symbol-aware navigation from grouped results:
+   - if `callGraphHint.supported=true`, call `call_graph(path, symbolRef=callGraphHint.symbolRef, direction="both", depth=1)`
+   - if unsupported, execute `navigationFallback.readSpan.args` exactly
+4. Lock spans deterministically:
+   - `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)`
+   - `read_file(open_symbol={...})`
 
-## Search Semantics
+## Query Strategy (semantic search)
 
-- Scope:
-  - `runtime`: excludes docs/tests
-  - `docs`: docs/tests only
-  - `mixed`: all
-- Operator prefixes (prefix block):
+- Start with natural-language intent (example: "lazy loading prefetch preload flow in landing page").
+- Use operators only when needed:
   - `lang:` `path:` `-path:` `must:` `exclude:`
-- Deterministic filter precedence:
-  - `scope -> lang -> path include -> path exclude -> must -> exclude`
-- Use `debug=true` only when you need ranking/filter explanations.
+- Scope policy:
+  - `runtime` excludes docs/tests (default)
+  - `docs` for docs/tests only
+  - `mixed` for everything
+- Keep grouped symbol mode for architecture tracing; use raw mode only for chunk-level deep inspection.
 
-## Noise Remediation
+## Symbol Reference Features (must use)
 
-If `search_codebase` returns `hints.noiseMitigation`:
+- In grouped results, treat `callGraphHint.symbolRef` as canonical call-graph input.
+- Treat `navigationFallback` as authoritative when call graph is unavailable.
+- Do not invent spans; use returned spans/args directly.
 
-1. Add recommended patterns to repo-root `.satoriignore`.
-2. Wait `debounceMs` when provided (or watcher debounce default).
-3. Rerun `search_codebase`.
-4. For immediate convergence, run `manage_index(action="sync", path=<same root>)`, then rerun search.
+## Gating + Reason Contract
 
-## Symbol + Read Guidance
+For gating responses, always read both `status` and `reason`:
+- `status="requires_reindex"` -> `reason="requires_reindex"`
+- `status="not_ready"` -> `reason="indexing"`
+- `status="not_indexed"` -> `reason="not_indexed"`
 
-- Prefer `read_file(open_symbol)` after exact symbol resolution.
-- If `open_symbol` is `ambiguous`/`not_found`, use `file_outline(resolveMode="exact")` to disambiguate.
-- In plain `read_file`, follow continuation hints (`offset`/line windows) rather than issuing huge reads.
+Gate precedence:
+1. `requires_reindex`
+2. `not_ready` (`reason=indexing`)
+3. `not_indexed`
 
-## Operational Runbook
+If `requires_reindex` appears:
+- run `manage_index(action="reindex", path=<hinted/effective root>)`
+- retry original call
+- do **not** replace with `sync`
 
-- First-time indexing: `create -> status -> search`.
-- `requires_reindex`: always `manage_index(action="reindex")` then retry original tool.
-- `call_graph` `not_ready`: reindex; meanwhile use `navigationFallback` + `file_outline`.
-- Subdirectory searches: pass user-requested subdir `path`; rely on returned fallback spans/paths.
+Never call `manage_index(action="clear")` unless user explicitly requests destructive reset.
 
-## Warnings/Hints Policy
+## Indexing Lock Behavior
 
-- `warnings[]` means degraded-but-usable, not fatal.
-- Prefer deeper reads and less ranking trust when warnings exist.
-- Treat warning codes as stable identifiers (not freeform prose).
+During active indexing for a codebase, index-dependent tools can return `not_ready` envelopes.
+Blocked envelopes should include:
+- `message`
+- `hints.status` (status-check call)
+- indexing metadata (`progressPct`, `lastUpdated`, `phase`)
+
+`read_file` may return structured blocked JSON during indexing lock.
+
+## Freshness + Noise
+
+- `search_codebase` is freshness-gated and may return `freshnessDecision="skipped_indexing"`.
+- If `hints.noiseMitigation` appears:
+  1. update repo-root `.satoriignore`
+  2. wait debounce
+  3. rerun search
+  4. optionally `manage_index(action="sync")` for immediate convergence
+
+## Fallback Rule
+
+Use ad-hoc `bash/rg` only when:
+- user explicitly requests regex/grep behavior, or
+- Satori index is unavailable and user does not want to create/reindex now.

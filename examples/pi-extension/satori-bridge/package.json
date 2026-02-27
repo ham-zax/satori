@@ -1,0 +1,29 @@
+{
+  "name": "pi-satori-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension that proxies Satori MCP tools",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.55.1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@sinclair/typebox": "^0.34.48"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "0.55.1",
+    "typescript": "^5.8.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

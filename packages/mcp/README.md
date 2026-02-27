@@ -212,6 +212,57 @@ Never commit real API keys/tokens into repo config files.
 pnpm --filter @zokizuan/satori-mcp start
 ```
 
+## Shell CLI (`satori-cli`)
+
+`@zokizuan/satori-mcp` also ships a shell-first client binary that works without an MCP adapter.
+
+### Commands
+
+```bash
+satori-cli tools list
+satori-cli tool call <toolName> --args-json '{"path":"/abs/repo","query":"auth"}'
+satori-cli tool call <toolName> --args-file ./args.json
+satori-cli tool call <toolName> --args-json @-
+satori-cli <toolName> [schema-subset flags]
+```
+
+Global flags (`--startup-timeout-ms`, `--call-timeout-ms`, `--format`, `--debug`) must appear before the command token.
+Example: `satori-cli --debug tools list`.
+
+### Output + Exit Contract
+
+- `stdout`: JSON only
+- `stderr`: diagnostics and text summaries
+- exit `0`: success
+- exit `1`: tool-level error (`isError=true` or structured envelope `status!="ok"`)
+- exit `2`: usage/argument/schema-subset errors
+- exit `3`: startup/transport/protocol/timeout failures
+
+### Wrapper Flag Support
+
+Wrapper mode (`satori-cli <toolName> ...`) supports a strict subset from reflected `tools/list` schemas:
+
+- primitive properties (`string|number|integer|boolean`)
+- enums of primitives
+- arrays of primitives (repeat flags in insertion order)
+- object properties only via `--<prop>-json '{...}'`
+
+Tool-level flags that overlap global names are preserved in wrapper mode once command parsing starts.
+Example: `satori-cli search_codebase --path /repo --query auth --debug` forwards `debug=true` to the tool.
+For boolean wrapper flags, `--flag` implies `true` and `--flag false` is supported.
+
+Unsupported schema shapes (for example `oneOf`, `anyOf`, `$ref`, complex arrays, nested expansion) return `E_SCHEMA_UNSUPPORTED` with fallback guidance to `--args-json` / `--args-file`.
+
+### Run Mode Semantics
+
+When spawned by `satori-cli`, server process mode is `SATORI_RUN_MODE=cli`:
+
+- startup background loops are disabled (`verifyCloudState`, watcher mode, background sync)
+- stdio safety hardening is enabled (`stdout` protocol-only, logs to `stderr`)
+- tool behavior stays on-demand and uses the same six MCP tools
+
+`SATORI_CLI_STDOUT_GUARD=drop|redirect` controls accidental non-protocol stdout handling (`drop` default).
+
 ## Development
 
 ```bash

@@ -10,6 +10,16 @@ Tool contracts remain owned by MCP; CLI reflects tool changes dynamically via `t
 
 Hard requirement: no stdio corruption. Child stdout is protocol-only.
 
+## Implementation Status (Current Patch)
+- [x] Bootstrap/server split with ESM-safe dynamic import after stdio patching.
+- [x] `SATORI_RUN_MODE=cli` startup gating (`verifyCloudState`, watcher mode, background sync not started).
+- [x] `satori-cli` command surface (`tools list`, `tool call`, wrapper mode, `--args-json`, `--args-file`, `--args-json @-`).
+- [x] Envelope-aware exit mapping (`isError=true` and `status!="ok"` both exit `1`).
+- [x] `manage_index create|reindex` wait/poll behavior to avoid premature child shutdown.
+- [x] Fake-server integration tests (well-behaved, corrupted stdout, non-ok envelope, manage wait).
+- [x] Stdout-safety unit tests (`console` patch + cli stdout guard).
+- [ ] Real-server cli-mode smoke in CI (enable only after lazy startup guarantee for external providers is fully enforced).
+
 ## Scope
 - Add `satori-cli` bin.
 - Refactor MCP server entry to a bootstrap + shared server factory.

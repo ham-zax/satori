@@ -2,6 +2,65 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-27] Satori CLI v1.1 (Hardened stdio) + Regression Follow-ups
+
+### Release Versions
+- Repository version: `0.3.0`
+- `@zokizuan/satori-mcp`: `4.1.0` (bin/interface expansion in-package)
+
+### Added
+- Added a second executable in `@zokizuan/satori-mcp`:
+  - `satori` (MCP server entrypoint)
+  - `satori-cli` (shell-first client over MCP stdio)
+- Added CLI modules under `packages/mcp/src/cli/`:
+  - command routing (`tools list`, `tool call`, wrapper mode)
+  - MCP stdio client transport (`Client` + `StdioClientTransport`)
+  - raw argument modes (`--args-json`, `--args-file`, `--args-json @-`)
+  - schema-subset wrapper parsing with deterministic fallback to raw JSON args
+  - structured output/error formatting and deterministic error tokens
+- Added server bootstrap split under `packages/mcp/src/server/`:
+  - shared server factory `start-server.ts`
+  - stdio hardening utilities in `stdio-safety.ts`
+- Added targeted tests:
+  - `packages/mcp/src/server/stdio-safety.test.ts`
+  - `packages/mcp/src/server/start-server.lifecycle.test.ts`
+  - `packages/mcp/src/cli/index.test.ts`
+  - `packages/mcp/src/cli/args.test.ts`
+
+### Modified
+- Refactored MCP entrypoint bootstrap (`packages/mcp/src/index.ts`) to be ESM-safe for stdio patch ordering:
+  - no project static imports before patching
+  - dynamic import of server modules after stdio safety setup
+- Introduced run-mode behavior split with `SATORI_RUN_MODE=cli`:
+  - disables startup background sync loop, watcher startup, and startup reconciliation
+  - preserves on-demand tool execution semantics
+- Hardened stdio discipline:
+  - console output redirected to stderr
+  - cli-mode stdout guard for accidental non-protocol writes
+  - transport writes routed through preserved protocol stdout writable
+- CLI error mapping aligned with indexing-lock envelopes:
+  - exits `1` on `isError=true`
+  - exits `1` on structured envelopes where `status != "ok"` even when `isError=false`
+- Added `manage_index create|reindex` wait behavior with status polling to avoid premature child shutdown for long-running indexing actions.
+- Updated package wiring:
+  - `package.json` `bin` includes `satori-cli`
+  - `fix:bin-perms` applies executable bit to both `dist/index.js` and `dist/cli/index.js`
+
+### Fixed
+- Fixed symlinked-bin execution detection so `satori-cli` runs correctly when installed via linked/symlinked package managers.
+- Fixed wrapper `--debug` handling by parsing global flags only from the leading argv segment, preserving tool-level `--debug` in wrapper mode.
+- Fixed `manage_index create|reindex` flow to evaluate the initial call result before polling, preventing immediate errors/non-ok envelopes from being masked by status polling.
+
+### Docs
+- Updated implementation/status docs:
+  - `docs/SATORI_CLI_IMPLEMENTATION_PLAN.md`
+  - `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md`
+- Expanded MCP README with shell CLI usage/contract details:
+  - output + exit-code contract
+  - run-mode semantics
+  - wrapper parsing subset and global-flag placement rule
+  - boolean wrapper-flag behavior
+
 ## [2026-02-27] Repository Minor Version Bump and Rerelease
 
 ### Release Versions

@@ -3,10 +3,11 @@
 Maintenance rule: this spec is hand-maintained and treated as a contract. Behavior changes must update this document and the proving tests in the same patch.
 
 ## Outline of Discovered Behaviors (Complete)
-- Server boot lifecycle: config creation, capability resolution, fingerprint construction, snapshot load, cloud-state verification, tool registration, background sync start, optional watcher start.
+- Server boot lifecycle is split into a bootstrap entrypoint (`index.ts`) and server factory (`start-server.ts`), with run-mode gates for startup loops.
 - Canonical architecture path: Core sync state + vector store + sidecar + MCP handlers + 6 MCP tools.
 - North-star agent path: `search_codebase -> file_outline -> call_graph -> read_file(open_symbol)` with `navigationFallback` when graph is unavailable.
 - Exactly six MCP tools are exposed via registry: `list_codebases`, `manage_index`, `search_codebase`, `file_outline`, `call_graph`, `read_file`.
+- `satori-cli` is a shell client of the same six MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
 - `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers.
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
@@ -43,6 +44,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 Architecture in words:
 - Core sync (`packages/core`) tracks file state (stats, hashes, merkle root, partial-scan metadata).
 - MCP runtime (`packages/mcp`) owns snapshot status, freshness gating, search orchestration, call graph sidecar lifecycle, and tool routing.
+- Shell CLI runtime (`packages/mcp/src/cli`) is transport/client glue only and must not duplicate tool logic.
 - Sidecar/index artifacts are consumed by `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - Agent-visible entrypoints are only the six tools from `toolRegistry`.
 
@@ -61,7 +63,10 @@ Behavior contract:
 - Performance impact: incremental sync, coalescing, bounded retries, bounded rerank top-K, cached git-status, watcher debounce.
 
 **Evidence:**
-- [index.ts](/home/hamza/repo/satori/packages/mcp/src/index.ts) (`ContextMcpServer`, `start`, `setupTools`, background sync/watcher startup).
+- [index.ts](/home/hamza/repo/satori/packages/mcp/src/index.ts) (bootstrap entrypoint with run-mode and stdio-safety wiring).
+- [start-server.ts](/home/hamza/repo/satori/packages/mcp/src/server/start-server.ts) (`ContextMcpServer`, `start`, `setupTools`, run-mode startup lifecycle).
+- [stdio-safety.ts](/home/hamza/repo/satori/packages/mcp/src/server/stdio-safety.ts) (console-to-stderr and cli-mode stdout guard).
+- [cli/index.ts](/home/hamza/repo/satori/packages/mcp/src/cli/index.ts) (`tools list`, `tool call`, wrapper path, envelope-aware exit mapping).
 - [registry.ts](/home/hamza/repo/satori/packages/mcp/src/tools/registry.ts) (6-tool surface).
 - [handlers.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.ts) (`handleSearchCode`, `handleFileOutline`, `handleCallGraph`).
 - [search-types.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-types.ts) (envelopes/contracts).

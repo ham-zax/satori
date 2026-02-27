@@ -141,24 +141,33 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
         return undefined;
     }
 
-    const candidates = allCodebases
-        .filter((item) => item && typeof item.path === "string" && item.info?.status === "indexing")
-        .map((item) => {
-            const codebaseRoot = ensureAbsolutePath(item.path);
-            return {
-                codebaseRoot,
-                info: item.info,
-                matches: absolutePath === codebaseRoot || absolutePath.startsWith(`${codebaseRoot}${path.sep}`)
-            };
-        })
+    const candidates: Array<{
+        codebaseRoot: string;
+        info: { indexingPercentage: number; lastUpdated: string };
+        matches: boolean;
+    }> = [];
+
+    for (const item of allCodebases) {
+        if (!item || typeof item.path !== "string" || !item.info || item.info.status !== "indexing") {
+            continue;
+        }
+        const codebaseRoot = ensureAbsolutePath(item.path);
+        candidates.push({
+            codebaseRoot,
+            info: item.info,
+            matches: absolutePath === codebaseRoot || absolutePath.startsWith(`${codebaseRoot}${path.sep}`)
+        });
+    }
+
+    const matchingCandidates = candidates
         .filter((item) => item.matches)
         .sort((a, b) => b.codebaseRoot.length - a.codebaseRoot.length || a.codebaseRoot.localeCompare(b.codebaseRoot));
 
-    if (candidates.length === 0) {
+    if (matchingCandidates.length === 0) {
         return undefined;
     }
 
-    const match = candidates[0];
+    const match = matchingCandidates[0];
     const progressRaw = match.info?.indexingPercentage;
     const lastUpdatedRaw = match.info?.lastUpdated;
     return {

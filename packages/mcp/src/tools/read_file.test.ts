@@ -139,6 +139,43 @@ test('read_file preserves missing-file and non-file errors', async () => {
     });
 });
 
+test('read_file returns not_ready envelope when parent codebase is indexing', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'export const value = true;\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{
+                    path: repoPath,
+                    info: {
+                        status: 'indexing',
+                        indexingPercentage: 42,
+                        lastUpdated: '2026-02-27T23:57:03.000Z'
+                    }
+                }]
+            } as any
+        });
+
+        assert.equal(response.isError, undefined);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'indexing');
+        assert.equal(payload.codebaseRoot, repoPath);
+        assert.equal(payload.indexing.progressPct, 42);
+        assert.equal(payload.indexing.lastUpdated, '2026-02-27T23:57:03.000Z');
+        assert.equal(payload.indexing.phase, null);
+        assert.equal(payload.hints.status.tool, 'manage_index');
+        assert.equal(payload.hints.status.args.action, 'status');
+        assert.equal(payload.hints.status.args.path, repoPath);
+    });
+});
+
 test('read_file annotated mode returns content and outline metadata when outline is available', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
@@ -386,7 +423,7 @@ test('read_file annotated mode ignores non-searchable candidate roots in nextSte
     });
 });
 
-test('read_file open_symbol unresolved root with single indexing candidate omits reindex step', async () => {
+test('read_file open_symbol request is blocked with not_ready when parent codebase is indexing', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
         const srcPath = path.join(repoPath, 'src');
@@ -407,11 +444,12 @@ test('read_file open_symbol unresolved root with single indexing candidate omits
             } as any
         });
 
-        assert.equal(response.isError, true);
+        assert.equal(response.isError, undefined);
         const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'requires_reindex');
-        assert.deepEqual(payload.hints?.nextSteps, [
-            { tool: 'manage_index', args: { action: 'status', path: repoPath } }
-        ]);
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'indexing');
+        assert.equal(payload.hints?.status?.tool, 'manage_index');
+        assert.equal(payload.hints?.status?.args?.action, 'status');
+        assert.equal(payload.hints?.status?.args?.path, repoPath);
     });
 });

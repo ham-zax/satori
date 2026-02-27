@@ -17,6 +17,7 @@ export type FreshnessDecisionMode =
     | 'synced'
     | 'skipped_recent'
     | 'coalesced'
+    | 'skipped_indexing'
     | 'skipped_requires_reindex'
     | 'skipped_missing_path'
     | 'reconciled_ignore_change'
@@ -317,6 +318,11 @@ export class SyncManager {
     }
 
     private async syncCodebase(codebasePath: string): Promise<SyncExecutionOutcome> {
+        if (this.snapshotManager.getCodebaseStatus(codebasePath) === 'indexing') {
+            console.log(`[SYNC] ⏭️  Skipping sync for '${codebasePath}' because indexing is active.`);
+            return { mode: 'skipped_indexing' };
+        }
+
         if (this.snapshotManager.getCodebaseStatus(codebasePath) === 'requires_reindex') {
             console.log(`[SYNC] ⏭️  Skipping sync for '${codebasePath}' because it requires reindex.`);
             return { mode: 'skipped_requires_reindex' };

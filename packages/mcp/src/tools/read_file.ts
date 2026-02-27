@@ -56,6 +56,12 @@ type ReadFileCodebaseCandidate = {
     status: ReadFileSearchableStatus;
 };
 
+type ReadFileIndexingBlock = {
+    codebaseRoot: string;
+    progressPct: number | null;
+    lastUpdated: string | null;
+};
+
 const READ_FILE_DISCOVERY_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed', 'indexing']);
 const READ_FILE_RESOLVE_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed']);
 
@@ -127,6 +133,41 @@ function resolveCodebaseRootForFile(absolutePath: string, ctx: ToolContext): str
     return candidates[0].path;
 }
 
+function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): ReadFileIndexingBlock | undefined {
+    const allCodebases = typeof ctx.snapshotManager?.getAllCodebases === "function"
+        ? ctx.snapshotManager.getAllCodebases()
+        : [];
+    if (!Array.isArray(allCodebases)) {
+        return undefined;
+    }
+
+    const candidates = allCodebases
+        .filter((item) => item && typeof item.path === "string" && item.info?.status === "indexing")
+        .map((item) => {
+            const codebaseRoot = ensureAbsolutePath(item.path);
+            return {
+                codebaseRoot,
+                info: item.info,
+                matches: absolutePath === codebaseRoot || absolutePath.startsWith(`${codebaseRoot}${path.sep}`)
+            };
+        })
+        .filter((item) => item.matches)
+        .sort((a, b) => b.codebaseRoot.length - a.codebaseRoot.length || a.codebaseRoot.localeCompare(b.codebaseRoot));
+
+    if (candidates.length === 0) {
+        return undefined;
+    }
+
+    const match = candidates[0];
+    const progressRaw = match.info?.indexingPercentage;
+    const lastUpdatedRaw = match.info?.lastUpdated;
+    return {
+        codebaseRoot: match.codebaseRoot,
+        progressPct: Number.isFinite(progressRaw) ? Number(progressRaw) : null,
+        lastUpdated: typeof lastUpdatedRaw === "string" ? lastUpdatedRaw : null
+    };
+}
+
 export const readFileTool: McpTool = {
     name: "read_file",
     description: () => "Read file content from the local filesystem, with optional 1-based inclusive line ranges and safe truncation.",
@@ -161,6 +202,39 @@ export const readFileTool: McpTool = {
                 return {
                     content: [{ type: "text", text: `Error: '${absolutePath}' is not a file.` }],
                     isError: true
+                };
+            }
+
+            const indexingBlock = resolveIndexingBlockForFile(absolutePath, ctx);
+            if (indexingBlock) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            status: "not_ready",
+                            reason: "indexing",
+                            path: absolutePath,
+                            codebaseRoot: indexingBlock.codebaseRoot,
+                            message: `Codebase '${indexingBlock.codebaseRoot}' is currently indexing. Wait for indexing to complete, then retry.`,
+                            hints: {
+                                status: {
+                                    tool: "manage_index",
+                                    args: {
+                                        action: "status",
+                                        path: indexingBlock.codebaseRoot
+                                    }
+                                },
+                                debugIndexing: {
+                                    completionProof: "marker_doc"
+                                }
+                            },
+                            indexing: {
+                                progressPct: indexingBlock.progressPct,
+                                lastUpdated: indexingBlock.lastUpdated,
+                                phase: null
+                            }
+                        }, null, 2)
+                    }]
                 };
             }
 

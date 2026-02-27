@@ -67,8 +67,50 @@ test('handleFileOutline returns requires_reindex when sidecar metadata is missin
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'requires_reindex');
+        assert.equal(payload.reason, 'requires_reindex');
         assert.equal(payload.file, 'src/runtime.ts');
         assert.equal(payload.hints.reindex.args.path, repoPath);
+    });
+});
+
+test('handleFileOutline returns not_ready envelope when codebase is indexing', async () => {
+    await withTempRepo(async (repoPath) => {
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getIndexedCodebases: () => [],
+            getIndexingCodebases: () => [repoPath],
+            getAllCodebases: () => [{
+                path: repoPath,
+                info: {
+                    status: 'indexing',
+                    indexingPercentage: 55,
+                    lastUpdated: '2026-02-27T23:57:03.000Z'
+                }
+            }],
+            getCodebaseInfo: () => ({
+                status: 'indexing',
+                indexingPercentage: 55,
+                lastUpdated: '2026-02-27T23:57:03.000Z'
+            }),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'indexing');
+        assert.equal(payload.codebaseRoot, repoPath);
+        assert.equal(payload.indexing.progressPct, 55);
+        assert.equal(payload.indexing.lastUpdated, '2026-02-27T23:57:03.000Z');
+        assert.equal(payload.hints.status.tool, 'manage_index');
+        assert.equal(payload.hints.status.args.action, 'status');
+        assert.equal(payload.hints.status.args.path, repoPath);
     });
 });
 

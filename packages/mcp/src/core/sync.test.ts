@@ -236,6 +236,24 @@ test('ensureFreshness does not baseline ignore control signature for non-searcha
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
+test('ensureFreshness returns skipped_indexing for actively indexing codebases', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexing']]);
+    const snapshot = createSnapshot(statusByPath);
+    const context = createContext();
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 60_000);
+    assert.equal(decision.mode, 'skipped_indexing');
+    assert.equal(context.calls, 0);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
 test('ensureFreshness detects ignore control signature changes and reconciles before skipped_recent', async () => {
     const codebasePath = createTempDir();
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);

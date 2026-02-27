@@ -57,6 +57,28 @@ export interface VectorStoreBackendInfo {
     address?: string;
 }
 
+export interface IndexCompletionFingerprint {
+    embeddingProvider: string;
+    embeddingModel: string;
+    embeddingDimension: number;
+    vectorStoreProvider: string;
+    schemaVersion: string;
+}
+
+export interface IndexCompletionMarkerDocument {
+    kind: 'satori_index_completion_v1';
+    codebasePath: string;
+    fingerprint: IndexCompletionFingerprint;
+    indexedFiles: number;
+    totalChunks: number;
+    completedAt: string;
+    runId: string;
+}
+
+export const INDEX_COMPLETION_MARKER_DOC_ID = '__satori_index_completion_marker_v1__';
+export const INDEX_COMPLETION_MARKER_FILE_EXTENSION = '.satori_meta';
+export const INDEX_COMPLETION_MARKER_RELATIVE_PATH = '.__satori__/index_completion_marker.json';
+
 export interface VectorDatabase {
     /**
      * Create collection

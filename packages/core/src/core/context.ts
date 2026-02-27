@@ -14,7 +14,12 @@ import {
     VectorSearchResult,
     HybridSearchRequest,
     HybridSearchOptions,
-    HybridSearchResult
+    HybridSearchResult,
+    IndexCompletionFingerprint,
+    IndexCompletionMarkerDocument,
+    INDEX_COMPLETION_MARKER_DOC_ID,
+    INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+    INDEX_COMPLETION_MARKER_RELATIVE_PATH
 } from '../vectordb';
 import { SemanticSearchResult } from '../types';
 import { envManager } from '../utils/env-manager';
@@ -421,6 +426,7 @@ export class Context {
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
         console.log(`[Context] 🔍 Executing ${searchType}: "${query}" in ${codebasePath}`);
+        const effectiveFilterExpr = this.buildSemanticSearchFilterExpr(filterExpr);
 
         const normalizeBreadcrumbs = (value: unknown): string[] | undefined => {
             if (!Array.isArray(value)) {
@@ -489,7 +495,7 @@ export class Context {
                         params: { k: 100 }
                     },
                     limit: topK,
-                    filterExpr
+                    filterExpr: effectiveFilterExpr
                 }
             );
 
@@ -524,7 +530,7 @@ export class Context {
             const searchResults: VectorSearchResult[] = await this.vectorDatabase.search(
                 collectionName,
                 queryEmbedding.vector,
-                { topK, threshold, filterExpr }
+                { topK, threshold, filterExpr: effectiveFilterExpr }
             );
 
             // 3. Convert to semantic search result format
@@ -544,6 +550,117 @@ export class Context {
             console.log(`[Context] ✅ Found ${results.length} relevant results`);
             return results;
         }
+    }
+
+    private buildSemanticSearchFilterExpr(filterExpr?: string): string {
+        const markerExclusion = `fileExtension != "${INDEX_COMPLETION_MARKER_FILE_EXTENSION}"`;
+        if (!filterExpr || filterExpr.trim().length === 0) {
+            return markerExclusion;
+        }
+        return `(${filterExpr}) and (${markerExclusion})`;
+    }
+
+    private async queryCompletionMarkerRows(collectionName: string): Promise<Record<string, any>[]> {
+        return this.vectorDatabase.query(
+            collectionName,
+            `id == "${INDEX_COMPLETION_MARKER_DOC_ID}"`,
+            ['id', 'metadata'],
+            8
+        );
+    }
+
+    async clearIndexCompletionMarker(codebasePath: string): Promise<void> {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
+        if (!hasCollection) {
+            return;
+        }
+
+        const rows = await this.queryCompletionMarkerRows(collectionName);
+        const markerIds = rows
+            .map((row) => (typeof row.id === 'string' ? row.id : ''))
+            .filter((id) => id.length > 0);
+        if (markerIds.length === 0) {
+            return;
+        }
+        await this.vectorDatabase.delete(collectionName, Array.from(new Set(markerIds)));
+    }
+
+    async writeIndexCompletionMarker(codebasePath: string, marker: IndexCompletionMarkerDocument): Promise<void> {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
+        if (!hasCollection) {
+            throw new Error(`Cannot write completion marker: collection '${collectionName}' does not exist.`);
+        }
+
+        await this.clearIndexCompletionMarker(codebasePath);
+
+        const vector = new Array<number>(this.embedding.getDimension()).fill(0);
+        const markerDoc: VectorDocument = {
+            id: INDEX_COMPLETION_MARKER_DOC_ID,
+            vector,
+            content: 'satori index completion marker',
+            relativePath: INDEX_COMPLETION_MARKER_RELATIVE_PATH,
+            startLine: 0,
+            endLine: 0,
+            fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+            metadata: marker,
+        };
+
+        if (this.getIsHybrid() === true) {
+            await this.vectorDatabase.insertHybrid(collectionName, [markerDoc]);
+        } else {
+            await this.vectorDatabase.insert(collectionName, [markerDoc]);
+        }
+    }
+
+    async getIndexCompletionMarker(codebasePath: string): Promise<IndexCompletionMarkerDocument | null> {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
+        if (!hasCollection) {
+            return null;
+        }
+
+        const rows = await this.queryCompletionMarkerRows(collectionName);
+        for (const row of rows) {
+            const rawMetadata = row?.metadata;
+            if (typeof rawMetadata !== 'string') {
+                continue;
+            }
+            try {
+                const parsed = JSON.parse(rawMetadata) as Partial<IndexCompletionMarkerDocument>;
+                if (parsed?.kind !== 'satori_index_completion_v1') {
+                    continue;
+                }
+                if (typeof parsed.codebasePath !== 'string' || typeof parsed.runId !== 'string') {
+                    continue;
+                }
+                if (!parsed.fingerprint || typeof parsed.fingerprint !== 'object') {
+                    continue;
+                }
+                const indexedFiles = Number(parsed.indexedFiles);
+                const totalChunks = Number(parsed.totalChunks);
+                if (!Number.isFinite(indexedFiles) || !Number.isFinite(totalChunks)) {
+                    continue;
+                }
+                if (typeof parsed.completedAt !== 'string' || Number.isNaN(Date.parse(parsed.completedAt))) {
+                    continue;
+                }
+                return {
+                    kind: 'satori_index_completion_v1',
+                    codebasePath: parsed.codebasePath,
+                    fingerprint: parsed.fingerprint as IndexCompletionFingerprint,
+                    indexedFiles,
+                    totalChunks,
+                    completedAt: parsed.completedAt,
+                    runId: parsed.runId,
+                };
+            } catch {
+                continue;
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -26,5 +26,5 @@ export function ensureAbsolutePath(inputPath: string): string {
 
 export function trackCodebasePath(codebasePath: string): void {
     const absolutePath = ensureAbsolutePath(codebasePath);
-    console.log(`[TRACKING] Tracked codebase path: ${absolutePath} (not marked as indexed)`);
-} 
+    console.log(`[TRACKING] Registered codebase path for indexing/sync lifecycle: ${absolutePath}`);
+}

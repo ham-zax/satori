@@ -53,6 +53,7 @@ import {
     FileOutlineResponseEnvelope,
     FileOutlineStatus,
     FileOutlineSymbolResult,
+    NonOkReason,
     SearchChunkResult,
     SearchDebugHint,
     SearchGroupResult,
@@ -288,6 +289,134 @@ export class ToolHandlers {
         };
     }
 
+    private buildStatusHint(codebasePath: string): { tool: string; args: { action: string; path: string } } {
+        return {
+            tool: "manage_index",
+            args: {
+                action: "status",
+                path: codebasePath
+            }
+        };
+    }
+
+    private buildIndexingMetadata(codebasePath: string): { progressPct: number | null; lastUpdated: string | null; phase: string | null } {
+        const info = this.snapshotManager.getCodebaseInfo(codebasePath);
+        if (!info || info.status !== 'indexing') {
+            return {
+                progressPct: null,
+                lastUpdated: null,
+                phase: null
+            };
+        }
+
+        return {
+            progressPct: Number.isFinite(info.indexingPercentage) ? Number(info.indexingPercentage) : null,
+            lastUpdated: typeof info.lastUpdated === 'string' ? info.lastUpdated : null,
+            phase: null
+        };
+    }
+
+    private buildManageActionBlockedMessage(codebasePath: string, action: 'create' | 'reindex' | 'sync' | 'clear'): string {
+        const indexing = this.buildIndexingMetadata(codebasePath);
+        const retryAfterMs = typeof (this.syncManager as any)?.getWatchDebounceMs === 'function'
+            ? this.syncManager.getWatchDebounceMs()
+            : DEFAULT_WATCH_DEBOUNCE_MS;
+
+        const lines = [
+            `Codebase '${codebasePath}' is currently indexing. manage_index action='${action}' is blocked until indexing completes.`,
+            'reason=indexing',
+            `hints.status=${JSON.stringify(this.buildStatusHint(codebasePath))}`,
+            `retryAfterMs=${retryAfterMs}`
+        ];
+
+        if (indexing.progressPct !== null) {
+            lines.push(`progressPct=${indexing.progressPct}`);
+        }
+        if (indexing.phase) {
+            lines.push(`phase=${indexing.phase}`);
+        }
+        if (indexing.lastUpdated) {
+            lines.push(`lastUpdated=${indexing.lastUpdated}`);
+        }
+
+        return lines.join('\n');
+    }
+
+    private markerMatchesRuntimeFingerprint(marker: any): boolean {
+        const fingerprint = marker?.fingerprint;
+        if (!fingerprint || typeof fingerprint !== 'object') {
+            return false;
+        }
+        return fingerprint.embeddingProvider === this.runtimeFingerprint.embeddingProvider
+            && fingerprint.embeddingModel === this.runtimeFingerprint.embeddingModel
+            && Number(fingerprint.embeddingDimension) === Number(this.runtimeFingerprint.embeddingDimension)
+            && fingerprint.vectorStoreProvider === this.runtimeFingerprint.vectorStoreProvider
+            && fingerprint.schemaVersion === this.runtimeFingerprint.schemaVersion;
+    }
+
+    private async hasValidCompletionProof(codebasePath: string): Promise<boolean> {
+        if (typeof (this.context as any).getIndexCompletionMarker !== 'function') {
+            return false;
+        }
+        const marker = await (this.context as any).getIndexCompletionMarker(codebasePath);
+        if (!marker || marker.kind !== 'satori_index_completion_v1') {
+            return false;
+        }
+        if (!Number.isFinite(Number(marker.indexedFiles)) || !Number.isFinite(Number(marker.totalChunks))) {
+            return false;
+        }
+        if (typeof marker.completedAt !== 'string' || Number.isNaN(Date.parse(marker.completedAt))) {
+            return false;
+        }
+        return this.markerMatchesRuntimeFingerprint(marker);
+    }
+
+    private isPathWithinCodebase(targetPath: string, rootPath: string): boolean {
+        return targetPath === rootPath || targetPath.startsWith(`${rootPath}${path.sep}`);
+    }
+
+    private resolveTrackedRoot(
+        absolutePath: string,
+        statuses: Array<'indexed' | 'sync_completed' | 'indexing' | 'requires_reindex'>
+    ): { path: string; info: any } | null {
+        const statusSet = new Set(statuses);
+        const allEntries = typeof this.snapshotManager.getAllCodebases === 'function'
+            ? this.snapshotManager.getAllCodebases()
+            : [];
+
+        const mergedByPath = new Map<string, { path: string; info: any }>();
+        for (const entry of allEntries) {
+            if (!entry || typeof entry.path !== 'string' || !entry.info) {
+                continue;
+            }
+            mergedByPath.set(entry.path, { path: entry.path, info: entry.info });
+        }
+
+        if (typeof this.snapshotManager.getIndexedCodebases === 'function') {
+            for (const codebasePath of this.snapshotManager.getIndexedCodebases()) {
+                if (!mergedByPath.has(codebasePath)) {
+                    mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexed' } });
+                }
+            }
+        }
+
+        if (typeof this.snapshotManager.getIndexingCodebases === 'function') {
+            for (const codebasePath of this.snapshotManager.getIndexingCodebases()) {
+                if (!mergedByPath.has(codebasePath)) {
+                    mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexing' } });
+                }
+            }
+        }
+
+        const matches = Array.from(mergedByPath.values())
+            .filter((entry) => statusSet.has(entry.info.status as any) && this.isPathWithinCodebase(absolutePath, entry.path))
+            .sort((a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path));
+        if (matches.length === 0) {
+            return null;
+        }
+        return matches[0];
+    }
+
     private summarizeFingerprint(fingerprint: IndexFingerprint): string {
         return `${fingerprint.embeddingProvider}/${fingerprint.embeddingModel}/${fingerprint.embeddingDimension}/${fingerprint.vectorStoreProvider}/${fingerprint.schemaVersion}`;
     }
@@ -362,6 +491,7 @@ export class ToolHandlers {
         return {
             ...base,
             status: "requires_reindex",
+            reason: "requires_reindex" as NonOkReason,
             codebasePath,
             results: [],
             freshnessDecision: {
@@ -410,7 +540,7 @@ export class ToolHandlers {
         return {
             status: "requires_reindex",
             supported: false,
-            reason: "requires_reindex",
+            reason: "requires_reindex" as NonOkReason,
             path: context.path,
             codebasePath,
             symbolRef: context.symbolRef,
@@ -428,6 +558,117 @@ export class ToolHandlers {
                 reindex: this.buildReindexHint(codebasePath)
             },
             compatibility: this.buildCompatibilityDiagnostics(codebasePath)
+        };
+    }
+
+    private buildNotReadySearchPayload(
+        codebasePath: string,
+        searchContext: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        }
+    ): SearchResponseEnvelope {
+        return {
+            status: "not_ready",
+            reason: "indexing",
+            codebasePath,
+            path: searchContext.path,
+            query: searchContext.query,
+            scope: searchContext.scope,
+            groupBy: searchContext.groupBy,
+            resultMode: searchContext.resultMode,
+            limit: searchContext.limit,
+            freshnessDecision: {
+                mode: "skipped_indexing"
+            },
+            message: `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry.`,
+            hints: {
+                status: this.buildStatusHint(codebasePath),
+                debugIndexing: {
+                    completionProof: "marker_doc"
+                }
+            },
+            indexing: this.buildIndexingMetadata(codebasePath),
+            results: []
+        } as SearchResponseEnvelope;
+    }
+
+    private buildNotReadyFileOutlinePayload(codebasePath: string, file: string, requestedPath: string): FileOutlineResponseEnvelope & Record<string, unknown> {
+        return {
+            status: 'not_ready',
+            reason: 'indexing',
+            path: requestedPath,
+            codebaseRoot: codebasePath,
+            file,
+            outline: null,
+            hasMore: false,
+            message: `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry file outline.`,
+            hints: {
+                status: this.buildStatusHint(codebasePath),
+                debugIndexing: {
+                    completionProof: "marker_doc"
+                }
+            },
+            indexing: this.buildIndexingMetadata(codebasePath)
+        };
+    }
+
+    private buildNotIndexedFileOutlinePayload(file: string, requestedPath: string): FileOutlineResponseEnvelope & Record<string, unknown> {
+        return {
+            status: 'not_indexed',
+            reason: 'not_indexed',
+            path: requestedPath,
+            file,
+            outline: null,
+            hasMore: false,
+            message: `Codebase '${requestedPath}' (or any parent) is not indexed.`,
+            hints: {
+                create: {
+                    tool: "manage_index",
+                    args: { action: "create", path: requestedPath }
+                }
+            }
+        };
+    }
+
+    private buildNotReadyCallGraphPayload(
+        codebasePath: string,
+        context: {
+            path: string;
+            symbolRef: CallGraphSymbolRef;
+            direction: CallGraphDirection;
+            depth: number;
+            limit: number;
+        }
+    ): Record<string, unknown> {
+        return {
+            status: "not_ready",
+            supported: false,
+            reason: "indexing",
+            path: context.path,
+            codebaseRoot: codebasePath,
+            symbolRef: context.symbolRef,
+            direction: context.direction,
+            depth: context.depth,
+            limit: context.limit,
+            nodes: [],
+            edges: [],
+            notes: [],
+            freshnessDecision: {
+                mode: "skipped_indexing"
+            },
+            message: `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry.`,
+            hints: {
+                status: this.buildStatusHint(codebasePath),
+                debugIndexing: {
+                    completionProof: "marker_doc"
+                }
+            },
+            indexing: this.buildIndexingMetadata(codebasePath)
         };
     }
 
@@ -1251,6 +1492,7 @@ export class ToolHandlers {
         const detailLine = detail ? `${detail}\n\n` : '';
         return {
             status: 'requires_reindex',
+            reason: 'requires_reindex',
             path: codebasePath,
             file: input.file,
             outline: null,
@@ -1798,36 +2040,11 @@ Agent instructions:
                 }
             }
 
-            // FIX: Mark interrupted indexing codebases as indexed if they exist in cloud
-            // This handles the case where indexing was interrupted but cloud index is complete
             for (const codebasePath of indexingCodebases) {
                 if (cloudCodebases.has(codebasePath)) {
-                    console.log(`[SYNC-CLOUD] 🔄 Marking interrupted indexing codebase as indexed: ${codebasePath}`);
-                    // Get the last known stats from the snapshot info
-                    const info = this.snapshotManager.getCodebaseInfo(codebasePath);
-                    const indexedFiles = (info as any)?.indexedFiles || 0;
-                    const totalChunks = (info as any)?.totalChunks || 0;
-
-                    // Mark as indexed with known stats
-                    this.snapshotManager.setCodebaseIndexed(codebasePath, {
-                        indexedFiles,
-                        totalChunks,
-                        status: 'completed'
-                    }, this.runtimeFingerprint, 'verified');
-                    hasChanges = true;
-                } else if (await this.context.hasIndexedCollection(codebasePath)) {
-                    // Double-check with hasIndexedCollection method
-                    console.log(`[SYNC-CLOUD] 🔄 hasIndexedCollection confirms cloud index exists for: ${codebasePath}`);
-                    const info = this.snapshotManager.getCodebaseInfo(codebasePath);
-                    const indexedFiles = (info as any)?.indexedFiles || 0;
-                    const totalChunks = (info as any)?.totalChunks || 0;
-
-                    this.snapshotManager.setCodebaseIndexed(codebasePath, {
-                        indexedFiles,
-                        totalChunks,
-                        status: 'completed'
-                    }, this.runtimeFingerprint, 'verified');
-                    hasChanges = true;
+                    console.log(`[SYNC-CLOUD] ⏸️  Keeping indexing status (cloud reconcile is read-only for indexing root): ${codebasePath}`);
+                } else {
+                    console.log(`[SYNC-CLOUD] ⏸️  Keeping indexing status (collection not observed yet): ${codebasePath}`);
                 }
             }
 
@@ -1888,10 +2105,11 @@ Agent instructions:
 
             // Check if already indexing
             if (this.snapshotManager.getIndexingCodebases().includes(absolutePath)) {
+                const blockedAction: 'create' | 'reindex' = forceReindex ? 'reindex' : 'create';
                 return {
                     content: [{
                         type: "text",
-                        text: `Codebase '${absolutePath}' is already being indexed in the background. Please wait for completion.`
+                        text: this.buildManageActionBlockedMessage(absolutePath, blockedAction)
                     }],
                     isError: true
                 };
@@ -1908,9 +2126,10 @@ Agent instructions:
                 };
             }
 
-            //Check if the snapshot and cloud index are in sync
-            if (this.snapshotManager.getIndexedCodebases().includes(absolutePath) !== await this.context.hasIndexedCollection(absolutePath)) {
-                console.warn(`[INDEX-VALIDATION] ❌ Snapshot and cloud index mismatch: ${absolutePath}`);
+            // Check if snapshot indexed state matches completion-proof marker state.
+            const hasValidCompletionProof = await this.hasValidCompletionProof(absolutePath);
+            if (this.snapshotManager.getIndexedCodebases().includes(absolutePath) !== hasValidCompletionProof) {
+                console.warn(`[INDEX-VALIDATION] ❌ Snapshot and completion marker mismatch: ${absolutePath}`);
             }
 
             // Check if already indexed (unless force is true)
@@ -2036,6 +2255,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 console.log(`[BACKGROUND-INDEX] Retrying indexing for previously failed codebase. Previous error: ${failedInfo?.errorMessage || 'Unknown error'}`);
             }
 
+            // Invariant: completion marker must be absent during indexing.
+            if (typeof (this.context as any).clearIndexCompletionMarker === 'function') {
+                await (this.context as any).clearIndexCompletionMarker(absolutePath);
+            }
+
             // Set to indexing status and save snapshot immediately
             this.snapshotManager.setCodebaseIndexing(absolutePath, 0);
             this.snapshotManager.saveCodebaseSnapshot();
@@ -2134,6 +2358,19 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             });
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
 
+            if (typeof (contextForThisTask as any).writeIndexCompletionMarker === 'function') {
+                const runId = `run_${crypto.randomUUID()}`;
+                await (contextForThisTask as any).writeIndexCompletionMarker(absolutePath, {
+                    kind: 'satori_index_completion_v1',
+                    codebasePath: absolutePath,
+                    fingerprint: this.runtimeFingerprint,
+                    indexedFiles: stats.indexedFiles,
+                    totalChunks: stats.totalChunks,
+                    completedAt: new Date().toISOString(),
+                    runId,
+                });
+            }
+
             // Set codebase to indexed status with complete statistics
             this.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.runtimeFingerprint, 'verified');
             if (typeof this.context.getTrackedRelativePaths === 'function') {
@@ -2167,6 +2404,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             if (isCollectionLimitError(error)) {
                 errorMessage = await this.buildCollectionLimitMessage(absolutePath);
             }
+
+            if (typeof (this.context as any).clearIndexCompletionMarker === 'function') {
+                try {
+                    await (this.context as any).clearIndexCompletionMarker(absolutePath);
+                } catch (clearError) {
+                    console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
+                }
+            }
+
             this.snapshotManager.setCodebaseIndexFailed(absolutePath, errorMessage, lastProgress);
             this.snapshotManager.saveCodebaseSnapshot();
 
@@ -2277,43 +2523,53 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            let effectiveRoot = absolutePath;
-            let isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
-            let isIndexing = this.snapshotManager.getIndexingCodebases().includes(absolutePath);
+            const searchableRoot = this.resolveTrackedRoot(absolutePath, ['indexed', 'sync_completed']);
+            const indexingRoot = this.resolveTrackedRoot(absolutePath, ['indexing']);
+            let effectiveRoot = searchableRoot?.path || absolutePath;
 
-            if (!isIndexed && !isIndexing) {
-                const indexedCodebases = this.snapshotManager.getIndexedCodebases();
-                const parents = indexedCodebases.filter(root => absolutePath.startsWith(root) && absolutePath !== root);
-                if (parents.length > 0) {
-                    parents.sort((a: string, b: string) => b.length - a.length);
-                    effectiveRoot = parents[0];
-                    isIndexed = true;
-                    isIndexing = this.snapshotManager.getIndexingCodebases().includes(effectiveRoot);
-                    console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${effectiveRoot}'`);
-                } else {
-                    const envelope: SearchResponseEnvelope = {
-                        status: "not_indexed",
-                        path: absolutePath,
-                        query: input.query,
-                        scope: input.scope,
-                        groupBy: input.groupBy,
-                        limit: input.limit,
-                        resultMode: input.resultMode,
-                        freshnessDecision: null,
-                        message: `Codebase '${absolutePath}' (or any parent) is not indexed.`,
-                        hints: {
-                            create: {
-                                tool: "manage_index",
-                                args: { action: "create", path: absolutePath }
-                            }
-                        },
-                        results: []
-                    };
-                    return {
-                        content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
-                        meta: { searchDiagnostics }
-                    };
-                }
+            if (!searchableRoot && indexingRoot) {
+                const payload = this.buildNotReadySearchPayload(indexingRoot.path, {
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                });
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    meta: { searchDiagnostics }
+                };
+            }
+
+            if (!searchableRoot && !indexingRoot) {
+                const envelope: SearchResponseEnvelope = {
+                    status: "not_indexed",
+                    reason: "not_indexed",
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    limit: input.limit,
+                    resultMode: input.resultMode,
+                    freshnessDecision: null,
+                    message: `Codebase '${absolutePath}' (or any parent) is not indexed.`,
+                    hints: {
+                        create: {
+                            tool: "manage_index",
+                            args: { action: "create", path: absolutePath }
+                        }
+                    },
+                    results: []
+                };
+                return {
+                    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+                    meta: { searchDiagnostics }
+                };
+            }
+
+            if (searchableRoot && searchableRoot.path !== absolutePath) {
+                console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${searchableRoot.path}'`);
             }
 
             const gateResult = this.enforceFingerprintGate(effectiveRoot);
@@ -2334,11 +2590,26 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const freshnessDecision = await this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000);
             searchDiagnostics.freshnessMode = freshnessDecision.mode;
+            if (freshnessDecision.mode === 'skipped_indexing') {
+                const payload = this.buildNotReadySearchPayload(effectiveRoot, {
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                });
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    meta: { searchDiagnostics }
+                };
+            }
             const encoderEngine = this.context.getEmbeddingEngine();
-            console.log(`[SEARCH] Searching in codebase: ${absolutePath}`);
-            console.log(`[SEARCH] Query: "${input.query}"`);
-            console.log(`[SEARCH] Indexing status: ${isIndexing ? 'In Progress' : 'Completed'}`);
-            console.log(`[SEARCH] 🧠 Using embedding provider: ${encoderEngine.getProvider()} for search`);
+            const rootTag = `[SEARCH][root=${effectiveRoot}]`;
+            console.log(`${rootTag} Searching (requestedPath='${absolutePath}')`);
+            console.log(`${rootTag} Query: "${input.query}"`);
+            console.log(`${rootTag} Indexing status: Completed`);
+            console.log(`${rootTag} 🧠 Using embedding provider: ${encoderEngine.getProvider()} for search`);
 
             const parsedOperators = this.parseSearchOperators(input.query);
             const semanticQuery = parsedOperators.semanticQuery;
@@ -2903,8 +3174,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const absoluteRoot = ensureAbsolutePath(args.path);
             const normalizedFile = this.normalizeRelativeFilePath(args.file);
-            const absoluteFile = path.resolve(absoluteRoot, normalizedFile);
-            const relativeToRoot = path.relative(absoluteRoot, absoluteFile);
 
             if (!fs.existsSync(absoluteRoot)) {
                 return {
@@ -2927,16 +3196,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: File '${normalizedFile}' must be inside codebase root '${absoluteRoot}'.`
-                    }],
-                    isError: true
-                };
-            }
-
             trackCodebasePath(absoluteRoot);
 
             const blockedRoot = this.getMatchingBlockedRoot(absoluteRoot);
@@ -2950,9 +3209,37 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const gateResult = this.enforceFingerprintGate(absoluteRoot);
+            const matchedRoot = this.resolveTrackedRoot(absoluteRoot, ['indexed', 'sync_completed', 'indexing']);
+            if (!matchedRoot) {
+                const payload = this.buildNotIndexedFileOutlinePayload(normalizedFile, absoluteRoot);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            if (matchedRoot.info.status === 'indexing') {
+                const payload = this.buildNotReadyFileOutlinePayload(matchedRoot.path, normalizedFile, absoluteRoot);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            const effectiveRoot = matchedRoot.path;
+            const absoluteFile = path.resolve(effectiveRoot, normalizedFile);
+            const relativeToRoot = path.relative(effectiveRoot, absoluteFile);
+            if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: File '${normalizedFile}' must be inside codebase root '${effectiveRoot}'.`
+                    }],
+                    isError: true
+                };
+            }
+
+            const gateResult = this.enforceFingerprintGate(effectiveRoot);
             if (gateResult.blockedResponse) {
-                const payload = this.buildRequiresReindexFileOutlinePayload(absoluteRoot, {
+                const payload = this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
                     ...args,
                     file: normalizedFile
                 }, gateResult.message);
@@ -2961,9 +3248,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const sidecarInfo = this.snapshotManager.getCodebaseCallGraphSidecar(absoluteRoot);
+            const sidecarInfo = this.snapshotManager.getCodebaseCallGraphSidecar(effectiveRoot);
             if (!sidecarInfo || sidecarInfo.version !== 'v3') {
-                const payload = this.buildRequiresReindexFileOutlinePayload(absoluteRoot, {
+                const payload = this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
                     ...args,
                     file: normalizedFile
                 });
@@ -2975,11 +3262,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             if (!fs.existsSync(absoluteFile)) {
                 const payload: FileOutlineResponseEnvelope = {
                     status: 'not_found',
-                    path: absoluteRoot,
+                    path: effectiveRoot,
                     file: normalizedFile,
                     outline: null,
                     hasMore: false,
-                    message: `File '${normalizedFile}' does not exist under codebase root '${absoluteRoot}'.`
+                    message: `File '${normalizedFile}' does not exist under codebase root '${effectiveRoot}'.`
                 };
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
@@ -2990,7 +3277,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             if (!fileStat.isFile()) {
                 const payload: FileOutlineResponseEnvelope = {
                     status: 'not_found',
-                    path: absoluteRoot,
+                    path: effectiveRoot,
                     file: normalizedFile,
                     outline: null,
                     hasMore: false,
@@ -3005,7 +3292,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             if (languageStatus !== 'ok') {
                 const payload: FileOutlineResponseEnvelope = {
                     status: 'unsupported',
-                    path: absoluteRoot,
+                    path: effectiveRoot,
                     file: normalizedFile,
                     outline: null,
                     hasMore: false,
@@ -3016,9 +3303,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const sidecar = this.callGraphManager.loadSidecar(absoluteRoot);
+            const sidecar = this.callGraphManager.loadSidecar(effectiveRoot);
             if (!sidecar) {
-                const payload = this.buildRequiresReindexFileOutlinePayload(absoluteRoot, {
+                const payload = this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
                     ...args,
                     file: normalizedFile
                 });
@@ -3090,7 +3377,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 if (exactMatches.length === 0) {
                     const payload: FileOutlineResponseEnvelope = {
                         status: 'not_found',
-                        path: absoluteRoot,
+                        path: effectiveRoot,
                         file: normalizedFile,
                         outline: null,
                         hasMore: false,
@@ -3105,7 +3392,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const hasMoreExact = exactMatches.length > limitSymbols;
                 const exactPayload: FileOutlineResponseEnvelope = {
                     status: exactMatches.length > 1 ? 'ambiguous' : 'ok',
-                    path: absoluteRoot,
+                    path: effectiveRoot,
                     file: normalizedFile,
                     outline: {
                         symbols: exactMatches.slice(0, limitSymbols)
@@ -3124,7 +3411,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const hasMore = symbols.length > limitSymbols;
             const payload: FileOutlineResponseEnvelope = {
                 status: 'ok',
-                path: absoluteRoot,
+                path: effectiveRoot,
                 file: normalizedFile,
                 outline: {
                     symbols: symbols.slice(0, limitSymbols)
@@ -3199,52 +3486,68 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             trackCodebasePath(absolutePath);
 
-            let effectiveRoot = absolutePath;
-            const indexedCodebases = this.snapshotManager.getIndexedCodebases();
-            if (!indexedCodebases.includes(absolutePath)) {
-                const blockedMatch = this.getMatchingBlockedRoot(absolutePath);
-                if (blockedMatch) {
-                    return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify(this.buildRequiresReindexCallGraphPayload(
-                                blockedMatch.path,
-                                blockedMatch.message,
-                                {
-                                    path: absolutePath,
-                                    symbolRef,
-                                    direction,
-                                    depth,
-                                    limit
-                                }
-                            ), null, 2)
-                        }]
-                    };
-                }
-
-                const parents = indexedCodebases.filter((root) => absolutePath.startsWith(root) && absolutePath !== root);
-                if (parents.length > 0) {
-                    parents.sort((a, b) => b.length - a.length);
-                    effectiveRoot = parents[0];
-                } else {
-                    return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                status: 'not_indexed',
-                                supported: false,
-                                reason: 'not_indexed',
-                                hints: {
-                                    create: {
-                                        tool: 'manage_index',
-                                        args: { action: 'create', path: absolutePath }
-                                    }
-                                }
-                            }, null, 2)
-                        }]
-                    };
-                }
+            const blockedMatch = this.getMatchingBlockedRoot(absolutePath);
+            if (blockedMatch) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(this.buildRequiresReindexCallGraphPayload(
+                            blockedMatch.path,
+                            blockedMatch.message,
+                            {
+                                path: absolutePath,
+                                symbolRef,
+                                direction,
+                                depth,
+                                limit
+                            }
+                        ), null, 2)
+                    }]
+                };
             }
+
+            const searchableRoot = this.resolveTrackedRoot(absolutePath, ['indexed', 'sync_completed']);
+            const indexingRoot = this.resolveTrackedRoot(absolutePath, ['indexing']);
+
+            if (!searchableRoot && indexingRoot) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(
+                            this.buildNotReadyCallGraphPayload(indexingRoot.path, {
+                                path: absolutePath,
+                                symbolRef,
+                                direction,
+                                depth,
+                                limit
+                            }),
+                            null,
+                            2
+                        )
+                    }]
+                };
+            }
+
+            if (!searchableRoot) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            status: 'not_indexed',
+                            supported: false,
+                            reason: 'not_indexed',
+                            hints: {
+                                create: {
+                                    tool: 'manage_index',
+                                    args: { action: 'create', path: absolutePath }
+                                }
+                            }
+                        }, null, 2)
+                    }]
+                };
+            }
+
+            const effectiveRoot = searchableRoot.path;
 
             const gateResult = this.enforceFingerprintGate(effectiveRoot);
             if (gateResult.blockedResponse) {
@@ -3271,15 +3574,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify({
-                            status: 'not_ready',
-                            supported: false,
-                            reason: 'missing_sidecar',
-                            hints: {
-                                message: 'Call graph sidecar is unavailable for this codebase. Reindex to rebuild call graph metadata.',
-                                reindex: this.buildReindexHint(effectiveRoot)
-                            }
-                        }, null, 2)
+                        text: JSON.stringify(
+                            this.buildRequiresReindexCallGraphPayload(
+                                effectiveRoot,
+                                'Call graph sidecar is unavailable for this codebase. Reindex to rebuild call graph metadata.',
+                                {
+                                    path: absolutePath,
+                                    symbolRef,
+                                    direction,
+                                    depth,
+                                    limit
+                                }
+                            ),
+                            null,
+                            2
+                        )
                     }]
                 };
             }
@@ -3362,6 +3671,16 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     content: [{
                         type: "text",
                         text: `Error: Codebase '${absolutePath}' is not indexed or being indexed.`
+                    }],
+                    isError: true
+                };
+            }
+
+            if (isIndexing) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.buildManageActionBlockedMessage(absolutePath, 'clear')
                     }],
                     isError: true
                 };
@@ -3614,6 +3933,16 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const syncGate = this.enforceFingerprintGate(absolutePath);
             if (syncGate.blockedResponse) {
                 return syncGate.blockedResponse;
+            }
+
+            if (this.snapshotManager.getIndexingCodebases().includes(absolutePath)) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.buildManageActionBlockedMessage(absolutePath, 'sync')
+                    }],
+                    isError: true
+                };
             }
 
             const isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);

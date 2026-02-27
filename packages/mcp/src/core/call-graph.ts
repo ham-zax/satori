@@ -78,6 +78,10 @@ export interface CallGraphResponseSupported {
     nodes: CallGraphNode[];
     edges: CallGraphEdge[];
     notes: CallGraphNote[];
+    warnings?: string[];
+    notesTruncated: boolean;
+    totalNoteCount: number;
+    returnedNoteCount: number;
     sidecar: {
         builtAt: string;
         nodeCount: number;
@@ -95,6 +99,7 @@ const SUPPORTED_SOURCE_EXTENSIONS = new Set(getSupportedExtensionsForCapability(
 const QUERY_SUPPORTED_EXTENSIONS = new Set(getSupportedExtensionsForCapability('callGraphQuery'));
 const QUERY_SUPPORTED_LANGUAGE_IDS = getSupportedLanguageIdsForCapability('callGraphQuery');
 const DEFAULT_IGNORE_PATTERNS = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/.next/**'];
+const DEFAULT_CALL_GRAPH_NOTE_LIMIT = 200;
 const CALL_KEYWORDS = new Set([
     'if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'typeof', 'function', 'class', 'def', 'await', 'with', 'from', 'import',
 ]);
@@ -124,18 +129,23 @@ export class CallGraphSidecarManager {
     private readonly splitter: AstCodeSplitter;
     private readonly now: () => number;
     private readonly deltaPolicy: CallGraphDeltaPolicy;
+    private readonly noteLimit: number;
 
     constructor(
         runtimeFingerprint: IndexFingerprint,
         options?: {
             now?: () => number;
             deltaPolicy?: CallGraphDeltaPolicy;
+            noteLimit?: number;
         }
     ) {
         this.runtimeFingerprint = runtimeFingerprint;
         this.splitter = new AstCodeSplitter();
         this.now = options?.now || (() => Date.now());
         this.deltaPolicy = options?.deltaPolicy || new SupportedSourceDeltaPolicy();
+        this.noteLimit = Number.isFinite(options?.noteLimit)
+            ? Math.max(1, Math.min(1000, Number(options?.noteLimit)))
+            : DEFAULT_CALL_GRAPH_NOTE_LIMIT;
     }
 
     public shouldRebuildForDelta(changedFiles: string[]): boolean {
@@ -327,9 +337,29 @@ export class CallGraphSidecarManager {
         );
 
         const edges = this.sortEdges(Array.from(selectedEdges.values()));
-        const notes = this.sortNotes(
-            sidecar.notes.filter((note) => !note.symbolId || visited.has(note.symbolId))
+        const visitedFiles = new Set<string>();
+        for (const node of nodes) {
+            visitedFiles.add(node.file);
+        }
+        for (const edge of edges) {
+            visitedFiles.add(edge.site.file);
+        }
+
+        const relevantNotes = this.sortNotes(
+            sidecar.notes.filter((note) => {
+                if (!visitedFiles.has(note.file)) {
+                    return false;
+                }
+                if (note.symbolId && !visited.has(note.symbolId)) {
+                    return false;
+                }
+                return true;
+            })
         );
+        const totalNoteCount = relevantNotes.length;
+        const notes = relevantNotes.slice(0, this.noteLimit);
+        const notesTruncated = totalNoteCount > notes.length;
+        const warnings = notesTruncated ? ['CALL_GRAPH_NOTES_TRUNCATED'] : undefined;
 
         return {
             supported: true,
@@ -339,6 +369,10 @@ export class CallGraphSidecarManager {
             nodes,
             edges,
             notes,
+            warnings,
+            notesTruncated,
+            totalNoteCount,
+            returnedNoteCount: notes.length,
             sidecar: {
                 builtAt: sidecar.builtAt,
                 nodeCount: sidecar.nodes.length,
@@ -698,10 +732,6 @@ export class CallGraphSidecarManager {
         const walk = async (dir: string): Promise<void> => {
             const entries = await fs.promises.readdir(dir, { withFileTypes: true });
             for (const entry of entries) {
-                if (entry.name.startsWith('.')) {
-                    continue;
-                }
-
                 const absolutePath = path.join(dir, entry.name);
                 const relativePath = this.toRelativePath(codebaseRoot, absolutePath);
                 if (matcher.ignores(relativePath) || matcher.ignores(`${relativePath}/`)) {
@@ -770,13 +800,15 @@ export class CallGraphSidecarManager {
         return notes.sort((a, b) => {
             const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
             if (fileCmp !== 0) return fileCmp;
-            const startCmp = this.compareNullableNumbersAsc(a.startLine, b.startLine);
-            if (startCmp !== 0) return startCmp;
             const typeCmp = this.compareNullableStringsAsc(a.type, b.type);
             if (typeCmp !== 0) return typeCmp;
             const symbolCmp = this.compareNullableStringsAsc(a.symbolId, b.symbolId);
             if (symbolCmp !== 0) return symbolCmp;
-            return this.compareNullableStringsAsc(a.detail, b.detail);
+            const startCmp = this.compareNullableNumbersAsc(a.startLine, b.startLine);
+            if (startCmp !== 0) return startCmp;
+            const aHash = crypto.createHash('sha1').update(a.detail || '').digest('hex');
+            const bHash = crypto.createHash('sha1').update(b.detail || '').digest('hex');
+            return this.compareNullableStringsAsc(aHash, bHash);
         });
     }
 

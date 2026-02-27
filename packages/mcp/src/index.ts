@@ -35,6 +35,7 @@ import { SnapshotManager } from "./core/snapshot.js";
 import { SyncManager } from "./core/sync.js";
 import { ToolHandlers } from "./core/handlers.js";
 import { CallGraphSidecarManager } from "./core/call-graph.js";
+import { decideInterruptedIndexingRecovery } from "./core/indexing-recovery.js";
 import { ToolContext } from "./tools/types.js";
 import { getMcpToolList, toolRegistry } from "./tools/registry.js";
 
@@ -172,56 +173,32 @@ class ContextMcpServer {
      * Verify cloud state and fix interrupted indexing snapshots.
      */
     private async verifyCloudState(): Promise<void> {
-        console.log('[STARTUP] Verifying cloud state against local snapshot...');
-
-        const vectorDb = this.context.getVectorStore();
-        const collections = await vectorDb.listCollections();
-        const cloudCodebases = new Set<string>();
-
-        for (const collectionName of collections) {
-            if (!collectionName.startsWith('code_chunks_') && !collectionName.startsWith('hybrid_code_chunks_')) {
-                continue;
-            }
-
-            try {
-                const results = await vectorDb.query(collectionName, '', ['metadata'], 1);
-                if (results && results.length > 0 && results[0].metadata) {
-                    const metadata = JSON.parse(results[0].metadata);
-                    if (metadata.codebasePath) {
-                        cloudCodebases.add(metadata.codebasePath);
-                    }
-                }
-            } catch {
-                // Best-effort startup reconciliation.
-            }
-        }
-
+        console.log('[STARTUP] Verifying interrupted indexing state against completion markers...');
         const indexingCodebases = this.snapshotManager.getIndexingCodebases();
-        let fixedCount = 0;
+        let promotedCount = 0;
+        let failedCount = 0;
 
         for (const codebasePath of indexingCodebases) {
-            if (cloudCodebases.has(codebasePath) || await this.context.hasIndexedCollection(codebasePath)) {
-                console.log(`[STARTUP] Fixing interrupted indexing: ${codebasePath} -> marked as indexed`);
-                const info = this.snapshotManager.getCodebaseInfo(codebasePath) as any;
-                this.snapshotManager.setCodebaseIndexed(
-                    codebasePath,
-                    {
-                        indexedFiles: info?.indexedFiles || 0,
-                        totalChunks: info?.totalChunks || 0,
-                        status: 'completed',
-                    },
-                    this.runtimeFingerprint,
-                    'verified'
-                );
-                fixedCount++;
+            const marker = typeof (this.context as any).getIndexCompletionMarker === 'function'
+                ? await (this.context as any).getIndexCompletionMarker(codebasePath)
+                : null;
+            const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
+            if (decision.action === 'promote_indexed') {
+                this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, this.runtimeFingerprint, 'verified');
+                promotedCount++;
+                console.log(`[STARTUP] Recovered interrupted indexing from marker: ${codebasePath} -> indexed`);
+                continue;
             }
+            this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message);
+            failedCount++;
+            console.log(`[STARTUP] Marked interrupted indexing as failed: ${codebasePath} (${decision.reason})`);
         }
 
-        if (fixedCount > 0) {
+        if (promotedCount > 0 || failedCount > 0) {
             this.snapshotManager.saveCodebaseSnapshot();
-            console.log(`[STARTUP] Fixed ${fixedCount} interrupted indexing state(s)`);
+            console.log(`[STARTUP] Recovery summary: promoted=${promotedCount}, failed=${failedCount}`);
         } else {
-            console.log('[STARTUP] Cloud state matches local snapshot');
+            console.log('[STARTUP] No interrupted indexing states required recovery');
         }
     }
 

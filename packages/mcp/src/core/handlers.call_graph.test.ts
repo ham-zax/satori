@@ -327,3 +327,61 @@ test('handleCallGraph maps unsupported_language to status unsupported', async ()
         assert.equal(payload.reason, 'unsupported_language');
     });
 });
+
+test('handleCallGraph returns not_ready envelope when codebase is indexing', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+
+        const snapshotManager = {
+            getIndexedCodebases: () => [],
+            getIndexingCodebases: () => [repoPath],
+            getCodebaseInfo: () => ({
+                status: 'indexing',
+                indexingPercentage: 79,
+                lastUpdated: '2026-02-27T23:57:03.000Z'
+            }),
+            getCodebaseStatus: () => 'indexing',
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => [{
+                path: repoPath,
+                info: {
+                    status: 'indexing',
+                    indexingPercentage: 79,
+                    lastUpdated: '2026-02-27T23:57:03.000Z'
+                }
+            }]
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/runtime.ts',
+                symbolId: 'sym_runtime_run'
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 20
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'indexing');
+        assert.equal(payload.codebaseRoot, repoPath);
+        assert.equal(payload.indexing.progressPct, 79);
+        assert.equal(payload.indexing.lastUpdated, '2026-02-27T23:57:03.000Z');
+        assert.equal(payload.hints.status.tool, 'manage_index');
+        assert.equal(payload.hints.status.args.action, 'status');
+        assert.equal(payload.hints.status.args.path, repoPath);
+    });
+});

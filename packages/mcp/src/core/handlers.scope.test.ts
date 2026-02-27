@@ -1696,9 +1696,54 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'requires_reindex');
+        assert.equal(payload.reason, 'requires_reindex');
         assert.equal(payload.freshnessDecision.mode, 'skipped_requires_reindex');
         assert.equal(payload.compatibility.runtimeFingerprint.schemaVersion, 'hybrid_v3');
         assert.equal(payload.compatibility.indexedFingerprint.schemaVersion, 'dense_v3');
         assert.equal(payload.compatibility.reindexReason, 'fingerprint_mismatch');
+    });
+});
+
+test('handleSearchCode not_indexed payload includes stable reason code', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => []
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getCodebaseInfo: () => undefined,
+            getCodebaseStatus: () => 'not_found',
+            getIndexedCodebases: () => [],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'not_indexed');
+        assert.equal(payload.hints?.create?.tool, 'manage_index');
+        assert.equal(payload.hints?.create?.args?.action, 'create');
     });
 });

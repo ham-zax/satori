@@ -189,14 +189,17 @@ export interface SearchResponseHints extends Record<string, unknown> {
     debugSearch?: SearchDebugHint;
 }
 
+export type NonOkReason = "indexing" | "requires_reindex" | "not_indexed";
+
 interface SearchBaseResponseEnvelope {
-    status: "ok" | "requires_reindex" | "not_indexed";
+    status: "ok" | "requires_reindex" | "not_indexed" | "not_ready";
+    reason?: NonOkReason;
     path: string;
     query: string;
     scope: SearchScope;
     groupBy: SearchGroupBy;
     limit: number;
-    freshnessDecision: FreshnessDecision | { mode: "skipped_requires_reindex" } | null;
+    freshnessDecision: FreshnessDecision | { mode: "skipped_requires_reindex" | "skipped_indexing" } | null;
     warnings?: string[];
     message?: string;
     hints?: SearchResponseHints;
@@ -237,7 +240,7 @@ export interface FileOutlineInput {
     symbolLabelExact?: string;
 }
 
-export type FileOutlineStatus = "ok" | "not_found" | "requires_reindex" | "unsupported" | "ambiguous";
+export type FileOutlineStatus = "ok" | "not_found" | "requires_reindex" | "not_indexed" | "not_ready" | "unsupported" | "ambiguous";
 
 export interface FileOutlineSymbolResult {
     symbolId: string;
@@ -248,6 +251,7 @@ export interface FileOutlineSymbolResult {
 
 export interface FileOutlineResponseEnvelope {
     status: FileOutlineStatus;
+    reason?: NonOkReason;
     path: string;
     file: string;
     outline: { symbols: FileOutlineSymbolResult[] } | null;

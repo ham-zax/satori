@@ -210,7 +210,7 @@ test('supported source delta policy only rebuilds for source file changes', () =
     assert.equal(policy.shouldRebuild(['python/app.py']), true);
 });
 
-test('call graph notes are deterministically sorted by file, line, and type', async () => {
+test('call graph notes are deterministically sorted by file, type, symbolId, and line', async () => {
     await withTempRepo(async (repoPath) => {
         const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
         const sidecarPath = (manager as any).getSidecarPath(repoPath) as string;
@@ -270,10 +270,125 @@ test('call graph notes are deterministically sorted by file, line, and type', as
         assert.deepEqual(
             response.notes.map((note) => `${note.file}:${note.startLine}:${note.type}`),
             [
-                'src/runtime.ts:5:missing_symbol_metadata',
                 'src/runtime.ts:10:dynamic_edge',
+                'src/runtime.ts:5:missing_symbol_metadata',
                 'src/runtime.ts:10:unresolved_edge'
             ]
         );
+    });
+});
+
+test('call graph query filters notes to returned scope and emits truncation metadata deterministically', async () => {
+    await withTempRepo(async (repoPath) => {
+        const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT, {
+            noteLimit: 2
+        } as any);
+        const sidecarPath = (manager as any).getSidecarPath(repoPath) as string;
+        fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+
+        fs.writeFileSync(sidecarPath, JSON.stringify({
+            formatVersion: 'v3',
+            codebasePath: repoPath,
+            builtAt: '2026-01-01T00:00:00.000Z',
+            fingerprint: RUNTIME_FINGERPRINT,
+            nodes: [
+                {
+                    symbolId: 'sym_root',
+                    symbolLabel: 'function root()',
+                    file: 'src/runtime.ts',
+                    language: 'typescript',
+                    span: { startLine: 1, endLine: 1 }
+                },
+                {
+                    symbolId: 'sym_other',
+                    symbolLabel: 'function other()',
+                    file: 'src/runtime.ts',
+                    language: 'typescript',
+                    span: { startLine: 20, endLine: 20 }
+                }
+            ],
+            edges: [],
+            notes: [
+                {
+                    type: 'unresolved_edge',
+                    file: 'src/runtime.ts',
+                    startLine: 10,
+                    symbolId: 'sym_root',
+                    detail: 'z unresolved'
+                },
+                {
+                    type: 'dynamic_edge',
+                    file: 'src/runtime.ts',
+                    startLine: 10,
+                    symbolId: 'sym_root',
+                    detail: 'a dynamic'
+                },
+                {
+                    type: 'missing_symbol_metadata',
+                    file: 'src/runtime.ts',
+                    startLine: 5,
+                    detail: 'metadata missing'
+                },
+                {
+                    type: 'unresolved_edge',
+                    file: 'src/runtime.ts',
+                    startLine: 12,
+                    symbolId: 'sym_other',
+                    detail: 'should drop by symbol scope'
+                },
+                {
+                    type: 'unresolved_edge',
+                    file: 'src/other.ts',
+                    startLine: 1,
+                    symbolId: 'sym_root',
+                    detail: 'should drop by file scope'
+                }
+            ]
+        }, null, 2));
+
+        const response = manager.queryGraph(repoPath, {
+            file: 'src/runtime.ts',
+            symbolId: 'sym_root',
+        }, {
+            direction: 'both',
+            depth: 1,
+            limit: 20
+        });
+
+        assert.equal(response.supported, true);
+        if (!response.supported) return;
+
+        assert.equal(response.totalNoteCount, 3);
+        assert.equal(response.returnedNoteCount, 2);
+        assert.equal(response.notesTruncated, true);
+        assert.deepEqual(response.warnings, ['CALL_GRAPH_NOTES_TRUNCATED']);
+        assert.deepEqual(
+            response.notes.map((note) => `${note.file}:${note.startLine}:${note.type}`),
+            [
+                'src/runtime.ts:10:dynamic_edge',
+                'src/runtime.ts:5:missing_symbol_metadata'
+            ]
+        );
+    });
+});
+
+test('call graph collector includes hidden directories when not ignored', async () => {
+    await withTempRepo(async (repoPath) => {
+        const hiddenDir = path.join(repoPath, '.hidden');
+        fs.mkdirSync(hiddenDir, { recursive: true });
+        fs.writeFileSync(path.join(hiddenDir, 'runtime.ts'), [
+            'export function hiddenEntry() {',
+            '  return true;',
+            '}',
+            ''
+        ].join('\n'));
+
+        const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
+        await manager.rebuildForCodebase(repoPath, []);
+        const sidecar = manager.loadSidecar(repoPath);
+        assert.ok(sidecar);
+
+        const hasHiddenNode = sidecar!.nodes.some((node) => node.file.startsWith('.hidden/'));
+        assert.equal(hasHiddenNode, true);
     });
 });

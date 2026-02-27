@@ -10,6 +10,11 @@ export {
     HybridSearchOptions,
     HybridSearchResult,
     RerankStrategy,
+    IndexCompletionFingerprint,
+    IndexCompletionMarkerDocument,
+    INDEX_COMPLETION_MARKER_DOC_ID,
+    INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+    INDEX_COMPLETION_MARKER_RELATIVE_PATH,
     COLLECTION_LIMIT_MESSAGE
 } from './types';
 

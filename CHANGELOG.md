@@ -2,6 +2,15 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-27] Repository Minor Version Bump and Rerelease
+
+### Release Versions
+- Repository version: `0.2.0`
+- Git tag: `v3.9.0`
+
+### Modified
+- Bumped repository minor version from `0.1.5` to `0.2.0` for the rerelease cycle.
+
 ## [2026-02-27] Indexing Lock Hardening Plan Contract Finalization
 
 ### Modified

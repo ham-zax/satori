@@ -1,5 +1,20 @@
 # Search + Manage Operator Safety Evolution Plan
 
+## Implementation Status (2026-02-28)
+Shipped in `packages/mcp`:
+
+1. Track A baseline completed:
+   - deterministic root `.gitignore`-aware suppression of redundant `hints.noiseMitigation.suggestedIgnorePatterns`
+   - deterministic next-step messaging variants
+   - matcher cache invalidation by `mtimeMs + size` + forced reload cadence
+2. Track B baseline completed:
+   - `manage_index` response envelope SSOT (`status/reason/warnings/hints/preflight/humanText`)
+   - explicit `allowUnnecessaryReindex` override for `action:"reindex"`
+   - preflight outcomes (`reindex_required`, `reindex_unnecessary_ignore_only`, `unknown`, `probe_failed`)
+   - warning-code registry SSOT and envelope propagation
+
+This document remains as the design/decision record, including historical no-drift constraints and staged evolution notes.
+
 ## Summary
 This plan now has two deliberate tracks:
 
@@ -11,7 +26,7 @@ Track A is low risk and can ship immediately. Track B is the long-term safety pa
 ## Codebase Verification (Current Reality)
 Verification against current implementation:
 
-1. `manage_index` is text-first today.
+1. `manage_index` is envelope-native today (JSON envelope serialized in `content[0].text`).
    - Schema/routes: `packages/mcp/src/tools/manage_index.ts`
    - Handler outputs: `packages/mcp/src/core/handlers.ts` (`handleIndexCodebase`, `handleReindexCodebase`, `handleSyncCodebase`, `handleGetIndexingStatus`, `handleClearIndex`)
 2. `handleReindexCodebase` currently delegates to create with hard force (`force: true`), so override semantics must not reuse existing `force` meaning.
@@ -21,7 +36,7 @@ Verification against current implementation:
 4. Bridge already preserves structured envelope text blocks and classifies valid tool payloads as non-retryable, so envelope migration is compatible.
    - `examples/pi-extension/satori-bridge/index.ts`
    - `examples/pi-extension/satori-bridge/recovery.ts`
-5. Tests currently assert text behavior for `manage_index` in multiple places, so contract evolution must include test migration.
+5. Tests now assert envelope behavior for `manage_index` in core flows; legacy text assumptions were migrated.
    - `packages/mcp/src/core/handlers.manage_index_blocking.test.ts`
    - `packages/mcp/src/core/handlers.status.test.ts`
    - `packages/mcp/src/tools/registry.test.ts`

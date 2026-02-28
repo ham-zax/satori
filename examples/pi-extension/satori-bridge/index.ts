@@ -835,6 +835,12 @@ const MANAGE_INDEX_SCHEMA = Type.Object({
 	]),
 	path: Type.String({ description: "ABSOLUTE path to the target codebase." }),
 	force: Type.Optional(Type.Boolean({ description: "Only for create. Force rebuild from scratch." })),
+	allowUnnecessaryReindex: Type.Optional(
+		Type.Boolean({
+			description:
+				"Only for reindex. Override preflight block when reindex is detected as unnecessary ignore-only churn.",
+		}),
+	),
 	customExtensions: Type.Optional(Type.Array(Type.String(), { description: "Only for create. Extra file extensions." })),
 	ignorePatterns: Type.Optional(Type.Array(Type.String(), { description: "Only for create. Extra ignore patterns." })),
 	zillizDropCollection: Type.Optional(
@@ -926,7 +932,8 @@ const TOOL_SPECS: McpToolSpec[] = [
 	},
 	{
 		name: "manage_index",
-		description: "Manage Satori index lifecycle operations (create/reindex/sync/status/clear).",
+		description:
+			"Manage Satori index lifecycle operations (create/reindex/sync/status/clear), including reindex preflight guardrails with explicit override support.",
 		parameters: MANAGE_INDEX_SCHEMA,
 	},
 	{

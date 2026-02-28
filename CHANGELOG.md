@@ -41,6 +41,10 @@ All notable changes to this repository are documented in this file.
 - Migrated manage-index handler tests to envelope assertions in:
   - `packages/mcp/src/core/handlers.manage_index_blocking.test.ts`
   - `packages/mcp/src/core/handlers.index_validation.test.ts`.
+- Updated PI example bridge/tooling contracts for reindex preflight override support:
+  - `examples/pi-extension/satori-bridge/index.ts` (`allowUnnecessaryReindex` schema field + manage tool description)
+  - `examples/pi-extension/satori-bridge/README.md` (blocked ignore-only reindex guidance)
+  - `examples/pi-extension/satori-bridge/skills/satori-cli/SKILL.md` (gating precedence + override routing guidance).
 
 ### Docs
 - Updated behavior contract docs for envelope-native `manage_index` responses, reindex preflight semantics, and root `.gitignore`-aware noise-hint filtering in:

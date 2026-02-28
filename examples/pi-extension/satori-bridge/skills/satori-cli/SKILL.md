@@ -60,6 +60,7 @@ For gating responses, always read both `status` and `reason`:
 - `status="requires_reindex"` -> `reason="requires_reindex"`
 - `status="not_ready"` -> `reason="indexing"`
 - `status="not_indexed"` -> `reason="not_indexed"`
+- `status="blocked"` + `reason="unnecessary_reindex_ignore_only"` -> reindex preflight block (sync path preferred)
 
 Status may be returned inside JSON text blocks in tool content payloads. Parse those text blocks before branching logic.
 
@@ -67,6 +68,7 @@ Gate precedence:
 1. `requires_reindex`
 2. `not_ready` (`reason=indexing`)
 3. `not_indexed`
+4. `blocked` (`reason=unnecessary_reindex_ignore_only`)
 
 If `requires_reindex` appears:
 - run `manage_index(action="reindex", path=<hinted/effective root>)`
@@ -74,6 +76,10 @@ If `requires_reindex` appears:
 - do **not** replace with `sync`
 
 Use `manage_index(action="sync")` only for freshness/noise convergence (for example after `.satoriignore` updates).
+
+If reindex is blocked as unnecessary ignore-only churn:
+- run `manage_index(action="sync", path=<same root>)` for convergence
+- use `manage_index(action="reindex", path=<same root>, allowUnnecessaryReindex=true)` only when user explicitly wants to override preflight safety
 
 Never call `manage_index(action="clear")` unless user explicitly requests destructive reset.
 

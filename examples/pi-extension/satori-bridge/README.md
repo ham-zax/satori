@@ -112,5 +112,6 @@ Example `config.json`:
 - Bridge auto-recovery retries once with `SATORI_CLI_STDOUT_GUARD=off` only for protocol/transport failures.
 - Missing `envFile` is non-fatal (bridge continues and uses process/config env values).
 - Tool-level responses (including non-ok structured envelopes such as `not_ready/indexing`) do not trigger auto-retry.
+- `manage_index` may return `status="blocked"` with `reason="unnecessary_reindex_ignore_only"`; preferred remediation is `manage_index {"action":"sync","path":"..."}` (override only with `allowUnnecessaryReindex=true` when explicitly intended).
 - Tool cancellation is forwarded to child process kill via `AbortSignal`.
 - Tool output is compact by default and progressively disclosed via `Ctrl+O` in Pi.

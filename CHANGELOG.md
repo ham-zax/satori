@@ -2,6 +2,16 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-28] Reindex Preflight Non-Indexed Bypass Fix
+
+### Fixed
+- Fixed `manage_index` reindex preflight regression in `packages/mcp/src/core/handlers.ts`:
+  - ignore-only reindex blocking (`reindex_unnecessary_ignore_only`) now applies only to already indexed roots (`indexed` / `sync_completed`),
+  - non-indexed roots with only ignore-file changes now proceed through reindex/create flow instead of being incorrectly blocked to `sync`.
+- Added deterministic regression coverage in:
+  - `packages/mcp/src/core/handlers.manage_index_preflight.test.ts`
+  - `handleReindexCodebase does not block ignore-only changes when codebase is not indexed`.
+
 ## [2026-02-28] Manage Index Envelope + Reindex Preflight Guardrails and Search Ignore-Hint Hardening
 
 ### Added

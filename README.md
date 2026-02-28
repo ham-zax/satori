@@ -147,7 +147,7 @@ The MCP surface is intentionally constrained to 6 tools. Smaller surface area ke
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.7.0"],
+      "args": ["-y", "--prefer-offline", "@zokizuan/satori-mcp@4.3.1"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -168,7 +168,7 @@ The MCP surface is intentionally constrained to 6 tools. Smaller surface area ke
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.7.0"]
+args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@4.3.1"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
@@ -189,6 +189,24 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
 Results include file paths, line ranges, code snippets, and structural scope annotations.
 
 Cold starts can take time on first install. Keep `timeout` / `startup_timeout_ms` at `180000`.
+
+### PI Agent Bridge (Optional)
+
+If you run PI and want Satori tools directly in PI's extension surface, use `pi-satori-bridge`.
+
+```bash
+pi install npm:pi-satori-bridge
+```
+
+Then run PI with the extension and verify connectivity using:
+
+```text
+/satori-mcp
+```
+
+Bridge repository and docs:
+- https://github.com/ham-zax/satori
+- `/home/hamza/repo/satori-bridge/README.md`
 
 ### Query Ideas for First Run
 
@@ -377,7 +395,7 @@ pnpm --filter @zokizuan/satori-mcp start        # run MCP server locally
 
 If MCP startup fails (`initialize response` closed), check:
 
-1. Pin a published version: `@zokizuan/satori-mcp@3.7.0`
+1. Pin a published version: `@zokizuan/satori-mcp@4.3.1`
 2. Increase startup timeout to `180000` (cold start package download can be slow)
 3. Remove local link shadowing: `npm unlink -g @zokizuan/satori-mcp` (and local `npm unlink @zokizuan/satori-mcp` if needed)
 4. Restart MCP client

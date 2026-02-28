@@ -6,6 +6,7 @@ import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
+import type { ManageIndexResponseEnvelope } from './manage-types.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -60,13 +61,25 @@ function createHandlers(repoPath: string): ToolHandlers {
     return handlers;
 }
 
-function assertBlockedText(text: string, repoPath: string, action: 'create' | 'sync' | 'clear') {
+function parseManageEnvelope(response: any): ManageIndexResponseEnvelope {
+    const payload = response?.content?.[0]?.text;
+    assert.equal(typeof payload, 'string');
+    return JSON.parse(payload) as ManageIndexResponseEnvelope;
+}
+
+function assertBlockedEnvelope(envelope: ManageIndexResponseEnvelope, repoPath: string, action: 'create' | 'sync' | 'clear') {
+    assert.equal(envelope.action, action);
+    assert.equal(envelope.path, repoPath);
+    assert.equal(envelope.status, 'not_ready');
+    assert.equal(envelope.reason, 'indexing');
+    assert.deepEqual(envelope.hints?.status, {
+        tool: 'manage_index',
+        args: { action: 'status', path: repoPath }
+    });
+    assert.equal(envelope.hints?.retryAfterMs, 2000);
+    const text = envelope.humanText || '';
     assert.match(text, new RegExp(`action='${action}'`));
     assert.match(text, /reason=indexing/);
-    assert.match(
-        text,
-        new RegExp(`hints\\.status=\\{"tool":"manage_index","args":\\{"action":"status","path":"${repoPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\}\\}`)
-    );
     assert.match(text, /retryAfterMs=2000/);
 }
 
@@ -74,9 +87,8 @@ test('handleIndexCodebase returns blocked manage message with status hint and re
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath);
         const response = await handlers.handleIndexCodebase({ path: repoPath });
-        assert.equal(response.isError, true);
-        const text = response.content[0]?.text || '';
-        assertBlockedText(text, repoPath, 'create');
+        const envelope = parseManageEnvelope(response);
+        assertBlockedEnvelope(envelope, repoPath, 'create');
     });
 });
 
@@ -84,9 +96,8 @@ test('handleSyncCodebase returns blocked manage message with status hint and ret
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath);
         const response = await handlers.handleSyncCodebase({ path: repoPath });
-        assert.equal(response.isError, true);
-        const text = response.content[0]?.text || '';
-        assertBlockedText(text, repoPath, 'sync');
+        const envelope = parseManageEnvelope(response);
+        assertBlockedEnvelope(envelope, repoPath, 'sync');
     });
 });
 
@@ -94,9 +105,8 @@ test('handleClearIndex returns blocked manage message with status hint and retry
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath);
         const response = await handlers.handleClearIndex({ path: repoPath });
-        assert.equal(response.isError, true);
-        const text = response.content[0]?.text || '';
-        assertBlockedText(text, repoPath, 'clear');
+        const envelope = parseManageEnvelope(response);
+        assertBlockedEnvelope(envelope, repoPath, 'clear');
     });
 });
 
@@ -142,7 +152,9 @@ test('handleGetIndexingStatus recovers stale indexing state to failed when compl
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        const text = envelope.humanText;
 
         assert.equal(markerCalls, 1);
         assert.equal(failedCalls, 1);
@@ -183,9 +195,8 @@ test('recent indexing state does not trigger stale-index recovery probes', async
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
-        assert.equal(response.isError, true);
-        const text = response.content[0]?.text || '';
-        assertBlockedText(text, repoPath, 'create');
+        const envelope = parseManageEnvelope(response);
+        assertBlockedEnvelope(envelope, repoPath, 'create');
         assert.equal(markerCalls, 0);
     });
 });
@@ -235,9 +246,10 @@ test('handleSyncCodebase routes through ensureFreshness and does not call raw re
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSyncCodebase({ path: repoPath });
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        const text = envelope.humanText;
 
-        assert.equal(response.isError, undefined);
+        assert.equal(envelope.status, 'ok');
         assert.equal(rawReindexCalls, 0);
         assert.equal(freshnessCalls, 1);
         assert.equal(observedThreshold, 0);
@@ -280,9 +292,10 @@ test('handleSyncCodebase surfaces ignore reconcile failure from ensureFreshness'
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSyncCodebase({ path: repoPath });
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        const text = envelope.humanText;
 
-        assert.equal(response.isError, true);
+        assert.equal(envelope.status, 'error');
         assert.match(text, /ignore-rule reconciliation failed/i);
         assert.match(text, /Fallback incremental sync was executed/i);
     });
@@ -321,9 +334,10 @@ test('handleSyncCodebase surfaces coalesced in-flight reconcile failure from ens
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSyncCodebase({ path: repoPath });
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        const text = envelope.humanText;
 
-        assert.equal(response.isError, true);
+        assert.equal(envelope.status, 'error');
         assert.match(text, /coalesced in-flight reconcile failed/i);
         assert.match(text, /Fallback incremental sync was executed/i);
     });

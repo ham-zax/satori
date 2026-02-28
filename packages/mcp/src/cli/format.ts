@@ -70,14 +70,29 @@ export function inferManageStatusState(result: unknown): ManageStatusState {
         if (envelope.status === "not_ready" && envelope.reason === "indexing") {
             return "indexing";
         }
+        if (envelope.status === "not_ready" && envelope.reason === "requires_reindex") {
+            return "requires_reindex";
+        }
         if (envelope.status === "requires_reindex") {
+            return "requires_reindex";
+        }
+        if (envelope.status === "blocked" && envelope.reason === "requires_reindex") {
             return "requires_reindex";
         }
         if (envelope.status === "not_indexed") {
             return "not_indexed";
         }
+        if (envelope.status === "blocked" && envelope.reason === "not_indexed") {
+            return "not_indexed";
+        }
         if (envelope.status === "ok") {
             return "indexed";
+        }
+        if (envelope.status === "error" && envelope.reason === "requires_reindex") {
+            return "requires_reindex";
+        }
+        if (envelope.status === "error" && envelope.reason === "not_indexed") {
+            return "not_indexed";
         }
     }
 
@@ -104,4 +119,3 @@ export function inferManageStatusState(result: unknown): ManageStatusState {
     }
     return "unknown";
 }
-

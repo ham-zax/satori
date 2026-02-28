@@ -8,7 +8,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - North-star agent path: `search_codebase -> file_outline -> call_graph -> read_file(open_symbol)` with `navigationFallback` when graph is unavailable.
 - Exactly six MCP tools are exposed via registry: `list_codebases`, `manage_index`, `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - `satori-cli` is a shell client of the same six MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
-- `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers.
+- `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers and responses are structured JSON envelopes.
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
 - `path:` and `-path:` operators use gitignore-style pattern matching via `ignore` against normalized repo-relative paths.
@@ -17,7 +17,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Must-retry is bounded and deterministic; warning is emitted only when must constraints remain unsatisfied after retries.
 - Group diversity is default-on and deterministic with fixed caps and one deterministic relaxed pass.
 - Changed-files boost is git-aware with TTL cache and hard threshold gating for large dirty trees.
-- Noise mitigation hint is deterministic, category-based, emitted only when noise ratio threshold is crossed in visible top-K.
+- Noise mitigation hint is deterministic, category-based, emitted only when noise ratio threshold is crossed in visible top-K, and root `.gitignore`-aware for redundant suggestion suppression.
 - Rerank is policy-controlled (capability/profile + docs-scope skip), runs post-filter and pre-group, top-K bounded, deterministic rank-only boost, stable failure degradation.
 - Candidate and group sorting both use explicit deterministic tie-break chains.
 - Grouping supports `symbol` and `file`; fallback groups use deterministic hashed IDs when symbol identity is unavailable.
@@ -107,21 +107,32 @@ Purpose: lifecycle operations (`create`, `reindex`, `sync`, `status`, `clear`).
 
 Inputs/defaults:
 - Required: `action`, `path`.
-- Optional: `force`, `customExtensions`, `ignorePatterns`, `zillizDropCollection`.
+- Optional: `force`, `allowUnnecessaryReindex`, `customExtensions`, `ignorePatterns`, `zillizDropCollection`.
 - No per-action schema branching in zod; handler enforces behavior.
 
 Outputs:
-- Text responses for each action.
-- `sync` and `status` return human-readable status text, not search envelope.
+- JSON envelope (serialized in `content[0].text`) for each action:
+  - `tool`, `version`, `action`, `path`
+  - `status` (`ok|not_ready|not_indexed|requires_reindex|blocked|error`)
+  - `reason` (when applicable)
+  - `message`, `humanText`
+  - optional `warnings`, `hints`, `preflight`
+- `humanText` remains deterministic operator-facing guidance; structured fields are authoritative for client branching.
 
 Warnings/hints:
 - Reindex guidance text when blocked by fingerprint mismatch.
 - Zilliz collection-limit guidance with explicit next action.
 - `create` path resolves and can return "already indexed" guidance.
+- `reindex` preflight can emit deterministic warnings (`REINDEX_UNNECESSARY_IGNORE_ONLY`, `REINDEX_PREFLIGHT_UNKNOWN`, `IGNORE_POLICY_PROBE_FAILED`).
 
 Determinism:
 - Action dispatch deterministic switch.
 - Fingerprint gate deterministic via snapshot/runtime fingerprint comparison.
+- Reindex preflight outcomes are deterministic and bounded:
+  - `reindex_required`
+  - `reindex_unnecessary_ignore_only` (blocked unless `allowUnnecessaryReindex=true`)
+  - `unknown` (warn-only, proceeds)
+  - `probe_failed` (warn-only, proceeds)
 
 Common recipes:
 1. First-time index: `manage_index {action:"create", path}`.
@@ -131,7 +142,7 @@ Common recipes:
 Behavior:
 - Trigger: action call.
 - Effect: runs mapped handler with validations/gates.
-- Observability: status text plus reindex instructions/hints.
+- Observability: structured manage envelope with stable statuses/reasons/warnings + human guidance text.
 - Determinism: fixed action routing and gate checks.
 - Performance: `create/reindex` background indexing; `sync` incremental; `status` read-mostly (but can mutate on fingerprint gate).
 
@@ -330,9 +341,14 @@ Behavior:
 
 9) Noise mitigation hint
 - Trigger: top visible results exceed noise ratio threshold.
-- Effect: emits deterministic mitigation payload (`ratios`, `recommendedScope`, patterns, debounce, nextStep).
+- Effect: emits deterministic mitigation payload (`ratios`, `recommendedScope`, patterns, debounce, nextStep) with root `.gitignore` redundancy suppression.
 - Observability: `hints.noiseMitigation` with `version=1`.
-- Determinism: fixed category precedence `generated > tests > fixtures > docs > runtime`, topK fixed cap.
+- Determinism:
+  - fixed category precedence `generated > tests > fixtures > docs > runtime`, topK fixed cap.
+  - suggestion order remains stable (`SEARCH_NOISE_HINT_PATTERNS` order).
+  - suppression is path-observed over top-K noisy files only.
+  - fallback to baseline suggestions when root `.gitignore` matcher state is absent/error.
+  - forced matcher reload cadence plus `mtimeMs+size` invalidation for coarse filesystems.
 - Performance: lightweight classification on visible top-K only.
 
 10) Reranking
@@ -354,6 +370,8 @@ Behavior:
 Recent vs legacy:
 - Legacy `useReranker` input has been removed; rerank is policy-driven now.
 - Legacy splitter control in `manage_index` removed from public schema.
+- `manage_index` now returns structured envelopes (not text-only contract).
+- `manage_index` reindex preflight guard rails added with explicit override knob (`allowUnnecessaryReindex`).
 - Warning semantics for must constraints tightened to final unsatisfied only.
 
 **Evidence:**

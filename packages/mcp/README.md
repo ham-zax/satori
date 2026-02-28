@@ -63,13 +63,14 @@ Tool surface is hard-broken to 6 tools. This keeps routing explicit while exposi
 
 ### `manage_index`
 
-Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action="sync" for immediate convergence and action="reindex" for full rebuild recovery.
+Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action="sync" for immediate convergence and action="reindex" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true).
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `action` | enum("create", "reindex", "sync", "status", "clear") | yes |  | Required operation to run. |
 | `path` | string | yes |  | ABSOLUTE path to the target codebase. |
 | `force` | boolean | no |  | Only for action='create'. Force rebuild from scratch. |
+| `allowUnnecessaryReindex` | boolean | no |  | Only for action='reindex'. Override preflight block when reindex is detected as unnecessary ignore-only churn. |
 | `customExtensions` | array<string> | no |  | Only for action='create'. Additional file extensions to include. |
 | `ignorePatterns` | array<string> | no |  | Only for action='create'. Additional ignore patterns to apply. |
 | `zillizDropCollection` | string | no |  | Only for action='create'. Zilliz-only: drop this Satori-managed collection before creating the new index. |

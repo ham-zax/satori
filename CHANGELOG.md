@@ -2,6 +2,54 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-28] Manage Index Envelope + Reindex Preflight Guardrails and Search Ignore-Hint Hardening
+
+### Added
+- Added structured `manage_index` envelope types in:
+  - `packages/mcp/src/core/manage-types.ts`
+- Added warning-code SSOT registry in:
+  - `packages/mcp/src/core/warnings.ts`
+- Added deterministic preflight/contract regression coverage:
+  - `packages/mcp/src/core/handlers.manage_index_preflight.test.ts`
+  - `packages/mcp/src/core/warnings.test.ts`
+- Expanded search noise-mitigation regressions in:
+  - `packages/mcp/src/core/handlers.scope.test.ts` for:
+    - root `.gitignore` redundant-suggestion suppression,
+    - partial suppression with order stability,
+    - forced reload cadence under unchanged `mtime`/size.
+
+### Modified
+- Evolved `manage_index` handler outputs from text-only responses to structured envelope JSON (serialized in `content[0].text`) with stable fields:
+  - `tool`, `version`, `action`, `path`, `status`, `reason?`, `message`, `humanText`, `warnings?`, `hints?`, `preflight?`
+  - implemented in `packages/mcp/src/core/handlers.ts`.
+- Added `reindex` preflight guardrails in `handlers.ts`:
+  - blocks ignore-only churn by default (`status="blocked"`, `reason="unnecessary_reindex_ignore_only"`),
+  - supports explicit override via `allowUnnecessaryReindex`,
+  - forwards non-authoritative preflight outcomes (`unknown`, `probe_failed`) as warn-only diagnostics while proceeding.
+- Hardened search noise mitigation in `handlers.ts`:
+  - root `.gitignore` matcher cache keyed by canonical root identity,
+  - cache invalidation by `mtimeMs + size`,
+  - deterministic forced reload cadence (`SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N`),
+  - path-observed filtering of `suggestedIgnorePatterns`,
+  - deterministic next-step messaging for empty/non-empty suggestion outcomes.
+- Fixed initial `.gitignore` cache-load short-circuit so first lookup attempts real matcher load.
+- Updated manage tool schema/description in:
+  - `packages/mcp/src/tools/manage_index.ts`
+  - added `allowUnnecessaryReindex` input.
+- Updated CLI manage status inference for expanded envelope status/reason combinations in:
+  - `packages/mcp/src/cli/format.ts`.
+- Migrated manage-index handler tests to envelope assertions in:
+  - `packages/mcp/src/core/handlers.manage_index_blocking.test.ts`
+  - `packages/mcp/src/core/handlers.index_validation.test.ts`.
+
+### Docs
+- Updated behavior contract docs for envelope-native `manage_index` responses, reindex preflight semantics, and root `.gitignore`-aware noise-hint filtering in:
+  - `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md`.
+
+### Validation
+- `pnpm -C packages/mcp typecheck`
+- `pnpm -C packages/mcp test`
+
 ## [2026-02-28] SnapshotManager Lock/Merge Hardening Follow-up
 
 ### Added

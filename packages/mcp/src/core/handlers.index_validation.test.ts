@@ -8,6 +8,7 @@ import { COLLECTION_LIMIT_MESSAGE } from '@zokizuan/satori-core';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
+import type { ManageIndexResponseEnvelope } from './manage-types.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -121,6 +122,12 @@ function createHandlersForValidation(options: ValidationHarnessOptions): { handl
     return { handlers, droppedCollections };
 }
 
+function parseManageEnvelope(response: any): ManageIndexResponseEnvelope {
+    const payload = response?.content?.[0]?.text;
+    assert.equal(typeof payload, 'string');
+    return JSON.parse(payload) as ManageIndexResponseEnvelope;
+}
+
 test('handleIndexCodebase returns Zilliz eviction guidance with free-tier reason and agent instructions', async () => {
     await withTempRepo(async (repoPath) => {
         const { handlers } = createHandlersForValidation({
@@ -143,8 +150,9 @@ test('handleIndexCodebase returns Zilliz eviction guidance with free-tier reason
         });
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
-        assert.equal(response.isError, true);
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        const text = envelope.humanText;
 
         assert.match(text, /Reason: Zilliz free-tier clusters are capped at 5 collections/i);
         assert.match(text, /Current Satori-managed collections \(oldest -> newest\):/i);
@@ -185,8 +193,9 @@ test('handleIndexCodebase ordering falls back to snapshot lastUpdated when colle
         });
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
-        assert.equal(response.isError, true);
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        const text = envelope.humanText;
 
         const tradingIndex = text.indexOf(tradingCollection);
         const promptReadyIndex = text.indexOf(promptReadyCollection);
@@ -209,8 +218,9 @@ test('handleIndexCodebase keeps generic limit message for non-Zilliz backend', a
         });
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
-        assert.equal(response.isError, true);
-        assert.equal(response.content[0]?.text, COLLECTION_LIMIT_MESSAGE);
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        assert.equal(envelope.humanText, COLLECTION_LIMIT_MESSAGE);
     });
 });
 
@@ -233,8 +243,9 @@ test('handleIndexCodebase supports explicit zillizDropCollection for user-select
             zillizDropCollection: 'hybrid_code_chunks_deadbeef'
         });
 
-        assert.equal(response.isError, undefined);
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'ok');
+        const text = envelope.humanText;
         assert.match(text, /Dropped Zilliz collection 'hybrid_code_chunks_deadbeef'/i);
         assert.equal(droppedCollections.length, 1);
         assert.equal(droppedCollections[0], 'hybrid_code_chunks_deadbeef');
@@ -265,8 +276,9 @@ test('handleIndexCodebase force reindex drops all prior collections for the same
             force: true
         });
 
-        assert.equal(response.isError, undefined);
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'ok');
+        const text = envelope.humanText;
         assert.match(text, /Force reindex cleanup dropped 2 prior collection\(s\)/i);
         assert.deepEqual(new Set(droppedCollections), new Set([legacyCollection, modernCollection]));
     });
@@ -285,8 +297,9 @@ test('handleIndexCodebase rejects zillizDropCollection for non-Zilliz backend', 
             zillizDropCollection: 'hybrid_code_chunks_deadbeef'
         });
 
-        assert.equal(response.isError, true);
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        const text = envelope.humanText;
         assert.match(text, /only supported when connected to a Zilliz Cloud backend/i);
         assert.equal(droppedCollections.length, 0);
     });
@@ -308,8 +321,9 @@ test('handleIndexCodebase surfaces structured Zilliz validation errors without [
         });
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
-        assert.equal(response.isError, true);
-        const text = response.content[0]?.text || '';
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        const text = envelope.humanText;
         assert.match(text, /permission denied while creating collection/i);
         assert.match(text, /token is invalid/i);
         assert.ok(!text.includes('[object Object]'));

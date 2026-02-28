@@ -25,6 +25,7 @@ export const SEARCH_NOISE_HINT_PATTERNS = [
     '**/fixtures/**',
     'coverage/**',
 ] as const;
+export const SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N = 25;
 
 export const STALENESS_THRESHOLDS_MS = {
     fresh: 30 * 60 * 1000,

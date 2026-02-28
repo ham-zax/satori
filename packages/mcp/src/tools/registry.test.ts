@@ -107,6 +107,7 @@ test('manage_index schema does not expose deprecated splitter knob', () => {
 
     const properties = manageIndexTool!.inputSchema.properties as Record<string, any>;
     assert.equal(Object.prototype.hasOwnProperty.call(properties, 'splitter'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(properties, 'allowUnnecessaryReindex'), true);
 });
 
 test('file_outline schema exposes path/file and line window controls', () => {

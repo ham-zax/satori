@@ -56,7 +56,12 @@ async function withEnv(vars: Record<string, string | undefined>, fn: () => Promi
     }
 }
 
-function createHandlers(repoPath: string, searchResults: any[], reranker?: any) {
+function createHandlers(
+    repoPath: string,
+    searchResults: any[],
+    reranker?: any,
+    options?: { gitignoreForceReloadEveryN?: number }
+) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         semanticSearch: async () => searchResults
@@ -85,7 +90,17 @@ function createHandlers(repoPath: string, searchResults: any[], reranker?: any) 
         ...(reranker ? { voyageKey: 'test' } : {}),
     });
 
-    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, capabilities, () => Date.parse('2026-01-01T01:00:00.000Z'), undefined, reranker || null);
+    const handlers = new ToolHandlers(
+        context,
+        snapshotManager,
+        syncManager,
+        RUNTIME_FINGERPRINT,
+        capabilities,
+        () => Date.parse('2026-01-01T01:00:00.000Z'),
+        undefined,
+        reranker || null,
+        options?.gitignoreForceReloadEveryN
+    );
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }
@@ -1008,8 +1023,282 @@ test('handleSearchCode emits deterministic noiseMitigation hint when top grouped
             'coverage/**'
         ]);
         assert.match(payload.hints?.noiseMitigation?.nextStep || '', /scope=\"runtime\"/);
-        assert.match(payload.hints?.noiseMitigation?.nextStep || '', /scope=\"mixed\"/);
         assert.match(payload.hints?.noiseMitigation?.nextStep || '', /\"action\":\"sync\"/);
+        assert.match(payload.hints?.noiseMitigation?.nextStep || '', /Reindex is only required when you see requires_reindex/i);
+        assert.doesNotMatch(payload.hints?.noiseMitigation?.nextStep || '', /already covered by root \.gitignore/i);
+    });
+});
+
+test('handleSearchCode suppresses redundant ignore suggestions when top noisy files are already covered by root .gitignore', async () => {
+    await withTempRepo(async (repoPath) => {
+        fs.writeFileSync(
+            path.join(repoPath, '.gitignore'),
+            ['**/*.test.*', '**/*.spec.*', '**/__tests__/**', '**/__fixtures__/**', 'coverage/**'].join('\n') + '\n',
+            'utf8'
+        );
+
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'describe("auth", () => {})',
+                relativePath: 'tests/auth.test.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.95,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_test',
+                symbolLabel: 'function testAuth()'
+            },
+            {
+                content: 'describe("auth", () => {})',
+                relativePath: 'src/__tests__/auth.spec.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.94,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_spec',
+                symbolLabel: 'function authSpec()'
+            },
+            {
+                content: 'export const fixture = true;',
+                relativePath: 'src/__fixtures__/auth-fixture.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.93,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_fixture',
+                symbolLabel: 'const fixture'
+            },
+            {
+                content: 'TN:coverage',
+                relativePath: 'coverage/lcov.info',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.92,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_generated',
+                symbolLabel: 'coverage'
+            },
+            {
+                content: 'export const runtime = true;',
+                relativePath: 'src/runtime.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.91,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime',
+                symbolLabel: 'const runtime'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth flow',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.deepEqual(payload.hints?.noiseMitigation?.suggestedIgnorePatterns, []);
+        assert.match(payload.hints?.noiseMitigation?.nextStep || '', /already covered by root \.gitignore/i);
+    });
+});
+
+test('handleSearchCode keeps only non-redundant ignore suggestions and preserves deterministic order', async () => {
+    await withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, '.gitignore'), 'coverage/**\n', 'utf8');
+
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'describe("auth", () => {})',
+                relativePath: 'src/__tests__/auth.spec.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.95,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_spec',
+                symbolLabel: 'function authSpec()'
+            },
+            {
+                content: 'export const fixture = true;',
+                relativePath: 'src/__fixtures__/auth-fixture.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.94,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_fixture',
+                symbolLabel: 'const fixture'
+            },
+            {
+                content: 'TN:coverage',
+                relativePath: 'coverage/lcov.info',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.93,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_generated',
+                symbolLabel: 'coverage'
+            },
+            {
+                content: 'export const runtime = true;',
+                relativePath: 'src/runtime.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.92,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_1',
+                symbolLabel: 'const runtime1'
+            },
+            {
+                content: 'export const runtime2 = true;',
+                relativePath: 'src/runtime2.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.91,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_2',
+                symbolLabel: 'const runtime2'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth flow',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.deepEqual(payload.hints?.noiseMitigation?.suggestedIgnorePatterns, [
+            '**/*.spec.*',
+            '**/__tests__/**',
+            '**/__fixtures__/**'
+        ]);
+        assert.doesNotMatch(payload.hints?.noiseMitigation?.nextStep || '', /already covered by root \.gitignore/i);
+    });
+});
+
+test('handleSearchCode reloads root .gitignore on forced cadence when mtime and size stay unchanged', async () => {
+    await withTempRepo(async (repoPath) => {
+        const gitignorePath = path.join(repoPath, '.gitignore');
+        const firstContent = 'coverage/**\n#same\n';
+        const secondContent = '**/*.spec.*\n#same\n';
+        const fixedDate = new Date('2026-03-01T00:00:00.000Z');
+
+        fs.writeFileSync(gitignorePath, firstContent, 'utf8');
+        fs.utimesSync(gitignorePath, fixedDate, fixedDate);
+
+        const handlers = createHandlers(
+            repoPath,
+            [
+                {
+                    content: 'describe("auth", () => {})',
+                    relativePath: 'src/__tests__/auth.spec.ts',
+                    startLine: 1,
+                    endLine: 3,
+                    language: 'typescript',
+                    score: 0.95,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_spec',
+                    symbolLabel: 'function authSpec()'
+                },
+                {
+                    content: 'TN:coverage',
+                    relativePath: 'coverage/lcov.info',
+                    startLine: 1,
+                    endLine: 2,
+                    language: 'text',
+                    score: 0.94,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_generated',
+                    symbolLabel: 'coverage'
+                },
+                {
+                    content: '# auth docs',
+                    relativePath: 'docs/auth.md',
+                    startLine: 1,
+                    endLine: 2,
+                    language: 'text',
+                    score: 0.93,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_docs',
+                    symbolLabel: 'doc auth'
+                },
+                {
+                    content: 'export const runtime = true;',
+                    relativePath: 'src/runtime.ts',
+                    startLine: 1,
+                    endLine: 2,
+                    language: 'typescript',
+                    score: 0.92,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_runtime_1',
+                    symbolLabel: 'const runtime1'
+                },
+                {
+                    content: 'export const runtime2 = true;',
+                    relativePath: 'src/runtime2.ts',
+                    startLine: 1,
+                    endLine: 2,
+                    language: 'typescript',
+                    score: 0.91,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_runtime_2',
+                    symbolLabel: 'const runtime2'
+                }
+            ],
+            undefined,
+            { gitignoreForceReloadEveryN: 2 }
+        );
+
+        const firstResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth flow',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+        const firstPayload = JSON.parse(firstResponse.content[0]?.text || '{}');
+        assert.deepEqual(firstPayload.hints?.noiseMitigation?.suggestedIgnorePatterns, ['**/*.spec.*', '**/__tests__/**']);
+
+        fs.writeFileSync(gitignorePath, secondContent, 'utf8');
+        fs.utimesSync(gitignorePath, fixedDate, fixedDate);
+
+        const secondResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth flow',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+        const secondPayload = JSON.parse(secondResponse.content[0]?.text || '{}');
+        assert.deepEqual(secondPayload.hints?.noiseMitigation?.suggestedIgnorePatterns, ['**/*.spec.*', '**/__tests__/**']);
+
+        const thirdResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth flow',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+        const thirdPayload = JSON.parse(thirdResponse.content[0]?.text || '{}');
+        assert.deepEqual(thirdPayload.hints?.noiseMitigation?.suggestedIgnorePatterns, ['coverage/**']);
     });
 });
 

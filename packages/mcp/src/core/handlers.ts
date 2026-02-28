@@ -27,6 +27,7 @@ import {
     SEARCH_MUST_RETRY_MULTIPLIER,
     SEARCH_MUST_RETRY_ROUNDS,
     SEARCH_NOISE_HINT_PATTERNS,
+    SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N,
     SEARCH_NOISE_HINT_THRESHOLD,
     SEARCH_NOISE_HINT_TOP_K,
     SEARCH_OPERATOR_PREFIX_MAX_CHARS,
@@ -64,6 +65,14 @@ import {
     SearchSpan,
     StalenessBucket
 } from "./search-types.js";
+import {
+    ManageIndexAction,
+    ManageIndexReason,
+    ManageIndexResponseEnvelope,
+    ManageIndexStatus,
+    ManageReindexPreflightOutcome,
+} from "./manage-types.js";
+import { WARNING_CODES, WarningCode } from "./warnings.js";
 import { CallGraphDirection, CallGraphSidecarManager, CallGraphSymbolRef } from "./call-graph.js";
 import { decideInterruptedIndexingRecovery } from "./indexing-recovery.js";
 
@@ -121,6 +130,23 @@ type SearchDiversitySummary = {
     skippedByFileCap: number;
     skippedBySymbolCap: number;
     usedRelaxedCap: boolean;
+};
+
+type GitignoreMatcherCacheState = "ready" | "absent" | "error";
+
+type GitignoreMatcherCacheEntry = {
+    state: GitignoreMatcherCacheState;
+    mtimeMs: number | null;
+    size: number | null;
+    matcher: ReturnType<typeof ignore> | null;
+    checksSinceReload: number;
+};
+
+type ReindexPreflightResult = {
+    outcome: ManageReindexPreflightOutcome;
+    warnings: WarningCode[];
+    confidence: "high" | "low";
+    probeFailed?: boolean;
 };
 
 type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mismatch" | "probe_failed";
@@ -278,6 +304,8 @@ export class ToolHandlers {
         available: boolean;
         files: Set<string>;
     }>();
+    private readonly rootGitignoreMatcherCache = new Map<string, GitignoreMatcherCacheEntry>();
+    private readonly gitignoreForceReloadEveryN: number;
 
     constructor(
         context: Context,
@@ -287,7 +315,8 @@ export class ToolHandlers {
         capabilities: CapabilityResolver,
         now: () => number = () => Date.now(),
         callGraphManager?: CallGraphSidecarManager,
-        reranker?: VoyageAIReranker | null
+        reranker?: VoyageAIReranker | null,
+        gitignoreForceReloadEveryN: number = SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N
     ) {
         this.context = context;
         this.snapshotManager = snapshotManager;
@@ -298,6 +327,7 @@ export class ToolHandlers {
         this.now = now;
         this.callGraphManager = callGraphManager || new CallGraphSidecarManager(runtimeFingerprint, { now });
         this.reranker = reranker || null;
+        this.gitignoreForceReloadEveryN = Math.max(1, Math.trunc(gitignoreForceReloadEveryN));
         console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`);
     }
 
@@ -334,6 +364,74 @@ export class ToolHandlers {
                 path: codebasePath
             }
         };
+    }
+
+    private buildManageResponseEnvelope(
+        action: ManageIndexAction,
+        codebasePath: string,
+        status: ManageIndexStatus,
+        humanText: string,
+        options: {
+            reason?: ManageIndexReason;
+            warnings?: WarningCode[];
+            hints?: Record<string, unknown>;
+            preflight?: ReindexPreflightResult;
+            message?: string;
+        } = {}
+    ): ManageIndexResponseEnvelope {
+        const envelope: ManageIndexResponseEnvelope = {
+            tool: "manage_index",
+            version: 1,
+            action,
+            path: codebasePath,
+            status,
+            message: options.message || humanText,
+            humanText,
+        };
+        if (options.reason) {
+            envelope.reason = options.reason;
+        }
+        if (Array.isArray(options.warnings) && options.warnings.length > 0) {
+            envelope.warnings = [...new Set(options.warnings)];
+        }
+        if (options.hints && Object.keys(options.hints).length > 0) {
+            envelope.hints = options.hints;
+        }
+        if (options.preflight) {
+            envelope.preflight = {
+                outcome: options.preflight.outcome,
+                confidence: options.preflight.confidence,
+                probeFailed: options.preflight.probeFailed === true,
+            };
+        }
+        return envelope;
+    }
+
+    private manageResponseFromEnvelope(envelope: ManageIndexResponseEnvelope): { content: Array<{ type: "text"; text: string }> } {
+        return {
+            content: [{
+                type: "text",
+                text: JSON.stringify(envelope, null, 2)
+            }]
+        };
+    }
+
+    private manageResponse(
+        action: ManageIndexAction,
+        codebasePath: string,
+        status: ManageIndexStatus,
+        humanText: string,
+        options: {
+            reason?: ManageIndexReason;
+            warnings?: WarningCode[];
+            hints?: Record<string, unknown>;
+            preflight?: ReindexPreflightResult;
+            message?: string;
+        } = {}
+    ): { content: Array<{ type: "text"; text: string }> } {
+        return this.manageResponseFromEnvelope(
+            this.buildManageResponseEnvelope(action, codebasePath, status, humanText, options)
+        );
     }
 
     private buildIndexingMetadata(codebasePath: string): { progressPct: number | null; lastUpdated: string | null; phase: string | null } {
@@ -1192,7 +1290,169 @@ export class ToolHandlers {
         return Math.round(value * 100) / 100;
     }
 
-    private buildNoiseMitigationHint(filesInOrder: string[]): SearchNoiseMitigationHint | undefined {
+    private normalizeRelativePathForIgnoreCheck(relativePath: string): string | null {
+        if (typeof relativePath !== 'string') {
+            return null;
+        }
+        const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+        if (normalized.length === 0 || normalized === '.') {
+            return null;
+        }
+        if (
+            normalized.startsWith('..')
+            || normalized.includes('/../')
+            || path.posix.isAbsolute(normalized)
+            || path.win32.isAbsolute(normalized)
+        ) {
+            return null;
+        }
+        return normalized;
+    }
+
+    private loadRootGitignoreMatcher(codebaseRoot: string): GitignoreMatcherCacheEntry {
+        const cacheKey = this.canonicalizeCodebasePath(codebaseRoot);
+        const gitignorePath = path.join(cacheKey, '.gitignore');
+        const existingFromCache = this.rootGitignoreMatcherCache.get(cacheKey);
+        const existing = existingFromCache || {
+            state: "absent" as GitignoreMatcherCacheState,
+            mtimeMs: null,
+            size: null,
+            matcher: null,
+            checksSinceReload: 0,
+        };
+        const hasExistingEntry = !!existingFromCache;
+
+        const nextChecks = existing.checksSinceReload + 1;
+        const forceReload = nextChecks >= this.gitignoreForceReloadEveryN;
+
+        if (!forceReload && existing.state === 'ready') {
+            try {
+                const stat = fs.statSync(gitignorePath);
+                const mtimeMs = Math.trunc(stat.mtimeMs);
+                const size = stat.size;
+                if (stat.isFile() && existing.mtimeMs === mtimeMs && existing.size === size && existing.matcher) {
+                    const retained = { ...existing, checksSinceReload: nextChecks };
+                    this.rootGitignoreMatcherCache.set(cacheKey, retained);
+                    return retained;
+                }
+            } catch {
+                // Fall through to reload path.
+            }
+        }
+
+        if (hasExistingEntry && !forceReload && (existing.state === 'absent' || existing.state === 'error')) {
+            const retained = { ...existing, checksSinceReload: nextChecks };
+            this.rootGitignoreMatcherCache.set(cacheKey, retained);
+            return retained;
+        }
+
+        try {
+            const stat = fs.statSync(gitignorePath);
+            if (!stat.isFile()) {
+                const absent = {
+                    state: "absent" as GitignoreMatcherCacheState,
+                    mtimeMs: null,
+                    size: null,
+                    matcher: null,
+                    checksSinceReload: 0,
+                };
+                this.rootGitignoreMatcherCache.set(cacheKey, absent);
+                return absent;
+            }
+
+            const mtimeMs = Math.trunc(stat.mtimeMs);
+            const size = stat.size;
+            const contents = fs.readFileSync(gitignorePath, 'utf8');
+            const matcher = ignore();
+            matcher.add(contents);
+
+            const ready = {
+                state: "ready" as GitignoreMatcherCacheState,
+                mtimeMs,
+                size,
+                matcher,
+                checksSinceReload: 0,
+            };
+            this.rootGitignoreMatcherCache.set(cacheKey, ready);
+            return ready;
+        } catch (error: any) {
+            const code = typeof error?.code === 'string' ? error.code : '';
+            if (code === 'ENOENT' || code === 'ENOTDIR') {
+                const absent = {
+                    state: "absent" as GitignoreMatcherCacheState,
+                    mtimeMs: null,
+                    size: null,
+                    matcher: null,
+                    checksSinceReload: 0,
+                };
+                this.rootGitignoreMatcherCache.set(cacheKey, absent);
+                return absent;
+            }
+            const failed = {
+                state: "error" as GitignoreMatcherCacheState,
+                mtimeMs: null,
+                size: null,
+                matcher: null,
+                checksSinceReload: 0,
+            };
+            this.rootGitignoreMatcherCache.set(cacheKey, failed);
+            return failed;
+        }
+    }
+
+    private patternMatchesAnyPath(pattern: string, paths: string[]): boolean {
+        if (!Array.isArray(paths) || paths.length === 0) {
+            return false;
+        }
+        try {
+            const matcher = ignore();
+            matcher.add(pattern);
+            return paths.some((filePath) => matcher.ignores(filePath));
+        } catch {
+            return false;
+        }
+    }
+
+    private filterNoiseHintPatternsByRootGitignore(
+        codebaseRoot: string,
+        observedNoisyFiles: string[]
+    ): {
+        matcherState: GitignoreMatcherCacheState;
+        suggestedIgnorePatterns: string[];
+        coveredByRootGitignore: boolean;
+    } {
+        const normalizedObserved = Array.from(
+            new Set(
+                observedNoisyFiles
+                    .map((filePath) => this.normalizeRelativePathForIgnoreCheck(filePath))
+                    .filter((filePath): filePath is string => typeof filePath === 'string')
+            )
+        );
+
+        const baseline = [...SEARCH_NOISE_HINT_PATTERNS];
+        const cacheEntry = this.loadRootGitignoreMatcher(codebaseRoot);
+        if (cacheEntry.state !== 'ready' || !cacheEntry.matcher) {
+            return {
+                matcherState: cacheEntry.state,
+                suggestedIgnorePatterns: baseline,
+                coveredByRootGitignore: false,
+            };
+        }
+
+        const coveredByRootGitignore = normalizedObserved.some((filePath) => cacheEntry.matcher!.ignores(filePath));
+        const noisyFilesNotIgnored = normalizedObserved.filter((filePath) => !cacheEntry.matcher!.ignores(filePath));
+        const suggestedIgnorePatterns = SEARCH_NOISE_HINT_PATTERNS.filter((pattern) =>
+            this.patternMatchesAnyPath(pattern, noisyFilesNotIgnored)
+        );
+
+        return {
+            matcherState: cacheEntry.state,
+            suggestedIgnorePatterns,
+            coveredByRootGitignore,
+        };
+    }
+
+    private buildNoiseMitigationHint(codebaseRoot: string, filesInOrder: string[]): SearchNoiseMitigationHint | undefined {
         if (!Array.isArray(filesInOrder) || filesInOrder.length === 0) {
             return undefined;
         }
@@ -1209,10 +1469,18 @@ export class ToolHandlers {
             generated: 0,
             runtime: 0,
         };
+        const observedNoisyFiles: string[] = [];
 
         for (let i = 0; i < topK; i++) {
-            const category = this.classifyNoiseCategory(filesInOrder[i]);
+            const filePath = filesInOrder[i];
+            const category = this.classifyNoiseCategory(filePath);
             counts[category] += 1;
+            if (category !== 'runtime') {
+                const normalized = this.normalizeRelativePathForIgnoreCheck(filePath);
+                if (normalized) {
+                    observedNoisyFiles.push(normalized);
+                }
+            }
         }
 
         const noisyRatio = (counts.tests + counts.fixtures + counts.docs + counts.generated) / topK;
@@ -1230,15 +1498,23 @@ export class ToolHandlers {
         const debounceMs = typeof (this.syncManager as any)?.getWatchDebounceMs === 'function'
             ? this.syncManager.getWatchDebounceMs()
             : DEFAULT_WATCH_DEBOUNCE_MS;
+        const filtered = this.filterNoiseHintPatternsByRootGitignore(codebaseRoot, observedNoisyFiles);
+        const isRootCoveredMessageEligible = filtered.matcherState === 'ready' && filtered.coveredByRootGitignore && filtered.suggestedIgnorePatterns.length === 0;
+        const nextStepMiddle = filtered.suggestedIgnorePatterns.length > 0
+            ? 'If you edit ignores, add only patterns not already ignored by root .gitignore (root-only check), then run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.'
+            : (isRootCoveredMessageEligible
+                ? 'Top noisy files appear already covered by root .gitignore (root-only check); .satoriignore changes may be unnecessary. If you changed ignores, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.'
+                : 'If you edit ignores, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.');
+        const nextStep = `Use scope="runtime" to reduce noise. ${nextStepMiddle} Reindex is only required when you see requires_reindex (fingerprint mismatch).`;
 
         return {
             reason: 'top_results_noise_dominant',
             topK,
             ratios,
             recommendedScope: 'runtime',
-            suggestedIgnorePatterns: [...SEARCH_NOISE_HINT_PATTERNS],
+            suggestedIgnorePatterns: [...filtered.suggestedIgnorePatterns],
             debounceMs,
-            nextStep: 'Use scope="runtime". If you still need docs context, use scope="mixed". Edit repo-root .satoriignore using your host/editor, wait one debounce window, rerun search_codebase, or run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.',
+            nextStep,
         };
     }
 
@@ -1460,7 +1736,11 @@ export class ToolHandlers {
         };
     }
 
-    private parseGitStatusChangedPaths(stdout: string): Set<string> {
+    private parseGitStatusChangedPaths(
+        stdout: string,
+        options: { includeUntracked?: boolean } = {}
+    ): Set<string> {
+        const includeUntracked = options.includeUntracked === true;
         const files = new Set<string>();
         const lines = stdout.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.length > 0);
         for (const line of lines) {
@@ -1468,7 +1748,10 @@ export class ToolHandlers {
                 continue;
             }
             const status = line.slice(0, 2);
-            if (status === '??' || status === '!!') {
+            if (status === '!!') {
+                continue;
+            }
+            if (status === '??' && !includeUntracked) {
                 continue;
             }
 
@@ -1511,7 +1794,7 @@ export class ToolHandlers {
                 { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
             );
 
-            const files = this.parseGitStatusChangedPaths(stdout);
+            const files = this.parseGitStatusChangedPaths(stdout, { includeUntracked: false });
 
             this.changedFilesCache.set(cacheKey, {
                 expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
@@ -1535,6 +1818,74 @@ export class ToolHandlers {
             });
             return { available: false, files: new Set<string>() };
         }
+    }
+
+    private getWorkingTreeChangedPathsForPreflight(codebasePath: string): { available: boolean; probeFailed: boolean; files: Set<string> } {
+        try {
+            const stdout = execFileSync(
+                "git",
+                ["-C", codebasePath, "status", "--porcelain"],
+                { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+            );
+            const files = this.parseGitStatusChangedPaths(stdout, { includeUntracked: true });
+            return { available: true, probeFailed: false, files };
+        } catch {
+            return { available: false, probeFailed: true, files: new Set<string>() };
+        }
+    }
+
+    private evaluateReindexPreflight(codebasePath: string): ReindexPreflightResult {
+        const currentStatus = this.snapshotManager.getCodebaseStatus(codebasePath);
+        if (currentStatus === 'requires_reindex') {
+            return {
+                outcome: 'reindex_required',
+                warnings: [],
+                confidence: 'high',
+            };
+        }
+
+        const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(codebasePath);
+        if (!gate.allowed || gate.changed || !!gate.reason) {
+            return {
+                outcome: 'reindex_required',
+                warnings: [],
+                confidence: 'high',
+            };
+        }
+
+        const workingTree = this.getWorkingTreeChangedPathsForPreflight(codebasePath);
+        if (!workingTree.available || workingTree.probeFailed) {
+            return {
+                outcome: 'probe_failed',
+                warnings: [WARNING_CODES.IGNORE_POLICY_PROBE_FAILED],
+                confidence: 'low',
+                probeFailed: true,
+            };
+        }
+
+        const changedFiles = [...workingTree.files];
+        if (changedFiles.length === 0) {
+            return {
+                outcome: 'unknown',
+                warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
+                confidence: 'low',
+            };
+        }
+
+        const ignoreOnlySet = new Set(['.gitignore', '.satoriignore']);
+        if (changedFiles.every((changedFile) => ignoreOnlySet.has(changedFile))) {
+            return {
+                outcome: 'reindex_unnecessary_ignore_only',
+                warnings: [WARNING_CODES.REINDEX_UNNECESSARY_IGNORE_ONLY],
+                confidence: 'high',
+            };
+        }
+
+        return {
+            outcome: 'unknown',
+            warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
+            confidence: 'low',
+        };
     }
 
     private applyGroupDiversity(
@@ -2318,6 +2669,16 @@ Agent instructions:
     public async handleIndexCodebase(args: any) {
         const { path: codebasePath, force, customExtensions, ignorePatterns, zillizDropCollection } = args;
         const forceReindex = force || false;
+        const manageAction: ManageIndexAction = forceReindex ? 'reindex' : 'create';
+        const internalPreflight: ReindexPreflightResult | undefined = forceReindex
+            ? (args?.__reindexPreflight as ReindexPreflightResult | undefined)
+            : undefined;
+        const preflightOptions = internalPreflight
+            ? {
+                warnings: internalPreflight.warnings,
+                preflight: internalPreflight
+            }
+            : {};
         const customFileExtensions = customExtensions || [];
         const customIgnorePatterns = ignorePatterns || [];
         const requestedDropCollection = typeof zillizDropCollection === 'string' ? zillizDropCollection.trim() : undefined;
@@ -2329,25 +2690,25 @@ Agent instructions:
 
             // Validate path exists
             if (!fs.existsSync(absolutePath)) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    manageAction,
+                    absolutePath,
+                    "error",
+                    `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`,
+                    preflightOptions
+                );
             }
 
             // Check if it's a directory
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' is not a directory`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    manageAction,
+                    absolutePath,
+                    "error",
+                    `Error: Path '${absolutePath}' is not a directory`,
+                    preflightOptions
+                );
             }
 
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);
@@ -2355,24 +2716,39 @@ Agent instructions:
             // Check if already indexing
             if (this.snapshotManager.getIndexingCodebases().includes(absolutePath)) {
                 const blockedAction: 'create' | 'reindex' = forceReindex ? 'reindex' : 'create';
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.buildManageActionBlockedMessage(absolutePath, blockedAction)
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    manageAction,
+                    absolutePath,
+                    "not_ready",
+                    this.buildManageActionBlockedMessage(absolutePath, blockedAction),
+                    {
+                        ...preflightOptions,
+                        reason: "indexing",
+                        hints: {
+                            status: this.buildStatusHint(absolutePath),
+                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            indexing: this.buildIndexingMetadata(absolutePath),
+                        }
+                    }
+                );
             }
 
             const existingInfo = this.snapshotManager.getCodebaseInfo(absolutePath);
             if (!forceReindex && existingInfo?.status === 'requires_reindex') {
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.buildReindexInstruction(absolutePath, existingInfo.message)
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    manageAction,
+                    absolutePath,
+                    "requires_reindex",
+                    this.buildReindexInstruction(absolutePath, existingInfo.message),
+                    {
+                        ...preflightOptions,
+                        reason: "requires_reindex",
+                        hints: {
+                            reindex: this.buildReindexHint(absolutePath),
+                            status: this.buildStatusHint(absolutePath),
+                        }
+                    }
+                );
             }
 
             // Check if already indexed (unless force is true)
@@ -2380,16 +2756,15 @@ Agent instructions:
             if (!forceReindex && isIndexedInSnapshot) {
                 const proof = await this.validateCompletionProof(absolutePath);
                 if (proof.outcome === 'valid') {
-                    return {
-                        content: [{
-                            type: "text",
-                            text: `Codebase '${absolutePath}' is already indexed.
+                    return this.manageResponse(
+                        manageAction,
+                        absolutePath,
+                        "blocked",
+                        `Codebase '${absolutePath}' is already indexed.
 
 To update incrementally with recent changes: call manage_index with {"action":"sync","path":"${absolutePath}"}.
 To force rebuild from scratch: call manage_index with {"action":"create","path":"${absolutePath}","force":true}.`
-                        }],
-                        isError: true
-                    };
+                    );
                 }
                 console.warn(`[INDEX-VALIDATION] Snapshot reports indexed for '${absolutePath}', but completion proof is '${proof.reason || proof.outcome}'. Treating as not_indexed and continuing create flow.`);
             }
@@ -2416,24 +2791,24 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             if (requestedDropCollection) {
                 if (!this.isZillizBackend()) {
-                    return {
-                        content: [{
-                            type: "text",
-                            text: "Error: zillizDropCollection is only supported when connected to a Zilliz Cloud backend."
-                        }],
-                        isError: true
-                    };
+                    return this.manageResponse(
+                        manageAction,
+                        absolutePath,
+                        "error",
+                        "Error: zillizDropCollection is only supported when connected to a Zilliz Cloud backend.",
+                        preflightOptions
+                    );
                 }
 
                 const targetCollectionName = this.context.resolveCollectionName(absolutePath);
                 if (requestedDropCollection === targetCollectionName) {
-                    return {
-                        content: [{
-                            type: "text",
-                            text: `Error: zillizDropCollection cannot target '${targetCollectionName}' for this same codebase create flow. Use {"action":"create","path":"${absolutePath}","force":true} for reindexing this codebase.`
-                        }],
-                        isError: true
-                    };
+                    return this.manageResponse(
+                        manageAction,
+                        absolutePath,
+                        "error",
+                        `Error: zillizDropCollection cannot target '${targetCollectionName}' for this same codebase create flow. Use {"action":"create","path":"${absolutePath}","force":true} for reindexing this codebase.`,
+                        preflightOptions
+                    );
                 }
 
                 const dropResult = await this.dropZillizCollectionForCreate(requestedDropCollection);
@@ -2450,13 +2825,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 if (!canCreateCollection) {
                     console.error(`[INDEX-VALIDATION] ❌ Collection limit validation failed: ${absolutePath}`);
                     const guidanceMessage = await this.buildCollectionLimitMessage(absolutePath);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: guidanceMessage
-                        }],
-                        isError: true
-                    };
+                    return this.manageResponse(manageAction, absolutePath, "error", guidanceMessage, preflightOptions);
                 }
 
                 console.log(`[INDEX-VALIDATION] ✅  Collection creation validation completed`);
@@ -2465,23 +2834,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 console.error(`[INDEX-VALIDATION] ❌ Collection creation validation failed:`, validationError);
                 if (isCollectionLimitError(validationError)) {
                     const guidanceMessage = await this.buildCollectionLimitMessage(absolutePath);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: guidanceMessage
-                        }],
-                        isError: true
-                    };
+                    return this.manageResponse(manageAction, absolutePath, "error", guidanceMessage, preflightOptions);
                 }
 
                 const validationMessage = formatUnknownError(validationError);
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error validating collection creation: ${validationMessage}`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    manageAction,
+                    absolutePath,
+                    "error",
+                    `Error validating collection creation: ${validationMessage}`,
+                    preflightOptions
+                );
             }
 
             // Add custom extensions if provided
@@ -2530,12 +2893,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? `\nUsing ${customIgnorePatterns.length} custom ignore patterns: ${customIgnorePatterns.join(', ')}`
                 : '';
 
-            return {
-                content: [{
-                    type: "text",
-                    text: `Started background indexing for codebase '${absolutePath}'.${pathInfo}${dropSummaryLine}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`
-                }]
-            };
+            return this.manageResponse(
+                manageAction,
+                absolutePath,
+                "ok",
+                `Started background indexing for codebase '${absolutePath}'.${pathInfo}${dropSummaryLine}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`,
+                preflightOptions
+            );
 
         } catch (error: any) {
             // Enhanced error handling to prevent MCP service crash
@@ -2543,13 +2907,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const errorMessage = formatUnknownError(error);
 
             // Ensure we always return a proper MCP response, never throw
-            return {
-                content: [{
-                    type: "text",
-                    text: `Error starting indexing: ${errorMessage}`
-                }],
-                isError: true
-            };
+            return this.manageResponse(
+                manageAction,
+                ensureAbsolutePath(codebasePath),
+                "error",
+                `Error starting indexing: ${errorMessage}`,
+                preflightOptions
+            );
         }
     }
 
@@ -2671,13 +3035,50 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
     }
 
     public async handleReindexCodebase(args: any) {
-        const { path: codebasePath, customExtensions, ignorePatterns, zillizDropCollection } = args;
+        const {
+            path: codebasePath,
+            customExtensions,
+            ignorePatterns,
+            zillizDropCollection,
+            allowUnnecessaryReindex
+        } = args;
+        const absolutePath = ensureAbsolutePath(codebasePath);
+        const preflight = this.evaluateReindexPreflight(absolutePath);
+
+        if (preflight.outcome === 'reindex_unnecessary_ignore_only' && allowUnnecessaryReindex !== true) {
+            return this.manageResponse(
+                "reindex",
+                absolutePath,
+                "blocked",
+                `Reindex preflight blocked for '${absolutePath}': only ignore-control changes were detected. Use manage_index with {"action":"sync","path":"${absolutePath}"} for immediate convergence.`,
+                {
+                    reason: "unnecessary_reindex_ignore_only",
+                    warnings: preflight.warnings,
+                    preflight,
+                    hints: {
+                        sync: {
+                            tool: "manage_index",
+                            args: { action: "sync", path: absolutePath }
+                        },
+                        overrideReindex: {
+                            tool: "manage_index",
+                            args: { action: "reindex", path: absolutePath, allowUnnecessaryReindex: true }
+                        }
+                    }
+                }
+            );
+        }
+
+        const forwardedPreflight = preflight.outcome === 'unknown' || preflight.outcome === 'probe_failed'
+            ? preflight
+            : undefined;
         return this.handleIndexCodebase({
             path: codebasePath,
             force: true,
             customExtensions,
             ignorePatterns,
-            zillizDropCollection
+            zillizDropCollection,
+            __reindexPreflight: forwardedPreflight,
         });
     }
 
@@ -3253,7 +3654,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         }
                     } : {})
                 }));
-                const noiseMitigationHint = this.buildNoiseMitigationHint(rawResults.map((result) => result.file));
+                const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, rawResults.map((result) => result.file));
                 const responseHints: Record<string, unknown> = {};
                 if (noiseMitigationHint || debugHintBase || proofDebugHint) {
                     responseHints.version = 1 as const;
@@ -3407,7 +3808,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const diversityApplied = this.applyGroupDiversity(groupedResults, input.limit, input.groupBy);
             const visibleGroupedResults = diversityApplied.selected;
-            const noiseMitigationHint = this.buildNoiseMitigationHint(visibleGroupedResults.map((result) => result.file));
+            const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file));
             const responseHints: Record<string, unknown> = {};
             if (noiseMitigationHint || debugHintBase || proofDebugHint) {
                 responseHints.version = 1 as const;
@@ -3992,41 +4393,31 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
     public async handleClearIndex(args: any) {
         const { path: codebasePath } = args;
+        const requestedPath = ensureAbsolutePath(codebasePath);
 
         if (this.snapshotManager.getAllCodebases().length === 0) {
-            return {
-                content: [{
-                    type: "text",
-                    text: "No codebases are currently tracked."
-                }]
-            };
+            return this.manageResponse(
+                "clear",
+                requestedPath,
+                "not_indexed",
+                "No codebases are currently tracked.",
+                { reason: "not_indexed" }
+            );
         }
 
         try {
             // Force absolute path resolution - warn if relative path provided
-            const absolutePath = ensureAbsolutePath(codebasePath);
+            const absolutePath = requestedPath;
 
             // Validate path exists
             if (!fs.existsSync(absolutePath)) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
             }
 
             // Check if it's a directory
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' is not a directory`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
             }
 
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);
@@ -4038,23 +4429,35 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const isRequiresReindex = status === 'requires_reindex';
 
             if (!isIndexed && !isIndexing && !isRequiresReindex) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Codebase '${absolutePath}' is not indexed or being indexed.`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    "clear",
+                    absolutePath,
+                    "not_indexed",
+                    `Error: Codebase '${absolutePath}' is not indexed or being indexed.`,
+                    {
+                        reason: "not_indexed",
+                        hints: {
+                            create: this.buildCreateHint(absolutePath)
+                        }
+                    }
+                );
             }
 
             if (isIndexing) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.buildManageActionBlockedMessage(absolutePath, 'clear')
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    "clear",
+                    absolutePath,
+                    "not_ready",
+                    this.buildManageActionBlockedMessage(absolutePath, 'clear'),
+                    {
+                        reason: "indexing",
+                        hints: {
+                            status: this.buildStatusHint(absolutePath),
+                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            indexing: this.buildIndexingMetadata(absolutePath),
+                        }
+                    }
+                );
             }
 
             console.log(`[CLEAR] Clearing codebase: ${absolutePath}`);
@@ -4065,13 +4468,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             } catch (error: any) {
                 const errorMsg = `Failed to clear ${absolutePath}: ${error.message}`;
                 console.error(`[CLEAR] ${errorMsg}`);
-                return {
-                    content: [{
-                        type: "text",
-                        text: errorMsg
-                    }],
-                    isError: true
-                };
+                return this.manageResponse("clear", absolutePath, "error", errorMsg);
             }
 
             // Completely remove the cleared codebase from snapshot
@@ -4093,12 +4490,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 resultText += `\n${remainingIndexed} other indexed codebase(s) and ${remainingIndexing} indexing codebase(s) remain`;
             }
 
-            return {
-                content: [{
-                    type: "text",
-                    text: resultText
-                }]
-            };
+            return this.manageResponse("clear", absolutePath, "ok", resultText);
         } catch (error) {
             // Check if this is the collection limit error
             // Handle both direct string throws and Error objects containing the message
@@ -4107,52 +4499,30 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             if (errorMessage === COLLECTION_LIMIT_MESSAGE || errorMessage.includes(COLLECTION_LIMIT_MESSAGE)) {
                 // Return the collection limit message as a successful response
                 // This ensures LLM treats it as final answer, not as retryable error
-                return {
-                    content: [{
-                        type: "text",
-                        text: COLLECTION_LIMIT_MESSAGE
-                    }]
-                };
+                return this.manageResponse("clear", requestedPath, "error", COLLECTION_LIMIT_MESSAGE);
             }
 
-            return {
-                content: [{
-                    type: "text",
-                    text: `Error clearing index: ${errorMessage}`
-                }],
-                isError: true
-            };
+            return this.manageResponse("clear", requestedPath, "error", `Error clearing index: ${errorMessage}`);
         }
     }
 
     public async handleGetIndexingStatus(args: any) {
         const { path: codebasePath } = args;
+        const requestedPath = ensureAbsolutePath(codebasePath);
 
         try {
             // Force absolute path resolution
-            const absolutePath = ensureAbsolutePath(codebasePath);
+            const absolutePath = requestedPath;
 
             // Validate path exists
             if (!fs.existsSync(absolutePath)) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
             }
 
             // Check if it's a directory
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' is not a directory`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
             }
 
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);
@@ -4166,30 +4536,52 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
                     : '';
 
-                return {
-                    content: [{
-                        type: "text",
-                        text: statusMessage + compatibilityStatus + pathInfo
-                    }]
-                };
+                return this.manageResponse(
+                    "status",
+                    absolutePath,
+                    "requires_reindex",
+                    statusMessage + compatibilityStatus + pathInfo,
+                    {
+                        reason: "requires_reindex",
+                        hints: {
+                            reindex: this.buildReindexHint(absolutePath),
+                            status: this.buildStatusHint(absolutePath),
+                        }
+                    }
+                );
             }
 
             const status = this.snapshotManager.getCodebaseStatus(absolutePath);
             const info = this.snapshotManager.getCodebaseInfo(absolutePath);
 
             let statusMessage = '';
+            let envelopeStatus: ManageIndexStatus = "ok";
+            let envelopeReason: ManageIndexReason | undefined = undefined;
+            let envelopeHints: Record<string, unknown> | undefined = undefined;
             let completionProof: CompletionProofValidationResult | null = null;
             if (status === 'indexed' || status === 'sync_completed') {
                 completionProof = await this.validateCompletionProof(absolutePath);
             }
 
             if (completionProof?.outcome === 'fingerprint_mismatch') {
+                envelopeStatus = "requires_reindex";
+                envelopeReason = "requires_reindex";
+                envelopeHints = {
+                    reindex: this.buildReindexHint(absolutePath),
+                    status: this.buildStatusHint(absolutePath),
+                };
                 statusMessage = this.buildReindexInstruction(
                     absolutePath,
                     'Completion proof fingerprint does not match the current runtime fingerprint.'
                 );
             } else if (completionProof?.outcome === 'stale_local') {
                 const staleReason = completionProof.reason || 'missing_marker_doc';
+                envelopeStatus = "not_indexed";
+                envelopeReason = "not_indexed";
+                envelopeHints = {
+                    create: this.buildCreateHint(absolutePath),
+                    staleLocal: this.buildStaleLocalHint(absolutePath, staleReason),
+                };
                 statusMessage = `❌ Codebase '${absolutePath}' is not indexed. Local snapshot claims it is ready, but completion proof is missing or invalid (reason: ${staleReason}). Call manage_index with {"action":"create","path":"${absolutePath}"} to repair it.`;
             } else {
                 switch (status) {
@@ -4206,6 +4598,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         break;
 
                     case 'indexing':
+                        envelopeStatus = "not_ready";
+                        envelopeReason = "indexing";
+                        envelopeHints = {
+                            status: this.buildStatusHint(absolutePath),
+                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            indexing: this.buildIndexingMetadata(absolutePath),
+                        };
                         if (info && 'indexingPercentage' in info) {
                             const indexingInfo = info as any;
                             const progressPercentage = indexingInfo.indexingPercentage || 0;
@@ -4224,6 +4623,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         break;
 
                     case 'indexfailed':
+                        envelopeStatus = "error";
                         if (info && 'errorMessage' in info) {
                             const failedInfo = info as any;
                             statusMessage = `❌ Codebase '${absolutePath}' indexing failed.`;
@@ -4250,18 +4650,31 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         break;
 
                     case 'requires_reindex':
+                        envelopeStatus = "requires_reindex";
+                        envelopeReason = "requires_reindex";
+                        envelopeHints = {
+                            reindex: this.buildReindexHint(absolutePath),
+                            status: this.buildStatusHint(absolutePath),
+                        };
                         statusMessage = this.buildReindexInstruction(absolutePath, info && 'message' in info ? info.message : undefined);
                         break;
 
                     case 'not_found':
                     default:
+                        envelopeStatus = "not_indexed";
+                        envelopeReason = "not_indexed";
+                        envelopeHints = {
+                            create: this.buildCreateHint(absolutePath)
+                        };
                         statusMessage = `❌ Codebase '${absolutePath}' is not indexed. Call manage_index with {\"action\":\"create\",\"path\":\"${absolutePath}\"} to index it first.`;
                         break;
                 }
             }
 
+            const warnings: WarningCode[] = [];
             if (completionProof?.outcome === 'probe_failed') {
                 statusMessage += `\n⚠️ Completion proof check is temporarily unavailable (probe_failed); keeping local status.`;
+                warnings.push(WARNING_CODES.IGNORE_POLICY_PROBE_FAILED);
             }
 
             const pathInfo = codebasePath !== absolutePath
@@ -4269,21 +4682,20 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 : '';
             const compatibilityStatus = this.buildCompatibilityStatusLines(absolutePath);
 
-            return {
-                content: [{
-                    type: "text",
-                    text: statusMessage + compatibilityStatus + pathInfo
-                }]
-            };
+            return this.manageResponse(
+                "status",
+                absolutePath,
+                envelopeStatus,
+                statusMessage + compatibilityStatus + pathInfo,
+                {
+                    reason: envelopeReason,
+                    hints: envelopeHints,
+                    warnings
+                }
+            );
 
         } catch (error: any) {
-            return {
-                content: [{
-                    type: "text",
-                    text: `Error getting indexing status: ${error.message || error}`
-                }],
-                isError: true
-            };
+            return this.manageResponse("status", requestedPath, "error", `Error getting indexing status: ${error.message || error}`);
         }
     }
 
@@ -4292,32 +4704,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
      */
     public async handleSyncCodebase(args: any) {
         const { path: codebasePath } = args;
+        const requestedPath = ensureAbsolutePath(codebasePath);
 
         try {
             // Force absolute path resolution
-            const absolutePath = ensureAbsolutePath(codebasePath);
+            const absolutePath = requestedPath;
 
             // Validate path exists
             if (!fs.existsSync(absolutePath)) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse("sync", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
             }
 
             // Check if it's a directory
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' is not a directory`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse("sync", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
             }
 
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);
@@ -4325,28 +4726,52 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             // Check if this codebase is indexed
             const syncGate = this.enforceFingerprintGate(absolutePath);
             if (syncGate.blockedResponse) {
-                return syncGate.blockedResponse;
+                return this.manageResponse(
+                    "sync",
+                    absolutePath,
+                    "requires_reindex",
+                    this.buildReindexInstruction(absolutePath, syncGate.message),
+                    {
+                        reason: "requires_reindex",
+                        hints: {
+                            reindex: this.buildReindexHint(absolutePath),
+                            status: this.buildStatusHint(absolutePath),
+                        }
+                    }
+                );
             }
 
             if (this.snapshotManager.getIndexingCodebases().includes(absolutePath)) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.buildManageActionBlockedMessage(absolutePath, 'sync')
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    "sync",
+                    absolutePath,
+                    "not_ready",
+                    this.buildManageActionBlockedMessage(absolutePath, 'sync'),
+                    {
+                        reason: "indexing",
+                        hints: {
+                            status: this.buildStatusHint(absolutePath),
+                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            indexing: this.buildIndexingMetadata(absolutePath),
+                        }
+                    }
+                );
             }
 
             const isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
             if (!isIndexed) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Codebase '${absolutePath}' is not indexed. Call manage_index with {\"action\":\"create\",\"path\":\"${absolutePath}\"} first.`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    "sync",
+                    absolutePath,
+                    "not_indexed",
+                    `Error: Codebase '${absolutePath}' is not indexed. Call manage_index with {\"action\":\"create\",\"path\":\"${absolutePath}\"} first.`,
+                    {
+                        reason: "not_indexed",
+                        hints: {
+                            create: this.buildCreateHint(absolutePath)
+                        }
+                    }
+                );
             }
 
             console.log(`[SYNC] Manually triggering incremental sync for: ${absolutePath}`);
@@ -4357,43 +4782,49 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const fallbackLine = decision.fallbackSyncExecuted
                     ? '\nFallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
                     : '';
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error syncing codebase: ignore-rule reconciliation failed (${decision.errorMessage || 'unknown_ignore_reload_error'}).${fallbackLine}`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    "sync",
+                    absolutePath,
+                    "error",
+                    `Error syncing codebase: ignore-rule reconciliation failed (${decision.errorMessage || 'unknown_ignore_reload_error'}).${fallbackLine}`
+                );
             }
 
             if (decision.mode === 'skipped_indexing') {
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.buildManageActionBlockedMessage(absolutePath, 'sync')
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    "sync",
+                    absolutePath,
+                    "not_ready",
+                    this.buildManageActionBlockedMessage(absolutePath, 'sync'),
+                    {
+                        reason: "indexing",
+                        hints: {
+                            status: this.buildStatusHint(absolutePath),
+                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            indexing: this.buildIndexingMetadata(absolutePath),
+                        }
+                    }
+                );
             }
 
             if (decision.mode === 'skipped_requires_reindex') {
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.buildReindexInstruction(absolutePath, 'Sync blocked because this codebase requires reindex.')
-                    }],
-                    isError: true
-                };
+                return this.manageResponse(
+                    "sync",
+                    absolutePath,
+                    "requires_reindex",
+                    this.buildReindexInstruction(absolutePath, 'Sync blocked because this codebase requires reindex.'),
+                    {
+                        reason: "requires_reindex",
+                        hints: {
+                            reindex: this.buildReindexHint(absolutePath),
+                            status: this.buildStatusHint(absolutePath),
+                        }
+                    }
+                );
             }
 
             if (decision.mode === 'skipped_missing_path') {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Codebase path '${absolutePath}' no longer exists.`
-                    }],
-                    isError: true
-                };
+                return this.manageResponse("sync", absolutePath, "error", `Error: Codebase path '${absolutePath}' no longer exists.`);
             }
 
             const added = decision.stats?.added ?? 0;
@@ -4407,30 +4838,19 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     const fallbackLine = decision.fallbackSyncExecuted
                         ? '\nFallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
                         : '';
-                    return {
-                        content: [{
-                            type: "text",
-                            text: `Error syncing codebase: coalesced in-flight reconcile failed (${decision.errorMessage}).${fallbackLine}`
-                        }],
-                        isError: true
-                    };
+                    return this.manageResponse(
+                        "sync",
+                        absolutePath,
+                        "error",
+                        `Error syncing codebase: coalesced in-flight reconcile failed (${decision.errorMessage}).${fallbackLine}`
+                    );
                 }
-                return {
-                    content: [{
-                        type: "text",
-                        text: `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`
-                    }]
-                };
+                return this.manageResponse("sync", absolutePath, "ok", `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`);
             }
 
             if (decision.mode === 'reconciled_ignore_change') {
                 if (totalChanges === 0 && ignoredDeletes === 0) {
-                    return {
-                        content: [{
-                            type: "text",
-                            text: `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`
-                        }]
-                    };
+                    return this.manageResponse("sync", absolutePath, "ok", `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`);
                 }
 
                 const resultMessage =
@@ -4439,41 +4859,20 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     `🧹 Ignored paths removed from index: ${ignoredDeletes}\n` +
                     `\nTotal changes: ${totalChanges + ignoredDeletes}`;
                 console.log(`[SYNC] ✅ Sync+ignore reconcile completed: +${added}, -${removed}, ~${modified}, ignoredDeleted=${ignoredDeletes}`);
-                return {
-                    content: [{
-                        type: "text",
-                        text: resultMessage
-                    }]
-                };
+                return this.manageResponse("sync", absolutePath, "ok", resultMessage);
             }
 
             if (totalChanges === 0) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: `✅ No changes detected for codebase '${absolutePath}'. Index is up to date.`
-                    }]
-                };
+                return this.manageResponse("sync", absolutePath, "ok", `✅ No changes detected for codebase '${absolutePath}'. Index is up to date.`);
             }
 
             const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${added} file(s) added\n- ${removed} file(s) removed\n~ ${modified} file(s) modified\n\nTotal changes: ${totalChanges}`;
             console.log(`[SYNC] ✅ Sync completed: +${added}, -${removed}, ~${modified}`);
-            return {
-                content: [{
-                    type: "text",
-                    text: resultMessage
-                }]
-            };
+            return this.manageResponse("sync", absolutePath, "ok", resultMessage);
 
         } catch (error: any) {
             console.error(`[SYNC] Error during sync:`, error);
-            return {
-                content: [{
-                    type: "text",
-                    text: `Error syncing codebase: ${error.message || error}`
-                }],
-                isError: true
-            };
+            return this.manageResponse("sync", requestedPath, "error", `Error syncing codebase: ${error.message || error}`);
         }
     }
     public async handleReadCode(args: any) {

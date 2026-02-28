@@ -44,7 +44,13 @@ function parseManageEnvelope(response: any): ManageIndexResponseEnvelope {
     return JSON.parse(payload) as ManageIndexResponseEnvelope;
 }
 
-function createHandlers(repoPath: string): ToolHandlers {
+function createHandlers(
+    repoPath: string,
+    options?: {
+        status?: 'indexed' | 'sync_completed' | 'not_found' | 'requires_reindex' | 'indexing' | 'indexfailed';
+    }
+): ToolHandlers {
+    const status = options?.status || 'indexed';
     const vectorStore = {
         checkCollectionLimit: async () => true,
         listCollections: async () => [],
@@ -68,8 +74,8 @@ function createHandlers(repoPath: string): ToolHandlers {
     const snapshotManager = {
         getAllCodebases: () => [],
         getIndexingCodebases: () => [],
-        getIndexedCodebases: () => [],
-        getCodebaseStatus: () => 'indexed',
+        getIndexedCodebases: () => (status === 'indexed' || status === 'sync_completed' ? [repoPath] : []),
+        getCodebaseStatus: () => status,
         getCodebaseInfo: () => undefined,
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
         removeCodebaseCompletely: () => undefined,
@@ -146,5 +152,24 @@ test('handleReindexCodebase surfaces probe_failed preflight diagnostics without 
         assert.equal(envelope.preflight?.outcome, 'probe_failed');
         assert.equal(envelope.preflight?.confidence, 'low');
         assert.equal(envelope.preflight?.probeFailed, true);
+    });
+});
+
+test('handleReindexCodebase does not block ignore-only changes when codebase is not indexed', async () => {
+    await withTempRepo(async (repoPath) => {
+        initGitRepo(repoPath);
+        fs.writeFileSync(path.join(repoPath, '.gitignore'), 'coverage/**\n', 'utf8');
+
+        const handlers = createHandlers(repoPath, { status: 'not_found' });
+        const response = await handlers.handleReindexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.action, 'reindex');
+        assert.equal(envelope.status, 'ok');
+        assert.deepEqual(envelope.warnings, [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN]);
+        assert.equal(envelope.preflight?.outcome, 'unknown');
+        assert.equal(envelope.preflight?.confidence, 'low');
+        assert.equal(envelope.reason, undefined);
+        assert.match(envelope.humanText, /Started background indexing/i);
     });
 });

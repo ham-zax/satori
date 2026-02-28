@@ -1836,6 +1836,7 @@ export class ToolHandlers {
 
     private evaluateReindexPreflight(codebasePath: string): ReindexPreflightResult {
         const currentStatus = this.snapshotManager.getCodebaseStatus(codebasePath);
+        const isIndexedLikeStatus = currentStatus === 'indexed' || currentStatus === 'sync_completed';
         if (currentStatus === 'requires_reindex') {
             return {
                 outcome: 'reindex_required',
@@ -1874,6 +1875,13 @@ export class ToolHandlers {
 
         const ignoreOnlySet = new Set(['.gitignore', '.satoriignore']);
         if (changedFiles.every((changedFile) => ignoreOnlySet.has(changedFile))) {
+            if (!isIndexedLikeStatus) {
+                return {
+                    outcome: 'unknown',
+                    warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
+                    confidence: 'low',
+                };
+            }
             return {
                 outcome: 'reindex_unnecessary_ignore_only',
                 warnings: [WARNING_CODES.REINDEX_UNNECESSARY_IGNORE_ONLY],

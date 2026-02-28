@@ -2,6 +2,35 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-28] PI Satori Bridge Contract Alignment and Robust Parsing
+
+### Modified
+- Hardened `examples/pi-extension/satori-bridge/index.ts` CLI JSON parsing:
+  - first parses full stdout as JSON,
+  - falls back deterministically to parsing the last non-empty stdout line,
+  - returns combined parse diagnostics when both attempts fail.
+- Preserved structured envelope JSON text blocks from truncation in bridge normalization to avoid corrupting `status`/`hints` payloads consumed by deterministic navigation flows.
+- Cleaned bridge extension registration formatting and health-check message transport labeling consistency.
+- Removed unused `extractEnvelopeStatus` helper from `examples/pi-extension/satori-bridge/recovery.ts`.
+- Aligned PI extension docs/config defaults with runtime call-timeout default (`callTimeoutMs=600000`) in:
+  - `examples/pi-extension/satori-bridge/README.md`
+  - `examples/pi-extension/satori-bridge/config.example.json`
+  - `examples/pi-extension/satori-bridge/config.json`
+- Updated `examples/pi-extension/satori-bridge/skills/satori-cli/SKILL.md` to make required argument contracts explicit for:
+  - `file_outline(path, file, resolveMode="exact", ...)`
+  - `read_file(path=<absolute file>, open_symbol=...)`
+  - plus explicit sync-vs-reindex and extension-unavailable fallback guidance.
+
+### Tests
+- Extended `examples/pi-extension/satori-bridge/index.test.ts` with deterministic coverage for:
+  - strict JSON parse,
+  - noisy-stdout last-line parse fallback,
+  - dual-failure parse diagnostics,
+  - normalization behavior for plain text truncation vs structured envelope pass-through.
+- Validation completed:
+  - `pnpm -C examples/pi-extension/satori-bridge test`
+  - `pnpm -C examples/pi-extension/satori-bridge typecheck`
+
 ## [2026-02-28] MCP Index State Stability Hardening
 
 ### Release Versions

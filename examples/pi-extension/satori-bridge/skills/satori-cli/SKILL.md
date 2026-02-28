@@ -32,8 +32,10 @@ Use exactly these 6 tools:
    - if `callGraphHint.supported=true`, call `call_graph(path, symbolRef=callGraphHint.symbolRef, direction="both", depth=1)`
    - if unsupported, execute `navigationFallback.readSpan.args` exactly
 4. Lock spans deterministically:
-   - `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)`
-   - `read_file(open_symbol={...})`
+   - `file_outline(path=<codebaseRootAbs>, file=<relative file path>, resolveMode="exact", symbolIdExact|symbolLabelExact)`
+   - `read_file(path=<absolute file path>, open_symbol={...})`
+   - Use `file` from grouped result metadata or `navigationFallback.fileOutlineWindow.args.file`.
+   - Use absolute read path from `navigationFallback.readSpan.args.path` when available; otherwise derive from codebase root + relative file.
 
 ## Query Strategy (semantic search)
 
@@ -59,6 +61,8 @@ For gating responses, always read both `status` and `reason`:
 - `status="not_ready"` -> `reason="indexing"`
 - `status="not_indexed"` -> `reason="not_indexed"`
 
+Status may be returned inside JSON text blocks in tool content payloads. Parse those text blocks before branching logic.
+
 Gate precedence:
 1. `requires_reindex`
 2. `not_ready` (`reason=indexing`)
@@ -68,6 +72,8 @@ If `requires_reindex` appears:
 - run `manage_index(action="reindex", path=<hinted/effective root>)`
 - retry original call
 - do **not** replace with `sync`
+
+Use `manage_index(action="sync")` only for freshness/noise convergence (for example after `.satoriignore` updates).
 
 Never call `manage_index(action="clear")` unless user explicitly requests destructive reset.
 
@@ -97,6 +103,8 @@ Use Satori via one of these two paths only:
 2. `satori-cli` shell commands when extension tools are unavailable
 
 Do not use or suggest any direct MCP client fallback path.
+
+Treat tools as unavailable only when the runtime reports missing/unregistered tool bindings (or explicit unknown-tool errors).
 
 If Satori tools are not registered in the current runtime, use shell CLI:
 

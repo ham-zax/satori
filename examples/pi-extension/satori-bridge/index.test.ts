@@ -173,3 +173,51 @@ test("resolveEffectiveCallTimeoutMs keeps configured timeout for non-long-runnin
 	assert.equal(manageStatusTimeout, 45_000);
 	assert.equal(searchTimeout, 45_000);
 });
+
+test("parseCliJson parses a strict JSON stdout blob", () => {
+	const payload = { tools: [{ name: "search_codebase" }] };
+	const parsed = __testInternals.parseCliJson(JSON.stringify(payload), "");
+	assert.deepEqual(parsed, payload);
+});
+
+test("parseCliJson falls back to the last non-empty line when stdout has preface noise", () => {
+	const payload = { content: [] };
+	const stdout = [
+		"[bridge-debug] spawned child",
+		JSON.stringify(payload),
+		"",
+	].join("\n");
+
+	const parsed = __testInternals.parseCliJson(stdout, "");
+	assert.deepEqual(parsed, payload);
+});
+
+test("parseCliJson reports both parse failures when full stdout and fallback fail", () => {
+	const stdout = ["{broken", "{also-broken"].join("\n");
+	assert.throws(
+		() => __testInternals.parseCliJson(stdout, "stderr payload"),
+		/full_stdout=.*last_non_empty_line=.*stderr payload/s,
+	);
+});
+
+test("normalizeContent truncates long plain text blocks", () => {
+	const longText = new Array(2000).fill("plain text payload").join("\n");
+	const normalized = __testInternals.normalizeContent([{ type: "text", text: longText }]);
+	assert.equal(normalized.length, 1);
+	assert.equal(normalized[0]?.type, "text");
+	assert.equal((normalized[0] as { text: string }).text, __testInternals.truncateText(longText));
+});
+
+test("normalizeContent preserves long structured envelope JSON text blocks", () => {
+	const envelopeText = JSON.stringify({
+		status: "ok",
+		warnings: [],
+		hints: { status: { args: { action: "status" } } },
+		payload: "x".repeat(200_000),
+	});
+	const normalized = __testInternals.normalizeContent([{ type: "text", text: envelopeText }]);
+	assert.equal(normalized.length, 1);
+	assert.equal(normalized[0]?.type, "text");
+	assert.equal((normalized[0] as { text: string }).text, envelopeText);
+	assert.equal(__testInternals.isStructuredEnvelopeText(envelopeText), true);
+});

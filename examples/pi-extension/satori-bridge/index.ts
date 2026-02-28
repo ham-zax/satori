@@ -589,11 +589,64 @@ function parseCliJson(stdout: string, stderr: string): unknown {
 	if (!trimmed) {
 		throw new Error(`satori-cli returned empty stdout. stderr:\n${stderr.trim() || "(empty)"}`);
 	}
+
+	const parseJson = (source: string): { ok: true; value: unknown } | { ok: false; message: string } => {
+		try {
+			return { ok: true, value: JSON.parse(source) };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { ok: false, message };
+		}
+	};
+
+	const fullParse = parseJson(trimmed);
+	if (fullParse.ok) {
+		return fullParse.value;
+	}
+
+	const nonEmptyLines = trimmed
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (nonEmptyLines.length > 1) {
+		const lastLine = nonEmptyLines[nonEmptyLines.length - 1];
+		const fallbackParse = parseJson(lastLine);
+		if (fallbackParse.ok) {
+			return fallbackParse.value;
+		}
+		throw new Error(
+			`Failed to parse satori-cli JSON output: full_stdout=${fullParse.message}; last_non_empty_line=${fallbackParse.message}\nstdout:\n${trimmed}\nstderr:\n${stderr.trim() || "(empty)"}`,
+		);
+	}
+
+	throw new Error(
+		`Failed to parse satori-cli JSON output: ${fullParse.message}\nstdout:\n${trimmed}\nstderr:\n${stderr.trim() || "(empty)"}`,
+	);
+}
+
+function isStructuredEnvelopeText(text: string): boolean {
+	const trimmed = text.trim();
+	if (!trimmed || !trimmed.startsWith("{")) {
+		return false;
+	}
 	try {
-		return JSON.parse(trimmed);
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Failed to parse satori-cli JSON output: ${message}\nstdout:\n${trimmed}\nstderr:\n${stderr.trim() || "(empty)"}`);
+		const parsed = JSON.parse(trimmed) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return false;
+		}
+		const record = parsed as Record<string, unknown>;
+		const envelopeKeys = [
+			"status",
+			"reason",
+			"hints",
+			"warnings",
+			"freshnessDecision",
+			"navigationFallback",
+			"outlineStatus",
+		];
+		return envelopeKeys.some((key) => key in record);
+	} catch {
+		return false;
 	}
 }
 
@@ -631,7 +684,8 @@ function normalizeContent(content: unknown): PiToolContent[] {
 		if (block && typeof block === "object") {
 			const record = block as Record<string, unknown>;
 			if (record.type === "text" && typeof record.text === "string") {
-				blocks.push({ type: "text", text: truncateText(record.text) });
+				const text = isStructuredEnvelopeText(record.text) ? record.text : truncateText(record.text);
+				blocks.push({ type: "text", text });
 				continue;
 			}
 			if (record.type === "image" && typeof record.data === "string" && typeof record.mimeType === "string") {
@@ -909,34 +963,34 @@ export default function satoriBridgeExtension(pi: ExtensionAPI) {
 				const text = `${theme.fg("toolTitle", "Satori CLI:")} ${theme.fg("muted", spec.name)}${theme.fg("accent", primaryArg)}`;
 				return new Text(text, 0, 0);
 			},
-				async execute(_toolCallId, params, signal, onUpdate, ctx) {
-					onUpdate?.({
-						content: [{ type: "text", text: `Calling ${spec.name} via satori-cli...` }],
-						details: { stage: "proxy-call" },
-					});
+			async execute(_toolCallId, params, signal, onUpdate, ctx) {
+				onUpdate?.({
+					content: [{ type: "text", text: `Calling ${spec.name} via satori-cli...` }],
+					details: { stage: "proxy-call" },
+				});
 
-					const invocationConfig = resolveCliInvocationConfig(ctx.cwd);
-					const { result, cli, recovery } = await callToolThroughCli(
-						invocationConfig,
-						spec.name,
-						params as Record<string, unknown>,
-						signal,
-					);
-					return {
-						content: normalizeContent(result.content),
-						details: {
-							tool: spec.name,
-							transport: invocationConfig.label,
-							exitCode: cli.exitCode,
-							stderr: cli.stderr.trim() || undefined,
-							meta: result._meta,
-							attemptCount: recovery.attemptCount,
-							guardRecoveryAttempted: recovery.guardRecoveryAttempted,
-							guardRecoverySucceeded: recovery.guardRecoverySucceeded,
-							effectiveGuardMode: recovery.effectiveGuardMode,
-						},
-					};
-				},
+				const invocationConfig = resolveCliInvocationConfig(ctx.cwd);
+				const { result, cli, recovery } = await callToolThroughCli(
+					invocationConfig,
+					spec.name,
+					params as Record<string, unknown>,
+					signal,
+				);
+				return {
+					content: normalizeContent(result.content),
+					details: {
+						tool: spec.name,
+						transport: invocationConfig.label,
+						exitCode: cli.exitCode,
+						stderr: cli.stderr.trim() || undefined,
+						meta: result._meta,
+						attemptCount: recovery.attemptCount,
+						guardRecoveryAttempted: recovery.guardRecoveryAttempted,
+						guardRecoverySucceeded: recovery.guardRecoverySucceeded,
+						effectiveGuardMode: recovery.effectiveGuardMode,
+					},
+				};
+			},
 			renderResult(result, { expanded, isPartial }, theme) {
 				return renderMcpResult(result, expanded, isPartial, spec.name, theme);
 			},
@@ -953,29 +1007,29 @@ export default function satoriBridgeExtension(pi: ExtensionAPI) {
 				callTimeoutMs: Math.min(invocationConfig.callTimeoutMs, HEALTHCHECK_TIMEOUT_MS),
 			};
 
-				const runHealthCheck = async () => {
-					try {
-						const toolsExecution = await listToolsThroughCli(healthCliConfig);
-						const recoverySuffix = toolsExecution.recovery.guardRecoverySucceeded
-							? " (guard recovery applied: off)"
-							: toolsExecution.recovery.effectiveGuardMode === "off"
-								? " (guard mode: off)"
-								: "";
-						const message = `Satori CLI connected (${invocationConfig.label}) - ${toolsExecution.tools.length} tools reflected${recoverySuffix}`;
-						if (ctx.hasUI) {
-							ctx.ui.notify(message, "info");
-						} else {
-							process.stdout.write(`${message}\n`);
-						}
-					} catch (error) {
-						const failureMessage = error instanceof Error ? error.message : String(error);
-						if (ctx.hasUI) {
-							ctx.ui.notify(`Satori CLI connection failed: ${failureMessage}`, "error");
-							return;
-						}
-						throw new Error(`Satori CLI connection failed: ${failureMessage}`);
+			const runHealthCheck = async () => {
+				try {
+					const toolsExecution = await listToolsThroughCli(healthCliConfig);
+					const recoverySuffix = toolsExecution.recovery.guardRecoverySucceeded
+						? " (guard recovery applied: off)"
+						: toolsExecution.recovery.effectiveGuardMode === "off"
+							? " (guard mode: off)"
+							: "";
+					const message = `Satori CLI connected (${healthCliConfig.label}) - ${toolsExecution.tools.length} tools reflected${recoverySuffix}`;
+					if (ctx.hasUI) {
+						ctx.ui.notify(message, "info");
+					} else {
+						process.stdout.write(`${message}\n`);
 					}
-				};
+				} catch (error) {
+					const failureMessage = error instanceof Error ? error.message : String(error);
+					if (ctx.hasUI) {
+						ctx.ui.notify(`Satori CLI connection failed: ${failureMessage}`, "error");
+						return;
+					}
+					throw new Error(`Satori CLI connection failed: ${failureMessage}`);
+				}
+			};
 
 			if (!ctx.hasUI) {
 				await runHealthCheck();
@@ -996,4 +1050,8 @@ export const __testInternals = {
 	resolveCliInvocationConfig,
 	parseEnvFile,
 	resolveEffectiveCallTimeoutMs,
+	parseCliJson,
+	normalizeContent,
+	isStructuredEnvelopeText,
+	truncateText,
 };

@@ -13,6 +13,6 @@
     "SATORI_CLI_STDOUT_GUARD": "drop"
   },
   "startupTimeoutMs": 180000,
-  "callTimeoutMs": 180000,
+  "callTimeoutMs": 600000,
   "debug": false
 }

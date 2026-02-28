@@ -69,30 +69,6 @@ export function isCallToolPayload(payload: unknown): payload is { content: unkno
     return Array.isArray((payload as { content?: unknown }).content);
 }
 
-export function extractEnvelopeStatus(payload: unknown): string | null {
-    if (!isCallToolPayload(payload)) {
-        return null;
-    }
-    for (const block of payload.content) {
-        if (!block || typeof block !== "object") {
-            continue;
-        }
-        const record = block as { type?: unknown; text?: unknown };
-        if (record.type !== "text" || typeof record.text !== "string") {
-            continue;
-        }
-        try {
-            const parsed = JSON.parse(record.text) as { status?: unknown };
-            if (parsed && typeof parsed === "object" && typeof parsed.status === "string") {
-                return parsed.status;
-            }
-        } catch {
-            // ignore non-json text blocks
-        }
-    }
-    return null;
-}
-
 export function hasRetryableProtocolSignature(text: string): boolean {
     return RETRYABLE_PROTOCOL_SIGNATURES.some((signature) => text.includes(signature));
 }

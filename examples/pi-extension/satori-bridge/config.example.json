@@ -4,6 +4,6 @@
   "forceNpx": false,
   "npmPackage": "@zokizuan/satori-mcp@latest",
   "startupTimeoutMs": 180000,
-  "callTimeoutMs": 180000,
+  "callTimeoutMs": 600000,
   "debug": false
 }

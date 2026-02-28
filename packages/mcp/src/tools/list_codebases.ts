@@ -153,7 +153,7 @@ export const listCodebasesTool: McpTool = {
             proof: await validateCompletionProof(entry.path, ctx)
         })));
 
-        const ready: Array<{ path: string; note?: string }> = [];
+        const ready: Array<{ path: string }> = [];
         const requiresReindex = all
             .filter((e) => e.info.status === "requires_reindex")
             .map((entry) => ({
@@ -178,7 +178,7 @@ export const listCodebasesTool: McpTool = {
             }
             if (proof.outcome === "probe_failed") {
                 // Probe failure is non-authoritative: keep local ready status stable.
-                ready.push({ path: entry.path, note: "completion proof probe failed" });
+                ready.push({ path: entry.path });
                 continue;
             }
             if (proof.outcome === "fingerprint_mismatch") {
@@ -201,8 +201,7 @@ export const listCodebasesTool: McpTool = {
         if (byStatus.indexed.length > 0) {
             lines.push('### Ready');
             for (const item of byStatus.indexed) {
-                const note = item.note ? ` (${item.note})` : '';
-                lines.push(`- \`${item.path}\`${note}`);
+                lines.push(`- \`${item.path}\``);
             }
             lines.push('');
         }

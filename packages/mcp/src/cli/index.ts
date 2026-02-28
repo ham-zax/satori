@@ -4,10 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCliArgs, parseWrapperArgumentsFromSchema, resolveRawArguments } from "./args.js";
+import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope } from "./format.js";
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
+
+const MANAGE_INDEX_MIN_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface RunCliOptions {
     writeStdout?: (text: string) => void;
@@ -180,7 +183,8 @@ async function invokeTool(
     }
 
     if (shouldWaitManageIndex(toolName, args)) {
-        const polled = await pollManageIndexUntilTerminal(args.path as string, session, callTimeoutMs);
+        const effectiveManagePollTimeoutMs = Math.max(callTimeoutMs, MANAGE_INDEX_MIN_POLL_TIMEOUT_MS);
+        const polled = await pollManageIndexUntilTerminal(args.path as string, session, effectiveManagePollTimeoutMs);
         result = polled.result;
         manageWaitState = polled.state;
     }
@@ -208,9 +212,13 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         writeStdout: options.writeStdout || ((text: string) => process.stdout.write(text)),
         writeStderr: options.writeStderr || ((text: string) => process.stderr.write(text)),
     };
+    let parsedFormat: "json" | "text" = "json";
+    let parsedCommandKind: ParsedCommand["kind"] | null = null;
 
     try {
         const parsed = parseCliArgs(argv);
+        parsedFormat = parsed.globals.format;
+        parsedCommandKind = parsed.command.kind;
         const startupTimeoutMs = options.startupTimeoutMs ?? parsed.globals.startupTimeoutMs;
         const callTimeoutMs = options.callTimeoutMs ?? parsed.globals.callTimeoutMs;
 
@@ -277,6 +285,22 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
     } catch (error) {
         const cliError = asCliError(error);
+        if (
+            parsedFormat === "json"
+            && (parsedCommandKind === "tool-call" || parsedCommandKind === "wrapper")
+        ) {
+            emitJson(writers, {
+                isError: true,
+                content: [{
+                    type: "text",
+                    text: `${cliError.token} ${cliError.message}`
+                }],
+                _meta: {
+                    cliErrorToken: cliError.token,
+                    exitCode: cliError.exitCode
+                }
+            });
+        }
         emitError(writers, cliError.token, cliError.message);
         return cliError.exitCode;
     }

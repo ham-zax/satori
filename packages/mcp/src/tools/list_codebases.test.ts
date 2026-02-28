@@ -4,17 +4,58 @@ import { listCodebasesTool } from './list_codebases.js';
 import { ToolContext } from './types.js';
 
 type SectionMap = Map<string, string[]>;
+type MarkerMap = Record<string, unknown>;
 
-function buildContext(entries: Array<{ path: string; info: Record<string, unknown> }>): ToolContext {
+const RUNTIME_FINGERPRINT = {
+    embeddingProvider: 'VoyageAI',
+    embeddingModel: 'voyage-4-large',
+    embeddingDimension: 1024,
+    vectorStoreProvider: 'Milvus',
+    schemaVersion: 'hybrid_v3'
+} as const;
+
+function buildContext(
+    entries: Array<{ path: string; info: Record<string, unknown> }>,
+    markers: MarkerMap = {},
+    options?: { throwOnProbe?: boolean }
+): ToolContext {
     return {
+        context: {
+            getIndexCompletionMarker: async (codebasePath: string) => {
+                if (options?.throwOnProbe) {
+                    throw new Error('probe_failed');
+                }
+                return Object.prototype.hasOwnProperty.call(markers, codebasePath)
+                    ? markers[codebasePath]
+                    : null;
+            }
+        },
         snapshotManager: {
             getAllCodebases: () => entries
-        }
+        },
+        runtimeFingerprint: RUNTIME_FINGERPRINT
     } as unknown as ToolContext;
 }
 
-async function runListCodebases(entries: Array<{ path: string; info: Record<string, unknown> }>) {
-    return listCodebasesTool.execute({}, buildContext(entries));
+function createMarker(path: string, overrides?: Record<string, unknown>) {
+    return {
+        kind: 'satori_index_completion_v1',
+        codebasePath: path,
+        fingerprint: { ...RUNTIME_FINGERPRINT },
+        indexedFiles: 10,
+        totalChunks: 25,
+        completedAt: '2026-02-28T08:00:00.000Z',
+        runId: 'run_123',
+        ...overrides
+    };
+}
+
+async function runListCodebases(
+    entries: Array<{ path: string; info: Record<string, unknown> }>,
+    markers: MarkerMap = {},
+    options?: { throwOnProbe?: boolean }
+) {
+    return listCodebasesTool.execute({}, buildContext(entries, markers, options));
 }
 
 function parseHeadings(text: string): string[] {
@@ -67,7 +108,10 @@ test('list_codebases output is deterministic with fixed bucket order and sorted 
         { path: '/repo/failed-a', info: { status: 'indexfailed', errorMessage: 'disk-full' } }
     ];
 
-    const response = await runListCodebases(entries);
+    const response = await runListCodebases(entries, {
+        '/repo/gamma': createMarker('/repo/gamma'),
+        '/repo/alpha': createMarker('/repo/alpha')
+    });
     const text = response.content[0]?.text || '';
 
     const headings = parseHeadings(text);
@@ -105,10 +149,68 @@ test('list_codebases remains stable across repeated calls and does not mutate me
         info: Object.freeze({ ...entry.info })
     })));
 
-    const first = await runListCodebases(frozenEntries as unknown as Array<{ path: string; info: Record<string, unknown> }>);
-    const second = await runListCodebases(frozenEntries as unknown as Array<{ path: string; info: Record<string, unknown> }>);
+    const markerMap = {
+        '/repo/a': createMarker('/repo/a'),
+        '/repo/b': createMarker('/repo/b')
+    };
+    const first = await runListCodebases(
+        frozenEntries as unknown as Array<{ path: string; info: Record<string, unknown> }>,
+        markerMap
+    );
+    const second = await runListCodebases(
+        frozenEntries as unknown as Array<{ path: string; info: Record<string, unknown> }>,
+        markerMap
+    );
 
     assert.equal(first.content[0]?.text, second.content[0]?.text);
     assert.match(first.content[0]?.text || '', /`\/repo\/a`/);
     assert.match(first.content[0]?.text || '', /`\/repo\/b`/);
+});
+
+test('list_codebases moves stale-local indexed entries to Failed bucket', async () => {
+    const entries = [
+        { path: '/repo/stale', info: { status: 'indexed' } },
+        { path: '/repo/ok', info: { status: 'indexed' } }
+    ];
+    const response = await runListCodebases(entries, {
+        '/repo/stale': null,
+        '/repo/ok': createMarker('/repo/ok')
+    });
+    const text = response.content[0]?.text || '';
+    const sections = parseSectionLines(text);
+
+    assert.deepEqual(extractPaths(sections.get('Ready') || []), ['/repo/ok']);
+    assert.deepEqual(extractPaths(sections.get('Failed') || []), ['/repo/stale']);
+    assert.match(text, /stale_local:missing_marker_doc/);
+});
+
+test('list_codebases maps completion-proof fingerprint mismatch to Requires Reindex', async () => {
+    const entries = [
+        { path: '/repo/mismatch', info: { status: 'indexed' } }
+    ];
+    const response = await runListCodebases(entries, {
+        '/repo/mismatch': createMarker('/repo/mismatch', {
+            fingerprint: {
+                ...RUNTIME_FINGERPRINT,
+                embeddingModel: 'voyage-3'
+            }
+        })
+    });
+    const text = response.content[0]?.text || '';
+    const sections = parseSectionLines(text);
+
+    assert.deepEqual(extractPaths(sections.get('Requires Reindex') || []), ['/repo/mismatch']);
+    assert.match(text, /completion_proof_fingerprint_mismatch/);
+});
+
+test('list_codebases keeps ready membership stable when marker probe fails', async () => {
+    const entries = [
+        { path: '/repo/a', info: { status: 'indexed' } }
+    ];
+    const response = await runListCodebases(entries, {}, { throwOnProbe: true });
+    const text = response.content[0]?.text || '';
+    const sections = parseSectionLines(text);
+
+    assert.deepEqual(extractPaths(sections.get('Ready') || []), ['/repo/a']);
+    assert.match(text, /completion proof probe failed/);
 });

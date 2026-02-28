@@ -80,6 +80,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const name = request.params?.name;
   const args = request.params?.arguments || {};
+  if (mode === "slow_tool" && name === "search_codebase") {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return {
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify({ status: "ok", tool: name, args }) }]
+    };
+  }
   if (mode === "envelope") {
     return {
       isError: false,
@@ -232,6 +239,73 @@ test("runCli waits for manage_index create until status reaches terminal indexed
         assert.equal(exitCode, 0);
         assert.equal(stdout.includes("fully indexed"), true);
         assert.equal(stdout.includes("polls=3"), true);
+    } finally {
+        fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true });
+    }
+});
+
+test("runCli enforces minimum poll timeout for manage_index create/reindex under low call-timeout overrides", async () => {
+    const scriptPath = writeTempScript("fake-mcp-manage-min-timeout", WELL_BEHAVED_SERVER);
+    const io = captureIo();
+
+    try {
+        const exitCode = await runCli([
+            "--call-timeout-ms",
+            "200",
+            "manage_index",
+            "--action",
+            "create",
+            "--path",
+            "/repo"
+        ], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            serverCommand: process.execPath,
+            serverArgs: [scriptPath],
+            serverEnv: { FAKE_MODE: "manage_wait" },
+            startupTimeoutMs: 10_000,
+            callTimeoutMs: 200,
+        });
+
+        const { stdout, stderr } = io.read();
+        assert.equal(exitCode, 0);
+        assert.equal(stderr.includes("E_CALL_TIMEOUT"), false);
+        assert.equal(stdout.includes("fully indexed"), true);
+        assert.equal(stdout.includes("polls=3"), true);
+    } finally {
+        fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true });
+    }
+});
+
+test("runCli emits deterministic JSON error payload for tool-call timeout instead of empty stdout", async () => {
+    const scriptPath = writeTempScript("fake-mcp-tool-timeout", WELL_BEHAVED_SERVER);
+    const io = captureIo();
+
+    try {
+        const exitCode = await runCli([
+            "--call-timeout-ms",
+            "200",
+            "search_codebase",
+            "--path",
+            "/repo",
+            "--query",
+            "auth"
+        ], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            serverCommand: process.execPath,
+            serverArgs: [scriptPath],
+            serverEnv: { FAKE_MODE: "slow_tool" },
+            startupTimeoutMs: 10_000,
+            callTimeoutMs: 200,
+        });
+
+        const { stdout, stderr } = io.read();
+        assert.equal(exitCode, 3);
+        assert.equal(stderr.includes("E_CALL_TIMEOUT"), true);
+        const parsed = JSON.parse(stdout);
+        assert.equal(parsed?.isError, true);
+        assert.match(parsed?.content?.[0]?.text || "", /E_CALL_TIMEOUT/);
     } finally {
         fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true });
     }

@@ -143,30 +143,9 @@ export function installCliStdoutRedirect(options: CliStdoutRedirectOptions = {})
         return true;
     });
 
-    patch("_write", (...args: unknown[]) => {
-        blockChunk(args[0]);
-        const maybeCallback = args[args.length - 1];
-        if (typeof maybeCallback === "function") {
-            (maybeCallback as (error?: Error | null) => void)(null);
-        }
-    });
-
-    patch("_writev", (...args: unknown[]) => {
-        const chunks = Array.isArray(args[0]) ? args[0] : [];
-        for (const chunkRecord of chunks) {
-            const chunk = (chunkRecord as { chunk?: unknown })?.chunk;
-            blockChunk(chunk);
-        }
-        const maybeCallback = args[args.length - 1];
-        if (typeof maybeCallback === "function") {
-            (maybeCallback as (error?: Error | null) => void)(null);
-        }
-    });
-
     return () => {
         for (const [methodName, original] of Object.entries(originalMethods)) {
             stdout[methodName] = original;
         }
     };
 }
-

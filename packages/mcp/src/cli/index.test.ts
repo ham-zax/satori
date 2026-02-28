@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isExecutedDirectlyForPaths, runCli } from "./index.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const SOURCE_SERVER_ENTRY = path.join(PACKAGE_ROOT, "src", "index.ts");
 
 function writeTempScript(prefix: string, content: string): string {
     const tempDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, `.tmp-${prefix}-`));
@@ -309,6 +310,41 @@ test("runCli exits on initial manage_index blocked envelope without polling stat
     } finally {
         fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true });
     }
+});
+
+test("protocol smoke: real server in cli mode with default guard serves tools/list", { timeout: 60_000 }, async () => {
+    const io = captureIo();
+
+    const exitCode = await runCli(["tools", "list"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
+        serverArgs: ["--import", "tsx", SOURCE_SERVER_ENTRY],
+        serverEnv: {
+            EMBEDDING_PROVIDER: "Ollama",
+            EMBEDDING_MODEL: "nomic-embed-text",
+            OLLAMA_HOST: "http://127.0.0.1:11434",
+            MILVUS_ADDRESS: "localhost:19530",
+            MCP_ENABLE_WATCHER: "false",
+            // Force default guard behavior in test regardless of parent env.
+            SATORI_CLI_STDOUT_GUARD: "",
+        },
+        cwd: PACKAGE_ROOT,
+        startupTimeoutMs: 30_000,
+        callTimeoutMs: 30_000,
+    });
+
+    const { stdout, stderr } = io.read();
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.includes("E_PROTOCOL_FAILURE"), false);
+
+    const parsed = JSON.parse(stdout) as { tools?: Array<{ name?: string }> };
+    assert.equal(Array.isArray(parsed.tools), true);
+    const toolNames = (parsed.tools || [])
+        .map((tool) => tool?.name)
+        .filter((name): name is string => typeof name === "string");
+    assert.equal(toolNames.includes("manage_index"), true);
+    assert.equal(toolNames.includes("search_codebase"), true);
 });
 
 test("isExecutedDirectlyForPaths treats symlinked bin path as direct execution", () => {

@@ -1,10 +1,10 @@
 # pi-satori-bridge
 
-Pi extension that exposes Satori MCP tools directly inside Pi.
+Pi extension that exposes Satori tools through `satori-cli` only.
 
 ## What this gives you
 
-This extension registers these Pi tools and proxies them to a running Satori MCP server:
+This extension registers and proxies these tools:
 
 - `list_codebases`
 - `manage_index`
@@ -13,9 +13,15 @@ This extension registers these Pi tools and proxies them to a running Satori MCP
 - `file_outline`
 - `read_file`
 
+Every tool call is delegated to:
+
+```bash
+satori-cli tool call <toolName> --args-json '<json>'
+```
+
 ## Setup
 
-### 1) Build Satori MCP (local repo mode)
+### 1) Build Satori MCP package (for local dist usage)
 
 From repo root:
 
@@ -32,45 +38,77 @@ pnpm install
 
 ### 3) Load extension in Pi
 
-From repo root:
-
 ```bash
 pi -e ./examples/pi-extension/satori-bridge/index.ts
 ```
 
-Or copy/symlink this directory into:
+Or copy/symlink into:
+- `~/.pi/agent/extensions/satori-bridge/`
+- `.pi/extensions/satori-bridge/`
 
-- `~/.pi/agent/extensions/satori-bridge/` (global)
-- `.pi/extensions/satori-bridge/` (project-local)
-
-## Default MCP launch behavior
-
-The extension tries, in order:
-
-1. Local built server in current project: `packages/mcp/dist/index.js`
-2. Fallback to npm: `npx -y @zokizuan/satori-mcp@latest`
-
-## Optional environment overrides
-
-- `SATORI_MCP_COMMAND` (example: `node`)
-- `SATORI_MCP_ARGS_JSON` (JSON array string, example: `[
-  "/absolute/path/to/packages/mcp/dist/index.js"
-]`)
-- `SATORI_MCP_CWD` (working directory for MCP process)
-- `SATORI_MCP_LOCAL_PATH` (override default local dist path)
-- `SATORI_MCP_FORCE_NPX=true` (skip local dist auto-detect)
-
-## Quick check
-
-Use command:
+## Command
 
 ```text
 /satori-mcp
 ```
 
-It notifies whether the bridge can connect.
+Health check that runs `satori-cli tools list` and confirms reflection.
+
+## Resolution order (CLI only)
+
+The extension resolves CLI execution in this order:
+
+1. Explicit CLI command (`SATORI_CLI_COMMAND` or config `command`)
+2. Local dist CLI (`packages/mcp/dist/cli/index.js`, with legacy `dist/index.js` auto-upgrade to `dist/cli/index.js`)
+3. npm fallback:
+   - `npx -y --package @zokizuan/satori-mcp@latest satori-cli ...`
+
+## Config file
+
+Supported config path (auto):
+
+- `~/.pi/agent/extensions/satori-bridge/config.json`
+- or project-local `.pi/satori-bridge.json`
+
+Optional override path:
+
+- `SATORI_CLI_CONFIG`
+
+Example `config.json`:
+
+```json
+{
+  "cliPath": "/home/hamza/repo/satori/packages/mcp/dist/cli/index.js",
+  "cwd": "/home/hamza/repo/satori",
+  "envFile": ".env.satori",
+  "guardRecovery": "auto",
+  "forceNpx": false,
+  "npmPackage": "@zokizuan/satori-mcp@latest",
+  "startupTimeoutMs": 30000,
+  "callTimeoutMs": 30000,
+  "debug": false
+}
+```
+
+## Env keys (optional)
+
+- `SATORI_CLI_COMMAND`
+- `SATORI_CLI_ARGS_JSON`
+- `SATORI_CLI_CWD`
+- `SATORI_CLI_LOCAL_PATH`
+- `SATORI_CLI_FORCE_NPX`
+- `SATORI_CLI_NPM_PACKAGE`
+- `SATORI_CLI_STARTUP_TIMEOUT_MS`
+- `SATORI_CLI_CALL_TIMEOUT_MS`
+- `SATORI_CLI_DEBUG`
+- `SATORI_CLI_STDOUT_GUARD` (`drop` default, `redirect`, or `off`)
+- `SATORI_CLI_GUARD_RECOVERY` (`auto` default, `never`)
+- `SATORI_CLI_CONFIG`
 
 ## Notes
 
-- Set required Satori env vars (embedding/vector DB/API keys) before starting Pi.
-- Tool cancellation is forwarded to MCP via `AbortSignal`.
+- Provide required Satori runtime env vars (embedding/vector DB/API keys) through your shell or `envFile`.
+- Bridge auto-recovery retries once with `SATORI_CLI_STDOUT_GUARD=off` only for protocol/transport failures.
+- Tool-level responses (including non-ok structured envelopes such as `not_ready/indexing`) do not trigger auto-retry.
+- Tool cancellation is forwarded to child process kill via `AbortSignal`.
+- Tool output is compact by default and progressively disclosed via `Ctrl+O` in Pi.

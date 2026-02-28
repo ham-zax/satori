@@ -90,6 +90,28 @@ Blocked envelopes should include:
   3. rerun search
   4. optionally `manage_index(action="sync")` for immediate convergence
 
+## CLI-Only Operation
+
+Use Satori via one of these two paths only:
+1. Registered extension tools (`list_codebases`, `manage_index`, `search_codebase`, `call_graph`, `file_outline`, `read_file`)
+2. `satori-cli` shell commands when extension tools are unavailable
+
+Do not use or suggest any direct MCP client fallback path.
+
+If Satori tools are not registered in the current runtime, use shell CLI:
+
+```bash
+satori-cli tools list
+satori-cli tool call search_codebase --args-json '{"path":"/abs/repo","query":"lazy loading prefetch preload","scope":"runtime","resultMode":"grouped","groupBy":"symbol"}'
+```
+
+Then continue with `file_outline`, `call_graph`, and `read_file` via `satori-cli tool call ... --args-json ...`.
+
+Bridge reliability note:
+- Default stdout guard mode is `drop`.
+- Bridge may perform one protocol-failure-only recovery retry with `SATORI_CLI_STDOUT_GUARD=off`.
+- Non-ok tool envelopes (for example `status="not_ready"`) are valid responses and are not retried.
+
 ## Fallback Rule
 
 Use ad-hoc `bash/rg` only when:

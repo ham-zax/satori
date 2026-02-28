@@ -16,14 +16,16 @@
     "@mariozechner/pi-coding-agent": ">=0.55.1"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
     "@sinclair/typebox": "^0.34.48"
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "0.55.1",
+    "@mariozechner/pi-tui": "0.55.1",
+    "tsx": "^4.19.4",
     "typescript": "^5.8.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 *.test.ts"
   }
 }

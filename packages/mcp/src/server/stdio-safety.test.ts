@@ -29,6 +29,7 @@ test("installConsoleToStderrPatch routes console output to stderr writer", () =>
 test("installCliStdoutRedirect blocks writes in drop mode and emits deterministic markers", () => {
     const writes: Array<{ chunk: unknown; encoding?: unknown }> = [];
     const stderrWrites: string[] = [];
+    const privateWrites: string[] = [];
 
     const fakeStdout: Record<string, any> = {
         write(chunk: unknown, encoding?: unknown) {
@@ -44,12 +45,15 @@ test("installCliStdoutRedirect blocks writes in drop mode and emits deterministi
             return true;
         },
         _write(chunk: unknown) {
-            writes.push({ chunk, encoding: "_write" });
+            privateWrites.push(String(chunk));
         },
         _writev(chunks: unknown) {
-            writes.push({ chunk: chunks, encoding: "_writev" });
+            privateWrites.push(JSON.stringify(chunks));
         }
     };
+
+    const originalPrivateWrite = fakeStdout._write;
+    const originalPrivateWritev = fakeStdout._writev;
 
     const restore = installCliStdoutRedirect({
         mode: "drop",
@@ -69,7 +73,9 @@ test("installCliStdoutRedirect blocks writes in drop mode and emits deterministi
     restore();
 
     assert.equal(writes.length, 0);
+    assert.equal(privateWrites.length, 2);
+    assert.equal(fakeStdout._write, originalPrivateWrite);
+    assert.equal(fakeStdout._writev, originalPrivateWritev);
     assert.equal(stderrWrites.some((line) => line.includes("[STDOUT_BLOCKED]")), true);
     assert.equal(stderrWrites.some((line) => line.includes("[STDOUT_BLOCKED_BINARY")), true);
 });
-

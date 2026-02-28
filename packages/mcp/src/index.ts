@@ -8,13 +8,21 @@ type ServerHandle = {
 
 let activeServer: ServerHandle | null = null;
 let shuttingDown = false;
+let guardDisabledWarningEmitted = false;
 
 function resolveRunMode(): "mcp" | "cli" {
     return process.env.SATORI_RUN_MODE === "cli" ? "cli" : "mcp";
 }
 
-function resolveGuardMode(): "drop" | "redirect" {
-    return process.env.SATORI_CLI_STDOUT_GUARD === "redirect" ? "redirect" : "drop";
+function resolveGuardMode(): "drop" | "redirect" | "off" {
+    const value = process.env.SATORI_CLI_STDOUT_GUARD?.trim().toLowerCase();
+    if (value === "redirect") {
+        return "redirect";
+    }
+    if (value === "off" || value === "false" || value === "0" || value === "disable") {
+        return "off";
+    }
+    return "drop";
 }
 
 function createProtocolStdout(originalWrite: typeof process.stdout.write): Writable {
@@ -57,9 +65,15 @@ async function main(): Promise<void> {
     const { installCliStdoutRedirect, installConsoleToStderrPatch } = await import("./server/stdio-safety.js");
     installConsoleToStderrPatch();
     if (runMode === "cli") {
-        installCliStdoutRedirect({
-            mode: resolveGuardMode(),
-        });
+        const guardMode = resolveGuardMode();
+        if (guardMode !== "off") {
+            installCliStdoutRedirect({
+                mode: guardMode,
+            });
+        } else if (!guardDisabledWarningEmitted) {
+            guardDisabledWarningEmitted = true;
+            console.error("[STDOUT_GUARD_DISABLED] SATORI_CLI_STDOUT_GUARD=off");
+        }
     }
 
     const { startMcpServerFromEnv } = await import("./server/start-server.js");

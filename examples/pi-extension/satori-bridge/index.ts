@@ -115,8 +115,6 @@ interface CliExecutionRequest {
 	commandArgs: string[];
 }
 
-let stickyGuardModeOff = false;
-
 interface McpToolSpec {
 	name: string;
 	description: string;
@@ -185,8 +183,8 @@ function loadBridgeConfig(cwd: string): LoadedBridgeConfig | undefined {
 	const explicitPath = process.env.SATORI_CLI_CONFIG?.trim();
 	const candidatePaths = [
 		explicitPath,
-		path.join(getAgentDir(), "extensions", "satori-bridge", "config.json"),
 		path.join(cwd, ".pi", "satori-bridge.json"),
+		path.join(getAgentDir(), "extensions", "satori-bridge", "config.json"),
 	].filter((entry): entry is string => Boolean(entry));
 
 	for (const candidatePath of candidatePaths) {
@@ -210,7 +208,8 @@ function loadBridgeConfig(cwd: string): LoadedBridgeConfig | undefined {
 
 function parseEnvFile(filePath: string): Record<string, string> {
 	if (!fs.existsSync(filePath)) {
-		throw new Error(`Bridge envFile not found: ${filePath}`);
+		console.warn(`[satori-bridge] envFile not found: ${filePath}; continuing without envFile values.`);
+		return {};
 	}
 	const values: Record<string, string> = {};
 	const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
@@ -518,7 +517,7 @@ async function executeCliWithRecovery(
 	request: CliExecutionRequest,
 	signal?: AbortSignal,
 ): Promise<{ parsed: unknown; cli: CliExecResult; recovery: CliRecoveryMetadata }> {
-	const firstGuardMode = stickyGuardModeOff ? "off" : invocationConfig.guardMode;
+	const firstGuardMode = invocationConfig.guardMode;
 	const firstAttemptConfig = withGuardMode(invocationConfig, firstGuardMode);
 	const firstAttempt = await runCliAttempt(firstAttemptConfig, request, signal);
 
@@ -551,7 +550,6 @@ async function executeCliWithRecovery(
 		const validationError = validateParsedPayload(request, secondAttempt.parsed);
 		const toolsListExitOk = request.commandType !== "tools-list" || secondAttempt.cli.exitCode === 0;
 		if (!validationError && toolsListExitOk) {
-			stickyGuardModeOff = true;
 			return {
 				parsed: secondAttempt.parsed,
 				cli: secondAttempt.cli,
@@ -974,3 +972,9 @@ export default function satoriBridgeExtension(pi: ExtensionAPI) {
 	});
 
 }
+
+export const __testInternals = {
+	loadBridgeConfig,
+	resolveCliInvocationConfig,
+	parseEnvFile,
+};

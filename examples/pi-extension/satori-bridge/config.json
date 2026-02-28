@@ -1,0 +1,17 @@
+{
+  "command": "pnpm",
+  "args": [
+    "-C",
+    "/home/hamza/repo/satori/packages/mcp",
+    "tsx",
+    "src/cli/index.ts"
+  ],
+  "envFile": ".env.satori",
+  "guardRecovery": "auto",
+  "env": {
+    "SATORI_CLI_STDOUT_GUARD": "drop"
+  },
+  "startupTimeoutMs": 180000,
+  "callTimeoutMs": 180000,
+  "debug": false
+}

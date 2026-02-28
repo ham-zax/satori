@@ -67,8 +67,8 @@ The extension resolves CLI execution in this order:
 
 Supported config path (auto):
 
-- `~/.pi/agent/extensions/satori-bridge/config.json`
-- or project-local `.pi/satori-bridge.json`
+- project-local `.pi/satori-bridge.json`
+- `~/.pi/agent/extensions/satori-bridge/config.json` (fallback)
 
 Optional override path:
 
@@ -78,14 +78,12 @@ Example `config.json`:
 
 ```json
 {
-  "cliPath": "/home/hamza/repo/satori/packages/mcp/dist/cli/index.js",
-  "cwd": "/home/hamza/repo/satori",
   "envFile": ".env.satori",
   "guardRecovery": "auto",
   "forceNpx": false,
   "npmPackage": "@zokizuan/satori-mcp@latest",
-  "startupTimeoutMs": 30000,
-  "callTimeoutMs": 30000,
+  "startupTimeoutMs": 180000,
+  "callTimeoutMs": 180000,
   "debug": false
 }
 ```
@@ -108,7 +106,9 @@ Example `config.json`:
 ## Notes
 
 - Provide required Satori runtime env vars (embedding/vector DB/API keys) through your shell or `envFile`.
+- Keep global config repo-agnostic; set repo-specific `cwd` / `cliPath` only in project-local `.pi/satori-bridge.json`.
 - Bridge auto-recovery retries once with `SATORI_CLI_STDOUT_GUARD=off` only for protocol/transport failures.
+- Missing `envFile` is non-fatal (bridge continues and uses process/config env values).
 - Tool-level responses (including non-ok structured envelopes such as `not_ready/indexing`) do not trigger auto-retry.
 - Tool cancellation is forwarded to child process kill via `AbortSignal`.
 - Tool output is compact by default and progressively disclosed via `Ctrl+O` in Pi.

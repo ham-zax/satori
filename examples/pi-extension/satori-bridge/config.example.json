@@ -1,11 +1,9 @@
 {
-  "cliPath": "/home/hamza/repo/satori/packages/mcp/dist/cli/index.js",
-  "cwd": "/home/hamza/repo/satori",
   "envFile": ".env.satori",
   "guardRecovery": "auto",
   "forceNpx": false,
   "npmPackage": "@zokizuan/satori-mcp@latest",
-  "startupTimeoutMs": 30000,
-  "callTimeoutMs": 30000,
+  "startupTimeoutMs": 180000,
+  "callTimeoutMs": 180000,
   "debug": false
 }

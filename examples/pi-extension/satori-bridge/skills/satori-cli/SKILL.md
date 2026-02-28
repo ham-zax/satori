@@ -1,9 +1,9 @@
 ---
-name: satori-mcp
-description: Semantic code search + symbol navigation for Satori MCP. Use when users ask to search codebases (for example lazy loading, prefetch/preload, “where is X implemented”, trace callers/callees), and prefer search_codebase/file_outline/call_graph/read_file over ad-hoc grep.
+name: satori-cli
+description: Semantic code search + symbol navigation for Satori CLI (MCP-backed). Use when users ask to search codebases (for example lazy loading, prefetch/preload, “where is X implemented”, trace callers/callees), and prefer search_codebase/file_outline/call_graph/read_file over ad-hoc grep.
 ---
 
-# Satori MCP (Semantic Search + Symbol Navigation)
+# Satori CLI (Semantic Search + Symbol Navigation)
 
 Use this skill for codebase discovery/navigation requests, especially:
 - "search my codebase"
@@ -111,6 +111,11 @@ Bridge reliability note:
 - Default stdout guard mode is `drop`.
 - Bridge may perform one protocol-failure-only recovery retry with `SATORI_CLI_STDOUT_GUARD=off`.
 - Non-ok tool envelopes (for example `status="not_ready"`) are valid responses and are not retried.
+
+Bridge config semantics:
+- Config precedence is deterministic: `SATORI_CLI_CONFIG` (explicit) -> project-local `.pi/satori-bridge.json` -> global `~/.pi/agent/extensions/satori-bridge/config.json` fallback.
+- Keep global config repo-agnostic; set repo-specific `cwd` / `cliPath` only in project-local config.
+- Missing `envFile` is non-fatal (bridge continues with process/config env values).
 
 ## Fallback Rule
 

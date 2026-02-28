@@ -4350,31 +4350,102 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             console.log(`[SYNC] Manually triggering incremental sync for: ${absolutePath}`);
+            // Route manual sync through freshness gate so ignore-rule reconciliation is honored.
+            const decision = await this.syncManager.ensureFreshness(absolutePath, 0);
 
-            // Perform incremental sync
-            const syncStats = await this.context.reindexByChange(absolutePath);
-            const changedFiles = Array.isArray((syncStats as any).changedFiles)
-                ? (syncStats as any).changedFiles.filter((file: unknown): file is string => typeof file === 'string')
-                : [];
-            const syncTotals = {
-                added: syncStats.added,
-                removed: syncStats.removed,
-                modified: syncStats.modified
-            };
-
-            if (typeof this.context.getTrackedRelativePaths === 'function') {
-                const trackedPaths = this.context.getTrackedRelativePaths(absolutePath);
-                if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
-                    this.snapshotManager.setCodebaseIndexManifest(absolutePath, trackedPaths);
-                }
+            if (decision.mode === 'ignore_reload_failed') {
+                const fallbackLine = decision.fallbackSyncExecuted
+                    ? '\nFallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
+                    : '';
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error syncing codebase: ignore-rule reconciliation failed (${decision.errorMessage || 'unknown_ignore_reload_error'}).${fallbackLine}`
+                    }],
+                    isError: true
+                };
             }
 
-            // Store sync result in snapshot
-            this.snapshotManager.setCodebaseSyncCompleted(absolutePath, syncTotals, this.runtimeFingerprint, 'verified');
-            this.snapshotManager.saveCodebaseSnapshot();
-            const rebuiltCallGraph = await this.rebuildCallGraphForSyncDelta(absolutePath, changedFiles);
+            if (decision.mode === 'skipped_indexing') {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.buildManageActionBlockedMessage(absolutePath, 'sync')
+                    }],
+                    isError: true
+                };
+            }
 
-            const totalChanges = syncStats.added + syncStats.removed + syncStats.modified;
+            if (decision.mode === 'skipped_requires_reindex') {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.buildReindexInstruction(absolutePath, 'Sync blocked because this codebase requires reindex.')
+                    }],
+                    isError: true
+                };
+            }
+
+            if (decision.mode === 'skipped_missing_path') {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: Codebase path '${absolutePath}' no longer exists.`
+                    }],
+                    isError: true
+                };
+            }
+
+            const added = decision.stats?.added ?? 0;
+            const removed = decision.stats?.removed ?? 0;
+            const modified = decision.stats?.modified ?? 0;
+            const ignoredDeletes = decision.deletedFiles ?? 0;
+            const totalChanges = added + removed + modified;
+
+            if (decision.mode === 'coalesced') {
+                if (typeof decision.errorMessage === 'string' && decision.errorMessage.trim().length > 0) {
+                    const fallbackLine = decision.fallbackSyncExecuted
+                        ? '\nFallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
+                        : '';
+                    return {
+                        content: [{
+                            type: "text",
+                            text: `Error syncing codebase: coalesced in-flight reconcile failed (${decision.errorMessage}).${fallbackLine}`
+                        }],
+                        isError: true
+                    };
+                }
+                return {
+                    content: [{
+                        type: "text",
+                        text: `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`
+                    }]
+                };
+            }
+
+            if (decision.mode === 'reconciled_ignore_change') {
+                if (totalChanges === 0 && ignoredDeletes === 0) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`
+                        }]
+                    };
+                }
+
+                const resultMessage =
+                    `🔄 Incremental sync + ignore-rule reconciliation completed for '${absolutePath}'.\n\n` +
+                    `📊 Sync changes:\n+ ${added} file(s) added\n- ${removed} file(s) removed\n~ ${modified} file(s) modified\n` +
+                    `🧹 Ignored paths removed from index: ${ignoredDeletes}\n` +
+                    `\nTotal changes: ${totalChanges + ignoredDeletes}`;
+                console.log(`[SYNC] ✅ Sync+ignore reconcile completed: +${added}, -${removed}, ~${modified}, ignoredDeleted=${ignoredDeletes}`);
+                return {
+                    content: [{
+                        type: "text",
+                        text: resultMessage
+                    }]
+                };
+            }
 
             if (totalChanges === 0) {
                 return {
@@ -4385,13 +4456,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const callGraphLine = rebuiltCallGraph
-                ? `\n🕸️ Call graph sidecar rebuilt from supported source changes.`
-                : '';
-            const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${syncStats.added} file(s) added\n- ${syncStats.removed} file(s) removed\n~ ${syncStats.modified} file(s) modified\n\nTotal changes: ${totalChanges}${callGraphLine}`;
-
-            console.log(`[SYNC] ✅ Sync completed: +${syncStats.added}, -${syncStats.removed}, ~${syncStats.modified}`);
-
+            const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${added} file(s) added\n- ${removed} file(s) removed\n~ ${modified} file(s) modified\n\nTotal changes: ${totalChanges}`;
+            console.log(`[SYNC] ✅ Sync completed: +${added}, -${removed}, ~${modified}`);
             return {
                 content: [{
                     type: "text",

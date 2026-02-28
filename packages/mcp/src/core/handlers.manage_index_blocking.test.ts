@@ -189,3 +189,142 @@ test('recent indexing state does not trigger stale-index recovery probes', async
         assert.equal(markerCalls, 0);
     });
 });
+
+test('handleSyncCodebase routes through ensureFreshness and does not call raw reindexByChange', async () => {
+    await withTempRepo(async (repoPath) => {
+        let rawReindexCalls = 0;
+        let freshnessCalls = 0;
+        let observedThreshold: number | null = null;
+
+        const context = {
+            reindexByChange: async () => {
+                rawReindexCalls += 1;
+                return { added: 9, removed: 9, modified: 9, changedFiles: [] };
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => ({
+                status: 'indexed',
+                indexedFiles: 10,
+                totalChunks: 20,
+                indexStatus: 'completed',
+                lastUpdated: new Date().toISOString()
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined
+        } as any;
+
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+            ensureFreshness: async (_path: string, thresholdMs: number) => {
+                freshnessCalls += 1;
+                observedThreshold = thresholdMs;
+                return {
+                    mode: 'synced',
+                    checkedAt: new Date().toISOString(),
+                    thresholdMs,
+                    stats: { added: 1, removed: 0, modified: 1 }
+                };
+            }
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const response = await handlers.handleSyncCodebase({ path: repoPath });
+        const text = response.content[0]?.text || '';
+
+        assert.equal(response.isError, undefined);
+        assert.equal(rawReindexCalls, 0);
+        assert.equal(freshnessCalls, 1);
+        assert.equal(observedThreshold, 0);
+        assert.match(text, /Incremental sync completed/i);
+        assert.match(text, /\+ 1 file\(s\) added/i);
+        assert.match(text, /~ 1 file\(s\) modified/i);
+    });
+});
+
+test('handleSyncCodebase surfaces ignore reconcile failure from ensureFreshness', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {} as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => ({
+                status: 'indexed',
+                indexedFiles: 10,
+                totalChunks: 20,
+                indexStatus: 'completed',
+                lastUpdated: new Date().toISOString()
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined
+        } as any;
+
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+            ensureFreshness: async () => ({
+                mode: 'ignore_reload_failed',
+                checkedAt: new Date().toISOString(),
+                thresholdMs: 0,
+                errorMessage: 'ignore_reload_failed',
+                fallbackSyncExecuted: true
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const response = await handlers.handleSyncCodebase({ path: repoPath });
+        const text = response.content[0]?.text || '';
+
+        assert.equal(response.isError, true);
+        assert.match(text, /ignore-rule reconciliation failed/i);
+        assert.match(text, /Fallback incremental sync was executed/i);
+    });
+});
+
+test('handleSyncCodebase surfaces coalesced in-flight reconcile failure from ensureFreshness', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {} as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => ({
+                status: 'indexed',
+                indexedFiles: 10,
+                totalChunks: 20,
+                indexStatus: 'completed',
+                lastUpdated: new Date().toISOString()
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined
+        } as any;
+
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+            ensureFreshness: async () => ({
+                mode: 'coalesced',
+                checkedAt: new Date().toISOString(),
+                thresholdMs: 0,
+                errorMessage: 'ignore_reload_failed',
+                fallbackSyncExecuted: true
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const response = await handlers.handleSyncCodebase({ path: repoPath });
+        const text = response.content[0]?.text || '';
+
+        assert.equal(response.isError, true);
+        assert.match(text, /coalesced in-flight reconcile failed/i);
+        assert.match(text, /Fallback incremental sync was executed/i);
+    });
+});

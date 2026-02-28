@@ -1204,20 +1204,16 @@ export class Context {
         try {
             let fileBasedPatterns: string[] = [];
 
-            // Load all .xxxignore files in codebase directory (excluding legacy .contextignore)
+            // v1 policy: only repo-root .satoriignore and .gitignore are supported.
             const ignoreFiles = await this.findIgnoreFiles(codebasePath);
             for (const ignoreFile of ignoreFiles) {
                 const patterns = await this.loadIgnoreFile(ignoreFile, path.basename(ignoreFile));
                 fileBasedPatterns.push(...patterns);
             }
 
-            // Load global ~/.satori/.satoriignore
-            const globalIgnorePatterns = await this.loadGlobalIgnoreFile();
-            fileBasedPatterns.push(...globalIgnorePatterns);
-
             this.setFileBasedPatternsForCodebase(codebasePath, fileBasedPatterns);
             if (fileBasedPatterns.length > 0) {
-                console.log(`[Context] 🚫 Loaded total ${fileBasedPatterns.length} ignore patterns from all ignore files`);
+                console.log(`[Context] 🚫 Loaded total ${fileBasedPatterns.length} ignore patterns from supported root ignore files`);
             } else {
                 console.log('📄 No ignore files found; effective rules reset to base + runtime custom');
             }
@@ -1228,22 +1224,25 @@ export class Context {
     }
 
     /**
-     * Find root-level .xxxignore files in the codebase directory.
-     * v1 policy: only root ignore files are loaded (nested .gitignore files are ignored).
+     * Find supported root ignore files in the codebase directory.
+     * v1 policy: only repo-root .satoriignore and .gitignore are loaded.
      * @param codebasePath Path to the codebase
      * @returns Array of ignore file paths
      */
     private async findIgnoreFiles(codebasePath: string): Promise<string[]> {
         try {
-            const entries = await fs.promises.readdir(codebasePath, { withFileTypes: true });
             const ignoreFiles: string[] = [];
+            const supportedIgnoreFiles = ['.satoriignore', '.gitignore'];
 
-            for (const entry of entries) {
-                if (entry.isFile() &&
-                    entry.name.startsWith('.') &&
-                    entry.name.endsWith('ignore') &&
-                    entry.name !== '.contextignore') {
-                    ignoreFiles.push(path.join(codebasePath, entry.name));
+            for (const fileName of supportedIgnoreFiles) {
+                const absolutePath = path.join(codebasePath, fileName);
+                try {
+                    const stat = await fs.promises.stat(absolutePath);
+                    if (stat.isFile()) {
+                        ignoreFiles.push(absolutePath);
+                    }
+                } catch {
+                    // Missing ignore file is expected.
                 }
             }
 
@@ -1254,21 +1253,6 @@ export class Context {
             return ignoreFiles;
         } catch (error) {
             console.warn(`[Context] ⚠️ Failed to scan for ignore files: ${error}`);
-            return [];
-        }
-    }
-
-    /**
-     * Load global ignore file from ~/.satori/.satoriignore
-     * @returns Array of ignore patterns
-     */
-    private async loadGlobalIgnoreFile(): Promise<string[]> {
-        try {
-            const homeDir = require('os').homedir();
-            const globalIgnorePath = path.join(homeDir, '.satori', '.satoriignore');
-            return await this.loadIgnoreFile(globalIgnorePath, 'global .satoriignore');
-        } catch (error) {
-            // Global ignore file is optional, don't log warnings
             return [];
         }
     }

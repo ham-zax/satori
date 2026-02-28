@@ -583,11 +583,25 @@ Recent vs legacy:
 - Determinism: cloud collection existence is not completion proof; marker-doc validation controls repair eligibility.
 - Performance: no cloud reconcile overhead on foreground reads.
 
+9) Snapshot persistence hardening (multi-process)
+- Trigger: any snapshot save/load under concurrent processes.
+- Effect:
+  - lock acquisition uses stale-lock owner checks (PID metadata + liveness) before breaking stale locks;
+  - lock wait never uses CPU-spin fallback;
+  - local-vs-disk merge uses deterministic state-class precedence (`indexing` > `indexfailed|requires_reindex` > `indexed|sync_completed`) with indexing progress tie-break and stale-indexing age guard;
+  - startup load writes only when semantic representation changed (migration or canonicalized-pruning difference);
+  - corrupt snapshots are preserved to `.corrupt-<pid>-<timestamp>-*` before in-memory reset (rename under lock, copy fallback when lock unavailable).
+- Observability: `[SNAPSHOT]` lock warnings, malformed-entry warnings, corrupt quarantine log lines.
+- Determinism: canonical stable-serialization comparison for save-on-load gating; indexed list ordering is lexicographically stable.
+- Performance: avoids unconditional startup writes and skips O(n) derived-state rebuild for metadata-only setters.
+
 **Evidence:**
 - [index.ts](/home/hamza/repo/satori/packages/mcp/src/index.ts) (`start`, background sync/watcher startup, lifecycle callback).
 - [sync.ts](/home/hamza/repo/satori/packages/mcp/src/core/sync.ts) (`startBackgroundSync`, watcher methods, debounce scheduling).
 - [handlers.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.ts) (`startBackgroundIndexing`, changed-files cache methods, search freshness call).
 - [call-graph.ts](/home/hamza/repo/satori/packages/mcp/src/core/call-graph.ts) (`shouldRebuildForDelta`, `rebuildIfSupportedDelta`).
+- [snapshot.ts](/home/hamza/repo/satori/packages/mcp/src/core/snapshot.ts) (lock + merge + load/save gating + quarantine behavior).
+- [snapshot.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/snapshot.test.ts) (hardened invariants for lock safety, merge precedence, migration-save gating, metadata-setter behavior, and quarantine).
 
 ---
 

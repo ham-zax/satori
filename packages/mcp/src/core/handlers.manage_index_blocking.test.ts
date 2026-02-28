@@ -100,3 +100,91 @@ test('handleClearIndex returns blocked manage message with status hint and retry
     });
 });
 
+test('handleGetIndexingStatus recovers stale indexing state to failed when completion marker is missing', async () => {
+    await withTempRepo(async (repoPath) => {
+        let currentInfo: any = {
+            status: 'indexing',
+            indexingPercentage: 98,
+            lastUpdated: '2026-02-27T23:57:03.000Z'
+        };
+        let markerCalls = 0;
+        let failedCalls = 0;
+        let saveCalls = 0;
+
+        const context = {
+            getIndexCompletionMarker: async () => {
+                markerCalls += 1;
+                return null;
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
+            getIndexingCodebases: () => currentInfo.status === 'indexing' ? [repoPath] : [],
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => currentInfo.status,
+            getCodebaseInfo: () => currentInfo,
+            getIndexingProgress: () => currentInfo.status === 'indexing' ? currentInfo.indexingPercentage : undefined,
+            setCodebaseIndexFailed: (_path: string, errorMessage: string, lastAttemptedPercentage?: number) => {
+                failedCalls += 1;
+                currentInfo = {
+                    status: 'indexfailed',
+                    errorMessage,
+                    lastAttemptedPercentage,
+                    lastUpdated: new Date().toISOString()
+                };
+            },
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => { saveCalls += 1; }
+        } as any;
+
+        const syncManager = { getWatchDebounceMs: () => 2000 } as any;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const text = response.content[0]?.text || '';
+
+        assert.equal(markerCalls, 1);
+        assert.equal(failedCalls, 1);
+        assert.equal(saveCalls, 1);
+        assert.match(text, /indexing failed/i);
+        assert.match(text, /Interrupted indexing detected without completion marker proof/i);
+    });
+});
+
+test('recent indexing state does not trigger stale-index recovery probes', async () => {
+    await withTempRepo(async (repoPath) => {
+        const recent = new Date().toISOString();
+        let markerCalls = 0;
+
+        const context = {
+            getIndexCompletionMarker: async () => {
+                markerCalls += 1;
+                return null;
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'indexing' } }],
+            getIndexingCodebases: () => [repoPath],
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => 'indexing',
+            getCodebaseInfo: () => ({
+                status: 'indexing',
+                indexingPercentage: 37,
+                lastUpdated: recent
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined
+        } as any;
+
+        const syncManager = { getWatchDebounceMs: () => 2000 } as any;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        assert.equal(response.isError, true);
+        const text = response.content[0]?.text || '';
+        assertBlockedText(text, repoPath, 'create');
+        assert.equal(markerCalls, 0);
+    });
+});

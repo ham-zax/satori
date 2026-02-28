@@ -49,6 +49,11 @@ export async function runPostConnectStartupLifecycle(
     dependencies: StartupLifecycleDependencies
 ): Promise<void> {
     if (runMode === "cli") {
+        try {
+            await dependencies.verifyCloudState();
+        } catch (error) {
+            dependencies.onVerifyCloudStateError(error);
+        }
         return;
     }
 

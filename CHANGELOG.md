@@ -2,6 +2,56 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-28] SnapshotManager Lock/Merge Hardening Follow-up
+
+### Added
+- Added execution plan doc:
+  - `docs/SNAPSHOT_MANAGER_HARDENING_PLAN.md`
+- Added SnapshotManager regression tests in `packages/mcp/src/core/snapshot.test.ts` for:
+  - explicit `fingerprintSource` override on `setCodebaseSyncCompleted`,
+  - immutable `setIndexedFileCount` behavior,
+  - stale-lock PID liveness handling,
+  - bounded no-spin lock retry behavior when wait path is unavailable,
+  - bounded no-spin behavior in stale-lock break branch when wait path is unavailable,
+  - merge precedence with stale indexing records,
+  - save-on-load migration gating,
+  - malformed persisted snapshot handling in merge/save path when payload is not v1/v2/v3,
+  - malformed `indexFingerprint` rejection during v3 load,
+  - malformed-entry partial skip behavior,
+  - corrupt snapshot quarantine preservation,
+  - metadata-only persistence on next save,
+  - dirty-flag behavior on lock-timeout save skips.
+- Added startup lifecycle regressions in `packages/mcp/src/server/start-server.lifecycle.test.ts` for:
+  - CLI one-shot recovery behavior,
+  - CLI recovery-error handling without enabling watcher/background loops.
+
+### Modified
+- Hardened snapshot lock behavior in `packages/mcp/src/core/snapshot.ts`:
+  - removed CPU-spin fallback in lock wait path,
+  - stale lock break now checks lock metadata owner PID liveness,
+  - stale-lock break attempts now use the same bounded wait/abort behavior as normal lock retries,
+  - lock retries fail gracefully when wait path is unavailable.
+- Hardened CLI startup lifecycle recovery in `packages/mcp/src/server/start-server.ts`:
+  - `cli` mode now runs one-shot interrupted-index recovery (`verifyCloudState`) pre-connect (before first tool request is accepted),
+  - watcher/background sync loops remain disabled in CLI mode.
+- Hardened merge precedence with deterministic state-class rules:
+  - `indexing` > `indexfailed|requires_reindex` > `indexed|sync_completed`,
+  - stale indexing protection avoids old high-progress records overriding fresh indexing state.
+- Hardened load/save behavior:
+  - `loadCodebaseSnapshot` persists only on semantic representation change,
+  - canonical compare uses normalized `codebases` map (not snapshot-level `lastUpdated`),
+  - persisted snapshot merge loader now rejects malformed non-v1/v2/v3 payloads deterministically (warn + local-only merge fallback),
+  - corrupt snapshots are preserved as `.corrupt-<pid>-<timestamp>-<suffix>.json`.
+- Improved type/API safety:
+  - narrowed `AccessGateResult.reason` to explicit union,
+  - `getCodebaseStatus` now returns `CodebaseInfo['status'] | 'not_found'`.
+- Added metadata setter guard rails:
+  - metadata-only setters cannot mutate derived-state-driving fields (`status`, `indexingPercentage`, `indexedFiles`),
+  - metadata updates set dirty state and persist on next successful save without rebuilding derived state.
+
+### Docs
+- Updated `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md` with snapshot persistence hardening semantics and evidence anchors.
+
 ## [2026-02-28] PI Satori Bridge Contract Alignment and Robust Parsing
 
 ### Modified
@@ -30,6 +80,38 @@ All notable changes to this repository are documented in this file.
 - Validation completed:
   - `pnpm -C examples/pi-extension/satori-bridge test`
   - `pnpm -C examples/pi-extension/satori-bridge typecheck`
+
+## [2026-02-28] Backfilled Coverage: CLI, Bridge, and Index Readiness Follow-ups
+
+### Added
+- Added index-state planning documentation in `docs/INDEX_STATE_STABILITY_PLAN.md` (`27a50d5`).
+- Added/expanded CLI implementation contract details in `docs/SATORI_CLI_IMPLEMENTATION_PLAN.md` (`4823565`), including:
+  - stdout JSON-only invariants for `help`/`version`,
+  - non-ok structured envelope exit behavior,
+  - long-running `manage_index create|reindex` wait/poll expectations.
+- Added bridge reliability hardening artifacts (`cd22074`):
+  - `docs/SATORI_BRIDGE_RELIABILITY_HARDENING_PLAN.md`
+  - `examples/pi-extension/satori-bridge/recovery.test.ts`
+  - `examples/pi-extension/satori-bridge/recovery.ts`
+  - `examples/pi-extension/satori-bridge/.env.satori.example`
+
+### Modified
+- Backfilled `fix(mcp): stabilize index readiness and enforce manage_index poll floor` (`fc27fbc`):
+  - enforced a minimum polling timeout floor for `manage_index create|reindex`,
+  - emitted deterministic JSON tool-error payloads on call timeout instead of empty stdout,
+  - hardened `list_codebases` completion-proof handling (stale local, fingerprint mismatch, probe-failed stability behavior) with expanded deterministic tests.
+- Backfilled `fix(list_codebases): remove unnecessary note field from ready status entries` (`78e24e7`) to keep Ready output clean/stable.
+- Backfilled `fix(cli): support source-mode launch and harden bridge timeout floor` (`b86a393`):
+  - added source-mode server entry resolution (`index.ts` with `--import tsx` fallback when dist JS is unavailable),
+  - propagated/manage-index timeout floor handling in the PI bridge path with deterministic tests.
+- Backfilled `feat(example): sync pi satori-bridge extension snapshot` (`c223c44`):
+  - synchronized extension snapshot files and lockfile,
+  - updated bridge config/docs defaults and repo-agnostic config guidance,
+  - introduced the `satori-cli` skill path and aligned extension test scaffolding.
+- Backfilled `fix(bridge): harden cli stdio recovery and add protocol smoke tests` (`cd22074`):
+  - migrated bridge transport to shell-first `satori-cli` invocation flow,
+  - added protocol-failure retry classification/recovery mechanics and smoke tests,
+  - updated bridge README/config contracts around guard and reliability behavior.
 
 ## [2026-02-28] MCP Index State Stability Hardening
 

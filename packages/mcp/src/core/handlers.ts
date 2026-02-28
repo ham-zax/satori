@@ -65,6 +65,7 @@ import {
     StalenessBucket
 } from "./search-types.js";
 import { CallGraphDirection, CallGraphSidecarManager, CallGraphSymbolRef } from "./call-graph.js";
+import { decideInterruptedIndexingRecovery } from "./indexing-recovery.js";
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -79,6 +80,7 @@ const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability('fileOu
 const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
 const SEARCH_OPERATOR_KEYS = new Set(['lang', 'path', '-path', 'must', 'exclude']);
 const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
+const STALE_INDEXING_RECOVERY_GRACE_MS = 15_000;
 
 type ParsedSearchOperators = {
     semanticQuery: string;
@@ -347,6 +349,58 @@ export class ToolHandlers {
             lastUpdated: typeof info.lastUpdated === 'string' ? info.lastUpdated : null,
             phase: null
         };
+    }
+
+    private isIndexingStateStale(codebasePath: string, graceMs: number = STALE_INDEXING_RECOVERY_GRACE_MS): boolean {
+        const info = this.snapshotManager.getCodebaseInfo(codebasePath);
+        if (!info || info.status !== "indexing") {
+            return false;
+        }
+
+        const lastUpdatedMs = Date.parse(info.lastUpdated);
+        if (!Number.isFinite(lastUpdatedMs)) {
+            return true;
+        }
+
+        return (this.now() - lastUpdatedMs) > graceMs;
+    }
+
+    private async recoverStaleIndexingStateIfNeeded(codebasePath: string): Promise<void> {
+        const indexingGetter = (this.snapshotManager as any)?.getIndexingCodebases;
+        if (typeof indexingGetter !== "function") {
+            return;
+        }
+        const indexingCodebases = indexingGetter.call(this.snapshotManager);
+        if (!Array.isArray(indexingCodebases) || !indexingCodebases.includes(codebasePath)) {
+            return;
+        }
+        if (!this.isIndexingStateStale(codebasePath)) {
+            return;
+        }
+        if (typeof (this.context as any).getIndexCompletionMarker !== "function") {
+            return;
+        }
+
+        let marker: any = null;
+        try {
+            marker = await (this.context as any).getIndexCompletionMarker(codebasePath);
+        } catch (error: any) {
+            console.warn(`[INDEX-RECOVERY] Stale indexing recovery probe failed for '${codebasePath}': ${formatUnknownError(error)}`);
+            return;
+        }
+
+        const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
+        if (decision.action === "promote_indexed") {
+            this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, this.runtimeFingerprint, "verified");
+            this.snapshotManager.saveCodebaseSnapshot();
+            console.log(`[INDEX-RECOVERY] Promoted stale indexing state to indexed for '${codebasePath}' using completion marker proof.`);
+            return;
+        }
+
+        const lastProgress = this.snapshotManager.getIndexingProgress(codebasePath);
+        this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message, lastProgress);
+        this.snapshotManager.saveCodebaseSnapshot();
+        console.log(`[INDEX-RECOVERY] Marked stale indexing state as failed for '${codebasePath}' (${decision.reason}).`);
     }
 
     private buildManageActionBlockedMessage(codebasePath: string, action: 'create' | 'reindex' | 'sync' | 'clear'): string {
@@ -2298,6 +2352,8 @@ Agent instructions:
                 };
             }
 
+            await this.recoverStaleIndexingStateIfNeeded(absolutePath);
+
             // Check if already indexing
             if (this.snapshotManager.getIndexingCodebases().includes(absolutePath)) {
                 const blockedAction: 'create' | 'reindex' = forceReindex ? 'reindex' : 'create';
@@ -3975,6 +4031,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
+            await this.recoverStaleIndexingStateIfNeeded(absolutePath);
+
             // Check if this codebase is indexed or being indexed
             const isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
             const isIndexing = this.snapshotManager.getIndexingCodebases().includes(absolutePath);
@@ -4098,6 +4156,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     isError: true
                 };
             }
+
+            await this.recoverStaleIndexingStateIfNeeded(absolutePath);
 
             // Check indexing status using new status system
             const statusGate = this.enforceFingerprintGate(absolutePath);
@@ -4261,6 +4321,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     isError: true
                 };
             }
+
+            await this.recoverStaleIndexingStateIfNeeded(absolutePath);
 
             // Check if this codebase is indexed
             const syncGate = this.enforceFingerprintGate(absolutePath);

@@ -38,16 +38,16 @@ function createLifecycleDeps() {
     };
 }
 
-test("runPostConnectStartupLifecycle skips startup loops and reconciliation in cli mode", async () => {
+test("runPostConnectStartupLifecycle runs one-shot recovery but skips loops in cli mode", async () => {
     const { deps, getCounts } = createLifecycleDeps();
 
     await runPostConnectStartupLifecycle("cli", deps);
 
     const counts = getCounts();
-    assert.equal(counts.verifyCalls, 0);
+    assert.equal(counts.verifyCalls, 1);
     assert.equal(counts.bgCalls, 0);
     assert.equal(counts.watcherCalls, 0);
-    assert.deepEqual(counts.events, []);
+    assert.deepEqual(counts.events, ["verify"]);
 });
 
 test("runPostConnectStartupLifecycle starts reconciliation and loops in mcp mode", async () => {
@@ -61,3 +61,17 @@ test("runPostConnectStartupLifecycle starts reconciliation and loops in mcp mode
     assert.equal(counts.watcherCalls, 1);
 });
 
+test("runPostConnectStartupLifecycle handles cli recovery errors without starting loops", async () => {
+    const { deps, getCounts } = createLifecycleDeps();
+    deps.verifyCloudState = async () => {
+        throw new Error("probe failure");
+    };
+
+    await runPostConnectStartupLifecycle("cli", deps);
+
+    const counts = getCounts();
+    assert.equal(counts.verifyCalls, 0);
+    assert.equal(counts.bgCalls, 0);
+    assert.equal(counts.watcherCalls, 0);
+    assert.deepEqual(counts.events, ["verify_error"]);
+});

@@ -2,6 +2,30 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-02-28] MCP Index State Stability Hardening
+
+### Release Versions
+- Repository version: `0.3.0`
+- `@zokizuan/satori-mcp`: `4.2.0`
+
+### Added
+- Added deterministic index-state stability coverage:
+  - `packages/mcp/src/core/handlers.index_state_stability.test.ts`
+  - repeated-read stability assertion in `packages/mcp/src/tools/list_codebases.test.ts`
+
+### Modified
+- Removed foreground destructive cloud reconciliation from search/file outline/call graph/index create paths.
+- Added shared completion-proof validation with explicit outcomes:
+  - `valid`
+  - `stale_local`
+  - `fingerprint_mismatch`
+  - `probe_failed`
+- Enforced marker-doc canonical-path + strict runtime fingerprint validation gates.
+- Mapped `fingerprint_mismatch` to `requires_reindex` envelopes and stale-local proof failures to deterministic `not_indexed` envelopes.
+- Kept `probe_failed` non-authoritative to avoid response-level flapping while preserving local indexed status.
+- Updated `manage_index status` messaging for stale-local and probe-failed proof states.
+- Updated docs contract in `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md` to reflect maintenance-only non-destructive cloud reconcile.
+
 ## [2026-02-27] Satori CLI v1.1 (Hardened stdio) + Regression Follow-ups
 
 ### Release Versions

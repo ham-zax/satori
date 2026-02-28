@@ -427,7 +427,7 @@ Recent vs legacy:
 - Observability: `freshnessDecision` in search envelope (`synced|skipped_recent|coalesced|...`).
 - Determinism: fixed gate order and thresholds.
 - Performance: avoids repeated sync with throttling/coalescing.
-  Implementation nuance: only `search_codebase` calls `ensureFreshness`; `file_outline` and `call_graph` still call cloud-state snapshot reconciliation (`syncIndexedCodebasesFromCloud`) and can therefore mutate local snapshot metadata outside freshness sync.
+  Implementation nuance: only `search_codebase` calls `ensureFreshness`; `file_outline` and `call_graph` do not run sync-on-read freshness and do not run cloud-state snapshot reconciliation in foreground.
 
 3) Ignore controls (`.satoriignore`, `.gitignore`)
 - Trigger: control-file signature mismatch or watcher control-file event.
@@ -461,6 +461,7 @@ Recent vs legacy:
 - [snapshot.ts](/home/hamza/repo/satori/packages/mcp/src/core/snapshot.ts) (`ensureFingerprintCompatibilityOnAccess`, status transitions, ignore signature/version fields).
 - [sync.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/sync.test.ts) (reconcile ordering/coalescing/signature-before-throttle and failure fallback tests).
 - [handlers.call_graph.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.call_graph.test.ts) and [handlers.file_outline.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.file_outline.test.ts) (requires_reindex envelopes).
+- [handlers.index_state_stability.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.index_state_stability.test.ts) (stale-local/probe-failed/fingerprint-mismatch mappings and foreground non-mutation expectations).
 
 ---
 
@@ -575,12 +576,12 @@ Recent vs legacy:
 - Determinism: runtime-vs-indexed fingerprint comparison and gate transitions are deterministic.
 - Performance: cheap metadata check that avoids unsafe reads on incompatible indexes.
 
-8) Foreground cloud-state reconciliation calls
-- Trigger: handler entry for search/file_outline/call_graph currently calls `syncIndexedCodebasesFromCloud()`.
-- Effect: snapshot can be reconciled against cloud collections before tool response.
+8) Cloud-state reconciliation is maintenance-only and non-destructive
+- Trigger: explicit maintenance paths (not foreground read handlers).
+- Effect: may repair/add local metadata only when marker completion proof is valid; never prunes local snapshot membership.
 - Observability: `[SYNC-CLOUD]` logs.
-- Determinism: deterministic reconciliation rules (remove local entries absent in cloud; do not auto-add cloud-only entries).
-- Performance: extra cloud list/query overhead on those tool paths; consistency-first behavior.
+- Determinism: cloud collection existence is not completion proof; marker-doc validation controls repair eligibility.
+- Performance: no cloud reconcile overhead on foreground reads.
 
 **Evidence:**
 - [index.ts](/home/hamza/repo/satori/packages/mcp/src/index.ts) (`start`, background sync/watcher startup, lifecycle callback).

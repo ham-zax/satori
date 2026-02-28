@@ -94,3 +94,21 @@ test('list_codebases preserves empty-state message when no codebases are tracked
         "No codebases are currently tracked.\n\nUse manage_index with action='create' to index one."
     );
 });
+
+test('list_codebases remains stable across repeated calls and does not mutate membership', async () => {
+    const entries = [
+        { path: '/repo/a', info: { status: 'indexed' } },
+        { path: '/repo/b', info: { status: 'sync_completed' } }
+    ];
+    const frozenEntries = Object.freeze(entries.map((entry) => Object.freeze({
+        path: entry.path,
+        info: Object.freeze({ ...entry.info })
+    })));
+
+    const first = await runListCodebases(frozenEntries as unknown as Array<{ path: string; info: Record<string, unknown> }>);
+    const second = await runListCodebases(frozenEntries as unknown as Array<{ path: string; info: Record<string, unknown> }>);
+
+    assert.equal(first.content[0]?.text, second.content[0]?.text);
+    assert.match(first.content[0]?.text || '', /`\/repo\/a`/);
+    assert.match(first.content[0]?.text || '', /`\/repo\/b`/);
+});

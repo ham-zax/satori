@@ -25,6 +25,7 @@ import {
 const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-mcp@latest";
 const DEFAULT_STARTUP_TIMEOUT_MS = 180_000;
 const DEFAULT_CALL_TIMEOUT_MS = 600_000;
+const MANAGE_INDEX_POLL_MIN_TIMEOUT_MS = 180_000;
 const HEALTHCHECK_TIMEOUT_MS = 15_000;
 
 const COLLAPSED_PREVIEW_LINES = 14;
@@ -112,6 +113,7 @@ interface CliAttemptResult {
 interface CliExecutionRequest {
 	commandType: CliCommandType;
 	toolName?: string;
+	toolParams?: Record<string, unknown>;
 	commandArgs: string[];
 }
 
@@ -323,11 +325,26 @@ function resolveCliInvocationConfig(cwd: string): CliInvocationConfig {
 	};
 }
 
+function resolveEffectiveCallTimeoutMs(
+	invocationConfig: CliInvocationConfig,
+	request: CliExecutionRequest,
+): number {
+	if (request.commandType !== "tool-call" || request.toolName !== "manage_index") {
+		return invocationConfig.callTimeoutMs;
+	}
+	const action = request.toolParams?.action;
+	if (action !== "create" && action !== "reindex") {
+		return invocationConfig.callTimeoutMs;
+	}
+	return Math.max(invocationConfig.callTimeoutMs, MANAGE_INDEX_POLL_MIN_TIMEOUT_MS);
+}
+
 function runCliCommand(
 	invocationConfig: CliInvocationConfig,
-	commandArgs: string[],
+	request: CliExecutionRequest,
 	signal?: AbortSignal,
 ): Promise<CliExecResult> {
+	const effectiveCallTimeoutMs = resolveEffectiveCallTimeoutMs(invocationConfig, request);
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			invocationConfig.command,
@@ -338,9 +355,9 @@ function runCliCommand(
 				"--startup-timeout-ms",
 				String(invocationConfig.startupTimeoutMs),
 				"--call-timeout-ms",
-				String(invocationConfig.callTimeoutMs),
+				String(effectiveCallTimeoutMs),
 				...(invocationConfig.debug ? ["--debug"] : []),
-				...commandArgs,
+				...request.commandArgs,
 			],
 			{
 				cwd: invocationConfig.cwd,
@@ -417,7 +434,7 @@ async function runCliAttempt(
 	signal?: AbortSignal,
 ): Promise<CliAttemptResult> {
 	try {
-		const cli = await runCliCommand(invocationConfig, request.commandArgs, signal);
+		const cli = await runCliCommand(invocationConfig, request, signal);
 		try {
 			const parsed = parseCliJson(cli.stdout, cli.stderr);
 			return {
@@ -718,6 +735,7 @@ async function callToolThroughCli(
 		{
 			commandType: "tool-call",
 			toolName,
+			toolParams: params,
 			commandArgs: ["tool", "call", toolName, "--args-json", JSON.stringify(params)],
 		},
 		signal,
@@ -977,4 +995,5 @@ export const __testInternals = {
 	loadBridgeConfig,
 	resolveCliInvocationConfig,
 	parseEnvFile,
+	resolveEffectiveCallTimeoutMs,
 };

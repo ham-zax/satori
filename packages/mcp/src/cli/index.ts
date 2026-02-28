@@ -53,6 +53,14 @@ function readPackageVersion(): string {
     return "unknown";
 }
 
+function resolveDefaultServerArgs(): string[] {
+    const serverEntry = resolveServerEntryPath();
+    if (serverEntry.endsWith(".ts")) {
+        return ["--import", "tsx", serverEntry];
+    }
+    return [serverEntry];
+}
+
 function buildHelpPayload() {
     return {
         usage: "satori-cli <command>",
@@ -244,7 +252,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
         const session = await connectCliMcpSession({
             command: options.serverCommand || process.execPath,
-            args: options.serverArgs || [resolveServerEntryPath()],
+            args: options.serverArgs || resolveDefaultServerArgs(),
             env: {
                 ...process.env,
                 ...options.serverEnv,

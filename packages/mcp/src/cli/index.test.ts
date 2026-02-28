@@ -421,6 +421,33 @@ test("protocol smoke: real server in cli mode with default guard serves tools/li
     assert.equal(toolNames.includes("search_codebase"), true);
 });
 
+test("runCli default server launch works when executing source cli entry", { timeout: 60_000 }, async () => {
+    const io = captureIo();
+
+    const exitCode = await runCli(["tools", "list"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        serverEnv: {
+            EMBEDDING_PROVIDER: "Ollama",
+            EMBEDDING_MODEL: "nomic-embed-text",
+            OLLAMA_HOST: "http://127.0.0.1:11434",
+            MILVUS_ADDRESS: "localhost:19530",
+            MCP_ENABLE_WATCHER: "false",
+            SATORI_CLI_STDOUT_GUARD: "",
+        },
+        cwd: PACKAGE_ROOT,
+        startupTimeoutMs: 30_000,
+        callTimeoutMs: 30_000,
+    });
+
+    const { stdout, stderr } = io.read();
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.includes("E_PROTOCOL_FAILURE"), false);
+
+    const parsed = JSON.parse(stdout) as { tools?: Array<{ name?: string }> };
+    assert.equal(Array.isArray(parsed.tools), true);
+});
+
 test("isExecutedDirectlyForPaths treats symlinked bin path as direct execution", () => {
     const tempDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-cli-symlink-"));
     const realFilePath = path.join(tempDir, "real-entry.js");

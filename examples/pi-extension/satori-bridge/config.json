@@ -3,6 +3,7 @@
   "args": [
     "-C",
     "/home/hamza/repo/satori/packages/mcp",
+    "exec",
     "tsx",
     "src/cli/index.ts"
   ],

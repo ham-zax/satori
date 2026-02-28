@@ -212,5 +212,6 @@ test('list_codebases keeps ready membership stable when marker probe fails', asy
     const sections = parseSectionLines(text);
 
     assert.deepEqual(extractPaths(sections.get('Ready') || []), ['/repo/a']);
-    assert.match(text, /completion proof probe failed/);
+    assert.deepEqual(extractPaths(sections.get('Failed') || []), []);
+    assert.doesNotMatch(text, /completion proof probe failed/);
 });

@@ -413,6 +413,45 @@ test('stale persisted indexing does not clobber local indexed recovery on save',
     });
 });
 
+test('persisted indexing older than local recovered indexed does not clobber transition before stale cutoff', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-recovery-recent-precedence');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { dir, file } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+
+        const indexingTimestamp = new Date(Date.now() - (3 * 60 * 1000)).toISOString();
+        fs.writeFileSync(file, JSON.stringify({
+            formatVersion: 'v3',
+            codebases: {
+                [codebase]: {
+                    status: 'indexing',
+                    indexingPercentage: 98,
+                    lastUpdated: indexingTimestamp,
+                    indexFingerprint: FINGERPRINT_A,
+                    fingerprintSource: 'verified'
+                }
+            },
+            lastUpdated: indexingTimestamp
+        }, null, 2));
+
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.loadCodebaseSnapshot();
+        manager.setCodebaseIndexed(codebase, {
+            indexedFiles: 12,
+            totalChunks: 30,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+        manager.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const info = reader.getCodebaseInfo(codebase);
+        assert.ok(info);
+        assert.equal(info?.status, 'indexed');
+    });
+});
+
 test('malformed indexFingerprint entries are skipped during v3 load', () => {
     withTempHome((homeDir) => {
         const codebaseGood = path.join(homeDir, 'repo-good-fp');

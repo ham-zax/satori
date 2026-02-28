@@ -213,6 +213,22 @@ export class SnapshotManager {
 
         if (localClass !== diskClass) {
             if (localStatus === "indexing" || diskStatus === "indexing") {
+                // If one side already transitioned out of indexing and is newer, keep that transition.
+                if (localStatus !== "indexing"
+                    && diskStatus === "indexing"
+                    && Number.isFinite(localMs)
+                    && Number.isFinite(diskMs)
+                    && localMs > diskMs) {
+                    return localInfo;
+                }
+                if (diskStatus !== "indexing"
+                    && localStatus === "indexing"
+                    && Number.isFinite(localMs)
+                    && Number.isFinite(diskMs)
+                    && diskMs > localMs) {
+                    return diskInfo;
+                }
+
                 if (localStatus === "indexing" && localIsStaleIndexing && diskStatus !== "indexing") {
                     return diskInfo;
                 }

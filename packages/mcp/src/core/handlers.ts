@@ -80,7 +80,9 @@ const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability('fileOu
 const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
 const SEARCH_OPERATOR_KEYS = new Set(['lang', 'path', '-path', 'must', 'exclude']);
 const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
-const STALE_INDEXING_RECOVERY_GRACE_MS = 15_000;
+// Recovery probe threshold for "likely interrupted" indexing states.
+// Keep this shorter than snapshot merge stale semantics for better operator UX.
+const STALE_INDEXING_RECOVERY_GRACE_MS = 2 * 60_000;
 
 type ParsedSearchOperators = {
     semanticQuery: string;
@@ -366,11 +368,7 @@ export class ToolHandlers {
     }
 
     private async recoverStaleIndexingStateIfNeeded(codebasePath: string): Promise<void> {
-        const indexingGetter = (this.snapshotManager as any)?.getIndexingCodebases;
-        if (typeof indexingGetter !== "function") {
-            return;
-        }
-        const indexingCodebases = indexingGetter.call(this.snapshotManager);
+        const indexingCodebases = this.snapshotManager.getIndexingCodebases?.();
         if (!Array.isArray(indexingCodebases) || !indexingCodebases.includes(codebasePath)) {
             return;
         }

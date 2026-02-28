@@ -174,6 +174,7 @@ test('recent indexing state does not trigger stale-index recovery probes', async
                 indexingPercentage: 37,
                 lastUpdated: recent
             }),
+            getIndexingProgress: () => 37,
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             saveCodebaseSnapshot: () => undefined
         } as any;

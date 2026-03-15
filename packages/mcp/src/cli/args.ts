@@ -17,6 +17,8 @@ export type RawArgsMode =
 export type ParsedCommand =
     | { kind: "help" }
     | { kind: "version" }
+    | { kind: "install"; client: InstallClient; dryRun: boolean }
+    | { kind: "uninstall"; client: InstallClient; dryRun: boolean }
     | { kind: "tools-list" }
     | { kind: "tool-call"; toolName: string; rawArgsMode: RawArgsMode }
     | { kind: "wrapper"; toolName: string; rawArgsMode: RawArgsMode; wrapperArgs: string[] };
@@ -31,7 +33,9 @@ export interface ResolveRawArgsOptions {
     stdinTimeoutMs: number;
 }
 
-const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version"]);
+export type InstallClient = "all" | "claude" | "codex";
+
+const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "install", "uninstall"]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
 function parsePositiveInteger(value: string, flagName: string): number {
@@ -151,6 +155,31 @@ function parseRawArgsMode(args: string[]): { rawArgsMode: RawArgsMode; remaining
     return { rawArgsMode, remaining };
 }
 
+function parseInstallCommand(kind: "install" | "uninstall", args: string[]): ParsedCommand {
+    let client: InstallClient = "all";
+    let dryRun = false;
+
+    for (let i = 0; i < args.length; i += 1) {
+        const token = args[i];
+        if (token === "--client") {
+            const next = args[i + 1];
+            if (next !== "all" && next !== "claude" && next !== "codex") {
+                throw new CliError("E_USAGE", "--client must be one of: all, claude, codex.", 2);
+            }
+            client = next;
+            i += 1;
+            continue;
+        }
+        if (token === "--dry-run") {
+            dryRun = true;
+            continue;
+        }
+        throw new CliError("E_USAGE", `Unknown arguments for ${kind}: ${args.slice(i).join(" ")}`, 2);
+    }
+
+    return { kind, client, dryRun };
+}
+
 export function parseCliArgs(argv: string[]): ParsedCliInput {
     const { globals, rest } = parseGlobalOptions(argv);
     if (rest.length === 0 || rest[0] === "help" || rest.includes("--help") || rest.includes("-h")) {
@@ -164,6 +193,20 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
         return {
             globals,
             command: { kind: "version" }
+        };
+    }
+
+    if (rest[0] === "install") {
+        return {
+            globals,
+            command: parseInstallCommand("install", rest.slice(1))
+        };
+    }
+
+    if (rest[0] === "uninstall") {
+        return {
+            globals,
+            command: parseInstallCommand("uninstall", rest.slice(1))
         };
     }
 

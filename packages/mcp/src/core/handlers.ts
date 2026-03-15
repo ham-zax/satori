@@ -366,6 +366,34 @@ export class ToolHandlers {
         };
     }
 
+    private async touchWatchedCodebase(codebasePath: string): Promise<void> {
+        const syncManager = this.syncManager as unknown as {
+            touchWatchedCodebase?: (path: string) => Promise<void> | void;
+            registerCodebaseWatcher?: (path: string) => Promise<void> | void;
+        };
+        if (typeof syncManager.touchWatchedCodebase === 'function') {
+            await syncManager.touchWatchedCodebase(codebasePath);
+            return;
+        }
+        if (typeof syncManager.registerCodebaseWatcher === 'function') {
+            await syncManager.registerCodebaseWatcher(codebasePath);
+        }
+    }
+
+    private async unwatchCodebase(codebasePath: string): Promise<void> {
+        const syncManager = this.syncManager as unknown as {
+            unwatchCodebase?: (path: string) => Promise<void> | void;
+            unregisterCodebaseWatcher?: (path: string) => Promise<void> | void;
+        };
+        if (typeof syncManager.unwatchCodebase === 'function') {
+            await syncManager.unwatchCodebase(codebasePath);
+            return;
+        }
+        if (typeof syncManager.unregisterCodebaseWatcher === 'function') {
+            await syncManager.unregisterCodebaseWatcher(codebasePath);
+        }
+    }
+
     private buildManageResponseEnvelope(
         action: ManageIndexAction,
         codebasePath: string,
@@ -2538,7 +2566,7 @@ Agent instructions:
             this.snapshotManager.removeCodebaseCompletely(droppedCodebasePath);
             this.snapshotManager.saveCodebaseSnapshot();
             try {
-                await this.syncManager.unregisterCodebaseWatcher(droppedCodebasePath);
+                await this.unwatchCodebase(droppedCodebasePath);
             } catch {
                 // Best-effort watcher cleanup; dropping cloud collection remains successful.
             }
@@ -2783,7 +2811,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 this.snapshotManager.removeCodebaseCompletely(absolutePath);
                 this.snapshotManager.saveCodebaseSnapshot();
                 try {
-                    await this.syncManager.unregisterCodebaseWatcher(absolutePath);
+                    await this.unwatchCodebase(absolutePath);
                 } catch {
                     // Best-effort watcher cleanup before force rebuild.
                 }
@@ -2885,6 +2913,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Track the codebase path for syncing
             trackCodebasePath(absolutePath);
+            await this.touchWatchedCodebase(absolutePath);
 
             // Start background indexing - now safe to proceed
             this.startBackgroundIndexing(absolutePath, forceReindex);
@@ -3005,7 +3034,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             // Save snapshot after updating codebase lists
             this.snapshotManager.saveCodebaseSnapshot();
             await this.rebuildCallGraphForIndex(absolutePath);
-            await this.syncManager.registerCodebaseWatcher(absolutePath);
+            await this.touchWatchedCodebase(absolutePath);
 
             let message = `Background indexing completed for '${absolutePath}'.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`;
             if (stats.status === 'limit_reached') {
@@ -3691,6 +3720,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     results: rawResults
                 };
 
+                await this.touchWatchedCodebase(effectiveRoot);
                 return {
                     content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
                     meta: { searchDiagnostics }
@@ -3848,6 +3878,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 results: visibleGroupedResults
             };
 
+            await this.touchWatchedCodebase(effectiveRoot);
             return {
                 content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
                 meta: { searchDiagnostics }
@@ -3998,6 +4029,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
                 };
             }
+
+            await this.touchWatchedCodebase(effectiveRoot);
 
             if (!fs.existsSync(absoluteFile)) {
                 const payload: FileOutlineResponseEnvelope = {
@@ -4370,6 +4403,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
+            await this.touchWatchedCodebase(effectiveRoot);
+
             const graph = this.callGraphManager.queryGraph(effectiveRoot, symbolRef, {
                 direction,
                 depth,
@@ -4487,7 +4522,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Save snapshot after clearing index
             this.snapshotManager.saveCodebaseSnapshot();
-            await this.syncManager.unregisterCodebaseWatcher(absolutePath);
+            await this.unwatchCodebase(absolutePath);
 
             let resultText = `Successfully cleared codebase '${absolutePath}'`;
 
@@ -4853,11 +4888,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         `Error syncing codebase: coalesced in-flight reconcile failed (${decision.errorMessage}).${fallbackLine}`
                     );
                 }
+                await this.touchWatchedCodebase(absolutePath);
                 return this.manageResponse("sync", absolutePath, "ok", `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`);
             }
 
             if (decision.mode === 'reconciled_ignore_change') {
                 if (totalChanges === 0 && ignoredDeletes === 0) {
+                    await this.touchWatchedCodebase(absolutePath);
                     return this.manageResponse("sync", absolutePath, "ok", `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`);
                 }
 
@@ -4867,15 +4904,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     `🧹 Ignored paths removed from index: ${ignoredDeletes}\n` +
                     `\nTotal changes: ${totalChanges + ignoredDeletes}`;
                 console.log(`[SYNC] ✅ Sync+ignore reconcile completed: +${added}, -${removed}, ~${modified}, ignoredDeleted=${ignoredDeletes}`);
+                await this.touchWatchedCodebase(absolutePath);
                 return this.manageResponse("sync", absolutePath, "ok", resultMessage);
             }
 
             if (totalChanges === 0) {
+                await this.touchWatchedCodebase(absolutePath);
                 return this.manageResponse("sync", absolutePath, "ok", `✅ No changes detected for codebase '${absolutePath}'. Index is up to date.`);
             }
 
             const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${added} file(s) added\n- ${removed} file(s) removed\n~ ${modified} file(s) modified\n\nTotal changes: ${totalChanges}`;
             console.log(`[SYNC] ✅ Sync completed: +${added}, -${removed}, ~${modified}`);
+            await this.touchWatchedCodebase(absolutePath);
             return this.manageResponse("sync", absolutePath, "ok", resultMessage);
 
         } catch (error: any) {

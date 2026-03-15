@@ -37,6 +37,9 @@ jobs:
 
     - name: Verify MCP docs are in sync
       run: pnpm -C packages/mcp docs:check
+
+    - name: Verify server manifest is in sync
+      run: pnpm -C packages/mcp manifest:check
       
     - name: Publish core package to npm
       run: pnpm --filter @zokizuan/satori-core publish --access public --no-git-checks

@@ -133,6 +133,27 @@ function resolveCodebaseRootForFile(absolutePath: string, ctx: ToolContext): str
     return candidates[0].path;
 }
 
+async function touchResolvedCodebaseRoot(absolutePath: string, ctx: ToolContext): Promise<void> {
+    const codebaseRoot = resolveCodebaseRootForFile(absolutePath, ctx);
+    if (!codebaseRoot) {
+        return;
+    }
+
+    const syncManager = ctx.syncManager as unknown as {
+        touchWatchedCodebase?: (path: string) => Promise<void> | void;
+        registerCodebaseWatcher?: (path: string) => Promise<void> | void;
+    };
+
+    if (typeof syncManager.touchWatchedCodebase === "function") {
+        await syncManager.touchWatchedCodebase(codebaseRoot);
+        return;
+    }
+
+    if (typeof syncManager.registerCodebaseWatcher === "function") {
+        await syncManager.registerCodebaseWatcher(codebaseRoot);
+    }
+}
+
 function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): ReadFileIndexingBlock | undefined {
     const allCodebases = typeof ctx.snapshotManager?.getAllCodebases === "function"
         ? ctx.snapshotManager.getAllCodebases()
@@ -246,6 +267,8 @@ export const readFileTool: McpTool = {
                     }]
                 };
             }
+
+            await touchResolvedCodebaseRoot(absolutePath, ctx);
 
             const content = fs.readFileSync(absolutePath, "utf-8");
             const lines = splitIntoLines(content);

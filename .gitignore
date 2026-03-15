@@ -77,3 +77,4 @@ evaluation/retrieval_results*
 .venv/
 # Lockfiles
 package-lock.json
+.gitnexus

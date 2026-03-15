@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { CliError } from "./errors.js";
+import { resolveManagedPackageJsonPath } from "./managed-package.js";
 
 interface PackageJsonShape {
     name: string;
@@ -24,8 +24,7 @@ export interface ReleaseSmokeOptions extends PackageInstallabilityOptions {
 }
 
 function resolveDefaultPackageJsonPath(): string {
-    const currentFile = fileURLToPath(import.meta.url);
-    return path.resolve(path.dirname(currentFile), "..", "..", "package.json");
+    return resolveManagedPackageJsonPath();
 }
 
 function readPackageJson(packageJsonPath: string): PackageJsonShape {

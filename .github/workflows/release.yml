@@ -46,5 +46,6 @@ jobs:
         
     - name: Publish mcp package to npm
       run: pnpm --filter @zokizuan/satori-mcp publish --access public --no-git-checks
-        
-    
+
+    - name: Publish cli package to npm
+      run: pnpm --filter @zokizuan/satori-cli publish --access public --no-git-checks

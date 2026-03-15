@@ -16,8 +16,6 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 - Structured search telemetry logs (`[TELEMETRY]` JSON to `stderr`)
 - Zod-first tool schemas converted to MCP JSON Schema for `ListTools`
 - Auto-generated tool docs from live tool schemas
-- `satori-cli install` / `uninstall` for Codex CLI and Claude Code config management
-- Packaged first-party client skills: `satori-search`, `satori-navigation`, `satori-indexing`
 - `read_file` line-range retrieval with default large-file truncation guard and optional `mode="annotated"` metadata envelope
 - Optional proactive sync watcher mode (debounced filesystem events for explicitly touched roots in the current session)
 - Index-time AST scope breadcrumbs (TS/JS/Python) rendered in search output as `🧬 Scope`
@@ -159,7 +157,7 @@ No parameters.
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "--package", "@zokizuan/satori-mcp@4.4.0", "satori"],
+      "args": ["-y", "@zokizuan/satori-mcp@4.4.0"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -180,7 +178,7 @@ No parameters.
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "--package", "@zokizuan/satori-mcp@4.4.0", "satori"]
+args = ["-y", "@zokizuan/satori-mcp@4.4.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
@@ -216,9 +214,9 @@ Never commit real API keys/tokens into repo config files.
 pnpm --filter @zokizuan/satori-mcp start
 ```
 
-## Shell CLI (`satori-cli`)
+## Shell CLI (`@zokizuan/satori-cli`)
 
-`@zokizuan/satori-mcp` also ships a shell-first client binary that works without an MCP adapter.
+The shell-first installer/client now lives in a separate package: `@zokizuan/satori-cli`.
 
 ### Install / Uninstall
 
@@ -230,10 +228,10 @@ Supported installer targets in Phase 1:
 Examples:
 
 ```bash
-npx -y --package @zokizuan/satori-mcp@4.4.0 satori-cli install --client codex
-npx -y --package @zokizuan/satori-mcp@4.4.0 satori-cli install --client claude
-npx -y --package @zokizuan/satori-mcp@4.4.0 satori-cli install --client all --dry-run
-npx -y --package @zokizuan/satori-mcp@4.4.0 satori-cli uninstall --client codex
+npx -y @zokizuan/satori-cli@0.1.0 install --client codex
+npx -y @zokizuan/satori-cli@0.1.0 install --client claude
+npx -y @zokizuan/satori-cli@0.1.0 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.1.0 uninstall --client codex
 ```
 
 Install and uninstall run before MCP session startup, only touch Satori-managed config, and copy/remove these packaged skills:
@@ -295,6 +293,8 @@ pnpm --filter @zokizuan/satori-mcp build
 pnpm --filter @zokizuan/satori-mcp typecheck
 pnpm --filter @zokizuan/satori-mcp test
 pnpm --filter @zokizuan/satori-mcp docs:check
+pnpm --filter @zokizuan/satori-cli build
+pnpm --filter @zokizuan/satori-cli test
 ```
 
 `build` automatically runs docs generation from tool schemas.

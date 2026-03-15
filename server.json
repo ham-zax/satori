@@ -9,27 +9,18 @@
     "command": "npx",
     "args": [
       "-y",
-      "--package",
-      "@zokizuan/satori-mcp@4.4.0",
-      "satori"
+      "@zokizuan/satori-mcp@4.4.0"
     ],
     "startupTimeoutMs": 180000
   },
   "clients": {
     "codex": {
       "configPath": "~/.codex/config.toml",
-      "configFormat": "toml",
-      "skillsPath": "~/.codex/skills"
+      "configFormat": "toml"
     },
     "claude": {
       "configPath": "~/.claude/settings.json",
-      "configFormat": "json",
-      "skillsPath": "~/.claude/skills"
+      "configFormat": "json"
     }
-  },
-  "skills": [
-    "satori-search",
-    "satori-navigation",
-    "satori-indexing"
-  ]
+  }
 }

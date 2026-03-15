@@ -1,0 +1,53 @@
+{
+  "name": "@zokizuan/satori-cli",
+  "version": "0.1.0",
+  "description": "Shell CLI for Satori MCP installation and skill-based workflows",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "satori-cli": "dist/index.js"
+  },
+  "scripts": {
+    "build": "pnpm clean && tsc --build --force && pnpm fix:bin-perms",
+    "dev": "tsx --watch src/index.ts",
+    "clean": "rimraf dist",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/index.ts",
+    "release:smoke": "tsx scripts/release-smoke.ts",
+    "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
+    "prepublishOnly": "pnpm build && pnpm release:smoke",
+    "test": "pnpm --filter @zokizuan/satori-mcp build:runtime && node --import tsx --test --test-concurrency=1 src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@zokizuan/satori-mcp": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "assets/skills/**/*.md",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ham-zax/satori.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/ham-zax/satori",
+  "bugs": {
+    "url": "https://github.com/ham-zax/satori/issues"
+  },
+  "author": "Hamza (@ham-zax)",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}

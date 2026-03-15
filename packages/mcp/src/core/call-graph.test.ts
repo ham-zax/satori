@@ -19,7 +19,14 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-call-graph-'));
     const repoPath = path.join(tempDir, 'repo');
     fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+    const prevHome = process.env.HOME;
+    process.env.HOME = tempDir;
     return fn(repoPath).finally(() => {
+        if (prevHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = prevHome;
+        }
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
 }

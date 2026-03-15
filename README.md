@@ -156,7 +156,7 @@ Use `--client all` to install both, and `uninstall` with the same selector to re
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "--prefer-offline", "@zokizuan/satori-mcp@4.4.0"],
+      "args": ["-y", "@zokizuan/satori-mcp@4.4.0"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -177,7 +177,7 @@ Use `--client all` to install both, and `uninstall` with the same selector to re
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@4.4.0"]
+args = ["-y", "@zokizuan/satori-mcp@4.4.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```

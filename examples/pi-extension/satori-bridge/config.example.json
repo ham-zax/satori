@@ -2,7 +2,7 @@
   "envFile": ".env.satori",
   "guardRecovery": "auto",
   "forceNpx": false,
-  "npmPackage": "@zokizuan/satori-mcp@latest",
+  "npmPackage": "@zokizuan/satori-mcp@4.4.0",
   "startupTimeoutMs": 180000,
   "callTimeoutMs": 600000,
   "debug": false

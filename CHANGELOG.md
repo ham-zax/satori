@@ -2,6 +2,61 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-03-16] Session-Scoped Watchers, CLI Install Flow, and Packaged Client Skills
+
+### Release Versions
+- Repository version: `0.3.0`
+- `@zokizuan/satori-core`: `1.1.0`
+- `@zokizuan/satori-mcp`: `4.4.0`
+
+### Added
+- Added explicit session-scoped watcher tracking in `packages/mcp/src/core/sync.ts` with deterministic coverage in:
+  - `packages/mcp/src/core/sync.test.ts`
+  - `packages/mcp/src/core/handlers.watchers.test.ts`
+  - `packages/mcp/src/tools/read_file.test.ts`
+- Added `satori-cli install` / `satori-cli uninstall` in:
+  - `packages/mcp/src/cli/args.ts`
+  - `packages/mcp/src/cli/index.ts`
+  - `packages/mcp/src/cli/install.ts`
+  - `packages/mcp/src/cli/install.test.ts`
+- Added packaged first-party client skills in:
+  - `packages/mcp/assets/skills/satori-search/SKILL.md`
+  - `packages/mcp/assets/skills/satori-navigation/SKILL.md`
+  - `packages/mcp/assets/skills/satori-indexing/SKILL.md`
+- Added generated install metadata in:
+  - `packages/mcp/scripts/generate-server-manifest.ts`
+  - `server.json`
+
+### Modified
+- Changed watcher behavior so startup no longer watches every indexed root; watchers are created only for codebases touched by successful index/search/navigation/read flows in the current session.
+- Updated handler flows to touch and unwatch roots deterministically from:
+  - `manage_index create|reindex|sync`
+  - `search_codebase`
+  - `file_outline`
+  - `call_graph`
+  - `read_file`
+- Hardened installer ownership rules:
+  - unmanaged Codex and Claude Satori entries are refused on install/uninstall
+  - `--client all` now preflights all targets before mutating any config
+  - installed command is pinned to the package version that shipped the bundled skills
+- Updated `packages/mcp/package.json` packaging hooks to generate and verify the manifest and include packaged skill assets in the published tarball.
+- Updated `.github/workflows/release.yml` to verify `server.json` during release.
+
+### Docs
+- Updated root and MCP package docs for:
+  - installer/uninstaller usage
+  - supported client targets
+  - first-party shipped skills
+  - session-scoped watcher semantics
+- Updated architecture and behavior spec docs to reflect active-session watcher registration and the CLI-only install/uninstall surface.
+
+### Validation
+- `pnpm --filter @zokizuan/satori-mcp test`
+- `pnpm --filter @zokizuan/satori-mcp build`
+- `pnpm -C packages/mcp docs:check`
+- `pnpm -C packages/mcp manifest:check`
+- `pnpm --filter @zokizuan/satori-mcp pack --pack-destination /tmp/satori-pack`
+
 ## [2026-02-28] Reindex Preflight Non-Indexed Bypass Fix
 
 ### Fixed

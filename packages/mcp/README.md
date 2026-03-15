@@ -16,8 +16,10 @@ MCP server for Satori — agent-safe semantic code search and indexing.
 - Structured search telemetry logs (`[TELEMETRY]` JSON to `stderr`)
 - Zod-first tool schemas converted to MCP JSON Schema for `ListTools`
 - Auto-generated tool docs from live tool schemas
+- `satori-cli install` / `uninstall` for Codex CLI and Claude Code config management
+- Packaged first-party client skills: `satori-search`, `satori-navigation`, `satori-indexing`
 - `read_file` line-range retrieval with default large-file truncation guard and optional `mode="annotated"` metadata envelope
-- Optional proactive sync watcher mode (debounced filesystem events)
+- Optional proactive sync watcher mode (debounced filesystem events for explicitly touched roots in the current session)
 - Index-time AST scope breadcrumbs (TS/JS/Python) rendered in search output as `🧬 Scope`
 - Fingerprint schema `dense_v3`/`hybrid_v3` with hard gate for all pre-v3 indexes
 
@@ -46,6 +48,7 @@ Tool surface is hard-broken to 6 tools. This keeps routing explicit while exposi
 
 - Enabled by default. Set `MCP_ENABLE_WATCHER=false` to disable
 - Debounce window via `MCP_WATCH_DEBOUNCE_MS` (default `5000`)
+- Watchers are session-scoped: startup does not watch every indexed codebase, only roots touched by successful index/search/navigation/read flows in the current session
 - Watch events reuse the same incremental sync pipeline (`reindexByChange`)
 - Ignore control files (`.satoriignore`, root `.gitignore`) trigger no-reindex reconciliation:
   - delete indexed paths now ignored by active rules
@@ -156,7 +159,7 @@ No parameters.
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@latest"],
+      "args": ["-y", "@zokizuan/satori-mcp@4.4.0"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -177,7 +180,7 @@ No parameters.
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@latest"]
+args = ["-y", "@zokizuan/satori-mcp@4.4.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
@@ -216,6 +219,27 @@ pnpm --filter @zokizuan/satori-mcp start
 ## Shell CLI (`satori-cli`)
 
 `@zokizuan/satori-mcp` also ships a shell-first client binary that works without an MCP adapter.
+
+### Install / Uninstall
+
+Supported installer targets in Phase 1:
+- `codex`
+- `claude`
+- `all`
+
+Examples:
+
+```bash
+satori-cli install --client codex
+satori-cli install --client claude
+satori-cli install --client all --dry-run
+satori-cli uninstall --client codex
+```
+
+Install and uninstall run before MCP session startup, only touch Satori-managed config, and copy/remove these packaged skills:
+- `satori-search`
+- `satori-navigation`
+- `satori-indexing`
 
 ### Commands
 

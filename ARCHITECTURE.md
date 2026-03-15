@@ -80,9 +80,10 @@ packages/
   mcp/
     src/
       index.ts                   bootstrap + stdio safety
+      cli/                       shell client + install/uninstall lifecycle
       core/handlers.ts           tool execution + fingerprint gate
       core/snapshot.ts           state machine + fingerprint storage
-      core/sync.ts               background sync + watcher
+      core/sync.ts               background sync + session-scoped watcher
       tools/                     per-tool modules (Zod schemas)
       telemetry/                 structured search telemetry
       config.ts                  env -> typed config
@@ -193,6 +194,7 @@ Behavior contract:
   - delete indexed paths now ignored by the active matcher
   - run incremental sync to pick up newly unignored files
 - Watcher mode and non-watcher mode both converge through the same reconcile path.
+- Watcher mode is session-scoped: startup does not register every indexed root, only codebases touched by successful index/search/navigation/read flows in the current session.
 
 ---
 
@@ -206,7 +208,7 @@ Behavior contract:
 - Builds runtime fingerprint
 - Wires Context, SnapshotManager, SyncManager, ToolHandlers, optional VoyageAI Reranker
 - Starts background sync loop
-- Enables watcher mode by default (`MCP_ENABLE_WATCHER=true`)
+- Enables watcher mode by default (`MCP_ENABLE_WATCHER=true`), but active chokidar watchers are created only for touched codebases in the current session watch list
 
 ### 4.2 Tool Surface
 

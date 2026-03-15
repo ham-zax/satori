@@ -91,7 +91,7 @@ Free-tier availability and limits can change, so check current provider pricing 
   |                                                                   |
   |  CapabilityResolver     SnapshotManager v3     SyncManager        |
   |  (fast|standard|slow)   (fingerprint gate)     (3-min loop +      |
-  |                                                 fs watcher)       |
+  |                                                 session watcher)  |
   +------------------------------+------------------------------------+
                                  |
                                  v
@@ -123,7 +123,7 @@ Dense vector similarity + BM25 keyword matching, merged with Reciprocal Rank Fus
 Tree-sitter splits code at function/class boundaries instead of arbitrary character windows. Each chunk includes structural breadcrumbs (`class UserService > method authenticate`) as metadata. Supported grammars: TypeScript, JavaScript, Python, Java, Go, C++, Rust, C#, and Scala. Unsupported languages fall back to LangChain splitting.
 
 **Incremental Merkle Sync**
-File-level SHA-256 hashing + Merkle DAG diffing means only changed files are re-embedded. If 3 files change in a 10,000-file repo, only 3 files are processed. Background polling runs every 3 minutes, with an optional chokidar watcher for near-real-time updates.
+File-level SHA-256 hashing + Merkle DAG diffing means only changed files are re-embedded. If 3 files change in a 10,000-file repo, only 3 files are processed. Background polling runs every 3 minutes, with an optional chokidar watcher for near-real-time updates on codebases touched in the current session.
 
 **Ignore-Rule Reconciliation (No-Reindex Normal Path)**
 Editing repo-root `.satoriignore` or `.gitignore` triggers reconciliation in the normal sync path: newly ignored files are removed from indexed results, and newly unignored files are picked up by incremental sync. This works even when watcher events are missed because sync-on-read checks an ignore-control signature before freshness early returns.
@@ -139,6 +139,15 @@ The MCP surface is intentionally constrained to 6 tools. Smaller surface area ke
 ## MCP Quickstart
 
 ### 1. Add to your MCP client config
+
+If you use Codex CLI or Claude Code, Satori now ships an installer that writes the client config and copies first-party Satori skills:
+
+```bash
+npx -y @zokizuan/satori-mcp@4.4.0 install --client codex
+npx -y @zokizuan/satori-mcp@4.4.0 install --client claude
+```
+
+Use `--client all` to install both, and `uninstall` with the same selector to remove only Satori-managed config and skills.
 
 **JSON** (Claude Desktop, Cursor):
 
@@ -189,6 +198,16 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
 Results include file paths, line ranges, code snippets, and structural scope annotations.
 
 Cold starts can take time on first install. Keep `timeout` / `startup_timeout_ms` at `180000`.
+
+### First-Party Skills
+
+The MCP package now ships three installable Satori skills for supported clients:
+
+- `satori-search`
+- `satori-navigation`
+- `satori-indexing`
+
+They do not add new MCP tools. They package the recommended six-tool workflow and remediation rules.
 
 ### PI Agent Bridge (Optional)
 
@@ -379,7 +398,7 @@ packages/
       index.ts                MCP server bootstrap + stdio safety
       core/handlers.ts        tool execution + fingerprint gate
       core/snapshot.ts        state machine + fingerprint storage
-      core/sync.ts            background sync + watcher
+      core/sync.ts            background sync + session-scoped watcher
       tools/                  per-tool modules (Zod schemas)
 tests/
   integration/              end-to-end index + search + sync
@@ -413,7 +432,7 @@ If MCP startup fails (`initialize response` closed), check:
 | Vector Store | Milvus / Zilliz Cloud (gRPC + REST) |
 | Search | Dense + BM25 hybrid, RRF, VoyageAI reranker |
 | Protocol | MCP (Model Context Protocol) over stdio |
-| Sync | Merkle DAG + chokidar filesystem watcher |
+| Sync | Merkle DAG + session-scoped chokidar watcher |
 | Schemas | Zod -> JSON Schema |
 
 ## License

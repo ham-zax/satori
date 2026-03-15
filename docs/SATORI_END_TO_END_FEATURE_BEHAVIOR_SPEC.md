@@ -8,6 +8,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - North-star agent path: `search_codebase -> file_outline -> call_graph -> read_file(open_symbol)` with `navigationFallback` when graph is unavailable.
 - Exactly six MCP tools are exposed via registry: `list_codebases`, `manage_index`, `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - `satori-cli` is a shell client of the same six MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
+- `satori-cli` also ships CLI-only `install` and `uninstall` commands for supported clients; these commands run before MCP session startup and do not widen the six-tool surface.
 - `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers and responses are structured JSON envelopes.
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
@@ -27,7 +28,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Reindex-compatibility gates propagate `requires_reindex` envelopes with deterministic `hints.reindex` across search/navigation tools.
 - Freshness behavior: sync-on-read for `search_codebase` via `ensureFreshness`; other tools do not run sync-on-read.
 - Subdirectory search requests resolve to an indexed parent `effectiveRoot` when needed; fallback navigation paths stay runnable from that resolved root while keeping returned `path` as requested input.
-- Watchers are optional, debounced, and status-gated; ignore-control files trigger ignore reconciliation flow.
+- Watchers are optional, debounced, status-gated, and session-scoped; ignore-control files trigger ignore reconciliation flow.
 - Ignore reconciliation is self-healing: manifest-first deletion of newly ignored indexed paths, synchronizer reload, forced sync, version/signature update, coalescing.
 - Non-watcher ignore convergence exists via control-file signature comparison in `ensureFreshness`.
 - Background periodic sync runs on timer with non-overlapping recursive scheduling.
@@ -44,7 +45,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 Architecture in words:
 - Core sync (`packages/core`) tracks file state (stats, hashes, merkle root, partial-scan metadata).
 - MCP runtime (`packages/mcp`) owns snapshot status, freshness gating, search orchestration, call graph sidecar lifecycle, and tool routing.
-- Shell CLI runtime (`packages/mcp/src/cli`) is transport/client glue only and must not duplicate tool logic.
+- Shell CLI runtime (`packages/mcp/src/cli`) is transport/client glue plus install/uninstall lifecycle commands; it must not duplicate MCP tool logic.
 - Sidecar/index artifacts are consumed by `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - Agent-visible entrypoints are only the six tools from `toolRegistry`.
 
@@ -456,7 +457,7 @@ Recent vs legacy:
 
 4) Watcher vs non-watcher behavior
 - Trigger: watcher-enabled mode vs on-demand sync path.
-- Effect: watcher schedules debounced sync/reconcile; non-watcher still converges via signature check in `ensureFreshness`.
+- Effect: watcher schedules debounced sync/reconcile only for codebases in the current session watch list; non-watcher still converges via signature check in `ensureFreshness`.
 - Observability: watcher logs and `freshnessDecision`.
 - Determinism: debounce window fixed by config/env; coalescing maps prevent duplicate concurrent runs.
 - Performance: watcher reduces manual sync need; signature check keeps non-watcher convergence cheap.
@@ -553,8 +554,8 @@ Recent vs legacy:
 - Performance: amortized freshness maintenance without request-blocking.
 
 2) Watcher registration and debounce
-- Trigger: server startup with watcher enabled, and indexed/sync_completed roots.
-- Effect: chokidar watchers register per codebase; events coalesce by debounce; ignore-control files route to ignore reconcile.
+- Trigger: server startup with watcher enabled, then later successful index/search/navigation/read activity on searchable codebases.
+- Effect: startup enables watcher mode but does not register all indexed roots; chokidar watchers register only for codebases in the current session watch list; events coalesce by debounce; ignore-control files route to ignore reconcile.
 - Observability: `[SYNC-WATCH]` logs and reconcile decisions.
 - Determinism: fixed debounce, status gating, coalesced edit counting.
 - Performance: avoids stormed sync calls.

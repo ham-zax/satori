@@ -9,6 +9,7 @@ import { connectCliMcpSession } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope } from "./format.js";
 import { executeInstallCommand } from "./install.js";
+import { verifyManagedPackageInstallability } from "./package-installability.js";
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
 
 const MANAGE_INDEX_MIN_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -24,6 +25,7 @@ interface RunCliOptions {
     startupTimeoutMs?: number;
     callTimeoutMs?: number;
     cwd?: string;
+    installabilityVerifier?: () => string | Promise<string>;
 }
 
 interface ToolDescriptor {
@@ -256,6 +258,9 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
+            if (parsed.command.kind === "install") {
+                await (options.installabilityVerifier || verifyManagedPackageInstallability)();
+            }
             const result = executeInstallCommand(parsed.command, {
                 homeDir: effectiveEnv.HOME,
             });

@@ -221,6 +221,7 @@ test("runCli install updates config without starting an MCP session", async () =
             writeStdout: io.writeStdout,
             writeStderr: io.writeStderr,
             env: { ...process.env, HOME: homeDir },
+            installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.0",
             serverCommand: process.execPath,
             serverArgs: ["/path/that/does/not/exist.mjs"],
             startupTimeoutMs: 100,
@@ -233,6 +234,32 @@ test("runCli install updates config without starting an MCP session", async () =
         assert.equal(parsed.action, "install");
         assert.equal(parsed.client, "codex");
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli install fails preflight with explicit package guidance before writing config", async () => {
+    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-preflight-home-"));
+    const io = captureIo();
+
+    try {
+        const exitCode = await runCli(["install", "--client", "codex"], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            env: { ...process.env, HOME: homeDir },
+            installabilityVerifier: () => {
+                throw new Error("Cannot install @zokizuan/satori-mcp@4.4.0 because required dependency @zokizuan/satori-core@1.1.0 is not published on npm.");
+            },
+            startupTimeoutMs: 100,
+            callTimeoutMs: 100,
+        });
+
+        const { stdout, stderr } = io.read();
+        assert.equal(exitCode, 3);
+        assert.equal(stdout.trim(), "");
+        assert.equal(stderr.includes("@zokizuan/satori-core@1.1.0 is not published on npm"), true);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }

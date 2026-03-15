@@ -17,8 +17,9 @@
         "release": "pnpm run release:core && pnpm run release:mcp",
         "release:login": "npm login --auth-type=web",
         "release:verify": "npm view @zokizuan/satori-core version && npm view @zokizuan/satori-mcp version",
+        "release:smoke:mcp": "pnpm -C packages/mcp release:smoke",
         "release:core": "pnpm --filter @zokizuan/satori-core... run build && pnpm --filter @zokizuan/satori-core publish --access public --no-git-checks",
-        "release:mcp": "pnpm --filter @zokizuan/satori-mcp... run build && pnpm --filter @zokizuan/satori-mcp publish --access public --no-git-checks",
+        "release:mcp": "pnpm --filter @zokizuan/satori-mcp... run build && pnpm run release:smoke:mcp && pnpm --filter @zokizuan/satori-mcp publish --access public --no-git-checks",
         "test:integration": "pnpm --filter @zokizuan/satori-core run test:integration",
         "benchmark": "node scripts/build-benchmark.js"
     },

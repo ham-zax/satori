@@ -124,7 +124,7 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
         assert.equal(installed.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, "1");
         assert.equal(installed.mcpServers.existing.command, "npx");
         assert.equal(installed.mcpServers.satori.command, "npx");
-        assert.deepEqual(installed.mcpServers.satori.args, ["-y", EXPECTED_PACKAGE_SPECIFIER]);
+        assert.deepEqual(installed.mcpServers.satori.args, ["-y", "--package", EXPECTED_PACKAGE_SPECIFIER, "satori"]);
         assert.equal(fs.existsSync(path.join(skillsDir, "satori-search", "SKILL.md")), true);
 
         const uninstall = executeInstallCommand({

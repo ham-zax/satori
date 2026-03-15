@@ -159,7 +159,7 @@ No parameters.
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@4.4.0"],
+      "args": ["-y", "--package", "@zokizuan/satori-mcp@4.4.0", "satori"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -180,7 +180,7 @@ No parameters.
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.4.0"]
+args = ["-y", "--package", "@zokizuan/satori-mcp@4.4.0", "satori"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
@@ -230,10 +230,10 @@ Supported installer targets in Phase 1:
 Examples:
 
 ```bash
-satori-cli install --client codex
-satori-cli install --client claude
-satori-cli install --client all --dry-run
-satori-cli uninstall --client codex
+npx -y --package @zokizuan/satori-mcp@4.4.0 satori-cli install --client codex
+npx -y --package @zokizuan/satori-mcp@4.4.0 satori-cli install --client claude
+npx -y --package @zokizuan/satori-mcp@4.4.0 satori-cli install --client all --dry-run
+npx -y --package @zokizuan/satori-mcp@4.4.0 satori-cli uninstall --client codex
 ```
 
 Install and uninstall run before MCP session startup, only touch Satori-managed config, and copy/remove these packaged skills:

@@ -9,7 +9,9 @@
     "command": "npx",
     "args": [
       "-y",
-      "@zokizuan/satori-mcp@4.4.0"
+      "--package",
+      "@zokizuan/satori-mcp@4.4.0",
+      "satori"
     ],
     "startupTimeoutMs": 180000
   },

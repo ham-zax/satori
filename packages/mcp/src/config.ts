@@ -314,7 +314,7 @@ export function showHelpMessage(): void {
     console.log(`
 Satori MCP Server
 
-Usage: npx @zokizuan/satori-mcp@4.4.0 [options]
+Usage: npx -y --package @zokizuan/satori-mcp@4.4.0 satori [options]
 
 Options:
   --help, -h                          Show this help message
@@ -351,15 +351,15 @@ Environment Variables:
 
 Examples:
   # Start MCP server with OpenAI and explicit Milvus address
-  OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 npx @zokizuan/satori-mcp@4.4.0
+  OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 npx -y --package @zokizuan/satori-mcp@4.4.0 satori
 
   # Start MCP server with VoyageAI and specific model
-  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-4-large MILVUS_TOKEN=your-token npx @zokizuan/satori-mcp@4.4.0
+  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-4-large MILVUS_TOKEN=your-token npx -y --package @zokizuan/satori-mcp@4.4.0 satori
 
   # Start MCP server with Gemini and specific model
-  EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 MILVUS_TOKEN=your-token npx @zokizuan/satori-mcp@4.4.0
+  EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 MILVUS_TOKEN=your-token npx -y --package @zokizuan/satori-mcp@4.4.0 satori
 
   # Start MCP server with Ollama and specific model
-  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text MILVUS_TOKEN=your-token npx @zokizuan/satori-mcp@4.4.0
+  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text MILVUS_TOKEN=your-token npx -y --package @zokizuan/satori-mcp@4.4.0 satori
         `);
 }

@@ -22,8 +22,9 @@
         "docs:check": "tsx scripts/generate-docs.ts --check",
         "manifest:generate": "tsx scripts/generate-server-manifest.ts",
         "manifest:check": "tsx scripts/generate-server-manifest.ts --check",
+        "release:smoke": "tsx scripts/release-smoke.ts",
         "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);fs.chmodSync('dist/cli/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
-        "prepublishOnly": "pnpm build && pnpm docs:check && pnpm manifest:check",
+        "prepublishOnly": "pnpm build && pnpm docs:check && pnpm manifest:check && pnpm release:smoke",
         "test": "pnpm --filter @zokizuan/satori-core build && tsx --test --test-concurrency=1 src/**/*.test.ts"
     },
     "dependencies": {

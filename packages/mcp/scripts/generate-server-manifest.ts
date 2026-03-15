@@ -18,7 +18,7 @@ function buildManifest(pkg: PackageJsonShape) {
         description: pkg.description || "MCP server for Satori with agent-safe semantic search and indexing",
         install: {
             command: "npx",
-            args: ["-y", `${pkg.name}@${pkg.version}`],
+            args: ["-y", "--package", `${pkg.name}@${pkg.version}`, "satori"],
             startupTimeoutMs: 180000,
         },
         clients: {

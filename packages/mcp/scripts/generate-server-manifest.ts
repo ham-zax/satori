@@ -18,26 +18,19 @@ function buildManifest(pkg: PackageJsonShape) {
         description: pkg.description || "MCP server for Satori with agent-safe semantic search and indexing",
         install: {
             command: "npx",
-            args: ["-y", "--package", `${pkg.name}@${pkg.version}`, "satori"],
+            args: ["-y", `${pkg.name}@${pkg.version}`],
             startupTimeoutMs: 180000,
         },
         clients: {
             codex: {
                 configPath: "~/.codex/config.toml",
                 configFormat: "toml",
-                skillsPath: "~/.codex/skills",
             },
             claude: {
                 configPath: "~/.claude/settings.json",
                 configFormat: "json",
-                skillsPath: "~/.claude/skills",
             },
         },
-        skills: [
-            "satori-search",
-            "satori-navigation",
-            "satori-indexing",
-        ],
     };
 }
 

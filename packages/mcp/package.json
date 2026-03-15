@@ -6,11 +6,11 @@
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "bin": {
-        "satori": "dist/index.js",
-        "satori-cli": "dist/cli/index.js"
+        "satori": "dist/index.js"
     },
     "scripts": {
         "build": "pnpm clean && tsc --build --force && pnpm fix:bin-perms && pnpm docs:generate && pnpm manifest:generate",
+        "build:runtime": "pnpm clean && tsc --build --force && pnpm fix:bin-perms",
         "dev": "tsx --watch src/index.ts",
         "clean": "rimraf dist",
         "lint": "eslint src --ext .ts",
@@ -23,9 +23,9 @@
         "manifest:generate": "tsx scripts/generate-server-manifest.ts",
         "manifest:check": "tsx scripts/generate-server-manifest.ts --check",
         "release:smoke": "tsx scripts/release-smoke.ts",
-        "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);fs.chmodSync('dist/cli/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
+        "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
         "prepublishOnly": "pnpm build && pnpm docs:check && pnpm manifest:check && pnpm release:smoke",
-        "test": "pnpm --filter @zokizuan/satori-core build && tsx --test --test-concurrency=1 src/**/*.test.ts"
+        "test": "pnpm --filter @zokizuan/satori-core build && node --import tsx --test --test-concurrency=1 src/core/**/*.test.ts src/server/**/*.test.ts src/tools/**/*.test.ts src/cli/**/*.test.ts"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.12.1",
@@ -43,7 +43,6 @@
     "files": [
         "dist/**/*.js",
         "dist/**/*.d.ts",
-        "assets/skills/**/*.md",
         "README.md"
     ],
     "repository": {

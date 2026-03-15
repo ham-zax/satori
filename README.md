@@ -192,10 +192,13 @@ Cold starts can take time on first install. Keep `timeout` / `startup_timeout_ms
 
 ### PI Agent Bridge (Optional)
 
-If you run PI and want Satori tools directly in PI's extension surface, use `pi-satori-bridge`.
+If you run PI and want Satori tools directly in PI's extension surface, this repo includes a local example bridge at `examples/pi-extension/satori-bridge`.
 
 ```bash
-pi install npm:pi-satori-bridge
+pnpm --filter @zokizuan/satori-mcp build
+cd examples/pi-extension/satori-bridge
+pnpm install
+pi -e ./index.ts
 ```
 
 Then run PI with the extension and verify connectivity using:
@@ -206,7 +209,7 @@ Then run PI with the extension and verify connectivity using:
 
 Bridge repository and docs:
 - https://github.com/ham-zax/satori
-- `/home/hamza/repo/satori-bridge/README.md`
+- `examples/pi-extension/satori-bridge/README.md`
 
 ### Query Ideas for First Run
 

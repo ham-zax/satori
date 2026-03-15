@@ -189,7 +189,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
   "mcpServers": {
     "satori": {
       "command": "node",
-      "args": ["/absolute/path/to/claude-context/packages/mcp/dist/index.js"],
+      "args": ["/absolute/path/to/satori/packages/mcp/dist/index.js"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",

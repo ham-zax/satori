@@ -32,7 +32,7 @@ graph TD
     subgraph "Core Engine Layer (`packages/core`)"
         Context[Context Orchestrator]
         Split[AST / LangChain Splitter]
-        Embed[Embedding Providers<br/>OpenAI/VoyageAI/Gemini]
+        Embed[Embedding Providers<br/>OpenAI/VoyageAI/Gemini/Ollama]
         VecDB[Vector DB Adapter<br/>Milvus/Zilliz]
         
         Handlers --> Context
@@ -192,7 +192,7 @@ Grouped search output includes:
 - `callGraphHint` discriminated union (`supported: true|false`)
 
 `call_graph` is first-class and consumes `callGraphHint.symbolRef`:
-- TS/Python supported
+- TS/JS/Python supported
 - deterministic ordering for nodes/edges/notes
 - structured unsupported/not_found/requires_reindex responses
 

@@ -556,7 +556,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
             return [];
         }
 
-        return searchResult.results.map((result: any) => ({
+        return searchResult.results
+            .map((result: any) => ({
             document: {
                 id: result.id,
                 vector: queryVector,
@@ -568,7 +569,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 metadata: JSON.parse(result.metadata || '{}'),
             },
             score: result.score,
-        }));
+        }))
+            .filter((result: VectorSearchResult) => options?.threshold === undefined || result.score >= options.threshold);
     }
 
     async delete(collectionName: string, ids: string[]): Promise<void> {
@@ -855,7 +857,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
             console.log(`[MilvusDB] ✅ Found ${searchResult.results.length} results from hybrid search`);
 
             // Transform results to HybridSearchResult format
-            return searchResult.results.map((result: any) => ({
+            return searchResult.results
+                .map((result: any) => ({
                 document: {
                     id: result.id,
                     content: result.content,
@@ -868,7 +871,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
                     metadata: JSON.parse(result.metadata || '{}'),
                 },
                 score: result.score,
-            }));
+            }))
+                .filter((result: HybridSearchResult) => options?.threshold === undefined || result.score >= options.threshold);
 
         } catch (error) {
             console.error(`[MilvusDB] ❌ Failed to perform hybrid search on collection '${collectionName}':`, error);

@@ -170,14 +170,25 @@ function createTempCodebase(files) {
 }
 
 function createContext() {
-  process.env.HYBRID_MODE = 'false';
-  const vectorDatabase = new InMemoryVectorDatabase();
+  const options = arguments[0] || {};
+  process.env.HYBRID_MODE = options.hybridMode ? 'true' : 'false';
+  const vectorDatabase = options.vectorDatabase || new InMemoryVectorDatabase();
   const context = new Context({
     embedding: new DeterministicEmbedding(),
     vectorDatabase,
     codeSplitter: createTestSplitter(),
   });
-  return { context };
+  return { context, vectorDatabase };
+}
+
+class FailingInsertVectorDatabase extends InMemoryVectorDatabase {
+  async insert() {
+    throw new Error('Synthetic insert failure');
+  }
+
+  async insertHybrid() {
+    throw new Error('Synthetic insert failure');
+  }
 }
 
 test('integration: index_codebase persists searchable chunks', async () => {
@@ -240,6 +251,67 @@ test('integration: reindex_by_change tracks add/modify/remove deltas', async () 
 
     const results = await context.semanticSearch(codebasePath, 'feature flag', 5, 0);
     assert.ok(results.some((result) => result.relativePath === 'src/new.ts'));
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: clearIndex resets sync state so reindex_by_change rebuilds a missing collection', async () => {
+  const { context } = createContext();
+  const codebasePath = createTempCodebase({
+    'src/service.ts': 'export const service = "ready";',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+    await context.clearIndex(codebasePath);
+    assert.equal(await context.hasIndexedCollection(codebasePath), false);
+
+    const delta = await context.reindexByChange(codebasePath);
+    assert.deepEqual(delta, {
+      added: 1,
+      removed: 0,
+      modified: 0,
+      changedFiles: ['src/service.ts'],
+    });
+
+    assert.equal(await context.hasIndexedCollection(codebasePath), true);
+    const results = await context.semanticSearch(codebasePath, 'service ready', 5, 0);
+    assert.ok(results.some((result) => result.relativePath === 'src/service.ts'));
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: index_codebase rejects when chunk persistence fails', async () => {
+  const { context } = createContext({
+    vectorDatabase: new FailingInsertVectorDatabase(),
+  });
+  const codebasePath = createTempCodebase({
+    'src/index.ts': 'export const ping = () => "pong";',
+  });
+
+  try {
+    await assert.rejects(
+      () => context.indexCodebase(codebasePath),
+      /Synthetic insert failure/,
+    );
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: semantic_search applies threshold in hybrid mode', async () => {
+  const { context } = createContext({ hybridMode: true });
+  const codebasePath = createTempCodebase({
+    'src/auth.ts': 'export function issueToken(user) { return `token-${user}`; }',
+    'src/math.ts': 'export const add = (a, b) => a + b;',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+    const results = await context.semanticSearch(codebasePath, 'login token auth', 5, 0.5);
+    assert.deepEqual(results.map((result) => result.relativePath), ['src/auth.ts']);
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }

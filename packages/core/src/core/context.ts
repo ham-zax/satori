@@ -341,6 +341,24 @@ export class Context {
         }
 
         const currentSynchronizer = this.synchronizers.get(collectionName)!;
+        const collectionExists = await this.vectorDatabase.hasCollection(collectionName);
+
+        if (!collectionExists) {
+            console.warn(`[Context] ⚠️  Collection '${collectionName}' is missing. Rebuilding full index before incremental sync resumes.`);
+            const changedFiles = this.normalizeRelativePathsForCodebase(codebasePath, await this.getCodeFiles(codebasePath));
+            if (changedFiles.length === 0) {
+                progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
+                return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+            }
+
+            await this.indexCodebase(codebasePath, progressCallback);
+            return {
+                added: changedFiles.length,
+                removed: 0,
+                modified: 0,
+                changedFiles
+            };
+        }
 
         progressCallback?.({ phase: 'Checking for file changes...', current: 0, total: 100, percentage: 0 });
         const { added, removed, modified } = await currentSynchronizer.checkForChanges();
@@ -495,6 +513,7 @@ export class Context {
                         params: { k: 100 }
                     },
                     limit: topK,
+                    threshold,
                     filterExpr: effectiveFilterExpr
                 }
             );
@@ -697,6 +716,8 @@ export class Context {
 
         // Delete snapshot file
         await FileSynchronizer.deleteSnapshot(codebasePath);
+        this.synchronizers.delete(collectionName);
+        this.ignoreStateByCollection.delete(collectionName);
 
         progressCallback?.({ phase: 'Index cleared', current: 100, total: 100, percentage: 100 });
         console.log('[Context] ✅ Index data cleaned');
@@ -985,6 +1006,7 @@ export class Context {
         let processedFiles = 0;
         let totalChunks = 0;
         let limitReached = false;
+        const describeError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
         for (let i = 0; i < filePaths.length; i++) {
             const filePath = filePaths[i];
@@ -1016,6 +1038,7 @@ export class Context {
                             if (error instanceof Error) {
                                 console.error('[Context] Stack trace:', error.stack);
                             }
+                            throw new Error(`Failed to persist ${searchType} chunks while indexing ${filePath}: ${describeError(error)}`);
                         } finally {
                             chunkBuffer = []; // Always clear buffer, even on failure
                         }
@@ -1037,7 +1060,8 @@ export class Context {
                 }
 
             } catch (error) {
-                console.warn(`[Context] ⚠️  Skipping file ${filePath}: ${error}`);
+                console.error(`[Context] ❌ Failed to index file ${filePath}: ${describeError(error)}`);
+                throw error;
             }
         }
 
@@ -1052,6 +1076,7 @@ export class Context {
                 if (error instanceof Error) {
                     console.error('[Context] Stack trace:', error.stack);
                 }
+                throw new Error(`Failed to persist final ${searchType} chunk batch: ${describeError(error)}`);
             }
         }
 

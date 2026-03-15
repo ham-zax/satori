@@ -517,7 +517,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
                 };
             });
 
-            return results;
+            return results.filter((result) => options?.threshold === undefined || result.score >= options.threshold);
 
         } catch (error) {
             console.error(`[MilvusRestfulDB] ❌ Failed to search in collection '${collectionName}':`, error);
@@ -829,7 +829,8 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
             console.log(`[MilvusRestfulDB] ✅ Found ${results.length} results from hybrid search`);
 
             // Transform response to HybridSearchResult format
-            return results.map((result: any) => ({
+            return results
+                .map((result: any) => ({
                 document: {
                     id: result.id,
                     content: result.content,
@@ -842,7 +843,8 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
                     metadata: JSON.parse(result.metadata || '{}'),
                 },
                 score: result.score || result.distance || 0,
-            }));
+            }))
+                .filter((result: HybridSearchResult) => options?.threshold === undefined || result.score >= options.threshold);
 
         } catch (error) {
             console.error(`[MilvusRestfulDB] ❌ Failed to perform hybrid search on collection '${collectionName}':`, error);
@@ -850,15 +852,46 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         }
     }
 
-    /**
-     * Check collection limit
-     * Returns true if collection can be created, false if limit exceeded
-     * TODO: Implement proper collection limit checking for REST API
-     */
     async checkCollectionLimit(): Promise<boolean> {
-        // TODO: Implement REST API version of collection limit checking
-        // For now, always return true to maintain compatibility
-        console.warn('[MilvusRestfulDB] ⚠️  checkCollectionLimit not implemented for REST API - returning true');
-        return true;
+        await this.ensureInitialized();
+
+        const restfulConfig = this.config as MilvusRestfulConfig;
+        const collectionName = `dummy_collection_${Date.now()}`;
+        const collectionSchema = {
+            collectionName,
+            dbName: restfulConfig.database,
+            schema: {
+                enableDynamicField: false,
+                fields: [
+                    {
+                        fieldName: "id",
+                        dataType: "VarChar",
+                        isPrimary: true,
+                        elementTypeParams: {
+                            max_length: 512
+                        }
+                    },
+                    {
+                        fieldName: "vector",
+                        dataType: "FloatVector",
+                        elementTypeParams: {
+                            dim: 128
+                        }
+                    }
+                ]
+            }
+        };
+
+        try {
+            await createCollectionWithLimitCheck(this.makeRequest.bind(this), collectionSchema);
+            await this.dropCollection(collectionName);
+            return true;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message === COLLECTION_LIMIT_MESSAGE) {
+                return false;
+            }
+            throw error;
+        }
     }
 }

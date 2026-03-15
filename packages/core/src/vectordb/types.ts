@@ -28,6 +28,7 @@ export interface HybridSearchRequest {
 export interface HybridSearchOptions {
     rerank?: RerankStrategy;
     limit?: number;
+    threshold?: number;
     filterExpr?: string;
 }
 

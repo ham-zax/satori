@@ -92,7 +92,7 @@ Contract drift is now allowed when it materially improves operator safety and de
 
 ## Public API / Contract Impact
 ### Track A (P1, no-drift)
-1. `manage_index` remains text-first and unchanged.
+1. `manage_index` remains structured-envelope based and unchanged in shape.
 2. `search_codebase` envelope shape remains unchanged.
 3. `hints.noiseMitigation` fields remain unchanged:
    - `reason`
@@ -107,7 +107,7 @@ Contract drift is now allowed when it materially improves operator safety and de
    - `nextStep` wording is updated to explain redundancy outcomes.
 
 ### Track B (P1.5/P2, intentional contract evolution)
-1. `manage_index` transitions to structured envelope responses (with human-readable text retained as `humanText`).
+1. `manage_index` extends the existing structured envelope only if new fields are needed (with human-readable text retained as `humanText`).
 2. `manage_index` input schema adds explicit reindex override field scoped to `action:"reindex"`.
 3. `search_codebase` `hints.noiseMitigation` may gain new structured fields (deterministically ordered and bounded).
 4. CLI/bridge/client parsing is upgraded to consume new structured signals first.

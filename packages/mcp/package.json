@@ -10,7 +10,7 @@
         "satori-cli": "dist/cli/index.js"
     },
     "scripts": {
-        "build": "pnpm clean && tsc --build --force && pnpm fix:bin-perms && pnpm docs:generate",
+        "build": "pnpm clean && tsc --build --force && pnpm fix:bin-perms && pnpm docs:generate && pnpm manifest:generate",
         "dev": "tsx --watch src/index.ts",
         "clean": "rimraf dist",
         "lint": "eslint src --ext .ts",
@@ -20,8 +20,10 @@
         "start:with-env": "OPENAI_API_KEY=${OPENAI_API_KEY:your-api-key-here} MILVUS_ADDRESS=${MILVUS_ADDRESS:localhost:19530} tsx src/index.ts",
         "docs:generate": "tsx scripts/generate-docs.ts",
         "docs:check": "tsx scripts/generate-docs.ts --check",
+        "manifest:generate": "tsx scripts/generate-server-manifest.ts",
+        "manifest:check": "tsx scripts/generate-server-manifest.ts --check",
         "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);fs.chmodSync('dist/cli/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
-        "prepublishOnly": "pnpm build && pnpm docs:check",
+        "prepublishOnly": "pnpm build && pnpm docs:check && pnpm manifest:check",
         "test": "pnpm --filter @zokizuan/satori-core build && tsx --test --test-concurrency=1 src/**/*.test.ts"
     },
     "dependencies": {
@@ -40,6 +42,7 @@
     "files": [
         "dist/**/*.js",
         "dist/**/*.d.ts",
+        "assets/skills/**/*.md",
         "README.md"
     ],
     "repository": {

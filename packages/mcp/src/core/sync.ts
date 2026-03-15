@@ -73,6 +73,7 @@ export class SyncManager {
     private watcherModeStarted = false;
     private watchEnabled: boolean;
     private watchDebounceMs: number;
+    private watchedCodebases: Set<string> = new Set();
     private watchers: Map<string, FSWatcher> = new Map();
     private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
     private watcherIgnoreMatchers: Map<string, ReturnType<typeof ignore>> = new Map();
@@ -333,15 +334,15 @@ export class SyncManager {
             await fs.promises.access(codebasePath);
         } catch {
             // Path doesn't exist anymore - Clean up snapshot
-            console.log(`[SYNC] 🗑️ Codebase '${codebasePath}' no longer exists. Removing from snapshot.`);
-            try {
-                this.snapshotManager.removeIndexedCodebase(codebasePath);
-                this.snapshotManager.saveCodebaseSnapshot();
-                await this.unregisterCodebaseWatcher(codebasePath);
-            } catch (e) {
-                console.error(`[SYNC] Failed to clean snapshot for '${codebasePath}':`, e);
-            }
-            return { mode: 'skipped_missing_path' };
+                console.log(`[SYNC] 🗑️ Codebase '${codebasePath}' no longer exists. Removing from snapshot.`);
+                try {
+                    this.snapshotManager.removeIndexedCodebase(codebasePath);
+                    this.snapshotManager.saveCodebaseSnapshot();
+                    await this.unwatchCodebase(codebasePath);
+                } catch (e) {
+                    console.error(`[SYNC] Failed to clean snapshot for '${codebasePath}':`, e);
+                }
+                return { mode: 'skipped_missing_path' };
         }
 
         try {
@@ -633,6 +634,19 @@ export class SyncManager {
         console.error(`[SYNC-WATCH] Watcher error for '${codebasePath}':`, error);
     }
 
+    public async touchWatchedCodebase(codebasePath: string): Promise<void> {
+        this.watchedCodebases.add(codebasePath);
+        if (!this.watchEnabled || !this.watcherModeStarted) {
+            return;
+        }
+        await this.refreshWatchersFromWatchList();
+    }
+
+    public async unwatchCodebase(codebasePath: string): Promise<void> {
+        this.watchedCodebases.delete(codebasePath);
+        await this.unregisterCodebaseWatcher(codebasePath);
+    }
+
     public async registerCodebaseWatcher(codebasePath: string): Promise<void> {
         if (!this.watchEnabled || !this.watcherModeStarted) {
             return;
@@ -717,22 +731,28 @@ export class SyncManager {
         }
     }
 
-    public async refreshWatchersFromSnapshot(): Promise<void> {
+    public async refreshWatchersFromWatchList(): Promise<void> {
         if (!this.watchEnabled || !this.watcherModeStarted) {
             return;
         }
 
-        const indexedCodebases = new Set(this.snapshotManager.getIndexedCodebases());
+        const watchableCodebases = new Set(
+            Array.from(this.watchedCodebases).filter((codebasePath) => this.canScheduleWatchSync(codebasePath))
+        );
 
         for (const watchedPath of Array.from(this.watchers.keys())) {
-            if (!indexedCodebases.has(watchedPath)) {
+            if (!watchableCodebases.has(watchedPath)) {
                 await this.unregisterCodebaseWatcher(watchedPath);
             }
         }
 
-        for (const codebasePath of indexedCodebases) {
+        for (const codebasePath of watchableCodebases) {
             await this.registerCodebaseWatcher(codebasePath);
         }
+    }
+
+    public async refreshWatchersFromSnapshot(): Promise<void> {
+        await this.refreshWatchersFromWatchList();
     }
 
     public async startWatcherMode(): Promise<void> {
@@ -741,7 +761,7 @@ export class SyncManager {
         }
 
         this.watcherModeStarted = true;
-        await this.refreshWatchersFromSnapshot();
+        await this.refreshWatchersFromWatchList();
         console.log(`[SYNC-WATCH] Watcher mode enabled.`);
     }
 

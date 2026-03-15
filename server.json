@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "satori",
+  "name": "Satori MCP",
+  "packageName": "@zokizuan/satori-mcp",
+  "version": "4.3.1",
+  "description": "MCP server for Satori with agent-safe semantic search and indexing",
+  "install": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@zokizuan/satori-mcp@4.3.1"
+    ],
+    "startupTimeoutMs": 180000
+  },
+  "clients": {
+    "codex": {
+      "configPath": "~/.codex/config.toml",
+      "configFormat": "toml",
+      "skillsPath": "~/.codex/skills"
+    },
+    "claude": {
+      "configPath": "~/.claude/settings.json",
+      "configFormat": "json",
+      "skillsPath": "~/.claude/skills"
+    }
+  },
+  "skills": [
+    "satori-search",
+    "satori-navigation",
+    "satori-indexing"
+  ]
+}

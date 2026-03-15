@@ -20,6 +20,7 @@ function buildContext(readFileMaxLines: number, overrides: Partial<ToolContext> 
         snapshotManager: {
             getAllCodebases: () => []
         },
+        syncManager: {},
         toolHandlers: {
             handleFileOutline: async () => ({
                 content: [{
@@ -69,6 +70,60 @@ test('read_file returns full content for small files when range is omitted', asy
         const response = await runReadFile({ path: filePath }, 1000);
         assert.equal(response.isError, undefined);
         assert.equal(response.content[0].text, 'a\nb\nc');
+    });
+});
+
+test('read_file touches the resolved indexed codebase root on successful reads', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const filePath = path.join(repoPath, 'src', 'small.ts');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'a\nb\nc\n', 'utf8');
+
+        const touched: string[] = [];
+        const response = await runReadFile(
+            { path: filePath },
+            1000,
+            {
+                snapshotManager: {
+                    getAllCodebases: () => [{
+                        path: repoPath,
+                        info: { status: 'indexed' }
+                    }]
+                } as any,
+                syncManager: {
+                    touchWatchedCodebase: async (codebasePath: string) => {
+                        touched.push(codebasePath);
+                    }
+                } as any
+            }
+        );
+
+        assert.equal(response.isError, undefined);
+        assert.deepEqual(touched, [repoPath]);
+    });
+});
+
+test('read_file does not touch watcher state when no indexed codebase root resolves', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'orphan.ts');
+        fs.writeFileSync(filePath, 'a\n', 'utf8');
+
+        const touched: string[] = [];
+        const response = await runReadFile(
+            { path: filePath },
+            1000,
+            {
+                syncManager: {
+                    touchWatchedCodebase: async (codebasePath: string) => {
+                        touched.push(codebasePath);
+                    }
+                } as any
+            }
+        );
+
+        assert.equal(response.isError, undefined);
+        assert.deepEqual(touched, []);
     });
 });
 

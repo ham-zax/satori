@@ -8,6 +8,7 @@ import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope } from "./format.js";
+import { executeInstallCommand } from "./install.js";
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
 
 const MANAGE_INDEX_MIN_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -16,6 +17,7 @@ interface RunCliOptions {
     writeStdout?: (text: string) => void;
     writeStderr?: (text: string) => void;
     stdin?: NodeJS.ReadStream;
+    env?: NodeJS.ProcessEnv;
     serverCommand?: string;
     serverArgs?: string[];
     serverEnv?: Record<string, string>;
@@ -65,6 +67,8 @@ function buildHelpPayload() {
     return {
         usage: "satori-cli <command>",
         commands: [
+            "install [--client all|codex|claude] [--dry-run]",
+            "uninstall [--client all|codex|claude] [--dry-run]",
             "tools list",
             "tool call <toolName> --args-json '<json>'",
             "tool call <toolName> --args-file <path>",
@@ -220,6 +224,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         writeStdout: options.writeStdout || ((text: string) => process.stdout.write(text)),
         writeStderr: options.writeStderr || ((text: string) => process.stderr.write(text)),
     };
+    const effectiveEnv = options.env || process.env;
     let parsedFormat: "json" | "text" = "json";
     let parsedCommandKind: ParsedCommand["kind"] | null = null;
 
@@ -250,11 +255,22 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             return 0;
         }
 
+        if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
+            const result = executeInstallCommand(parsed.command, {
+                homeDir: effectiveEnv.HOME,
+            });
+            emitJson(writers, result);
+            if (parsed.globals.format === "text") {
+                writers.writeStderr(`satori-cli ${parsed.command.kind} completed for ${parsed.command.client}.\n`);
+            }
+            return 0;
+        }
+
         const session = await connectCliMcpSession({
             command: options.serverCommand || process.execPath,
             args: options.serverArgs || resolveDefaultServerArgs(),
             env: {
-                ...process.env,
+                ...effectiveEnv,
                 ...options.serverEnv,
                 SATORI_RUN_MODE: "cli",
             },

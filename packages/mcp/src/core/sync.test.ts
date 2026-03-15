@@ -692,3 +692,58 @@ test('registering watcher does not increment ignore rules version', async () => 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
+
+test('startWatcherMode does not automatically watch every indexed codebase from snapshot state', async () => {
+    const codebasePathA = createTempDir();
+    const codebasePathB = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([
+        [codebasePathA, 'indexed'],
+        [codebasePathB, 'sync_completed'],
+    ]);
+    const context = createContext();
+    const snapshot = createSnapshot(statusByPath);
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: true,
+        watchDebounceMs: 20,
+    });
+
+    await manager.startWatcherMode();
+
+    assert.equal((manager as any).watchers.size, 0);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePathA, { recursive: true, force: true });
+    fs.rmSync(codebasePathB, { recursive: true, force: true });
+});
+
+test('touchWatchedCodebase registers only explicitly touched codebases and unwatchCodebase removes them', async () => {
+    const codebasePathA = createTempDir();
+    const codebasePathB = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([
+        [codebasePathA, 'indexed'],
+        [codebasePathB, 'indexed'],
+    ]);
+    const context = createContext();
+    const snapshot = createSnapshot(statusByPath);
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: true,
+        watchDebounceMs: 20,
+    });
+
+    await manager.startWatcherMode();
+    await (manager as any).touchWatchedCodebase(codebasePathA);
+
+    assert.equal((manager as any).watchers.has(codebasePathA), true);
+    assert.equal((manager as any).watchers.has(codebasePathB), false);
+
+    await (manager as any).touchWatchedCodebase(codebasePathB);
+    assert.equal((manager as any).watchers.has(codebasePathB), true);
+
+    await (manager as any).unwatchCodebase(codebasePathA);
+    assert.equal((manager as any).watchers.has(codebasePathA), false);
+    assert.equal((manager as any).watchers.has(codebasePathB), true);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePathA, { recursive: true, force: true });
+    fs.rmSync(codebasePathB, { recursive: true, force: true });
+});

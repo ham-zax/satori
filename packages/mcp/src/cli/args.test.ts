@@ -24,3 +24,40 @@ test("parseCliArgs does not treat post-command --debug as global", () => {
         /Unsupported tools subcommand/
     );
 });
+
+test("parseCliArgs supports install with explicit client and dry-run", () => {
+    const parsed = parseCliArgs(["install", "--client", "codex", "--dry-run"]);
+    assert.equal(parsed.command.kind, "install");
+    if (parsed.command.kind !== "install") {
+        assert.fail("Expected install command parsing");
+    }
+    assert.equal(parsed.command.client, "codex");
+    assert.equal(parsed.command.dryRun, true);
+});
+
+test("parseCliArgs defaults install client to all", () => {
+    const parsed = parseCliArgs(["install"]);
+    assert.equal(parsed.command.kind, "install");
+    if (parsed.command.kind !== "install") {
+        assert.fail("Expected install command parsing");
+    }
+    assert.equal(parsed.command.client, "all");
+    assert.equal(parsed.command.dryRun, false);
+});
+
+test("parseCliArgs supports uninstall with explicit client", () => {
+    const parsed = parseCliArgs(["uninstall", "--client", "claude"]);
+    assert.equal(parsed.command.kind, "uninstall");
+    if (parsed.command.kind !== "uninstall") {
+        assert.fail("Expected uninstall command parsing");
+    }
+    assert.equal(parsed.command.client, "claude");
+    assert.equal(parsed.command.dryRun, false);
+});
+
+test("parseCliArgs rejects unsupported install clients", () => {
+    assert.throws(
+        () => parseCliArgs(["install", "--client", "cursor"]),
+        /--client must be one of: all, claude, codex/
+    );
+});

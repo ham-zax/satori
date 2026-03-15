@@ -26,11 +26,26 @@ interface RunCliOptions {
     callTimeoutMs?: number;
     cwd?: string;
     installabilityVerifier?: () => string | Promise<string>;
+    connectSession?: (options: {
+        command: string;
+        args: string[];
+        env: Record<string, string | undefined>;
+        cwd?: string;
+        startupTimeoutMs: number;
+        callTimeoutMs: number;
+        writeStderr: (text: string) => void;
+    }) => Promise<CliSession>;
 }
 
 interface ToolDescriptor {
     name: string;
     inputSchema?: unknown;
+}
+
+interface CliSession {
+    listTools(): Promise<any>;
+    callTool(name: string, args: Record<string, unknown>): Promise<any>;
+    close(): Promise<void>;
 }
 
 function firstText(result: any): string | null {
@@ -107,7 +122,7 @@ function sleep(ms: number): Promise<void> {
 
 async function pollManageIndexUntilTerminal(
     pathArg: string,
-    session: Awaited<ReturnType<typeof connectCliMcpSession>>,
+    session: CliSession,
     timeoutMs: number
 ): Promise<{ result: any; state: ReturnType<typeof inferManageStatusState> }> {
     const startedAt = Date.now();
@@ -179,7 +194,7 @@ function evaluateToolResultForError(
 async function invokeTool(
     toolName: string,
     args: Record<string, unknown>,
-    session: Awaited<ReturnType<typeof connectCliMcpSession>>,
+    session: CliSession,
     callTimeoutMs: number,
     writers: { writeStdout: (text: string) => void; writeStderr: (text: string) => void; },
     format: "json" | "text"
@@ -271,7 +286,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             return 0;
         }
 
-        const session = await connectCliMcpSession({
+        const session = await (options.connectSession || connectCliMcpSession)({
             command: options.serverCommand || process.execPath,
             args: options.serverArgs || resolveDefaultServerArgs(),
             env: {

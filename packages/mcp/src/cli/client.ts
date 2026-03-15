@@ -71,6 +71,7 @@ export class CliMcpSession {
     }
 
     async close(): Promise<void> {
+        const stderr = this.transport.stderr;
         try {
             await this.client.close();
         } catch {
@@ -81,6 +82,7 @@ export class CliMcpSession {
         } catch {
             // Best-effort close.
         }
+        stderr?.removeAllListeners("data");
     }
 
     logProtocolFailure(error: unknown): never {

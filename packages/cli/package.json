@@ -1,6 +1,6 @@
 {
   "name": "@zokizuan/satori-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shell CLI for Satori MCP installation and skill-based workflows",
   "type": "module",
   "main": "dist/index.js",

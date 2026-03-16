@@ -22,7 +22,7 @@ import {
 	type CliCommandType,
 } from "./recovery.js";
 
-const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-mcp@4.4.0";
+const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-mcp@4.4.1";
 const DEFAULT_STARTUP_TIMEOUT_MS = 180_000;
 const DEFAULT_CALL_TIMEOUT_MS = 600_000;
 const MANAGE_INDEX_POLL_MIN_TIMEOUT_MS = 180_000;

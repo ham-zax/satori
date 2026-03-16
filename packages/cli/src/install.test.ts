@@ -175,7 +175,7 @@ test("install upgrades legacy managed Claude entries to the bare MCP package lau
             mcpServers: {
                 satori: {
                     command: "npx",
-                    args: ["-y", "--package", "@zokizuan/satori-mcp@4.4.0", "satori"],
+                    args: ["-y", "--package", "@zokizuan/satori-mcp@4.4.1", "satori"],
                     timeout: 180000,
                 }
             }

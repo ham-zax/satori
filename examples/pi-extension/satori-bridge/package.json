@@ -1,6 +1,6 @@
 {
   "name": "pi-satori-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Pi extension that proxies Satori MCP tools",
   "type": "module",

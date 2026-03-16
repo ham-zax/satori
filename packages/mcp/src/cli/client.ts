@@ -114,7 +114,7 @@ export async function connectCliMcpSession(options: SessionOptions): Promise<Cli
     });
     const client = new Client({
         name: "satori-cli",
-        version: "1.1.0",
+        version: "1.1.1",
     });
     const session = new CliMcpSession(client, transport, options.callTimeoutMs, options.writeStderr);
     session.wireStderr();

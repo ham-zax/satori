@@ -5,9 +5,9 @@ All notable changes to this repository are documented in this file.
 ## [2026-03-16] Session-Scoped Watchers, CLI Install Flow, and Packaged Client Skills
 
 ### Release Versions
-- Repository version: `0.3.0`
-- `@zokizuan/satori-core`: `1.1.0`
-- `@zokizuan/satori-mcp`: `4.4.0`
+- Repository version: `0.3.1`
+- `@zokizuan/satori-core`: `1.1.1`
+- `@zokizuan/satori-mcp`: `4.4.1`
 
 ### Added
 - Added explicit session-scoped watcher tracking in `packages/mcp/src/core/sync.ts` with deterministic coverage in:
@@ -233,7 +233,7 @@ All notable changes to this repository are documented in this file.
 ## [2026-02-28] MCP Index State Stability Hardening
 
 ### Release Versions
-- Repository version: `0.3.0`
+- Repository version: `0.3.1`
 - `@zokizuan/satori-mcp`: `4.2.0`
 
 ### Added
@@ -257,7 +257,7 @@ All notable changes to this repository are documented in this file.
 ## [2026-02-27] Satori CLI v1.1 (Hardened stdio) + Regression Follow-ups
 
 ### Release Versions
-- Repository version: `0.3.0`
+- Repository version: `0.3.1`
 - `@zokizuan/satori-mcp`: `4.1.0` (bin/interface expansion in-package)
 
 ### Added
@@ -413,7 +413,7 @@ All notable changes to this repository are documented in this file.
 ## [2026-02-26] Core Sync Determinism and Hash-on-Change Refactor
 
 ### Release Versions
-- `@zokizuan/satori-core`: `0.3.0`
+- `@zokizuan/satori-core`: `0.3.1`
 
 ### Modified
 - Replaced full-content rehash-on-every-sync in `@zokizuan/satori-core` `FileSynchronizer` with a stat-first flow:

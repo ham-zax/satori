@@ -14,10 +14,10 @@ Shell CLI for Satori installation, skill packaging, and direct tool invocation w
 ## Install / Uninstall
 
 ```bash
-npx -y @zokizuan/satori-cli@0.1.0 install --client codex
-npx -y @zokizuan/satori-cli@0.1.0 install --client claude
-npx -y @zokizuan/satori-cli@0.1.0 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.1.0 uninstall --client codex
+npx -y @zokizuan/satori-cli@0.1.1 install --client codex
+npx -y @zokizuan/satori-cli@0.1.1 install --client claude
+npx -y @zokizuan/satori-cli@0.1.1 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.1.1 uninstall --client codex
 ```
 
 Managed install writes MCP config that launches:
@@ -25,7 +25,7 @@ Managed install writes MCP config that launches:
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.4.0"]
+args = ["-y", "@zokizuan/satori-mcp@4.4.1"]
 startup_timeout_ms = 180000
 ```
 

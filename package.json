@@ -1,6 +1,6 @@
 {
     "name": "satori",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "description": "Satori: sudden-insight semantic code indexing + MCP integration",
     "private": true,
     "scripts": {
@@ -36,7 +36,7 @@
         "browserify-zlib": "^0.2.0",
         "eslint": "^9.25.1",
         "https-browserify": "^1.0.0",
-        "os-browserify": "^0.3.0",
+        "os-browserify": "^0.3.1",
         "rimraf": "^6.0.1",
         "stream-http": "^3.2.0",
         "typescript": "^5.8.3",

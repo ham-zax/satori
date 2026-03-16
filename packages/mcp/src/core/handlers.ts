@@ -88,6 +88,11 @@ const ZILLIZ_FREE_TIER_COLLECTION_LIMIT = 5;
 const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability('fileOutline');
 const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
 const SEARCH_OPERATOR_KEYS = new Set(['lang', 'path', '-path', 'must', 'exclude']);
+const SEARCH_QUERY_STOPWORDS = new Set([
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'find', 'for', 'from', 'how',
+    'in', 'is', 'it', 'logic', 'of', 'or', 'the', 'to', 'used', 'uses', 'using',
+    'what', 'where', 'which', 'who', 'why'
+]);
 const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
 // Recovery probe threshold for "likely interrupted" indexing states.
 // Keep this shorter than snapshot merge stale semantics for better operator UX.
@@ -106,12 +111,44 @@ type ParsedSearchOperators = {
 type SearchCandidate = {
     result: any;
     baseScore: number;
+    backendScore: number;
+    backendScoreKind: 'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown';
     fusionScore: number;
+    lexicalScore: number;
     finalScore: number;
     pathCategory: PathCategory;
     pathMultiplier: number;
     changedFilesMultiplier: number;
     passesMatchedMust: boolean;
+    exactLexicalMatch: boolean;
+};
+
+type SearchQueryIntent = 'identifier' | 'semantic' | 'mixed' | 'uncertain';
+type SearchIntentConfidence = 'high' | 'medium' | 'low';
+type SearchLexicalTermKind = 'whole' | 'fragment';
+
+type SearchLexicalTerm = {
+    value: string;
+    kind: SearchLexicalTermKind;
+};
+
+type SearchQueryPlan = {
+    semanticQuery: string;
+    intent: SearchQueryIntent;
+    confidence: SearchIntentConfidence;
+    reasons: string[];
+    referenceSeeking: boolean;
+    lexicalTerms: SearchLexicalTerm[];
+    retrievalMode: 'dense' | 'lexical' | 'hybrid';
+    scorePolicyKind: 'dense_similarity_min' | 'topk_only';
+    lexicalWeight: number;
+    exactMatchPinningEnabled: boolean;
+    rerankAllowed: boolean;
+};
+
+type SearchLexicalEvidence = {
+    score: number;
+    exactLexicalMatch: boolean;
 };
 
 type SearchFilterSummary = {
@@ -1694,6 +1731,274 @@ export class ToolHandlers {
         return operators;
     }
 
+    private tokenizeLexicalTerms(tokens: string[]): SearchLexicalTerm[] {
+        const terms = new Map<string, SearchLexicalTerm>();
+        const addTerm = (value: string, kind: SearchLexicalTermKind): void => {
+            const normalized = value
+                .replace(/^['"`]+|['"`]+$/g, '')
+                .replace(/[(){}\[\],;]+/g, ' ')
+                .trim()
+                .toLowerCase();
+            if (normalized.length === 0) {
+                return;
+            }
+
+            const existing = terms.get(normalized);
+            if (!existing || (existing.kind === 'fragment' && kind === 'whole')) {
+                terms.set(normalized, { value: normalized, kind });
+            }
+        };
+
+        for (const token of tokens) {
+            const trimmed = token.trim();
+            if (trimmed.length === 0) {
+                continue;
+            }
+
+            addTerm(trimmed, 'whole');
+
+            const expanded = trimmed
+                .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+                .replace(/[/\\._:-]+/g, ' ')
+                .replace(/[(){}\[\],;]+/g, ' ')
+                .toLowerCase();
+            for (const part of expanded.split(/\s+/)) {
+                const normalizedPart = part.trim();
+                if (normalizedPart.length >= 2) {
+                    addTerm(normalizedPart, 'fragment');
+                }
+            }
+        }
+
+        return Array.from(terms.values());
+    }
+
+    private isIdentifierLikeToken(token: string): boolean {
+        const trimmed = token.trim();
+        if (trimmed.length === 0) {
+            return false;
+        }
+
+        return /[A-Z]/.test(trimmed)
+            || /[_/\\.\-:]/.test(trimmed)
+            || /\d/.test(trimmed);
+    }
+
+    private buildSearchQueryPlan(semanticQuery: string): SearchQueryPlan {
+        const hybridEnabled = this.runtimeFingerprint.schemaVersion.startsWith('hybrid');
+        const tokens = semanticQuery
+            .split(/\s+/)
+            .map((token) => token.trim())
+            .filter((token) => token.length > 0);
+        const normalizedQuery = semanticQuery.toLowerCase();
+        const normalizedTokens = tokens.map((token) => token.toLowerCase());
+        const identifierTokens = tokens.filter((token) => this.isIdentifierLikeToken(token));
+        const naturalLanguageTokens = tokens
+            .filter((token) => (
+                !this.isIdentifierLikeToken(token)
+                && (SEARCH_QUERY_STOPWORDS.has(token.toLowerCase()) || token.length >= 4)
+            ))
+            .map((token) => token.toLowerCase());
+        const singleBareLookup = tokens.length === 1
+            && /^[a-z][a-z0-9]{2,63}$/.test(tokens[0])
+            && !SEARCH_QUERY_STOPWORDS.has(normalizedTokens[0] || '');
+        const lexicalTerms = this
+            .tokenizeLexicalTerms(identifierTokens.length > 0 ? identifierTokens : tokens)
+            .filter((term) => !SEARCH_QUERY_STOPWORDS.has(term.value))
+            .slice(0, 8);
+        const referenceSeeking = /\b(used|uses|usage|reference|references|referenced|callers?|called|imports?|imported|instantiat(?:e|ed|ion))\b/.test(normalizedQuery)
+            || /\bwhere\s+is\b/.test(normalizedQuery)
+            || /\bwho\s+uses\b/.test(normalizedQuery);
+
+        let intent: SearchQueryIntent = 'uncertain';
+        let confidence: SearchIntentConfidence = 'low';
+        const reasons: string[] = [];
+
+        if (identifierTokens.length > 0 && naturalLanguageTokens.length > 0) {
+            intent = 'mixed';
+            confidence = identifierTokens.length >= 2 ? 'high' : 'medium';
+            reasons.push('identifier_terms_present', 'natural_language_terms_present');
+        } else if (identifierTokens.length > 0) {
+            intent = 'identifier';
+            confidence = tokens.length === identifierTokens.length ? 'high' : 'medium';
+            reasons.push(tokens.length === 1 ? 'single_identifier_token' : 'identifier_tokens_present');
+        } else if (singleBareLookup) {
+            intent = 'uncertain';
+            confidence = 'medium';
+            reasons.push('single_term_lookup');
+        } else if (naturalLanguageTokens.length >= 2 || tokens.length >= 4) {
+            intent = 'semantic';
+            confidence = 'high';
+            reasons.push('natural_language_query');
+        } else {
+            reasons.push('ambiguous_short_query');
+        }
+        if (referenceSeeking) {
+            reasons.push('reference_seeking_query');
+        }
+
+        return {
+            semanticQuery,
+            intent,
+            confidence,
+            reasons,
+            referenceSeeking,
+            lexicalTerms,
+            retrievalMode: hybridEnabled
+                ? (intent === 'identifier' ? 'lexical' : 'hybrid')
+                : 'dense',
+            scorePolicyKind: 'topk_only',
+            lexicalWeight: intent === 'identifier'
+                ? 1.35
+                : intent === 'mixed'
+                    ? (referenceSeeking ? 0.18 : 0.05)
+                    : intent === 'uncertain'
+                        ? 0.60
+                        : 0.00,
+            exactMatchPinningEnabled: intent !== 'semantic' && !referenceSeeking,
+            rerankAllowed: intent !== 'identifier',
+        };
+    }
+
+    private escapeLexicalRegex(value: string): string {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    private hasTokenBoundaryMatch(field: string, term: string): boolean {
+        if (!field || !term) {
+            return false;
+        }
+
+        const pattern = new RegExp(`(^|[^a-z0-9])${this.escapeLexicalRegex(term)}([^a-z0-9]|$)`, 'i');
+        return pattern.test(field);
+    }
+
+    private getReferenceUsageKind(content: string, term: string): 'executable' | 'import' | null {
+        if (!content || !term) {
+            return null;
+        }
+
+        const escaped = this.escapeLexicalRegex(term);
+        const executablePatterns = [
+            new RegExp(`\\bnew\\s+${escaped}\\b`, 'i'),
+            new RegExp(`\\b${escaped}\\s*\\(`, 'i'),
+            new RegExp(`\\b${escaped}\\b\\s*=`, 'i'),
+        ];
+        if (executablePatterns.some((pattern) => pattern.test(content))) {
+            return 'executable';
+        }
+
+        const importPatterns = [
+            new RegExp(`\\bimport\\s+.*\\b${escaped}\\b`, 'i'),
+            new RegExp(`\\bfrom\\s+.+\\s+import\\s+.*\\b${escaped}\\b`, 'i'),
+        ];
+        return importPatterns.some((pattern) => pattern.test(content)) ? 'import' : null;
+    }
+
+    private hasDeclarationMatch(content: string, term: string): boolean {
+        if (!content || !term) {
+            return false;
+        }
+
+        const escaped = this.escapeLexicalRegex(term);
+        const declarationPatterns = [
+            new RegExp(`\\bclass\\s+${escaped}\\b`, 'i'),
+            new RegExp(`\\bdef\\s+${escaped}\\b`, 'i'),
+            new RegExp(`\\bfunction\\s+${escaped}\\b`, 'i'),
+            new RegExp(`\\btype\\s+${escaped}\\b`, 'i'),
+            new RegExp(`\\binterface\\s+${escaped}\\b`, 'i'),
+            new RegExp(`\\benum\\s+${escaped}\\b`, 'i'),
+            new RegExp(`\\bstruct\\s+${escaped}\\b`, 'i'),
+            new RegExp(`\\b(?:const|let|var)\\s+${escaped}\\b\\s*=\\s*(?:async\\s+)?function\\b`, 'i'),
+            new RegExp(`\\b(?:const|let|var)\\s+${escaped}\\b\\s*=\\s*(?:async\\s*)?(?:\\([^)]*\\)|[a-z_$][\\w$]*)\\s*=>`, 'i'),
+        ];
+
+        return declarationPatterns.some((pattern) => pattern.test(content));
+    }
+
+    private getLexicalTermFactor(plan: SearchQueryPlan, term: SearchLexicalTerm): number {
+        if (term.kind === 'whole') {
+            return 1;
+        }
+        if (plan.referenceSeeking) {
+            return 0.18;
+        }
+        if (plan.intent === 'identifier') {
+            return 0.18;
+        }
+        return 0.35;
+    }
+
+    private scoreCandidateLexicalEvidence(plan: SearchQueryPlan, result: any): SearchLexicalEvidence {
+        if (plan.lexicalTerms.length === 0) {
+            return { score: 0, exactLexicalMatch: false };
+        }
+
+        const relativePath = typeof result?.relativePath === 'string' ? result.relativePath.toLowerCase() : '';
+        const symbolLabel = typeof result?.symbolLabel === 'string' ? result.symbolLabel.toLowerCase() : '';
+        const content = typeof result?.content === 'string' ? result.content.toLowerCase() : '';
+        const pathSegments = relativePath.split('/').filter((segment: string) => segment.length > 0);
+
+        let score = 0;
+        let exactLexicalMatch = false;
+
+        for (const term of plan.lexicalTerms) {
+            const usageKind = plan.referenceSeeking ? this.getReferenceUsageKind(content, term.value) : null;
+            const declarationMatch = plan.referenceSeeking && this.hasDeclarationMatch(content, term.value);
+            const termFactor = this.getLexicalTermFactor(plan, term);
+
+            if (usageKind === 'executable' && !declarationMatch) {
+                score = Math.max(score, 1.60 * termFactor);
+                continue;
+            }
+
+            if (usageKind === 'import' && !declarationMatch) {
+                score = Math.max(score, 0.75 * termFactor);
+                continue;
+            }
+
+            if (this.hasTokenBoundaryMatch(symbolLabel, term.value)) {
+                score = Math.max(score, (plan.referenceSeeking ? 0.02 : 1.30) * termFactor);
+                if (!plan.referenceSeeking && term.kind === 'whole') {
+                    exactLexicalMatch = true;
+                }
+                continue;
+            }
+
+            if (pathSegments.some((segment: string) => this.hasTokenBoundaryMatch(segment, term.value))) {
+                score = Math.max(score, (plan.referenceSeeking ? 0.02 : 1.20) * termFactor);
+                if (!plan.referenceSeeking && term.kind === 'whole') {
+                    exactLexicalMatch = true;
+                }
+                continue;
+            }
+
+            if (this.hasTokenBoundaryMatch(content, term.value)) {
+                score = Math.max(score, (plan.referenceSeeking ? (declarationMatch ? 0.10 : 1.25) : 0.90) * termFactor);
+                continue;
+            }
+
+            if (symbolLabel.includes(term.value)) {
+                score = Math.max(score, (plan.referenceSeeking ? 0.04 : 0.55) * termFactor);
+                continue;
+            }
+
+            if (relativePath.includes(term.value)) {
+                score = Math.max(score, (plan.referenceSeeking ? 0.04 : 0.45) * termFactor);
+                continue;
+            }
+
+            if (content.includes(term.value)) {
+                score = Math.max(score, (plan.referenceSeeking ? (declarationMatch ? 0.08 : 0.30) : 0.25) * termFactor);
+            }
+        }
+
+        return {
+            score: score * plan.lexicalWeight,
+            exactLexicalMatch,
+        };
+    }
+
     private pathMatchesAnyPattern(relativePath: string, patterns: string[]): boolean {
         if (patterns.length === 0) return false;
         const normalizedPath = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -1720,23 +2025,28 @@ export class ToolHandlers {
         return false;
     }
 
-    private resolveRerankDecision(scope: SearchScope): {
+    private resolveRerankDecision(scope: SearchScope, plan: SearchQueryPlan): {
         enabledByPolicy: boolean;
         skippedByScopeDocs: boolean;
+        skippedByIdentifierIntent: boolean;
         capabilityPresent: boolean;
         rerankerPresent: boolean;
         enabled: boolean;
+        exactMatchPinningEnabled: boolean;
     } {
         const capabilityPresent = this.capabilities.hasReranker();
         const enabledByPolicy = capabilityPresent && this.capabilities.getDefaultRerankEnabled();
         const rerankerPresent = this.reranker !== null;
         const skippedByScopeDocs = scope === 'docs';
+        const skippedByIdentifierIntent = !plan.rerankAllowed;
         return {
             enabledByPolicy,
             skippedByScopeDocs,
+            skippedByIdentifierIntent,
             capabilityPresent,
             rerankerPresent,
-            enabled: enabledByPolicy && rerankerPresent && !skippedByScopeDocs,
+            enabled: enabledByPolicy && rerankerPresent && !skippedByScopeDocs && !skippedByIdentifierIntent,
+            exactMatchPinningEnabled: plan.exactMatchPinningEnabled,
         };
     }
 
@@ -1924,11 +2234,11 @@ export class ToolHandlers {
         };
     }
 
-    private applyGroupDiversity(
-        grouped: SearchGroupResult[],
+    private applyGroupDiversity<T extends SearchGroupResult>(
+        grouped: T[],
         limit: number,
         groupBy: SearchGroupBy
-    ): { selected: SearchGroupResult[]; summary: SearchDiversitySummary } {
+    ): { selected: T[]; summary: SearchDiversitySummary } {
         const summary: SearchDiversitySummary = {
             maxPerFile: SEARCH_DIVERSITY_MAX_PER_FILE,
             maxPerSymbol: SEARCH_DIVERSITY_MAX_PER_SYMBOL,
@@ -1938,7 +2248,7 @@ export class ToolHandlers {
             usedRelaxedCap: false,
         };
 
-        const selected: SearchGroupResult[] = [];
+        const selected: T[] = [];
         const selectedIds = new Set<string>();
         const fileCounts = new Map<string, number>();
         const symbolCounts = new Map<string, number>();
@@ -2021,6 +2331,129 @@ export class ToolHandlers {
         if (!a) return 1;
         if (!b) return -1;
         return a.localeCompare(b);
+    }
+
+    private compareSearchCandidates(a: SearchCandidate, b: SearchCandidate, options?: { exactMatchFirst?: boolean; mustMatchesFirst?: boolean }): number {
+        if (options?.mustMatchesFirst === true && a.passesMatchedMust !== b.passesMatchedMust) {
+            return a.passesMatchedMust ? -1 : 1;
+        }
+        if (options?.exactMatchFirst === true && a.exactLexicalMatch !== b.exactLexicalMatch) {
+            return a.exactLexicalMatch ? -1 : 1;
+        }
+        if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+        const fileCmp = this.compareNullableStringsAsc(a.result.relativePath, b.result.relativePath);
+        if (fileCmp !== 0) return fileCmp;
+        const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
+        if (startCmp !== 0) return startCmp;
+        const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
+        if (labelCmp !== 0) return labelCmp;
+        return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
+    }
+
+    private sortSearchCandidates(candidates: SearchCandidate[], exactMatchFirst: boolean, mustMatchesFirst = false): boolean {
+        const topWithoutPinning = candidates.length > 0
+            ? [...candidates].sort((a, b) => this.compareSearchCandidates(a, b, { mustMatchesFirst }))[0]
+            : undefined;
+        candidates.sort((a, b) => this.compareSearchCandidates(a, b, { exactMatchFirst, mustMatchesFirst }));
+        if (!exactMatchFirst || !topWithoutPinning || candidates.length === 0) {
+            return false;
+        }
+        return topWithoutPinning.exactLexicalMatch !== candidates[0].exactLexicalMatch;
+    }
+
+    private isDeclarationSearchGroup(group: SearchGroupResult): boolean {
+        const label = (group.symbolLabel || '').trim().toLowerCase();
+        if (/^(class|type|interface|enum|struct|function|def)\b/.test(label)) {
+            return true;
+        }
+        if (/^(const|let|var)\s+[a-z0-9_$]+\s*=/.test(label)) {
+            return true;
+        }
+
+        const previewStart = (group.preview || '').slice(0, 240).toLowerCase();
+        return /\b(class|type|interface|enum|struct|function|def)\s+[a-z0-9_]/i.test(previewStart)
+            || /\b(?:const|let|var)\s+[a-z0-9_$]+\s*=\s*(?:async\s+)?function\b/i.test(previewStart)
+            || /\b(?:const|let|var)\s+[a-z0-9_$]+\s*=\s*(?:async\s*)?(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>/i.test(previewStart);
+    }
+
+    private normalizeDeclarationGroupKey(group: SearchGroupResult): string | null {
+        if (!group.file || !group.symbolLabel) {
+            return null;
+        }
+        if (!this.isDeclarationSearchGroup(group)) {
+            return null;
+        }
+
+        const normalizedLabel = group.symbolLabel
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+        return `${group.file}::${normalizedLabel}`;
+    }
+
+    private collapseDuplicateDeclarationGroups<T extends SearchGroupResult>(groups: T[]): T[] {
+        const deduped = new Map<string, T>();
+        for (const group of groups) {
+            const key = this.normalizeDeclarationGroupKey(group);
+            if (!key) {
+                deduped.set(`unique:${deduped.size}`, group);
+                continue;
+            }
+
+            const existing = deduped.get(key);
+            if (!existing) {
+                deduped.set(key, group);
+                continue;
+            }
+
+            const existingComparable: SearchCandidate = {
+                result: {
+                    relativePath: existing.file,
+                    startLine: existing.span.startLine,
+                    endLine: existing.span.endLine,
+                    symbolId: existing.symbolId || undefined,
+                    symbolLabel: existing.symbolLabel || undefined,
+                },
+                baseScore: 0,
+                backendScore: 0,
+                backendScoreKind: 'unknown',
+                fusionScore: 0,
+                lexicalScore: existing.debug?.lexicalScore || 0,
+                finalScore: existing.score,
+                pathCategory: (existing.debug?.pathCategory as PathCategory | undefined) || 'neutral',
+                pathMultiplier: existing.debug?.pathMultiplier || 1,
+                changedFilesMultiplier: existing.debug?.changedFilesMultiplier || 1,
+                passesMatchedMust: existing.debug?.matchesMust === true,
+                exactLexicalMatch: (existing as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
+            };
+            const nextComparable: SearchCandidate = {
+                result: {
+                    relativePath: group.file,
+                    startLine: group.span.startLine,
+                    endLine: group.span.endLine,
+                    symbolId: group.symbolId || undefined,
+                    symbolLabel: group.symbolLabel || undefined,
+                },
+                baseScore: 0,
+                backendScore: 0,
+                backendScoreKind: 'unknown',
+                fusionScore: 0,
+                lexicalScore: group.debug?.lexicalScore || 0,
+                finalScore: group.score,
+                pathCategory: (group.debug?.pathCategory as PathCategory | undefined) || 'neutral',
+                pathMultiplier: group.debug?.pathMultiplier || 1,
+                changedFilesMultiplier: group.debug?.changedFilesMultiplier || 1,
+                passesMatchedMust: group.debug?.matchesMust === true,
+                    exactLexicalMatch: (group as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
+            };
+
+            if (this.compareSearchCandidates(nextComparable, existingComparable) < 0) {
+                deduped.set(key, group);
+                continue;
+            }
+        }
+
+        return Array.from(deduped.values());
     }
 
     private buildFallbackGroupId(relativePath: string, span: SearchSpan): string {
@@ -3348,6 +3781,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const parsedOperators = this.parseSearchOperators(input.query);
             const semanticQuery = parsedOperators.semanticQuery;
+            const queryPlan = this.buildSearchQueryPlan(semanticQuery);
             const expandedQuery = `${semanticQuery}\nimplementation runtime source entrypoint`;
             const maxAttempts = parsedOperators.must.length > 0 ? 1 + SEARCH_MUST_RETRY_ROUNDS : 1;
             let candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
@@ -3370,7 +3804,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             let attemptsUsed = 0;
             const searchWarningsSet = new Set<string>();
             const passesUsed = new Set<string>();
+            const backendScoreKinds = new Set<'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown'>();
             let scored: SearchCandidate[] = [];
+            let exactMatchPinningApplied = false;
 
             for (let attempt = 0; attempt < maxAttempts; attempt++) {
                 attemptsUsed = attempt + 1;
@@ -3385,7 +3821,16 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     if (this.shouldForceSearchPassFailure(passId)) {
                         throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${passId}`);
                     }
-                    return this.context.semanticSearch(effectiveRoot, pass.query, candidateLimit, 0.3);
+                    const scorePolicy = queryPlan.scorePolicyKind === 'topk_only'
+                        ? { kind: 'topk_only' as const }
+                        : { kind: 'dense_similarity_min' as const, min: 0.3 };
+                    return this.context.semanticSearch({
+                        codebasePath: effectiveRoot,
+                        query: pass.query,
+                        topK: candidateLimit,
+                        retrievalMode: queryPlan.retrievalMode,
+                        scorePolicy
+                    });
                 }));
 
                 const successfulPasses: Array<{ id: string; results: any[] }> = [];
@@ -3436,20 +3881,39 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         const rrf = passWeight * (1 / (SEARCH_RRF_K + rank));
                         const existing = byChunkKey.get(key);
                         if (!existing) {
+                            const backendScoreKind = typeof result.backendScoreKind === 'string'
+                                ? result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion'
+                                : 'unknown';
+                            backendScoreKinds.add(backendScoreKind);
                             byChunkKey.set(key, {
                                 result,
-                                baseScore: typeof result.score === 'number' ? result.score : 0,
+                                baseScore: typeof result.backendScore === 'number'
+                                    ? result.backendScore
+                                    : (typeof result.score === 'number' ? result.score : 0),
+                                backendScore: typeof result.backendScore === 'number'
+                                    ? result.backendScore
+                                    : (typeof result.score === 'number' ? result.score : 0),
+                                backendScoreKind,
                                 fusionScore: rrf,
+                                lexicalScore: 0,
                                 finalScore: 0,
                                 pathCategory: 'neutral',
                                 pathMultiplier: 1.0,
                                 changedFilesMultiplier: 1.0,
                                 passesMatchedMust: false,
+                                exactLexicalMatch: false,
                             });
                         } else {
                             existing.fusionScore += rrf;
-                            if (typeof result.score === 'number') {
-                                existing.baseScore = Math.max(existing.baseScore, result.score);
+                            const nextScore = typeof result.backendScore === 'number'
+                                ? result.backendScore
+                                : (typeof result.score === 'number' ? result.score : undefined);
+                            if (typeof nextScore === 'number') {
+                                existing.baseScore = Math.max(existing.baseScore, nextScore);
+                                existing.backendScore = Math.max(existing.backendScore, nextScore);
+                            }
+                            if (typeof result.backendScoreKind === 'string') {
+                                backendScoreKinds.add(result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion');
                             }
                         }
                     }
@@ -3513,7 +3977,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     candidate.pathMultiplier = pathMultiplier;
                     candidate.changedFilesMultiplier = changedFilesMultiplier;
                     candidate.passesMatchedMust = matchesMust;
-                    candidate.finalScore = candidate.fusionScore * pathMultiplier * changedFilesMultiplier;
+                    const lexicalEvidence = this.scoreCandidateLexicalEvidence(queryPlan, candidate.result);
+                    candidate.lexicalScore = lexicalEvidence.score;
+                    candidate.exactLexicalMatch = lexicalEvidence.exactLexicalMatch;
+                    candidate.finalScore = (candidate.fusionScore + candidate.lexicalScore) * pathMultiplier * changedFilesMultiplier;
                     scoredAttempt.push(candidate);
                 }
 
@@ -3522,16 +3989,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 filterSummary = attemptFilterSummary;
                 scored = scoredAttempt;
 
-                scored.sort((a, b) => {
-                    if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
-                    const fileCmp = this.compareNullableStringsAsc(a.result.relativePath, b.result.relativePath);
-                    if (fileCmp !== 0) return fileCmp;
-                    const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
-                    if (startCmp !== 0) return startCmp;
-                    const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
-                    if (labelCmp !== 0) return labelCmp;
-                    return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
-                });
+                exactMatchPinningApplied = this.sortSearchCandidates(scored, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
 
                 if (parsedOperators.must.length === 0 || scored.length >= input.limit || attempt === maxAttempts - 1 || candidateLimit >= SEARCH_MAX_CANDIDATES) {
                     break;
@@ -3544,7 +4002,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             const searchWarnings = Array.from(searchWarningsSet);
-            const rerankDecision = this.resolveRerankDecision(input.scope);
+            const rerankDecision = this.resolveRerankDecision(input.scope, queryPlan);
             let rerankerApplied = false;
             let rerankerAttempted = false;
             let rerankerFailurePhase: 'api_call' | 'parse_results' | undefined;
@@ -3590,19 +4048,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         }
                         const rerankRrf = 1 / (SEARCH_RERANK_RRF_K + rank);
                         rerankSlice[idx].fusionScore += SEARCH_RERANK_WEIGHT * rerankRrf;
-                        rerankSlice[idx].finalScore = rerankSlice[idx].fusionScore * rerankSlice[idx].pathMultiplier * rerankSlice[idx].changedFilesMultiplier;
+                        rerankSlice[idx].finalScore = (rerankSlice[idx].fusionScore + rerankSlice[idx].lexicalScore) * rerankSlice[idx].pathMultiplier * rerankSlice[idx].changedFilesMultiplier;
                     }
 
-                    scored.sort((a, b) => {
-                        if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
-                        const fileCmp = this.compareNullableStringsAsc(a.result.relativePath, b.result.relativePath);
-                        if (fileCmp !== 0) return fileCmp;
-                        const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
-                        if (startCmp !== 0) return startCmp;
-                        const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
-                        if (labelCmp !== 0) return labelCmp;
-                        return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
-                    });
+                    exactMatchPinningApplied = this.sortSearchCandidates(scored, rerankDecision.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
                     rerankerApplied = true;
                 } catch {
                     if (!rerankerFailurePhase) {
@@ -3624,6 +4073,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const debugHintBase: SearchDebugHint | undefined = input.debug
                 ? {
+                    queryIntent: {
+                        classification: queryPlan.intent,
+                        confidence: queryPlan.confidence,
+                        reasons: [...queryPlan.reasons],
+                        lexicalTerms: queryPlan.lexicalTerms.map((term) => term.value),
+                        semanticQuery,
+                    },
+                    retrieval: {
+                        mode: queryPlan.retrievalMode,
+                        scorePolicyKind: queryPlan.scorePolicyKind,
+                        backendScoreKinds: Array.from(backendScoreKinds).sort(),
+                    },
                     passesUsed: Array.from(passesUsed).sort(),
                     candidateLimit,
                     mustRetry: {
@@ -3648,11 +4109,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     rerank: {
                         enabledByPolicy: rerankDecision.enabledByPolicy,
                         skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
+                        skippedByIdentifierIntent: rerankDecision.skippedByIdentifierIntent,
                         capabilityPresent: rerankDecision.capabilityPresent,
                         rerankerPresent: rerankDecision.rerankerPresent,
                         enabled: rerankDecision.enabled,
                         attempted: rerankerAttempted,
                         applied: rerankerApplied,
+                        exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
+                        exactMatchPinningApplied,
                         candidatesIn: rerankerCandidatesIn,
                         candidatesReranked: rerankerCandidatesReranked,
                         topK: SEARCH_RERANK_TOP_K,
@@ -3684,10 +4148,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         debug: {
                             baseScore: candidate.baseScore,
                             fusionScore: candidate.fusionScore,
+                            lexicalScore: candidate.lexicalScore,
                             pathMultiplier: candidate.pathMultiplier,
                             pathCategory: candidate.pathCategory,
                             changedFilesMultiplier: candidate.changedFilesMultiplier,
-                            matchesMust: candidate.passesMatchedMust
+                            matchesMust: candidate.passesMatchedMust,
+                            exactLexicalMatch: candidate.exactLexicalMatch,
+                            backendScore: candidate.backendScore,
+                            backendScoreKind: candidate.backendScoreKind,
                         }
                     } : {})
                 }));
@@ -3756,21 +4224,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? (this.snapshotManager as any).getCodebaseCallGraphSidecar(effectiveRoot)
                 : undefined;
             const sidecarReadyForOutline = Boolean(sidecarInfo && sidecarInfo.version === 'v3');
-            const groupedResults: SearchGroupResult[] = [];
+            const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
             for (const group of groups.values()) {
-                group.chunks.sort((a, b) => {
-                    if (a.passesMatchedMust !== b.passesMatchedMust) {
-                        return a.passesMatchedMust ? -1 : 1;
-                    }
-                    if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
-                    const fileCmp = this.compareNullableStringsAsc(a.result.relativePath, b.result.relativePath);
-                    if (fileCmp !== 0) return fileCmp;
-                    const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
-                    if (startCmp !== 0) return startCmp;
-                    const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
-                    if (labelCmp !== 0) return labelCmp;
-                    return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
-                });
+                exactMatchPinningApplied = this.sortSearchCandidates(group.chunks, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
                 const representative = group.chunks[0];
                 const spanStart = Math.min(...group.chunks.map((c) => c.result.startLine || 0));
                 const spanEnd = Math.max(...group.chunks.map((c) => c.result.endLine || 0));
@@ -3820,20 +4276,30 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     callGraphHint,
                     ...(navigationFallback ? { navigationFallback } : {}),
                     preview: truncateContent(String(representative.result.content || ''), 4000),
+                    __exactLexicalMatch: representative.exactLexicalMatch,
                     ...(input.debug ? {
                         debug: {
                             representativeChunkCount: group.chunks.length,
                             pathCategory: representative.pathCategory,
                             pathMultiplier: representative.pathMultiplier,
                             topChunkScore: representative.finalScore,
+                            lexicalScore: representative.lexicalScore,
                             changedFilesMultiplier: representative.changedFilesMultiplier,
-                            matchesMust: representative.passesMatchedMust
+                            matchesMust: representative.passesMatchedMust,
+                            exactLexicalMatch: representative.exactLexicalMatch,
                         }
                     } : {})
                 });
             }
 
-            groupedResults.sort((a, b) => {
+            const rankedGroupedResults = (queryPlan.referenceSeeking || queryPlan.intent === 'identifier')
+                ? this.collapseDuplicateDeclarationGroups(groupedResults)
+                : groupedResults;
+
+            rankedGroupedResults.sort((a, b) => {
+                if (queryPlan.exactMatchPinningEnabled && a.__exactLexicalMatch !== b.__exactLexicalMatch) {
+                    return a.__exactLexicalMatch ? -1 : 1;
+                }
                 if (b.score !== a.score) return b.score - a.score;
                 const fileCmp = a.file.localeCompare(b.file);
                 if (fileCmp !== 0) return fileCmp;
@@ -3844,7 +4310,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
             });
 
-            const diversityApplied = this.applyGroupDiversity(groupedResults, input.limit, input.groupBy);
+            const diversityApplied = this.applyGroupDiversity(rankedGroupedResults, input.limit, input.groupBy);
             const visibleGroupedResults = diversityApplied.selected;
             const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file));
             const responseHints: Record<string, unknown> = {};
@@ -3875,7 +4341,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 freshnessDecision,
                 ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
                 ...(Object.keys(responseHints).length > 0 ? { hints: responseHints } : {}),
-                results: visibleGroupedResults
+                results: visibleGroupedResults.map(({ __exactLexicalMatch: _exactLexicalMatch, ...result }) => result)
             };
 
             await this.touchWatchedCodebase(effectiveRoot);

@@ -15,13 +15,15 @@ import {
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,
+    RetrievalMode,
+    ScorePolicy,
     IndexCompletionFingerprint,
     IndexCompletionMarkerDocument,
     INDEX_COMPLETION_MARKER_DOC_ID,
     INDEX_COMPLETION_MARKER_FILE_EXTENSION,
     INDEX_COMPLETION_MARKER_RELATIVE_PATH
 } from '../vectordb';
-import { SemanticSearchResult } from '../types';
+import { SemanticSearchRequest, SemanticSearchResult } from '../types';
 import { envManager } from '../utils/env-manager';
 import { DEFAULT_IGNORE_PATTERNS, DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
 import { getLanguageIdFromExtension } from '../language';
@@ -440,11 +442,22 @@ export class Context {
      * @param topK Number of results to return
      * @param threshold Similarity threshold
      */
-    async semanticSearch(codebasePath: string, query: string, topK: number = 5, threshold: number = 0.5, filterExpr?: string): Promise<SemanticSearchResult[]> {
-        const isHybrid = this.getIsHybrid();
+    async semanticSearch(request: SemanticSearchRequest): Promise<SemanticSearchResult[]>;
+    async semanticSearch(codebasePath: string, query: string, topK?: number, threshold?: number, filterExpr?: string): Promise<SemanticSearchResult[]>;
+    async semanticSearch(
+        requestOrCodebasePath: SemanticSearchRequest | string,
+        query?: string,
+        topK: number = 5,
+        threshold: number = 0.5,
+        filterExpr?: string
+    ): Promise<SemanticSearchResult[]> {
+        const request = this.normalizeSemanticSearchRequest(requestOrCodebasePath, query, topK, threshold, filterExpr);
+        const resolvedRequest = this.resolveSemanticSearchRequest(request);
+        const codebasePath = resolvedRequest.codebasePath;
+        const isHybrid = resolvedRequest.retrievalMode !== 'dense' && this.getIsHybrid() === true;
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
-        console.log(`[Context] 🔍 Executing ${searchType}: "${query}" in ${codebasePath}`);
-        const effectiveFilterExpr = this.buildSemanticSearchFilterExpr(filterExpr);
+        console.log(`[Context] 🔍 Executing ${searchType}: "${resolvedRequest.query}" in ${codebasePath}`);
+        const effectiveFilterExpr = this.buildSemanticSearchFilterExpr(resolvedRequest.filterExpr);
 
         const normalizeBreadcrumbs = (value: unknown): string[] | undefined => {
             if (!Array.isArray(value)) {
@@ -478,8 +491,8 @@ export class Context {
             }
 
             // 1. Generate query vector
-            console.log(`[Context] 🔍 Generating embeddings for query: "${query}"`);
-            const queryEmbedding: EmbeddingVector = await this.embedding.embed(query);
+            console.log(`[Context] 🔍 Generating embeddings for query: "${resolvedRequest.query}"`);
+            const queryEmbedding: EmbeddingVector = await this.embedding.embed(resolvedRequest.query);
             console.log(`[Context] ✅ Generated embedding vector with dimension: ${queryEmbedding.vector.length}`);
             console.log(`[Context] 🔍 First 5 embedding values: [${queryEmbedding.vector.slice(0, 5).join(', ')}]`);
 
@@ -489,18 +502,18 @@ export class Context {
                     data: queryEmbedding.vector,
                     anns_field: "vector",
                     param: { "nprobe": 10 },
-                    limit: topK
+                    limit: resolvedRequest.topK
                 },
                 {
-                    data: query,
+                    data: resolvedRequest.query,
                     anns_field: "sparse_vector",
                     param: { "drop_ratio_search": 0.2 },
-                    limit: topK
+                    limit: resolvedRequest.topK
                 }
             ];
 
             console.log(`[Context] 🔍 Search request 1 (dense): anns_field="${searchRequests[0].anns_field}", vector_dim=${queryEmbedding.vector.length}, limit=${searchRequests[0].limit}`);
-            console.log(`[Context] 🔍 Search request 2 (sparse): anns_field="${searchRequests[1].anns_field}", query_text="${query}", limit=${searchRequests[1].limit}`);
+            console.log(`[Context] 🔍 Search request 2 (sparse): anns_field="${searchRequests[1].anns_field}", query_text="${resolvedRequest.query}", limit=${searchRequests[1].limit}`);
 
             // 3. Execute hybrid search
             console.log(`[Context] 🔍 Executing hybrid search with RRF reranking...`);
@@ -512,7 +525,7 @@ export class Context {
                         strategy: 'rrf',
                         params: { k: 100 }
                     },
-                    limit: topK,
+                    limit: resolvedRequest.topK,
                     // Hybrid RRF scores are backend/rerank relative, so dense similarity
                     // thresholds can erase valid sparse lexical matches before MCP ranking.
                     filterExpr: effectiveFilterExpr
@@ -532,7 +545,9 @@ export class Context {
                 breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs),
                 indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
                 symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
-                symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined
+                symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined,
+                backendScore: result.score,
+                backendScoreKind: 'rrf_fusion'
             }));
 
             console.log(`[Context] ✅ Found ${results.length} relevant hybrid results`);
@@ -544,13 +559,16 @@ export class Context {
         } else {
             // Regular semantic search
             // 1. Generate query vector
-            const queryEmbedding: EmbeddingVector = await this.embedding.embed(query);
+            const queryEmbedding: EmbeddingVector = await this.embedding.embed(resolvedRequest.query);
+            const denseThreshold = resolvedRequest.scorePolicy.kind === 'dense_similarity_min'
+                ? resolvedRequest.scorePolicy.min
+                : undefined;
 
             // 2. Search in vector database
             const searchResults: VectorSearchResult[] = await this.vectorDatabase.search(
                 collectionName,
                 queryEmbedding.vector,
-                { topK, threshold, filterExpr: effectiveFilterExpr }
+                { topK: resolvedRequest.topK, threshold: denseThreshold, filterExpr: effectiveFilterExpr }
             );
 
             // 3. Convert to semantic search result format
@@ -564,12 +582,66 @@ export class Context {
                 breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs),
                 indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
                 symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
-                symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined
+                symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined,
+                backendScore: result.score,
+                backendScoreKind: 'dense_similarity'
             }));
 
             console.log(`[Context] ✅ Found ${results.length} relevant results`);
             return results;
         }
+    }
+
+    private normalizeSemanticSearchRequest(
+        requestOrCodebasePath: SemanticSearchRequest | string,
+        query?: string,
+        topK: number = 5,
+        threshold: number = 0.5,
+        filterExpr?: string
+    ): SemanticSearchRequest {
+        if (typeof requestOrCodebasePath === 'string') {
+            return {
+                codebasePath: requestOrCodebasePath,
+                query: query ?? '',
+                topK,
+                filterExpr,
+                ...(threshold > 0
+                    ? {
+                        retrievalMode: 'dense',
+                        scorePolicy: { kind: 'dense_similarity_min', min: threshold } as const
+                    }
+                    : {
+                        scorePolicy: { kind: 'topk_only' } as const
+                    })
+            };
+        }
+
+        return requestOrCodebasePath;
+    }
+
+    private resolveSemanticSearchRequest(request: SemanticSearchRequest): Required<SemanticSearchRequest> & { retrievalMode: RetrievalMode; scorePolicy: ScorePolicy } {
+        const hybridEnabled = this.getIsHybrid() === true;
+        const retrievalMode = request.retrievalMode ?? (hybridEnabled ? 'hybrid' : 'dense');
+        const scorePolicy = request.scorePolicy ?? (retrievalMode === 'dense'
+            ? { kind: 'dense_similarity_min', min: 0.5 }
+            : { kind: 'topk_only' });
+
+        if (request.retrievalMode !== undefined && retrievalMode !== 'dense' && hybridEnabled !== true) {
+            throw new Error(`${retrievalMode} retrieval requires hybrid search support, but HYBRID_MODE is disabled.`);
+        }
+
+        if (retrievalMode !== 'dense' && scorePolicy.kind === 'dense_similarity_min') {
+            throw new Error(`Dense similarity threshold score policy is invalid for ${retrievalMode} retrieval.`);
+        }
+
+        return {
+            codebasePath: request.codebasePath,
+            query: request.query,
+            topK: request.topK ?? 5,
+            retrievalMode,
+            filterExpr: request.filterExpr ?? '',
+            scorePolicy
+        };
     }
 
     private buildSemanticSearchFilterExpr(filterExpr?: string): string {

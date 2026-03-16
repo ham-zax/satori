@@ -216,7 +216,12 @@ test('integration: semantic_search returns domain-relevant files', async () => {
 
   try {
     await context.indexCodebase(codebasePath);
-    const results = await context.semanticSearch(codebasePath, 'login token authentication', 5, 0);
+    const results = await context.semanticSearch({
+      codebasePath,
+      query: 'login token authentication',
+      topK: 5,
+      scorePolicy: { kind: 'topk_only' },
+    });
     assert.ok(results.length > 0);
     assert.equal(results[0].relativePath, 'src/auth.ts');
   } finally {
@@ -249,7 +254,12 @@ test('integration: reindex_by_change tracks add/modify/remove deltas', async () 
       changedFiles: ['src/new.ts', 'src/obsolete.ts', 'src/service.ts'],
     });
 
-    const results = await context.semanticSearch(codebasePath, 'feature flag', 5, 0);
+    const results = await context.semanticSearch({
+      codebasePath,
+      query: 'feature flag',
+      topK: 5,
+      scorePolicy: { kind: 'topk_only' },
+    });
     assert.ok(results.some((result) => result.relativePath === 'src/new.ts'));
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
@@ -276,7 +286,12 @@ test('integration: clearIndex resets sync state so reindex_by_change rebuilds a 
     });
 
     assert.equal(await context.hasIndexedCollection(codebasePath), true);
-    const results = await context.semanticSearch(codebasePath, 'service ready', 5, 0);
+    const results = await context.semanticSearch({
+      codebasePath,
+      query: 'service ready',
+      topK: 5,
+      scorePolicy: { kind: 'topk_only' },
+    });
     assert.ok(results.some((result) => result.relativePath === 'src/service.ts'));
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
@@ -310,7 +325,13 @@ test('integration: semantic_search applies threshold in hybrid mode', async () =
 
   try {
     await context.indexCodebase(codebasePath);
-    const results = await context.semanticSearch(codebasePath, 'login token auth', 5, 0.5);
+    const results = await context.semanticSearch({
+      codebasePath,
+      query: 'login token auth',
+      topK: 5,
+      retrievalMode: 'dense',
+      scorePolicy: { kind: 'dense_similarity_min', min: 0.5 },
+    });
     assert.deepEqual(results.map((result) => result.relativePath), ['src/auth.ts']);
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
@@ -331,7 +352,12 @@ test('integration: ignore negation patterns keep explicitly unignored files inde
     const stats = await context.indexCodebase(codebasePath);
     assert.equal(stats.indexedFiles, 2);
 
-    const keptResults = await context.semanticSearch(codebasePath, 'kept', 10, 0);
+    const keptResults = await context.semanticSearch({
+      codebasePath,
+      query: 'kept',
+      topK: 10,
+      scorePolicy: { kind: 'topk_only' },
+    });
     assert.ok(keptResults.some((r) => r.relativePath === 'generated/keep.ts'));
     assert.ok(!keptResults.some((r) => r.relativePath === 'generated/drop.ts'));
   } finally {

@@ -10,6 +10,14 @@ export interface VectorDocument {
     metadata: Record<string, any>;
 }
 
+export type RetrievalMode = 'dense' | 'lexical' | 'hybrid';
+
+export type ScorePolicy =
+    | { kind: 'dense_similarity_min'; min: number }
+    | { kind: 'topk_only' };
+
+export type BackendScoreKind = 'dense_similarity' | 'lexical_rank' | 'rrf_fusion';
+
 export interface SearchOptions {
     topK?: number;
     filter?: Record<string, any>;

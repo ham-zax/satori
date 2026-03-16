@@ -16,6 +16,11 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     schemaVersion: 'hybrid_v3'
 };
 
+const DENSE_RUNTIME_FINGERPRINT: IndexFingerprint = {
+    ...RUNTIME_FINGERPRINT,
+    schemaVersion: 'dense_v3'
+};
+
 const CAPABILITIES_NO_RERANK = new CapabilityResolver({
     name: 'test',
     version: '0.0.0',
@@ -103,6 +108,24 @@ function createHandlers(
     );
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
+}
+
+function parseSemanticSearchInvocation(args: any[]): { root: string; query: string; topK: number; request: any | null } {
+    if (args.length === 1 && args[0] && typeof args[0] === 'object') {
+        return {
+            root: args[0].codebasePath,
+            query: args[0].query,
+            topK: args[0].topK ?? 5,
+            request: args[0]
+        };
+    }
+
+    return {
+        root: args[0],
+        query: args[1],
+        topK: args[2] ?? 5,
+        request: null
+    };
 }
 
 test('handleSearchCode grouped output includes symbol metadata and callGraphHint', async () => {
@@ -332,7 +355,7 @@ test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', asy
 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async (_root: string, _query: string, topK: number) => denseResults.slice(0, topK)
+            semanticSearch: async (...args: any[]) => denseResults.slice(0, parseSemanticSearchInvocation(args).topK)
         } as any;
 
         const snapshotManager = {
@@ -350,7 +373,7 @@ test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', asy
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
@@ -386,7 +409,7 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async (_root: string, _query: string, topK: number) => denseResults.slice(0, topK)
+            semanticSearch: async (...args: any[]) => denseResults.slice(0, parseSemanticSearchInvocation(args).topK)
         } as any;
 
         const snapshotManager = {
@@ -404,7 +427,7 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
@@ -425,6 +448,53 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
         assert.equal(payload.hints?.debugSearch?.mustRetry?.attempts, 2);
         assert.equal(payload.hints?.debugSearch?.mustRetry?.satisfied, true);
         assert.equal(payload.hints?.debugSearch?.mustRetry?.finalCount, 1);
+    });
+});
+
+test('handleSearchCode grouped representative prefers must-matching chunk within the same symbol group', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export function auth() { return "no token"; }',
+                relativePath: 'src/auth.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_auth',
+                symbolLabel: 'function auth()'
+            },
+            {
+                content: 'export function auth() { return "ERR_CODE_42"; }',
+                relativePath: 'src/auth.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.80,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_auth',
+                symbolLabel: 'function auth()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'must:ERR_CODE_42 auth',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, 'src/auth.ts');
+        assert.equal(payload.results[0].span?.startLine, 20);
+        assert.equal(payload.results[0].debug?.matchesMust, true);
+        assert.match(payload.results[0].preview, /ERR_CODE_42/);
     });
 });
 
@@ -863,6 +933,750 @@ test('handleSearchCode marks rerank.enabled=false when reranker instance is miss
         assert.equal(payload.hints?.debugSearch?.rerank?.enabled, false);
         assert.equal(payload.hints?.debugSearch?.rerank?.attempted, false);
         assert.equal(payload.hints?.debugSearch?.rerank?.applied, false);
+    });
+});
+
+test('handleSearchCode exposes identifier query intent and skips reranker for exact identifier lookups', async () => {
+    await withTempRepo(async (repoPath) => {
+        let rerankCalls = 0;
+        const reranker = {
+            rerank: async () => {
+                rerankCalls += 1;
+                return [];
+            }
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export type HurstGateState = "open" | "blocked";',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state',
+                symbolLabel: 'type HurstGateState'
+            },
+            {
+                content: 'export type RegimeGateState = "open" | "blocked";',
+                relativePath: 'src/regime_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.021,
+                backendScore: 0.021,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_regime_gate_state',
+                symbolLabel: 'type RegimeGateState'
+            }
+        ], reranker);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'HurstGateState',
+            scope: 'runtime',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(rerankCalls, 0);
+        assert.equal(payload.results[0].file, 'src/hurst_gate.ts');
+        assert.equal(payload.results[0].debug?.exactLexicalMatch, true);
+        assert.equal(payload.hints?.debugSearch?.queryIntent?.classification, 'identifier');
+        assert.equal(payload.hints?.debugSearch?.retrieval?.mode, 'lexical');
+        assert.equal(payload.hints?.debugSearch?.retrieval?.scorePolicyKind, 'topk_only');
+        assert.equal(payload.hints?.debugSearch?.retrieval?.backendScoreKinds?.includes('rrf_fusion'), true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabledByPolicy, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.skippedByIdentifierIntent, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabled, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.attempted, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.exactMatchPinningEnabled, true);
+    });
+});
+
+test('handleSearchCode promotes lexical exact matches for hurst-style single-token queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export function checkRegimeGate() { return "trend persistence"; }',
+                relativePath: 'src/regime_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.021,
+                backendScore: 0.021,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_regime_gate',
+                symbolLabel: 'function checkRegimeGate()'
+            },
+            {
+                content: 'export function check_hurst_gate() { return "hurst gate"; }',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate',
+                symbolLabel: 'function check_hurst_gate()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'hurst',
+            scope: 'runtime',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/hurst_gate.ts');
+        assert.equal(payload.results[0].debug?.exactLexicalMatch, true);
+        assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
+        assert.equal(payload.hints?.debugSearch?.retrieval?.backendScoreKinds?.includes('rrf_fusion'), true);
+    });
+});
+
+test('handleSearchCode prefers usage hits over declarations for reference-seeking mixed queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const reranker = {
+            rerank: async () => [
+                { index: 1, relevanceScore: 0.95 }
+            ]
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export type HurstGateState = "open" | "blocked";',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state',
+                symbolLabel: 'type HurstGateState'
+            },
+            {
+                content: 'const gate = new HurstGateState(config); return explainWhereUsed(gate);',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 10,
+                endLine: 14,
+                language: 'typescript',
+                score: 0.021,
+                backendScore: 0.021,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function explainRuntimeUsage()'
+            }
+        ], reranker);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is HurstGateState used',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        assert.equal(payload.results[0].debug?.exactLexicalMatch, false);
+        assert.equal(payload.hints?.debugSearch?.queryIntent?.classification, 'mixed');
+        assert.equal(payload.hints?.debugSearch?.queryIntent?.reasons?.includes('reference_seeking_query'), true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabled, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.attempted, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.applied, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.exactMatchPinningEnabled, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.exactMatchPinningApplied, false);
+    });
+});
+
+test('handleSearchCode collapses duplicate declaration groups for reference-seeking queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const reranker = {
+            rerank: async () => [
+                { index: 2, relevanceScore: 0.99 },
+                { index: 0, relevanceScore: 0.98 },
+                { index: 1, relevanceScore: 0.97 }
+            ]
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export class HurstGateState {}',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state_a',
+                symbolLabel: 'class HurstGateState'
+            },
+            {
+                content: 'class HurstGateState { /* duplicate chunk */ }',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 2,
+                endLine: 4,
+                language: 'typescript',
+                score: 0.0185,
+                backendScore: 0.0185,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state_b',
+                symbolLabel: 'class HurstGateState'
+            },
+            {
+                content: 'const gate = new HurstGateState(config); return gate;',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 10,
+                endLine: 14,
+                language: 'typescript',
+                score: 0.017,
+                backendScore: 0.017,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function explainRuntimeUsage()'
+            }
+        ], reranker);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is HurstGateState used',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        const declarationHits = payload.results.filter((result: any) => result.file === 'src/hurst_gate.ts' && result.symbolLabel === 'class HurstGateState');
+        assert.equal(declarationHits.length, 1);
+    });
+});
+
+test('handleSearchCode identifier query does not treat fragment-only matches as exact lexical matches', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export class HurstGateState {}',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state',
+                symbolLabel: 'class HurstGateState'
+            },
+            {
+                content: 'export function current_state() { return GateState.NORMAL; }',
+                relativePath: 'src/risk_state.ts',
+                startLine: 20,
+                endLine: 24,
+                language: 'typescript',
+                score: 0.021,
+                backendScore: 0.021,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_current_state',
+                symbolLabel: 'function current_state()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'HurstGateState',
+            scope: 'runtime',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/hurst_gate.ts');
+        assert.equal(payload.results[0].debug?.exactLexicalMatch, true);
+        assert.equal(payload.results[1].file, 'src/risk_state.ts');
+        assert.equal(payload.results[1].debug?.exactLexicalMatch, false);
+        assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
+    });
+});
+
+test('handleSearchCode collapses duplicate declaration groups for identifier queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export class HurstGateState {}',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state_a',
+                symbolLabel: 'class HurstGateState'
+            },
+            {
+                content: 'class HurstGateState { /* duplicate chunk */ }',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 2,
+                endLine: 4,
+                language: 'typescript',
+                score: 0.0185,
+                backendScore: 0.0185,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state_b',
+                symbolLabel: 'class HurstGateState'
+            },
+            {
+                content: 'export function current_state() { return GateState.NORMAL; }',
+                relativePath: 'src/risk_state.ts',
+                startLine: 20,
+                endLine: 24,
+                language: 'typescript',
+                score: 0.021,
+                backendScore: 0.021,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_current_state',
+                symbolLabel: 'function current_state()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'HurstGateState',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const declarationHits = payload.results.filter((result: any) => result.file === 'src/hurst_gate.ts' && result.symbolLabel === 'class HurstGateState');
+        assert.equal(declarationHits.length, 1);
+    });
+});
+
+test('handleSearchCode reference-seeking queries downweight fragment-only matches below real usage', async () => {
+    await withTempRepo(async (repoPath) => {
+        const reranker = {
+            rerank: async () => [
+                { index: 1, relevanceScore: 0.99 },
+                { index: 0, relevanceScore: 0.98 },
+                { index: 2, relevanceScore: 0.97 }
+            ]
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export class HurstGateState {}',
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state',
+                symbolLabel: 'class HurstGateState'
+            },
+            {
+                content: 'export function current_state_gate() { return gateState; }',
+                relativePath: 'src/check_gate_state.ts',
+                startLine: 20,
+                endLine: 24,
+                language: 'typescript',
+                score: 0.20,
+                backendScore: 0.20,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_current_state_gate',
+                symbolLabel: 'function current_state_gate()'
+            },
+            {
+                content: 'const gate = HurstGateState(config); return gate;',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 10,
+                endLine: 14,
+                language: 'typescript',
+                score: 0.017,
+                backendScore: 0.017,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function explainRuntimeUsage()'
+            }
+        ], reranker);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is HurstGateState used',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        assert.equal(payload.results[1].file !== 'src/check_gate_state.ts', true);
+    });
+});
+
+test('handleSearchCode reference-seeking queries rank runtime usage above declaration chunks with usage examples', async () => {
+    await withTempRepo(async (repoPath) => {
+        const reranker = {
+            rerank: async () => [
+                { index: 0, relevanceScore: 0.99 },
+                { index: 1, relevanceScore: 0.98 }
+            ]
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: [
+                    'export class HurstGateState {',
+                    '  /**',
+                    '   * Usage:',
+                    '   *   const gate = HurstGateState(config);',
+                    '   */',
+                    '}'
+                ].join('\n'),
+                relativePath: 'src/hurst_gate.ts',
+                startLine: 1,
+                endLine: 6,
+                language: 'typescript',
+                score: 0.020,
+                backendScore: 0.020,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_hurst_gate_state',
+                symbolLabel: 'class HurstGateState'
+            },
+            {
+                content: 'this.hurstGate = HurstGateState(config); return this.hurstGate;',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.017,
+                backendScore: 0.017,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function initializeRuntimeGate()'
+            }
+        ], reranker);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is HurstGateState used',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        assert.equal(payload.results[1].file, 'src/hurst_gate.ts');
+    });
+});
+
+test('handleSearchCode reference-seeking function declarations do not receive usage-match boost', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export function check_hurst_gate(config) { return config; }',
+                relativePath: 'src/check_hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_check_hurst_gate',
+                symbolLabel: 'function check_hurst_gate('
+            },
+            {
+                content: 'const result = check_hurst_gate(config); return result;',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.017,
+                backendScore: 0.017,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function runGateCheck()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is check_hurst_gate used',
+            scope: 'runtime',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        const declaration = payload.results.find((result: any) => result.file === 'src/check_hurst_gate.ts');
+        assert.ok(declaration);
+        assert.equal(declaration.debug?.lexicalScore < 0.05, true);
+    });
+});
+
+test('handleSearchCode reference-seeking queries rank executable usage above import-only references', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'import { HurstGateState } from "./hurst_gate"; export { HurstGateState };',
+                relativePath: 'src/runtime_import.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.021,
+                backendScore: 0.021,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_import',
+                symbolLabel: 'module runtime_import'
+            },
+            {
+                content: 'const gate = new HurstGateState(config); return gate;',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.017,
+                backendScore: 0.017,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function initializeRuntimeGate()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is HurstGateState used',
+            scope: 'runtime',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        assert.equal(payload.results[1].file, 'src/runtime_import.ts');
+        assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
+    });
+});
+
+test('handleSearchCode treats arrow function declarations as declarations for reference-seeking queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'const check_hurst_gate = (config) => config;',
+                relativePath: 'src/check_hurst_gate.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_check_hurst_gate_arrow_a',
+                symbolLabel: 'const check_hurst_gate ='
+            },
+            {
+                content: 'const check_hurst_gate = async (config) => config.value;',
+                relativePath: 'src/check_hurst_gate.ts',
+                startLine: 3,
+                endLine: 4,
+                language: 'typescript',
+                score: 0.0185,
+                backendScore: 0.0185,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_check_hurst_gate_arrow_b',
+                symbolLabel: 'const check_hurst_gate ='
+            },
+            {
+                content: 'const result = check_hurst_gate(config); return result;',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.017,
+                backendScore: 0.017,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function runGateCheck()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is check_hurst_gate used',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        const declarationHits = payload.results.filter((result: any) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'const check_hurst_gate =');
+        assert.equal(declarationHits.length, 1);
+    });
+});
+
+test('handleSearchCode treats arrow declarations with n-containing parameter names as declarations', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'const check_hurst_gate = (next) => next;',
+                relativePath: 'src/check_hurst_gate.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_check_hurst_gate_arrow_next',
+                symbolLabel: 'const check_hurst_gate ='
+            },
+            {
+                content: 'const result = check_hurst_gate(config); return result;',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.017,
+                backendScore: 0.017,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function runGateCheck()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is check_hurst_gate used',
+            scope: 'runtime',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        const declaration = payload.results.find((result: any) => result.file === 'src/check_hurst_gate.ts');
+        assert.ok(declaration);
+        assert.equal(declaration.debug?.lexicalScore < 0.05, true);
+    });
+});
+
+test('handleSearchCode collapses duplicate function declaration groups for reference-seeking queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export function check_hurst_gate(config) { return config; }',
+                relativePath: 'src/check_hurst_gate.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.019,
+                backendScore: 0.019,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_check_hurst_gate_a',
+                symbolLabel: 'function check_hurst_gate('
+            },
+            {
+                content: 'function check_hurst_gate(config) { return config.value; }',
+                relativePath: 'src/check_hurst_gate.ts',
+                startLine: 2,
+                endLine: 4,
+                language: 'typescript',
+                score: 0.0185,
+                backendScore: 0.0185,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_check_hurst_gate_b',
+                symbolLabel: 'function check_hurst_gate('
+            },
+            {
+                content: 'const result = check_hurst_gate(config); return result;',
+                relativePath: 'src/runtime_usage.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.017,
+                backendScore: 0.017,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_usage',
+                symbolLabel: 'function runGateCheck()'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is check_hurst_gate used',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const declarationHits = payload.results.filter((result: any) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'function check_hurst_gate(');
+        assert.equal(declarationHits.length, 1);
     });
 });
 
@@ -1459,7 +2273,7 @@ test('handleSearchCode emits fileOutlineWindow navigation fallback when sidecar 
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
@@ -1535,7 +2349,7 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
             })
         } as any;
 
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
@@ -1609,6 +2423,113 @@ test('handleSearchCode grouped sorting places null symbolLabel last for determin
     });
 });
 
+test('handleSearchCode builds explicit hybrid semantic search requests with topk_only policy', async () => {
+    await withTempRepo(async (repoPath) => {
+        const calls: Array<{ root: string; query: string; topK: number; request: any | null }> = [];
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async (...args: any[]) => {
+                calls.push(parseSemanticSearchInvocation(args));
+                return [];
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(calls.length, 2);
+        assert.deepEqual(calls.map((call) => call.query), [
+            'validate session',
+            'validate session\nimplementation runtime source entrypoint'
+        ]);
+        for (const call of calls) {
+            assert.ok(call.request);
+            assert.equal(call.request.codebasePath, repoPath);
+            assert.equal(call.request.topK, 40);
+            assert.equal(call.request.retrievalMode, 'hybrid');
+            assert.deepEqual(call.request.scorePolicy, { kind: 'topk_only' });
+        }
+    });
+});
+
+test('handleSearchCode falls back to dense retrieval when hybrid mode is disabled', async () => {
+    await withTempRepo(async (repoPath) => {
+        const calls: Array<ReturnType<typeof parseSemanticSearchInvocation>> = [];
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getIsHybrid: () => false,
+            semanticSearch: async (...args: any[]) => {
+                calls.push(parseSemanticSearchInvocation(args));
+                return [];
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(calls.length, 2);
+        for (const call of calls) {
+            assert.ok(call.request);
+            assert.equal(call.request.codebasePath, repoPath);
+            assert.equal(call.request.topK, 40);
+            assert.equal(call.request.retrievalMode, 'dense');
+            assert.deepEqual(call.request.scorePolicy, { kind: 'topk_only' });
+        }
+    });
+});
+
 test('handleSearchCode runs semantic passes concurrently and emits warnings on partial failure', async () => {
     await withTempRepo(async (repoPath) => {
         const started: string[] = [];
@@ -1619,7 +2540,8 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async (_root: string, query: string) => {
+            semanticSearch: async (...args: any[]) => {
+                const { query } = parseSemanticSearchInvocation(args);
                 const passId = query.includes('implementation runtime source entrypoint') ? 'expanded' : 'primary';
                 started.push(passId);
                 await gate;
@@ -1729,7 +2651,8 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
         }, async () => {
             const context = {
                 getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-                semanticSearch: async (_root: string, query: string) => {
+                semanticSearch: async (...args: any[]) => {
+                    const { query } = parseSemanticSearchInvocation(args);
                     if (query.includes('implementation runtime source entrypoint')) {
                         return [{
                             content: 'expanded pass hit',
@@ -1804,7 +2727,8 @@ test('handleSearchCode ignores fault injection env outside test mode', { concurr
         }, async () => {
             const context = {
                 getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-                semanticSearch: async (_root: string, query: string) => {
+                semanticSearch: async (...args: any[]) => {
+                    const { query } = parseSemanticSearchInvocation(args);
                     if (query.includes('implementation runtime source entrypoint')) {
                         return [{
                             content: 'expanded pass hit',

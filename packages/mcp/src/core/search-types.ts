@@ -34,10 +34,14 @@ export interface SearchChunkResult {
     debug?: {
         baseScore: number;
         fusionScore: number;
+        lexicalScore: number;
         pathMultiplier: number;
         pathCategory: string;
         changedFilesMultiplier?: number;
         matchesMust?: boolean;
+        exactLexicalMatch: boolean;
+        backendScore?: number;
+        backendScoreKind?: "dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown";
     };
 }
 
@@ -61,8 +65,10 @@ export interface SearchGroupResult {
         pathCategory: string;
         pathMultiplier: number;
         topChunkScore: number;
+        lexicalScore: number;
         changedFilesMultiplier?: number;
         matchesMust?: boolean;
+        exactLexicalMatch: boolean;
     };
 }
 
@@ -127,6 +133,18 @@ export interface SearchOperatorSummary {
 }
 
 export interface SearchDebugHint {
+    queryIntent: {
+        classification: "identifier" | "semantic" | "mixed" | "uncertain";
+        confidence: "high" | "medium" | "low";
+        reasons: string[];
+        lexicalTerms: string[];
+        semanticQuery: string;
+    };
+    retrieval: {
+        mode: "dense" | "lexical" | "hybrid";
+        scorePolicyKind: "dense_similarity_min" | "topk_only";
+        backendScoreKinds: Array<"dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown">;
+    };
     passesUsed: string[];
     candidateLimit: number;
     mustRetry: {
@@ -166,11 +184,14 @@ export interface SearchDebugHint {
     rerank?: {
         enabledByPolicy: boolean;
         skippedByScopeDocs: boolean;
+        skippedByIdentifierIntent: boolean;
         capabilityPresent: boolean;
         rerankerPresent: boolean;
         enabled: boolean;
         attempted: boolean;
         applied: boolean;
+        exactMatchPinningEnabled: boolean;
+        exactMatchPinningApplied: boolean;
         candidatesIn: number;
         candidatesReranked: number;
         errorCode?: "RERANKER_FAILED";

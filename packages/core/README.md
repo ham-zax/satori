@@ -36,7 +36,13 @@ const context = new Context({
 });
 
 await context.indexCodebase('/absolute/path/to/repo');
-const results = await context.semanticSearch('/absolute/path/to/repo', 'authentication logic', 5);
+const results = await context.semanticSearch({
+  codebasePath: '/absolute/path/to/repo',
+  query: 'authentication logic',
+  topK: 5,
+  retrievalMode: 'hybrid',
+  scorePolicy: { kind: 'topk_only' }
+});
 ```
 
 ## Development

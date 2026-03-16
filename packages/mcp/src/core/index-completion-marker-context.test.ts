@@ -15,7 +15,8 @@ import type {
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,
-    IndexCompletionMarkerDocument
+    IndexCompletionMarkerDocument,
+    SemanticSearchRequest
 } from '@zokizuan/satori-core';
 
 class FakeEmbedding extends Embedding {
@@ -42,10 +43,11 @@ class FakeEmbedding extends Embedding {
     }
 }
 
-function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[] }) {
+function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]; vectorResults?: VectorSearchResult[] }) {
     const byCollection = new Map<string, Map<string, VectorDocument>>();
     let lastHybridFilterExpr: string | undefined;
     let lastHybridOptions: HybridSearchOptions | undefined;
+    let lastSearchOptions: SearchOptions | undefined;
 
     const ensureCollection = (collectionName: string): Map<string, VectorDocument> => {
         if (!byCollection.has(collectionName)) {
@@ -83,8 +85,13 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
                 collection.set(doc.id, doc);
             }
         },
-        async search(_collectionName, _queryVector, _options?: SearchOptions): Promise<VectorSearchResult[]> {
-            return [];
+        async search(_collectionName, _queryVector, searchOptions?: SearchOptions): Promise<VectorSearchResult[]> {
+            lastSearchOptions = searchOptions;
+            const results = options?.vectorResults || [];
+            if (searchOptions?.threshold === undefined) {
+                return results;
+            }
+            return results.filter((result) => result.score >= searchOptions.threshold!);
         },
         async hybridSearch() {
             return [];
@@ -131,7 +138,8 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
             }
         } satisfies VectorDatabase,
         getLastHybridFilterExpr: () => lastHybridFilterExpr,
-        getLastHybridOptions: () => lastHybridOptions
+        getLastHybridOptions: () => lastHybridOptions,
+        getLastSearchOptions: () => lastSearchOptions
     };
 }
 
@@ -195,13 +203,14 @@ test('Context semanticSearch always excludes completion marker docs from query f
         metadata: buildMarker()
     }]);
 
-    await context.semanticSearch(
+    await context.semanticSearch({
         codebasePath,
-        'runtime symbol',
-        8,
-        0.5,
-        'fileExtension in [".ts"]'
-    );
+        query: 'runtime symbol',
+        topK: 8,
+        retrievalMode: 'hybrid',
+        filterExpr: 'fileExtension in [".ts"]',
+        scorePolicy: { kind: 'topk_only' }
+    });
 
     const filterExpr = getLastHybridFilterExpr();
     assert.ok(filterExpr);
@@ -235,9 +244,154 @@ test('Context semanticSearch does not apply dense thresholds to hybrid RRF resul
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
 
-    const results = await context.semanticSearch(codebasePath, 'hurst', 8, 0.3);
+    const results = await context.semanticSearch({
+        codebasePath,
+        query: 'hurst',
+        topK: 8,
+        retrievalMode: 'hybrid',
+        scorePolicy: { kind: 'topk_only' }
+    });
 
     assert.equal(results.length, 1);
     assert.equal(results[0]?.relativePath, 'src/python/core/regime/hurst_gate.py');
     assert.equal(getLastHybridOptions()?.threshold, undefined);
+});
+
+test('Context semanticSearch request preserves dense thresholds and returns dense score metadata', async () => {
+    const vectorResults: VectorSearchResult[] = [
+        {
+            document: {
+                id: 'chunk_high',
+                vector: [0.1, 0.2, 0.3, 0.4],
+                content: 'dense match',
+                relativePath: 'src/core/high.ts',
+                startLine: 10,
+                endLine: 12,
+                fileExtension: '.ts',
+                metadata: { language: 'typescript' }
+            },
+            score: 0.82
+        },
+        {
+            document: {
+                id: 'chunk_low',
+                vector: [0.1, 0.2, 0.3, 0.4],
+                content: 'low dense match',
+                relativePath: 'src/core/low.ts',
+                startLine: 20,
+                endLine: 22,
+                fileExtension: '.ts',
+                metadata: { language: 'typescript' }
+            },
+            score: 0.35
+        }
+    ];
+    const { db, getLastSearchOptions } = createInMemoryVectorDb({ vectorResults });
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+    });
+    const codebasePath = '/repo/app';
+    const collectionName = context.resolveCollectionName(codebasePath);
+    await db.createCollection(collectionName, 4);
+
+    const request: SemanticSearchRequest = {
+        codebasePath,
+        query: 'dense query',
+        topK: 8,
+        retrievalMode: 'dense',
+        scorePolicy: { kind: 'dense_similarity_min', min: 0.6 }
+    };
+
+    const results = await context.semanticSearch(request);
+
+    assert.equal(getLastSearchOptions()?.threshold, 0.6);
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.relativePath, 'src/core/high.ts');
+    assert.equal(results[0]?.backendScoreKind, 'dense_similarity');
+    assert.equal(results[0]?.backendScore, 0.82);
+});
+
+test('Context semanticSearch request rejects dense similarity thresholds for hybrid and lexical retrieval', async () => {
+    const { db } = createInMemoryVectorDb();
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+    });
+
+    const hybridRequest: SemanticSearchRequest = {
+        codebasePath: '/repo/app',
+        query: 'hurst',
+        topK: 8,
+        retrievalMode: 'hybrid',
+        scorePolicy: { kind: 'dense_similarity_min', min: 0.3 }
+    };
+    await assert.rejects(
+        () => context.semanticSearch(hybridRequest),
+        /dense similarity threshold.*hybrid/i
+    );
+
+    const lexicalRequest: SemanticSearchRequest = {
+        codebasePath: '/repo/app',
+        query: 'HurstGateState',
+        topK: 8,
+        retrievalMode: 'lexical',
+        scorePolicy: { kind: 'dense_similarity_min', min: 0.3 }
+    };
+    await assert.rejects(
+        () => context.semanticSearch(lexicalRequest),
+        /dense similarity threshold.*lexical/i
+    );
+});
+
+test('Context semanticSearch rejects explicit hybrid and lexical retrieval when hybrid mode is disabled', async () => {
+    const previousHybridMode = process.env.HYBRID_MODE;
+    process.env.HYBRID_MODE = 'false';
+
+    try {
+        const { db } = createInMemoryVectorDb();
+        const context = new Context({
+            embedding: new FakeEmbedding(),
+            vectorDatabase: db,
+        });
+
+        await assert.rejects(
+            () => context.semanticSearch({
+                codebasePath: '/repo/app',
+                query: 'hurst',
+                topK: 8,
+                retrievalMode: 'hybrid',
+                scorePolicy: { kind: 'topk_only' }
+            }),
+            /hybrid retrieval requires hybrid search support/i
+        );
+
+        await assert.rejects(
+            () => context.semanticSearch({
+                codebasePath: '/repo/app',
+                query: 'HurstGateState',
+                topK: 8,
+                retrievalMode: 'lexical',
+                scorePolicy: { kind: 'topk_only' }
+            }),
+            /lexical retrieval requires hybrid search support/i
+        );
+    } finally {
+        if (previousHybridMode === undefined) {
+            delete process.env.HYBRID_MODE;
+        } else {
+            process.env.HYBRID_MODE = previousHybridMode;
+        }
+    }
+});
+
+test('Context semanticSearch supports legacy positional arguments', async () => {
+    const { db } = createInMemoryVectorDb();
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+    });
+
+    const results = await context.semanticSearch('/repo/app', 'hurst', 8, 0.3);
+    assert.deepEqual(results, []);
 });

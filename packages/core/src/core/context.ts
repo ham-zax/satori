@@ -513,7 +513,8 @@ export class Context {
                         params: { k: 100 }
                     },
                     limit: topK,
-                    threshold,
+                    // Hybrid RRF scores are backend/rerank relative, so dense similarity
+                    // thresholds can erase valid sparse lexical matches before MCP ranking.
                     filterExpr: effectiveFilterExpr
                 }
             );

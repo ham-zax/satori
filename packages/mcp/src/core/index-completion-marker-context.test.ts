@@ -42,9 +42,10 @@ class FakeEmbedding extends Embedding {
     }
 }
 
-function createInMemoryVectorDb() {
+function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[] }) {
     const byCollection = new Map<string, Map<string, VectorDocument>>();
     let lastHybridFilterExpr: string | undefined;
+    let lastHybridOptions: HybridSearchOptions | undefined;
 
     const ensureCollection = (collectionName: string): Map<string, VectorDocument> => {
         if (!byCollection.has(collectionName)) {
@@ -85,8 +86,7 @@ function createInMemoryVectorDb() {
         async search(_collectionName, _queryVector, _options?: SearchOptions): Promise<VectorSearchResult[]> {
             return [];
         },
-        async hybridSearch(_collectionName, _searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]> {
-            lastHybridFilterExpr = options?.filterExpr;
+        async hybridSearch() {
             return [];
         },
         async delete(collectionName, ids) {
@@ -117,7 +117,22 @@ function createInMemoryVectorDb() {
         }
     };
 
-    return { db, getLastHybridFilterExpr: () => lastHybridFilterExpr };
+    return {
+        db: {
+            ...db,
+            async hybridSearch(_collectionName: string, _searchRequests: HybridSearchRequest[], hybridOptions?: HybridSearchOptions): Promise<HybridSearchResult[]> {
+                lastHybridFilterExpr = hybridOptions?.filterExpr;
+                lastHybridOptions = hybridOptions;
+                const results = options?.hybridResults || [];
+                if (hybridOptions?.threshold === undefined) {
+                    return results;
+                }
+                return results.filter((result) => result.score >= hybridOptions.threshold!);
+            }
+        } satisfies VectorDatabase,
+        getLastHybridFilterExpr: () => lastHybridFilterExpr,
+        getLastHybridOptions: () => lastHybridOptions
+    };
 }
 
 function buildMarker(): IndexCompletionMarkerDocument {
@@ -192,4 +207,37 @@ test('Context semanticSearch always excludes completion marker docs from query f
     assert.ok(filterExpr);
     assert.match(filterExpr!, /fileExtension in \["\.ts"\]/);
     assert.match(filterExpr!, /fileExtension != "\.satori_meta"/);
+});
+
+test('Context semanticSearch does not apply dense thresholds to hybrid RRF results', async () => {
+    const hybridResults: HybridSearchResult[] = [{
+        document: {
+            id: 'chunk_hurst',
+            vector: [],
+            content: 'class HurstGateState:\n    pass',
+            relativePath: 'src/python/core/regime/hurst_gate.py',
+            startLine: 72,
+            endLine: 73,
+            fileExtension: '.py',
+            metadata: {
+                language: 'python',
+                symbolLabel: 'class HurstGateState'
+            }
+        },
+        score: 0.019
+    }];
+    const { db, getLastHybridOptions } = createInMemoryVectorDb({ hybridResults });
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+    });
+    const codebasePath = '/repo/app';
+    const collectionName = context.resolveCollectionName(codebasePath);
+    await db.createHybridCollection(collectionName, 4);
+
+    const results = await context.semanticSearch(codebasePath, 'hurst', 8, 0.3);
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.relativePath, 'src/python/core/regime/hurst_gate.py');
+    assert.equal(getLastHybridOptions()?.threshold, undefined);
 });

@@ -6,7 +6,7 @@ export function createEmbeddingInstance(config: ContextMcpConfig): OpenAIEmbeddi
     console.log(`[EMBEDDING] Creating ${config.encoderProvider} embedding instance...`);
 
     switch (config.encoderProvider) {
-        case 'OpenAI':
+        case 'OpenAI': {
             if (!config.openaiKey) {
                 console.error(`[EMBEDDING] ❌ OpenAI API key is required but not provided`);
                 throw new Error('OPENAI_API_KEY is required for OpenAI embedding provider');
@@ -19,8 +19,9 @@ export function createEmbeddingInstance(config: ContextMcpConfig): OpenAIEmbeddi
             });
             console.log(`[EMBEDDING] ✅ OpenAI embedding instance created successfully`);
             return openaiEmbedding;
+        }
 
-        case 'VoyageAI':
+        case 'VoyageAI': {
             if (!config.voyageKey) {
                 console.error(`[EMBEDDING] ❌ VoyageAI API key is required but not provided`);
                 throw new Error('VOYAGEAI_API_KEY is required for VoyageAI embedding provider');
@@ -36,8 +37,9 @@ export function createEmbeddingInstance(config: ContextMcpConfig): OpenAIEmbeddi
             });
             console.log(`[EMBEDDING] ✅ VoyageAI embedding instance created successfully`);
             return voyageEmbedding;
+        }
 
-        case 'Gemini':
+        case 'Gemini': {
             if (!config.geminiKey) {
                 console.error(`[EMBEDDING] ❌ Gemini API key is required but not provided`);
                 throw new Error('GEMINI_API_KEY is required for Gemini embedding provider');
@@ -50,8 +52,9 @@ export function createEmbeddingInstance(config: ContextMcpConfig): OpenAIEmbeddi
             });
             console.log(`[EMBEDDING] ✅ Gemini embedding instance created successfully`);
             return geminiEmbedding;
+        }
 
-        case 'Ollama':
+        case 'Ollama': {
             const ollamaEndpoint = config.ollamaEndpoint || 'http://127.0.0.1:11434';
             console.log(`[EMBEDDING] 🔧 Configuring Ollama with model: ${config.encoderModel}, host: ${ollamaEndpoint}`);
             const ollamaEmbedding = new OllamaEmbedding({
@@ -60,6 +63,7 @@ export function createEmbeddingInstance(config: ContextMcpConfig): OpenAIEmbeddi
             });
             console.log(`[EMBEDDING] ✅ Ollama embedding instance created successfully`);
             return ollamaEmbedding;
+        }
 
         default:
             console.error(`[EMBEDDING] ❌ Unsupported embedding provider: ${config.encoderProvider}`);
@@ -86,4 +90,4 @@ export function logEmbeddingProviderInfo(config: ContextMcpConfig, embedding: Op
             console.log(`[EMBEDDING] Ollama configuration - Host: ${config.ollamaEndpoint || 'http://127.0.0.1:11434'}, Model: ${config.encoderModel}`);
             break;
     }
-} 
+}

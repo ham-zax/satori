@@ -206,7 +206,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         }
     }
 
-    async createCollection(collectionName: string, dimension: number, description?: string): Promise<void> {
+    async createCollection(collectionName: string, dimension: number, _description?: string): Promise<void> {
         await this.ensureInitialized();
 
         try {
@@ -578,7 +578,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         }
     }
 
-    async createHybridCollection(collectionName: string, dimension: number, description?: string): Promise<void> {
+    async createHybridCollection(collectionName: string, dimension: number, _description?: string): Promise<void> {
         try {
             const restfulConfig = this.config as MilvusRestfulConfig;
 

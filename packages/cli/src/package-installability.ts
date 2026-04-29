@@ -86,7 +86,7 @@ function assertPublishedVersion(
             encoding: "utf8",
             stdio: ["ignore", "pipe", "pipe"],
         });
-    } catch (error) {
+    } catch {
         if (relation === "self") {
             throw new CliError(
                 "E_USAGE",

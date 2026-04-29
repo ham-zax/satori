@@ -2,6 +2,17 @@
 
 All notable changes to this repository are documented in this file.
 
+## [Unreleased] Repository Quality Gate Hardening
+
+### Added
+- Added a root `versions:check` guard that fails when docs/config examples pin stale published Satori package versions.
+- Added shared completion-proof validation for MCP lifecycle status reporting and `list_codebases`.
+
+### Changed
+- Migrated ESLint configuration to ESLint 9 flat config and fixed the surfaced lint errors so `pnpm -r lint` is usable again.
+- Updated MCP install/config examples from `@zokizuan/satori-mcp@4.4.1` to `@zokizuan/satori-mcp@4.7.0`.
+- Annotated `list_codebases` Ready entries when completion-proof probing is indeterminate, while preserving the non-authoritative "keep local ready state" behavior.
+
 ## [2026-04-30] Zilliz/Milvus Timeout-Safe Index Lifecycle
 
 ### Release Versions

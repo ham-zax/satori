@@ -75,6 +75,13 @@ import {
 import { WARNING_CODES, WarningCode } from "./warnings.js";
 import { CallGraphDirection, CallGraphSidecarManager, CallGraphSymbolRef } from "./call-graph.js";
 import { decideInterruptedIndexingRecovery } from "./indexing-recovery.js";
+import type {
+    CompletionProofReason,
+    CompletionProofValidationResult
+} from "./completion-proof.js";
+import {
+    validateCompletionProof as validateIndexCompletionProof
+} from "./completion-proof.js";
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -186,27 +193,6 @@ type ReindexPreflightResult = {
     probeFailed?: boolean;
 };
 
-type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mismatch" | "probe_failed";
-type CompletionProofReason =
-    | "missing_marker_doc"
-    | "invalid_marker_kind"
-    | "path_mismatch"
-    | "invalid_payload"
-    | "fingerprint_mismatch"
-    | "probe_failed";
-type CompletionProofValidationResult = {
-    outcome: CompletionProofOutcome;
-    reason?: CompletionProofReason;
-    marker?: {
-        kind?: string;
-        codebasePath?: string;
-        fingerprint?: unknown;
-        indexedFiles?: number;
-        totalChunks?: number;
-        completedAt?: string;
-        runId?: string;
-    };
-};
 type CompletionProbeDebugHint = { ok: false; reason: "probe_failed" };
 
 interface CandidateCollection {
@@ -595,75 +581,6 @@ export class ToolHandlers {
         return lines.join('\n');
     }
 
-    private markerMatchesRuntimeFingerprint(marker: any): boolean {
-        const fingerprint = marker?.fingerprint;
-        if (!fingerprint || typeof fingerprint !== 'object') {
-            return false;
-        }
-        return fingerprint.embeddingProvider === this.runtimeFingerprint.embeddingProvider
-            && fingerprint.embeddingModel === this.runtimeFingerprint.embeddingModel
-            && Number(fingerprint.embeddingDimension) === Number(this.runtimeFingerprint.embeddingDimension)
-            && fingerprint.vectorStoreProvider === this.runtimeFingerprint.vectorStoreProvider
-            && fingerprint.schemaVersion === this.runtimeFingerprint.schemaVersion;
-    }
-
-    private trimTrailingSeparators(inputPath: string): string {
-        const parsedRoot = path.parse(inputPath).root;
-        if (inputPath === parsedRoot) {
-            return inputPath;
-        }
-        return inputPath.replace(/[\\/]+$/, '');
-    }
-
-    private canonicalizeCodebasePath(codebasePath: string): string {
-        const resolved = path.resolve(codebasePath);
-        try {
-            const realPath = typeof fs.realpathSync.native === 'function'
-                ? fs.realpathSync.native(resolved)
-                : fs.realpathSync(resolved);
-            return this.trimTrailingSeparators(path.normalize(realPath));
-        } catch {
-            return this.trimTrailingSeparators(path.normalize(resolved));
-        }
-    }
-
-    private validateMarkerShape(
-        expectedCodebasePath: string,
-        marker: any
-    ): { ok: true } | { ok: false; reason: CompletionProofReason } {
-        if (!marker || typeof marker !== 'object') {
-            return { ok: false, reason: 'invalid_payload' };
-        }
-
-        if (marker.kind !== 'satori_index_completion_v1') {
-            return { ok: false, reason: 'invalid_marker_kind' };
-        }
-
-        if (typeof marker.codebasePath !== 'string' || marker.codebasePath.trim().length === 0) {
-            return { ok: false, reason: 'invalid_payload' };
-        }
-
-        if (!marker.fingerprint || typeof marker.fingerprint !== 'object') {
-            return { ok: false, reason: 'invalid_payload' };
-        }
-
-        if (!Number.isFinite(Number(marker.indexedFiles)) || !Number.isFinite(Number(marker.totalChunks))) {
-            return { ok: false, reason: 'invalid_payload' };
-        }
-
-        if (typeof marker.completedAt !== 'string' || Number.isNaN(Date.parse(marker.completedAt))) {
-            return { ok: false, reason: 'invalid_payload' };
-        }
-
-        const expectedCanonical = this.canonicalizeCodebasePath(expectedCodebasePath);
-        const markerCanonical = this.canonicalizeCodebasePath(marker.codebasePath);
-        if (expectedCanonical !== markerCanonical) {
-            return { ok: false, reason: 'path_mismatch' };
-        }
-
-        return { ok: true };
-    }
-
     private buildStaleLocalHint(codebasePath: string, reason: CompletionProofReason): Record<string, unknown> {
         return {
             completionProof: reason,
@@ -696,52 +613,16 @@ export class ToolHandlers {
     }
 
     private async validateCompletionProof(codebasePath: string): Promise<CompletionProofValidationResult> {
-        if (typeof (this.context as any).getIndexCompletionMarker !== 'function') {
-            return {
-                outcome: 'probe_failed',
-                reason: 'probe_failed'
-            };
-        }
-
-        let marker: any;
-        try {
-            marker = await (this.context as any).getIndexCompletionMarker(codebasePath);
-        } catch (error) {
-            console.warn(`[INDEX-PROOF] Completion marker probe failed for '${codebasePath}': ${formatUnknownError(error)}`);
-            return {
-                outcome: 'probe_failed',
-                reason: 'probe_failed'
-            };
-        }
-
-        if (!marker) {
-            return {
-                outcome: 'stale_local',
-                reason: 'missing_marker_doc'
-            };
-        }
-
-        const markerShape = this.validateMarkerShape(codebasePath, marker);
-        if (!markerShape.ok) {
-            return {
-                outcome: 'stale_local',
-                reason: markerShape.reason,
-                marker
-            };
-        }
-
-        if (!this.markerMatchesRuntimeFingerprint(marker)) {
-            return {
-                outcome: 'fingerprint_mismatch',
-                reason: 'fingerprint_mismatch',
-                marker
-            };
-        }
-
-        return {
-            outcome: 'valid',
-            marker
-        };
+        return validateIndexCompletionProof({
+            codebasePath,
+            runtimeFingerprint: this.runtimeFingerprint,
+            getIndexCompletionMarker: typeof (this.context as any).getIndexCompletionMarker === 'function'
+                ? (markerPath) => (this.context as any).getIndexCompletionMarker(markerPath)
+                : undefined,
+            onProbeError: (error) => {
+                console.warn(`[INDEX-PROOF] Completion marker probe failed for '${codebasePath}': ${formatUnknownError(error)}`);
+            }
+        });
     }
 
     private isPathWithinCodebase(targetPath: string, rootPath: string): boolean {
@@ -1377,6 +1258,26 @@ export class ToolHandlers {
             return null;
         }
         return normalized;
+    }
+
+    private trimTrailingSeparators(inputPath: string): string {
+        const parsedRoot = path.parse(inputPath).root;
+        if (inputPath === parsedRoot) {
+            return inputPath;
+        }
+        return inputPath.replace(/[\\/]+$/, '');
+    }
+
+    private canonicalizeCodebasePath(codebasePath: string): string {
+        const resolved = path.resolve(codebasePath);
+        try {
+            const realPath = typeof fs.realpathSync.native === 'function'
+                ? fs.realpathSync.native(resolved)
+                : fs.realpathSync(resolved);
+            return this.trimTrailingSeparators(path.normalize(realPath));
+        } catch {
+            return this.trimTrailingSeparators(path.normalize(resolved));
+        }
     }
 
     private loadRootGitignoreMatcher(codebaseRoot: string): GitignoreMatcherCacheEntry {

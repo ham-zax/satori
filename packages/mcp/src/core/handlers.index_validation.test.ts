@@ -53,8 +53,13 @@ function resolveCollectionName(codebasePath: string): string {
     return `hybrid_code_chunks_${digest}`;
 }
 
-function createHandlersForValidation(options: ValidationHarnessOptions): { handlers: ToolHandlers; droppedCollections: string[] } {
+function createHandlersForValidation(options: ValidationHarnessOptions): {
+    handlers: ToolHandlers;
+    droppedCollections: string[];
+    snapshotEvents: { removed: string[]; indexing: string[]; saved: number };
+} {
     const droppedCollections: string[] = [];
+    const snapshotEvents = { removed: [] as string[], indexing: [] as string[], saved: 0 };
     const backendProvider = options.backendProvider || 'milvus';
     const collectionDetails = options.collectionDetails || [];
     const metadataByCollection = options.metadataByCollection || {};
@@ -106,9 +111,15 @@ function createHandlersForValidation(options: ValidationHarnessOptions): { handl
         getCodebaseInfo: () => undefined,
         getIndexedCodebases: () => [],
         getCodebaseStatus: () => 'not_found',
-        removeCodebaseCompletely: () => undefined,
-        setCodebaseIndexing: () => undefined,
-        saveCodebaseSnapshot: () => undefined,
+        removeCodebaseCompletely: (codebasePath: string) => {
+            snapshotEvents.removed.push(codebasePath);
+        },
+        setCodebaseIndexing: (codebasePath: string) => {
+            snapshotEvents.indexing.push(codebasePath);
+        },
+        saveCodebaseSnapshot: () => {
+            snapshotEvents.saved += 1;
+        },
         getAllCodebases: () => snapshotCodebases,
     } as any;
 
@@ -119,7 +130,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): { handl
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     (handlers as any).startBackgroundIndexing = async () => undefined;
-    return { handlers, droppedCollections };
+    return { handlers, droppedCollections, snapshotEvents };
 }
 
 function parseManageEnvelope(response: any): ManageIndexResponseEnvelope {
@@ -284,6 +295,46 @@ test('handleIndexCodebase force reindex drops all prior collections for the same
     });
 });
 
+test('handleIndexCodebase force reindex preserves local state when remote cleanup times out', async () => {
+    await withTempRepo(async (repoPath) => {
+        const resolvedCollection = resolveCollectionName(repoPath);
+        const hash = resolvedCollection.split('_').pop()!;
+        const legacyCollection = `code_chunks_${hash}`;
+        const modernCollection = `hybrid_code_chunks_${hash}`;
+        const existingCollections = new Set<string>([legacyCollection, modernCollection]);
+
+        const { handlers, droppedCollections, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => true,
+            collectionDetails: [
+                { name: legacyCollection, createdAt: '2026-01-01T00:00:00.000Z' },
+                { name: modernCollection, createdAt: '2026-01-02T00:00:00.000Z' },
+            ],
+            hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async (collectionName) => {
+                if (collectionName === modernCollection) {
+                    throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+                }
+                existingCollections.delete(collectionName);
+            },
+        });
+
+        const response = await handlers.handleIndexCodebase({
+            path: repoPath,
+            force: true
+        });
+
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        assert.match(envelope.humanText, /Force reindex cleanup failed before local state changes/i);
+        assert.match(envelope.humanText, /DEADLINE_EXCEEDED/i);
+        assert.ok(droppedCollections.includes(legacyCollection));
+        assert.ok(droppedCollections.includes(modernCollection));
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.deepEqual(snapshotEvents.indexing, []);
+    });
+});
+
 test('handleIndexCodebase rejects zillizDropCollection for non-Zilliz backend', async () => {
     await withTempRepo(async (repoPath) => {
         const { handlers, droppedCollections } = createHandlersForValidation({
@@ -327,5 +378,31 @@ test('handleIndexCodebase surfaces structured Zilliz validation errors without [
         assert.match(text, /permission denied while creating collection/i);
         assert.match(text, /token is invalid/i);
         assert.ok(!text.includes('[object Object]'));
+    });
+});
+
+test('handleIndexCodebase create validation timeout does not mutate local index state', async () => {
+    await withTempRepo(async (repoPath) => {
+        const { handlers, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => {
+                throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+            }
+        });
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        assert.equal(envelope.reason, 'backend_timeout');
+        assert.match(envelope.humanText, /Backend timeout while validating Zilliz\/Milvus collection creation/i);
+        assert.match(envelope.humanText, /repo path is valid and local index state was not changed/i);
+        assert.match(envelope.humanText, /retryable\/operator-actionable/i);
+        assert.match(envelope.humanText, /DEADLINE_EXCEEDED/i);
+        assert.deepEqual(envelope.hints?.retry, {
+            tool: 'manage_index',
+            args: { action: 'create', path: repoPath }
+        });
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.deepEqual(snapshotEvents.indexing, []);
     });
 });

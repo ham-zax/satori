@@ -15,7 +15,8 @@ export type ManageIndexReason =
     | "not_indexed"
     | "requires_reindex"
     | "unnecessary_reindex_ignore_only"
-    | "preflight_unknown";
+    | "preflight_unknown"
+    | "backend_timeout";
 
 export type ManageReindexPreflightOutcome =
     | "reindex_required"

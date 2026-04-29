@@ -325,6 +325,11 @@ function isCollectionLimitError(error: unknown): boolean {
     return COLLECTION_LIMIT_PATTERNS.some((pattern) => pattern.test(message));
 }
 
+function isBackendTimeoutError(error: unknown): boolean {
+    const message = formatUnknownError(error);
+    return /DEADLINE_EXCEEDED|deadline exceeded|timeout|timed out/i.test(message);
+}
+
 export class ToolHandlers {
     private context: Context;
     private snapshotManager: SnapshotManager;
@@ -2956,6 +2961,7 @@ Agent instructions:
         }
 
         const droppedCollections: string[] = [];
+        const dropErrors: string[] = [];
         for (const candidateName of candidateNames) {
             try {
                 if (await vectorDb.hasCollection(candidateName)) {
@@ -2963,8 +2969,14 @@ Agent instructions:
                     droppedCollections.push(candidateName);
                 }
             } catch (error) {
-                console.warn(`[FORCE-REINDEX] Failed to drop collection '${candidateName}': ${formatUnknownError(error)}`);
+                const message = formatUnknownError(error);
+                dropErrors.push(`${candidateName}: ${message}`);
+                console.warn(`[FORCE-REINDEX] Failed to drop collection '${candidateName}': ${message}`);
             }
+        }
+
+        if (dropErrors.length > 0) {
+            throw new Error(`Force reindex cleanup failed before local state changes: ${dropErrors.join('; ')}`);
         }
 
         // Ensure local Merkle/snapshot state is cleared for this codebase.
@@ -3241,15 +3253,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             // If force reindex, always clear every previous collection for this codebase hash.
             if (forceReindex) {
                 console.log(`[FORCE-REINDEX] 🔄 Preparing force cleanup for '${absolutePath}'`);
+                const droppedCollections = await this.clearAllCollectionsForForceReindex(absolutePath);
                 this.snapshotManager.removeCodebaseCompletely(absolutePath);
                 this.snapshotManager.saveCodebaseSnapshot();
                 try {
                     await this.unwatchCodebase(absolutePath);
                 } catch {
-                    // Best-effort watcher cleanup before force rebuild.
+                    // Best-effort watcher cleanup after successful force cleanup.
                 }
 
-                const droppedCollections = await this.clearAllCollectionsForForceReindex(absolutePath);
                 if (droppedCollections.length > 0) {
                     const sortedDroppedCollections = [...droppedCollections].sort();
                     dropSummaryLine += `\nForce reindex cleanup dropped ${sortedDroppedCollections.length} prior collection(s) for this codebase hash: ${sortedDroppedCollections.join(', ')}.`;
@@ -3307,12 +3319,28 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
 
                 const validationMessage = formatUnknownError(validationError);
+                const backendTimeout = isBackendTimeoutError(validationError);
+                const timeoutOptions = backendTimeout
+                    ? {
+                        ...preflightOptions,
+                        reason: "backend_timeout" as const,
+                        hints: {
+                            retry: {
+                                tool: "manage_index",
+                                args: { action: manageAction, path: absolutePath }
+                            }
+                        }
+                    }
+                    : preflightOptions;
+                const validationText = backendTimeout
+                    ? `Backend timeout while validating Zilliz/Milvus collection creation for '${absolutePath}'. The repo path is valid and local index state was not changed. This is retryable/operator-actionable: check backend availability or network latency, then retry manage_index action='${manageAction}'. Details: ${validationMessage}`
+                    : `Error validating collection creation: ${validationMessage}`;
                 return this.manageResponse(
                     manageAction,
                     absolutePath,
                     "error",
-                    `Error validating collection creation: ${validationMessage}`,
-                    preflightOptions
+                    validationText,
+                    timeoutOptions
                 );
             }
 

@@ -784,7 +784,24 @@ export class Context {
         progressCallback?.({ phase: 'Removing index data...', current: 50, total: 100, percentage: 50 });
 
         if (collectionExists) {
-            await this.vectorDatabase.dropCollection(collectionName);
+            try {
+                await this.vectorDatabase.dropCollection(collectionName);
+            } catch (error) {
+                let collectionStillExists = true;
+                try {
+                    collectionStillExists = await this.vectorDatabase.hasCollection(collectionName);
+                } catch {
+                    // Remote state is indeterminate: preserve local state so operators can retry safely.
+                    throw error;
+                }
+
+                if (collectionStillExists) {
+                    throw error;
+                }
+
+                const message = error instanceof Error ? error.message : String(error);
+                console.warn(`[Context] dropCollection for '${collectionName}' returned an error, but the collection is absent after verification; continuing local cleanup. Error: ${message}`);
+            }
         }
 
         // Delete snapshot file

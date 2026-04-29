@@ -2,6 +2,33 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-04-30] Zilliz/Milvus Timeout-Safe Index Lifecycle
+
+### Release Versions
+- `@zokizuan/satori-core`: `1.4.0`
+- `@zokizuan/satori-mcp`: `4.7.0`
+
+### Fixed
+- Hardened `Context.clearIndex()` so a timed-out `dropCollection()` only clears local Merkle/synchronizer state after a follow-up probe confirms the remote collection is absent.
+- Preserved local index state when both `dropCollection()` and the follow-up `hasCollection()` probe time out, making the indeterminate remote-state retry rule explicit.
+- Hardened force reindex cleanup so failed remote collection deletion aborts before local snapshot/index metadata is removed.
+- Confirmed `clearIndex()` still removes local sync state when the active remote collection was already absent.
+- Classified Zilliz/Milvus collection-validation timeouts as `backend_timeout` manage-index errors with retry guidance, instead of presenting them like invalid repo/path failures.
+
+### Tests
+- Added integration coverage for:
+  - drop timeout with verified remote absence,
+  - drop timeout with collection still present,
+  - drop timeout with indeterminate remote state,
+  - local sync cleanup when remote collection is already absent.
+- Added MCP handler coverage for force reindex remote-cleanup timeouts and retryable create-validation backend timeouts.
+
+### Validation
+- `pnpm --filter @zokizuan/satori-core test:integration -- --test-name-pattern "clearIndex"`
+- `pnpm --filter @zokizuan/satori-mcp test`
+- `pnpm --filter @zokizuan/satori-mcp typecheck`
+- `git diff --check`
+
 ## [2026-03-16] Session-Scoped Watchers, CLI Install Flow, and Packaged Client Skills
 
 ### Release Versions

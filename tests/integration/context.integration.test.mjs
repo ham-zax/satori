@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { Context } = require('../../packages/core/dist/context.js');
+const { FileSynchronizer } = require('../../packages/core/dist/index.js');
 
 class DeterministicEmbedding {
   async detectDimension() {
@@ -191,6 +192,39 @@ class FailingInsertVectorDatabase extends InMemoryVectorDatabase {
   }
 }
 
+class DeadlineAfterDeleteVectorDatabase extends InMemoryVectorDatabase {
+  async dropCollection(collectionName) {
+    this.collections.delete(collectionName);
+    throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+  }
+}
+
+class PersistentDeadlineVectorDatabase extends InMemoryVectorDatabase {
+  async dropCollection() {
+    throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+  }
+}
+
+class IndeterminateDeadlineVectorDatabase extends InMemoryVectorDatabase {
+  constructor() {
+    super();
+    this.failNextCollectionProbe = false;
+  }
+
+  async dropCollection() {
+    this.failNextCollectionProbe = true;
+    throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+  }
+
+  async hasCollection(collectionName) {
+    if (this.failNextCollectionProbe) {
+      this.failNextCollectionProbe = false;
+      throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+    }
+    return super.hasCollection(collectionName);
+  }
+}
+
 test('integration: index_codebase persists searchable chunks', async () => {
   const { context } = createContext();
   const codebasePath = createTempCodebase({
@@ -293,6 +327,87 @@ test('integration: clearIndex resets sync state so reindex_by_change rebuilds a 
       scorePolicy: { kind: 'topk_only' },
     });
     assert.ok(results.some((result) => result.relativePath === 'src/service.ts'));
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: clearIndex treats drop timeout as success only when collection is absent after verification', async () => {
+  const { context } = createContext({
+    vectorDatabase: new DeadlineAfterDeleteVectorDatabase(),
+  });
+  const codebasePath = createTempCodebase({
+    'src/service.ts': 'export const service = "ready";',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+    await context.clearIndex(codebasePath);
+    assert.equal(await context.hasIndexedCollection(codebasePath), false);
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: clearIndex preserves local state when drop timeout leaves collection present', async () => {
+  const { context } = createContext({
+    vectorDatabase: new PersistentDeadlineVectorDatabase(),
+  });
+  const codebasePath = createTempCodebase({
+    'src/service.ts': 'export const service = "ready";',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+    await assert.rejects(
+      () => context.clearIndex(codebasePath),
+      /DEADLINE_EXCEEDED/
+    );
+    assert.equal(await context.hasIndexedCollection(codebasePath), true);
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: clearIndex preserves local state when drop timeout leaves remote state indeterminate', async () => {
+  const { context } = createContext({
+    vectorDatabase: new IndeterminateDeadlineVectorDatabase(),
+  });
+  const codebasePath = createTempCodebase({
+    'src/service.ts': 'export const service = "ready";',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+    await assert.rejects(
+      () => context.clearIndex(codebasePath),
+      /DEADLINE_EXCEEDED/
+    );
+    assert.equal(await context.hasIndexedCollection(codebasePath), true);
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: clearIndex removes local sync state when remote collection is already absent', async () => {
+  const { context, vectorDatabase } = createContext();
+  const codebasePath = createTempCodebase({
+    'src/service.ts': 'export const service = "ready";',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+    const baseline = await context.reindexByChange(codebasePath);
+    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+
+    const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(codebasePath);
+    assert.equal(fs.existsSync(snapshotPath), true);
+
+    await vectorDatabase.dropCollection(context.resolveCollectionName(codebasePath));
+    await context.clearIndex(codebasePath);
+
+    assert.equal(await context.hasIndexedCollection(codebasePath), false);
+    assert.equal(fs.existsSync(snapshotPath), false);
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }

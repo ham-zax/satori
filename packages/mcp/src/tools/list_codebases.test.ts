@@ -213,5 +213,38 @@ test('list_codebases keeps ready membership stable when marker probe fails', asy
 
     assert.deepEqual(extractPaths(sections.get('Ready') || []), ['/repo/a']);
     assert.deepEqual(extractPaths(sections.get('Failed') || []), []);
-    assert.doesNotMatch(text, /completion proof probe failed/);
+});
+
+test('list_codebases annotates ready entries when completion proof probe fails', async () => {
+    const entries = [
+        { path: '/repo/a', info: { status: 'indexed' } }
+    ];
+    const response = await runListCodebases(entries, {}, { throwOnProbe: true });
+    const text = response.content[0]?.text || '';
+    const sections = parseSectionLines(text);
+
+    assert.deepEqual(extractPaths(sections.get('Ready') || []), ['/repo/a']);
+    assert.match(sections.get('Ready')?.[0] || '', /completion proof probe failed/i);
+    assert.match(sections.get('Ready')?.[0] || '', /manage_index action='status'/i);
+});
+
+test('list_codebases preserves getIndexCompletionMarker receiver binding', async () => {
+    const markerContext = {
+        marker: createMarker('/repo/a'),
+        async getIndexCompletionMarker(codebasePath: string) {
+            assert.equal(this, markerContext);
+            assert.equal(codebasePath, '/repo/a');
+            return this.marker;
+        }
+    };
+    const ctx = buildContext([
+        { path: '/repo/a', info: { status: 'indexed' } }
+    ]);
+    (ctx as any).context = markerContext;
+
+    const response = await listCodebasesTool.execute({}, ctx);
+    const sections = parseSectionLines(response.content[0]?.text || '');
+
+    assert.deepEqual(extractPaths(sections.get('Ready') || []), ['/repo/a']);
+    assert.deepEqual(extractPaths(sections.get('Failed') || []), []);
 });

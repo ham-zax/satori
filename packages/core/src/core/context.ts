@@ -13,7 +13,6 @@ import {
     VectorDocument,
     VectorSearchResult,
     HybridSearchRequest,
-    HybridSearchOptions,
     HybridSearchResult,
     RetrievalMode,
     ScorePolicy,
@@ -484,7 +483,7 @@ export class Context {
         if (isHybrid === true) {
             try {
                 // Check collection stats to see if it has data
-                const stats = await this.vectorDatabase.query(collectionName, '', ['id'], 1);
+                await this.vectorDatabase.query(collectionName, '', ['id'], 1);
                 console.log(`[Context] 🔍 Collection '${collectionName}' exists and appears to have data`);
             } catch (error) {
                 console.log(`[Context] ⚠️  Collection '${collectionName}' exists but may be empty or not properly indexed:`, error);
@@ -1216,7 +1215,10 @@ export class Context {
 
                 const relativePath = path.relative(codebasePath, chunk.metadata.filePath);
                 const fileExtension = path.extname(chunk.metadata.filePath);
-                const { filePath, startLine, endLine, ...restMetadata } = chunk.metadata;
+                const { filePath: omittedFilePath, startLine: omittedStartLine, endLine: omittedEndLine, ...restMetadata } = chunk.metadata;
+                void omittedFilePath;
+                void omittedStartLine;
+                void omittedEndLine;
 
                 return {
                     id: this.generateId(relativePath, chunk.metadata.startLine || 0, chunk.metadata.endLine || 0, chunk.content),
@@ -1247,7 +1249,10 @@ export class Context {
 
                 const relativePath = path.relative(codebasePath, chunk.metadata.filePath);
                 const fileExtension = path.extname(chunk.metadata.filePath);
-                const { filePath, startLine, endLine, ...restMetadata } = chunk.metadata;
+                const { filePath: omittedFilePath, startLine: omittedStartLine, endLine: omittedEndLine, ...restMetadata } = chunk.metadata;
+                void omittedFilePath;
+                void omittedStartLine;
+                void omittedEndLine;
 
                 return {
                     id: this.generateId(relativePath, chunk.metadata.startLine || 0, chunk.metadata.endLine || 0, chunk.content),
@@ -1392,7 +1397,7 @@ export class Context {
                 console.log(`📄 ${fileName} file found but no valid patterns detected`);
                 return [];
             }
-        } catch (error) {
+        } catch {
             if (fileName.includes('global')) {
                 console.log(`📄 No ${fileName} file found`);
             }

@@ -25,7 +25,7 @@ Managed install writes MCP config that launches:
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.4.1"]
+args = ["-y", "@zokizuan/satori-mcp@4.7.0"]
 startup_timeout_ms = 180000
 ```
 

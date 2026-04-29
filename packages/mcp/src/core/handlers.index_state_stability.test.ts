@@ -301,6 +301,36 @@ test('handleGetIndexingStatus keeps indexed status when marker probe fails', asy
     });
 });
 
+test('handleGetIndexingStatus preserves getIndexCompletionMarker receiver binding', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            marker: buildMarker(repoPath),
+            async getIndexCompletionMarker(codebasePath: string) {
+                assert.equal(this, context);
+                assert.equal(codebasePath, repoPath);
+                return this.marker;
+            }
+        } as any;
+        const snapshotManager = {
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => ({
+                status: 'indexed',
+                indexedFiles: 169,
+                totalChunks: 728,
+                indexStatus: 'completed',
+                lastUpdated: '2026-02-28T08:00:00.000Z'
+            })
+        } as any;
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const text = response.content[0]?.text || '';
+        assert.match(text, /fully indexed and ready for search/i);
+        assert.doesNotMatch(text, /probe_failed/i);
+    });
+});
+
 test('handleIndexCodebase create proceeds when snapshot is indexed but completion marker is missing', async () => {
     await withTempRepo(async (repoPath) => {
         let startedBackgroundIndexing = false;

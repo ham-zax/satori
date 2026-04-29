@@ -189,7 +189,7 @@ export class AstCodeSplitter implements Splitter {
         return this.addOverlap(refinedChunks);
     }
 
-    private splitLargeChunk(chunk: CodeChunk, originalCode: string): CodeChunk[] {
+    private splitLargeChunk(chunk: CodeChunk, _originalCode: string): CodeChunk[] {
         const lines = chunk.content.split('\n');
         const subChunks: CodeChunk[] = [];
         let currentChunk = '';

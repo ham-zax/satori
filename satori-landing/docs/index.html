@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Satori | Docs</title>
+    <meta
+      name="description"
+      content="Detailed Satori documentation for install, indexing, search, symbol navigation, call-graph context, debug output, warnings, and troubleshooting."
+    />
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+      media="(min-width: 921px)"
+    />
+    <link
+      rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin
+      media="(min-width: 921px)"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@100;400;700&display=swap"
+      rel="stylesheet"
+      media="(min-width: 921px)"
+    />
+    <style>
+      :root {
+        --bg: #030303;
+        --panel: rgba(10, 10, 10, 0.76);
+        --fg: #ffffff;
+        --muted: rgba(255, 255, 255, 0.62);
+        --line: rgba(255, 255, 255, 0.14);
+        --accent: #dfff00;
+        --cyan: #00e5ff;
+        --pink: #ff4d7a;
+        --amber: #ffb020;
+        --green: #00ff99;
+        --sans: "Inter", sans-serif;
+        --serif: "Cormorant Garamond", serif;
+        --mono: "JetBrains Mono", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        cursor: crosshair;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        min-height: 100vh;
+        color: var(--fg);
+        font-family: var(--sans);
+        background:
+          radial-gradient(circle at 50% 0%, rgba(20, 20, 25, 1) 0%, transparent 34rem),
+          #030303;
+        line-height: 1.6;
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      ::selection {
+        background: var(--accent);
+        color: #060607;
+      }
+
+      .bg-grid {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: -2;
+        opacity: 0.64;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: 4rem 4rem;
+        mask-image: linear-gradient(to bottom, #000 0%, transparent 86%);
+      }
+
+      .container {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 1rem 1rem 4rem;
+      }
+
+      nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 1.2rem 1.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        font-size: 0.75rem;
+        font-family: var(--mono);
+        background: rgba(10, 10, 10, 0.7);
+        backdrop-filter: blur(16px);
+        position: sticky;
+        top: 1rem;
+        z-index: 100;
+        box-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.5);
+      }
+
+      .nav-brand,
+      .nav-links {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+      }
+
+      .nav-links {
+        gap: 1.5rem;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        border-radius: 50%;
+        box-shadow: 0 0 10px var(--accent);
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.6;
+          transform: scale(0.9);
+        }
+      }
+
+      a {
+        color: var(--fg);
+        text-decoration: none;
+        transition: color 0.2s, border-color 0.2s;
+      }
+
+      a:hover {
+        color: var(--accent);
+      }
+
+      .hero {
+        margin-top: 2rem;
+        padding: 5rem 2rem 3rem;
+        border: 1px solid var(--line);
+        border-left: 2px solid var(--accent);
+        background:
+          linear-gradient(135deg, rgba(223, 255, 0, 0.08), transparent 32%),
+          rgba(10, 10, 10, 0.58);
+      }
+
+      .eyebrow {
+        color: var(--accent);
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        letter-spacing: 0.18em;
+        margin-bottom: 1.2rem;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 980px;
+        font-family: var(--serif);
+        font-size: clamp(3.5rem, 12vw, 9rem);
+        font-weight: 300;
+        line-height: 0.86;
+        letter-spacing: 0;
+        margin-bottom: 1.5rem;
+      }
+
+      h2 {
+        font-family: var(--serif);
+        font-size: clamp(2.2rem, 5vw, 5rem);
+        font-weight: 300;
+        line-height: 0.96;
+        letter-spacing: 0;
+        margin-bottom: 1.5rem;
+      }
+
+      h3 {
+        font-family: var(--mono);
+        font-size: 0.86rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.8rem;
+      }
+
+      p {
+        max-width: 860px;
+        color: var(--muted);
+        font-size: 1rem;
+      }
+
+      code {
+        color: var(--fg);
+        font-family: var(--mono);
+        font-size: 0.9em;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 0.08rem 0.28rem;
+      }
+
+      pre {
+        overflow-x: auto;
+        color: rgba(255, 255, 255, 0.88);
+        font-family: var(--mono);
+        font-size: 0.84rem;
+        line-height: 1.55;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.42);
+        padding: 1rem;
+        margin-top: 1rem;
+      }
+
+      pre code {
+        padding: 0;
+        border: 0;
+        background: transparent;
+      }
+
+      .hero-copy {
+        font-size: 1.18rem;
+        color: rgba(255, 255, 255, 0.75);
+      }
+
+      .quick-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.8rem;
+        margin-top: 2rem;
+      }
+
+      .quick-links a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 2.6rem;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        padding: 0.72rem 0.9rem;
+        font-family: var(--mono);
+        font-size: 0.76rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .section {
+        padding: 4rem 2rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section:nth-of-type(2) {
+        --accent: var(--cyan);
+      }
+
+      .section:nth-of-type(3) {
+        --accent: var(--pink);
+      }
+
+      .section:nth-of-type(4) {
+        --accent: var(--amber);
+      }
+
+      .section:nth-of-type(5) {
+        --accent: var(--green);
+      }
+
+      .lede {
+        margin-bottom: 2rem;
+        color: rgba(255, 255, 255, 0.72);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+        margin-top: 1.6rem;
+      }
+
+      .tool-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        padding: 1.35rem;
+      }
+
+      .panel p,
+      .panel li {
+        font-size: 0.94rem;
+      }
+
+      .panel ul {
+        display: grid;
+        gap: 0.55rem;
+        margin-top: 0.85rem;
+        padding-left: 1.1rem;
+        color: var(--muted);
+      }
+
+      .workflow {
+        display: grid;
+        gap: 0.85rem;
+        counter-reset: step;
+      }
+
+      .step {
+        position: relative;
+        display: grid;
+        grid-template-columns: 8.5rem 1fr;
+        gap: 1rem;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.035);
+        padding: 1rem;
+      }
+
+      .step strong {
+        color: var(--fg);
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .callout {
+        margin-top: 1.5rem;
+        border-left: 2px solid var(--accent);
+        padding: 1rem 1.2rem;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .code-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+
+      .code-list code {
+        font-size: 0.78rem;
+      }
+
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        padding: 2rem 0 0;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.75rem;
+      }
+
+      @media (max-width: 900px) {
+        .grid,
+        .tool-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .step {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        nav,
+        .hero,
+        .section {
+          padding-left: 1rem;
+          padding-right: 1rem;
+        }
+
+        h1 {
+          font-size: 4rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg-grid"></div>
+
+    <div class="container">
+      <nav>
+        <div class="nav-brand">
+          <div class="status-dot"></div>
+          <span>Satori // Docs</span>
+        </div>
+        <div class="nav-links">
+          <a href="../index.html">[ Landing ]</a>
+          <a href="../architecture.html">[ Architecture ]</a>
+          <a href="https://github.com/ham-zax/satori" target="_blank">[ Repository ]</a>
+          <a href="https://hamza.my.id" target="_blank">[ Hamza ]</a>
+        </div>
+      </nav>
+
+      <section class="hero">
+        <div class="eyebrow">Operational documentation</div>
+        <h1>Satori Docs</h1>
+        <p class="hero-copy">
+          Satori gives coding agents repo-aware retrieval through a fixed
+          six-tool MCP surface: index lifecycle, semantic search, symbol
+          outlines, exact reads, and bounded call-graph context.
+        </p>
+        <div class="quick-links" aria-label="Docs sections">
+          <a href="#install">Install</a>
+          <a href="#setup">Setup</a>
+          <a href="#first-index">First Index</a>
+          <a href="#lifecycle">Lifecycle</a>
+          <a href="#warnings">Warnings</a>
+          <a href="#troubleshooting">Troubleshooting</a>
+        </div>
+      </section>
+
+      <section class="section" id="install">
+        <h2>Install the MCP Server</h2>
+        <p class="lede">
+          Satori runs as an MCP server. The easiest path is the CLI installer:
+          it writes managed client config and copies the first-party workflow
+          skills without adding new MCP tools.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Codex</h3>
+            <pre><code>npx -y @zokizuan/satori-cli@0.2.0 install --client codex</code></pre>
+            <p>
+              Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
+              and installs Satori skills in <code>~/.codex/skills</code>.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Claude</h3>
+            <pre><code>npx -y @zokizuan/satori-cli@0.2.0 install --client claude</code></pre>
+            <p>
+              Writes the Satori MCP entry to
+              <code>~/.claude/settings.json</code> and installs Satori skills
+              in <code>~/.claude/skills</code>.
+            </p>
+          </div>
+        </div>
+        <div class="callout">
+          <p>
+            Use <code>--client all</code> to install both clients, and
+            <code>uninstall</code> with the same selector to remove only
+            Satori-managed config and skills.
+          </p>
+        </div>
+        <div class="grid">
+          <div class="panel">
+            <h3>Manual MCP Config</h3>
+            <p>
+              For JSON-style clients, point the MCP server at the published
+              package through <code>npx</code>. Keep the startup timeout long
+              enough for first-run package resolution.
+            </p>
+            <pre><code>{
+  "mcpServers": {
+    "satori": {
+      "command": "npx",
+      "args": ["-y", "@zokizuan/satori-mcp@4.8.0"],
+      "timeout": 180000,
+      "env": {
+        "EMBEDDING_PROVIDER": "VoyageAI",
+        "EMBEDDING_MODEL": "voyage-4-large",
+        "EMBEDDING_OUTPUT_DIMENSION": "1024",
+        "VOYAGEAI_API_KEY": "your-api-key",
+        "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
+        "MILVUS_ADDRESS": "your-milvus-endpoint",
+        "MILVUS_TOKEN": "your-milvus-token"
+      }
+    }
+  }
+}</code></pre>
+          </div>
+          <div class="panel">
+            <h3>Managed Files</h3>
+            <ul>
+              <li>Codex config: <code>~/.codex/config.toml</code>.</li>
+              <li>Codex skills: <code>~/.codex/skills</code>.</li>
+              <li>Claude config: <code>~/.claude/settings.json</code>.</li>
+              <li>Claude skills: <code>~/.claude/skills</code>.</li>
+            </ul>
+            <p>
+              The installer refuses to overwrite unmanaged Satori entries. If
+              you already have one, remove or align it before rerunning install.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="setup">
+        <h2>Minimum Runtime Setup</h2>
+        <p class="lede">
+          Configure the embedding provider and vector backend before indexing.
+          Those values are part of the index fingerprint, so changing provider,
+          model, dimension, or vector-store schema later requires a reindex.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Cloud Start</h3>
+            <pre><code>EMBEDDING_PROVIDER=VoyageAI
+EMBEDDING_MODEL=voyage-4-large
+EMBEDDING_OUTPUT_DIMENSION=1024
+VOYAGEAI_API_KEY=your-api-key
+VOYAGEAI_RERANKER_MODEL=rerank-2.5
+MILVUS_ADDRESS=your-milvus-endpoint
+MILVUS_TOKEN=your-milvus-token</code></pre>
+            <p>
+              This is the recommended first path for quality: VoyageAI
+              embeddings plus Milvus or Zilliz for vector storage.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Local Start</h3>
+            <pre><code>EMBEDDING_PROVIDER=Ollama
+EMBEDDING_MODEL=nomic-embed-text
+OLLAMA_HOST=http://127.0.0.1:11434
+MILVUS_ADDRESS=localhost:19530
+MILVUS_TOKEN=your-token</code></pre>
+            <p>
+              Use this path when you want local embeddings. Keep model and
+              dimension stable for any repo you have already indexed.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="first-index">
+        <h2>Index the First Repo</h2>
+        <p class="lede">
+          Satori only returns repo context after a codebase has been indexed.
+          Start with one absolute repository path, confirm it appears in the
+          codebase list, then search with runtime-first defaults.
+        </p>
+        <div class="workflow">
+          <div class="step">
+            <strong>1 Connect</strong>
+            <p>
+              Run <code>list_codebases</code> in your MCP client to verify the
+              server starts and can see its local state.
+            </p>
+          </div>
+          <div class="step">
+            <strong>2 Create</strong>
+            <p>
+              Run
+              <code>manage_index action="create" path="/absolute/path/to/repo"</code>.
+              Use the repository root for the first index unless you have a
+              specific subdirectory workflow.
+            </p>
+          </div>
+          <div class="step">
+            <strong>3 Search</strong>
+            <p>
+              Run
+              <code>search_codebase path="/absolute/path/to/repo" query="authentication flow"</code>.
+              Defaults are <code>scope=runtime</code>,
+              <code>resultMode=grouped</code>, and
+              <code>groupBy=symbol</code>.
+            </p>
+          </div>
+          <div class="step">
+            <strong>4 Navigate</strong>
+            <p>
+              Use <code>file_outline</code>, <code>call_graph</code>, and
+              <code>read_file</code> to lock exact spans before editing.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="workflow">
+        <h2>Search Workflow</h2>
+        <p class="lede">
+          The default agent path is intentionally narrow. Search finds candidate
+          symbols, outline locks deterministic spans, call graph adds nearby
+          relationships, and exact reads provide edit context.
+        </p>
+        <div class="workflow">
+          <div class="step">
+            <strong>1 Search</strong>
+            <p>
+              Use <code>search_codebase</code> with the user requested path.
+              Default scope is runtime, grouped by symbol, with changed-file
+              awareness when the repository supports it.
+            </p>
+          </div>
+          <div class="step">
+            <strong>2 Outline</strong>
+            <p>
+              Use <code>file_outline</code> to lock symbol spans before reading
+              or editing. Exact mode reports ambiguity instead of guessing.
+            </p>
+          </div>
+          <div class="step">
+            <strong>3 Graph</strong>
+            <p>
+              Use <code>call_graph</code> with the returned
+              <code>callGraphHint.symbolRef</code>. Treat the output as graph
+              context, not a complete impact guarantee.
+            </p>
+          </div>
+          <div class="step">
+            <strong>4 Read</strong>
+            <p>
+              Use <code>read_file</code> with <code>open_symbol</code> or the
+              returned navigation fallback. Reads are bounded and return
+              continuation hints when truncated.
+            </p>
+          </div>
+        </div>
+        <div class="callout">
+          <p>
+            If a tool returns <code>requires_reindex</code>, run
+            <code>manage_index(action="reindex")</code> for the hinted path
+            before retrying the original call.
+          </p>
+        </div>
+      </section>
+
+      <section class="section" id="tools">
+        <h2>Six Tools</h2>
+        <p class="lede">
+          Satori keeps the public MCP surface fixed. Diagnostics are added
+          through existing tools, not through new product surface area.
+        </p>
+        <div class="tool-grid">
+          <div class="panel">
+            <h3>list_codebases</h3>
+            <p>
+              Lists indexed repositories in deterministic buckets: ready,
+              indexing, requires reindex, and failed.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>manage_index</h3>
+            <p>
+              Creates, syncs, checks status, reindexes, or clears indexes.
+              Status includes health diagnostics when available.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>search_codebase</h3>
+            <p>
+              Semantic search with runtime/docs/mixed scopes, path operators,
+              must/exclude filters, grouped output, and debug metadata.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>file_outline</h3>
+            <p>
+              Reads sidecar symbol outlines and resolves exact symbols without
+              guessing when matches are ambiguous.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>call_graph</h3>
+            <p>
+              Traverses sidecar caller/callee relationships with deterministic
+              depth, limits, and transparency metadata.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>read_file</h3>
+            <p>
+              Reads plain text or annotated content. Exact symbol opening
+              delegates to outline resolution.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="lifecycle">
+        <h2>Sync, Reindex, and Clear</h2>
+        <p class="lede">
+          Lifecycle operations have different meanings. Use sync for ordinary
+          file changes, reindex for fingerprint or sidecar incompatibility, and
+          clear only when you intentionally want to remove a tracked codebase.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Sync</h3>
+            <p>
+              <code>manage_index action="sync"</code> is the immediate
+              convergence lever after normal file edits or ignore-rule changes.
+              Search also runs freshness checks before returning results.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Reindex</h3>
+            <p>
+              <code>manage_index action="reindex"</code> rebuilds the index.
+              Use it when a tool returns <code>requires_reindex</code> or a
+              reindex hint. Do not substitute sync for fingerprint
+              incompatibility.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Clear</h3>
+            <p>
+              <code>manage_index action="clear"</code> is destructive. Do not
+              call it for routine refresh. Use it only when the user explicitly
+              asks to remove Satori's tracked index for a codebase.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Status</h3>
+            <p>
+              <code>manage_index action="status"</code> answers why a repo is
+              or is not usable right now.
+            </p>
+            <ul>
+              <li>Index state and remediation reason.</li>
+              <li>Completion marker proof.</li>
+              <li>Fingerprint match or mismatch.</li>
+              <li>Sidecar readiness and stale-state signals.</li>
+              <li>Watcher state and indexed file/chunk counts.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="warnings">
+        <h2>Warnings and Status</h2>
+        <p class="lede">
+          Satori separates usable degraded output from blocking lifecycle
+          states. Agents should branch on structured statuses and warnings
+          instead of parsing prose.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Stable Warnings</h3>
+            <p>
+              Warnings mean the result is usable but degraded. Examples include
+              unsatisfied must filters, reranker failure, or a failed search
+              pass that still left usable fallback output.
+            </p>
+            <div class="code-list">
+              <code>FILTER_MUST_UNSATISFIED</code>
+              <code>RERANKER_FAILED</code>
+              <code>SEARCH_PASS_FAILED:*</code>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>Blocking Status</h3>
+            <p>
+              <code>requires_reindex</code> is not a warning. It is a blocking
+              status or remediation hint. Reindex the hinted path, then retry
+              the original call.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Diagnostic Causes</h3>
+            <p>
+              <code>fingerprint_mismatch</code>,
+              <code>completion_marker_missing</code>, sidecar readiness, and
+              watcher state are status diagnostics. They explain why the tool
+              chose a lifecycle state; they are not all search warnings.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Debug Payloads</h3>
+            <p>
+              Use <code>debug=true</code> on <code>search_codebase</code> when
+              you need ranking, filter, freshness, reranker, or relaxed-pass
+              explanations.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="debugging">
+        <h2>Debugging Search</h2>
+        <p class="lede">
+          Normal search output should stay compact. Use
+          <code>debug=true</code> when you need to understand ranking, filters,
+          fallback passes, or exclusions.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Debug payload</h3>
+            <ul>
+              <li>Filters applied in deterministic order.</li>
+              <li>Candidate counts before and after filtering.</li>
+              <li>Reranker attempt and usage state.</li>
+              <li>Freshness mode and changed-file boost state.</li>
+              <li>Relaxed search pass usage when grouped output underfills.</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>Warnings vs failures</h3>
+            <p>
+              Warnings mean usable but degraded. Failures and
+              <code>requires_reindex</code> statuses require remediation before
+              treating results as current.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <p class="lede">
+          Prefer status and debug output before guessing. The goal is to make
+          repo state visible enough for the agent to choose the next operation.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Not indexed</h3>
+            <p>
+              Run <code>manage_index(action="create")</code> on the repository
+              root, then retry search.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Requires reindex</h3>
+            <p>
+              Run <code>manage_index(action="reindex")</code>. Do not use sync
+              as a substitute for fingerprint incompatibility.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Noisy results</h3>
+            <p>
+              Apply suggested ignore patterns through repo
+              <code>.satoriignore</code>, then run
+              <code>manage_index(action="sync")</code> for immediate
+              convergence.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Unsupported graph</h3>
+            <p>
+              Follow the returned navigation fallback. Read exact spans and use
+              additional scoped searches to enumerate usages.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span>
+          Landing: <a href="../index.html">index.html</a> · Architecture:
+          <a href="../architecture.html">architecture.html</a> · Source:
+          <a href="https://github.com/ham-zax/satori" target="_blank">GitHub</a>
+        </span>
+        <span>Fixed six-tool surface. Diagnostics through existing tools.</span>
+      </footer>
+    </div>
+  </body>
+</html>

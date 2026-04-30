@@ -947,7 +947,7 @@
         <a href="https://github.com/ham-zax/satori" target="_blank">[ Repository ]</a>
         <a href="architecture.html">[ Architecture ]</a>
         <a href="https://hamza.my.id" target="_blank">[ Hamza ]</a>
-        <a href="https://github.com/ham-zax/satori/blob/main/README.md" target="_blank">[ Docs ]</a>
+        <a href="docs/index.html">[ Docs ]</a>
       </div>
     </nav>
 
@@ -1305,22 +1305,17 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
                   </button>
                 </div>
                 <pre><code id="claude-config">"satori": {
-  "type": "local",
-  "command": [
-    "npx",
-    "-y",
-    "@zokizuan/satori-mcp@4.8.0"
-  ],
-  "enabled": true,
+  "command": "npx",
+  "args": ["-y", "@zokizuan/satori-mcp@4.8.0"],
   "timeout": 180000,
-  "environment": {
-    "MILVUS_ADDRESS": "your-milvus-endpoint",
-    "MILVUS_TOKEN": "your-milvus-token",
-    "VOYAGEAI_API_KEY": "your-api-key",
+  "env": {
     "EMBEDDING_PROVIDER": "VoyageAI",
     "EMBEDDING_MODEL": "voyage-4-large",
     "EMBEDDING_OUTPUT_DIMENSION": "1024",
-    "VOYAGEAI_RERANKER_MODEL": "rerank-2.5"
+    "VOYAGEAI_API_KEY": "your-api-key",
+    "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
+    "MILVUS_ADDRESS": "your-milvus-endpoint",
+    "MILVUS_TOKEN": "your-milvus-token"
   }
 }</code></pre>
               </div>
@@ -1468,7 +1463,7 @@ score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc</c
 
     <footer class="footer">
       <span>Docs:
-        <a href="https://github.com/ham-zax/satori/blob/main/README.md" target="_blank">README.md</a>
+        <a href="docs/index.html">docs/</a>
         · Architecture: <a href="architecture.html">architecture.html</a> ·
         Start free when provider allowances fit your usage; limits can change.</span>
       <span>Keep landing pages sharp. Keep docs deep.</span>

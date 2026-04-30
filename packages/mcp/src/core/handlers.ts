@@ -7,6 +7,8 @@ import {
     Context,
     COLLECTION_LIMIT_MESSAGE,
     VoyageAIReranker,
+    RemoteCollectionDeletePendingError,
+    deleteCollectionWithVerification,
     getSupportedExtensionsForCapability,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForLanguage,
@@ -2865,8 +2867,8 @@ Agent instructions:
         const dropErrors: string[] = [];
         for (const candidateName of candidateNames) {
             try {
-                if (await vectorDb.hasCollection(candidateName)) {
-                    await vectorDb.dropCollection(candidateName);
+                const result = await deleteCollectionWithVerification(vectorDb, candidateName);
+                if (result.attempts > 0) {
                     droppedCollections.push(candidateName);
                 }
             } catch (error) {
@@ -2906,10 +2908,13 @@ Agent instructions:
         }
 
         const droppedCodebasePath = await this.resolveCollectionCodebasePath(vectorDb, trimmedName, new Map());
-        await vectorDb.dropCollection(trimmedName);
+        await deleteCollectionWithVerification(vectorDb, trimmedName);
 
         if (droppedCodebasePath) {
             this.snapshotManager.removeCodebaseCompletely(droppedCodebasePath);
+            if (typeof (this.snapshotManager as any).markCodebaseCleared === 'function') {
+                this.snapshotManager.markCodebaseCleared(droppedCodebasePath, trimmedName);
+            }
             this.snapshotManager.saveCodebaseSnapshot();
             try {
                 await this.unwatchCodebase(droppedCodebasePath);
@@ -2944,7 +2949,7 @@ Agent instructions:
                 return;
             }
 
-            const cloudCodebases = new Set<string>();
+            const cloudCodebaseCollections = new Map<string, Set<string>>();
 
             // Check each collection for codebase path
             for (const collectionName of collections) {
@@ -2976,7 +2981,9 @@ Agent instructions:
 
                                 if (codebasePath && typeof codebasePath === 'string') {
                                     console.log(`[SYNC-CLOUD] 📍 Found codebase path: ${codebasePath} in collection: ${collectionName}`);
-                                    cloudCodebases.add(codebasePath);
+                                    const collectionNames = cloudCodebaseCollections.get(codebasePath) ?? new Set<string>();
+                                    collectionNames.add(collectionName);
+                                    cloudCodebaseCollections.set(codebasePath, collectionNames);
                                 } else {
                                     console.warn(`[SYNC-CLOUD] ⚠️  No codebasePath found in metadata for collection: ${collectionName}`);
                                 }
@@ -2995,11 +3002,22 @@ Agent instructions:
                 }
             }
 
-            console.log(`[SYNC-CLOUD] 📊 Found ${cloudCodebases.size} valid codebases in cloud`);
+            console.log(`[SYNC-CLOUD] 📊 Found ${cloudCodebaseCollections.size} valid codebases in cloud`);
 
             let hasChanges = false;
 
-            for (const cloudCodebasePath of cloudCodebases) {
+            for (const [cloudCodebasePath, collectionNames] of cloudCodebaseCollections.entries()) {
+                const activeCollectionNames = Array.from(collectionNames)
+                    .filter((collectionName) => (
+                        typeof (this.snapshotManager as any).isCodebaseCleared !== 'function'
+                        || !this.snapshotManager.isCodebaseCleared(cloudCodebasePath, collectionName)
+                    ));
+                if (typeof (this.snapshotManager as any).isCodebaseCleared === 'function'
+                    && activeCollectionNames.length === 0) {
+                    console.log(`[SYNC-CLOUD] ⏭️  Skipping repair for intentionally cleared root '${cloudCodebasePath}'`);
+                    continue;
+                }
+
                 const localInfo = this.snapshotManager.getCodebaseInfo(cloudCodebasePath);
                 if (localInfo?.status === 'indexing') {
                     console.log(`[SYNC-CLOUD] ⏸️  Skipping repair for indexing root '${cloudCodebasePath}'`);
@@ -3193,7 +3211,30 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     );
                 }
 
-                const dropResult = await this.dropZillizCollectionForCreate(requestedDropCollection);
+                let dropResult: { droppedCodebasePath?: string };
+                try {
+                    dropResult = await this.dropZillizCollectionForCreate(requestedDropCollection);
+                } catch (error) {
+                    if (error instanceof RemoteCollectionDeletePendingError) {
+                        return this.manageResponse(
+                            manageAction,
+                            absolutePath,
+                            "error",
+                            `Zilliz collection '${requestedDropCollection}' remote deletion is still pending. Local index state was not changed. Retry after the backend has converged. Details: ${formatUnknownError(error)}`,
+                            {
+                                ...preflightOptions,
+                                reason: "remote_delete_pending",
+                                hints: {
+                                    retry: {
+                                        tool: "manage_index",
+                                        args: { action: manageAction, path: absolutePath, zillizDropCollection: requestedDropCollection }
+                                    }
+                                }
+                            }
+                        );
+                    }
+                    throw error;
+                }
                 dropSummaryLine += dropResult.droppedCodebasePath
                     ? `\nDropped Zilliz collection '${requestedDropCollection}' (mapped codebase: '${dropResult.droppedCodebasePath}').`
                     : `\nDropped Zilliz collection '${requestedDropCollection}'.`;
@@ -3217,6 +3258,25 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 if (isCollectionLimitError(validationError)) {
                     const guidanceMessage = await this.buildCollectionLimitMessage(absolutePath);
                     return this.manageResponse(manageAction, absolutePath, "error", guidanceMessage, preflightOptions);
+                }
+
+                if (validationError instanceof RemoteCollectionDeletePendingError) {
+                    return this.manageResponse(
+                        manageAction,
+                        absolutePath,
+                        "error",
+                        `Zilliz/Milvus validation collection deletion is still pending. Local index state was not changed. Retry after the backend has converged. Details: ${formatUnknownError(validationError)}`,
+                        {
+                            ...preflightOptions,
+                            reason: "remote_delete_pending",
+                            hints: {
+                                retry: {
+                                    tool: "manage_index",
+                                    args: { action: manageAction, path: absolutePath }
+                                }
+                            }
+                        }
+                    );
                 }
 
                 const validationMessage = formatUnknownError(validationError);
@@ -4904,6 +4964,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 await this.context.clearIndex(absolutePath);
                 console.log(`[CLEAR] Successfully cleared index for: ${absolutePath}`);
             } catch (error: any) {
+                if (error instanceof RemoteCollectionDeletePendingError) {
+                    const errorMsg = `Remote deletion is still pending for ${absolutePath}. Local index state was not changed. Details: ${formatUnknownError(error)}`;
+                    console.error(`[CLEAR] ${errorMsg}`);
+                    return this.manageResponse("clear", absolutePath, "error", errorMsg, {
+                        reason: "remote_delete_pending",
+                        hints: {
+                            retry: this.buildStatusHint(absolutePath),
+                            clear: { tool: "manage_index", args: { action: "clear", path: absolutePath } }
+                        }
+                    });
+                }
                 const errorMsg = `Failed to clear ${absolutePath}: ${error.message}`;
                 console.error(`[CLEAR] ${errorMsg}`);
                 return this.manageResponse("clear", absolutePath, "error", errorMsg);
@@ -4911,6 +4982,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Completely remove the cleared codebase from snapshot
             this.snapshotManager.removeCodebaseCompletely(absolutePath);
+            if (typeof (this.snapshotManager as any).markCodebaseCleared === 'function') {
+                this.snapshotManager.markCodebaseCleared(absolutePath, this.context.resolveCollectionName(absolutePath));
+            }
 
             // Reset indexing stats if this was the active codebase
             this.indexingStats = null;

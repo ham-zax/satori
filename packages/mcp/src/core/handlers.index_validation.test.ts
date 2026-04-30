@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { COLLECTION_LIMIT_MESSAGE } from '@zokizuan/satori-core';
+import { COLLECTION_LIMIT_MESSAGE, RemoteCollectionDeletePendingError } from '@zokizuan/satori-core';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
@@ -237,6 +237,7 @@ test('handleIndexCodebase keeps generic limit message for non-Zilliz backend', a
 
 test('handleIndexCodebase supports explicit zillizDropCollection for user-selected eviction', async () => {
     await withTempRepo(async (repoPath) => {
+        const existingCollections = new Set<string>(['hybrid_code_chunks_deadbeef']);
         const { handlers, droppedCollections } = createHandlersForValidation({
             backendProvider: 'zilliz',
             checkCollectionLimitImpl: async () => true,
@@ -246,7 +247,10 @@ test('handleIndexCodebase supports explicit zillizDropCollection for user-select
             metadataByCollection: {
                 hybrid_code_chunks_deadbeef: { codebasePath: '/repo/stale' }
             },
-            hasCollectionImpl: async (collectionName) => collectionName === 'hybrid_code_chunks_deadbeef',
+            hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async (collectionName) => {
+                existingCollections.delete(collectionName);
+            },
         });
 
         const response = await handlers.handleIndexCodebase({
@@ -260,6 +264,73 @@ test('handleIndexCodebase supports explicit zillizDropCollection for user-select
         assert.match(text, /Dropped Zilliz collection 'hybrid_code_chunks_deadbeef'/i);
         assert.equal(droppedCollections.length, 1);
         assert.equal(droppedCollections[0], 'hybrid_code_chunks_deadbeef');
+    });
+});
+
+test('handleIndexCodebase retries explicit zillizDropCollection until deletion is verified absent', async () => {
+    await withTempRepo(async (repoPath) => {
+        const existingCollections = new Set<string>(['hybrid_code_chunks_deadbeef']);
+        let dropAttempts = 0;
+        const { handlers, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => true,
+            collectionDetails: [
+                { name: 'hybrid_code_chunks_deadbeef', createdAt: '2026-01-01T00:00:00.000Z' }
+            ],
+            metadataByCollection: {
+                hybrid_code_chunks_deadbeef: { codebasePath: '/repo/stale' }
+            },
+            hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async (collectionName) => {
+                dropAttempts += 1;
+                if (dropAttempts < 3) {
+                    throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+                }
+                existingCollections.delete(collectionName);
+            }
+        });
+
+        const response = await handlers.handleIndexCodebase({
+            path: repoPath,
+            zillizDropCollection: 'hybrid_code_chunks_deadbeef'
+        });
+
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'ok');
+        assert.equal(dropAttempts, 3);
+        assert.deepEqual(snapshotEvents.removed, ['/repo/stale']);
+    });
+});
+
+test('handleIndexCodebase keeps local state when explicit zillizDropCollection remains pending remotely', async () => {
+    await withTempRepo(async (repoPath) => {
+        const existingCollections = new Set<string>(['hybrid_code_chunks_deadbeef']);
+        const { handlers, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => true,
+            collectionDetails: [
+                { name: 'hybrid_code_chunks_deadbeef', createdAt: '2026-01-01T00:00:00.000Z' }
+            ],
+            metadataByCollection: {
+                hybrid_code_chunks_deadbeef: { codebasePath: '/repo/stale' }
+            },
+            hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async () => {
+                throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+            }
+        });
+
+        const response = await handlers.handleIndexCodebase({
+            path: repoPath,
+            zillizDropCollection: 'hybrid_code_chunks_deadbeef'
+        });
+
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        assert.equal(envelope.reason, 'remote_delete_pending');
+        assert.match(envelope.humanText, /remote deletion is still pending/i);
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.deepEqual(snapshotEvents.indexing, []);
     });
 });
 
@@ -280,6 +351,9 @@ test('handleIndexCodebase force reindex drops all prior collections for the same
                 { name: 'hybrid_code_chunks_unrelated', createdAt: '2026-01-03T00:00:00.000Z' },
             ],
             hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async (collectionName) => {
+                existingCollections.delete(collectionName);
+            },
         });
 
         const response = await handlers.handleIndexCodebase({
@@ -405,4 +479,105 @@ test('handleIndexCodebase create validation timeout does not mutate local index 
         assert.deepEqual(snapshotEvents.removed, []);
         assert.deepEqual(snapshotEvents.indexing, []);
     });
+});
+
+test('handleIndexCodebase create validation pending delete does not mutate local index state', async () => {
+    await withTempRepo(async (repoPath) => {
+        const { handlers, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => {
+                throw new RemoteCollectionDeletePendingError(
+                    'dummy_collection_validation',
+                    3,
+                    new Error('dropCollection returned successfully but collection still exists')
+                );
+            }
+        });
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        assert.equal(envelope.reason, 'remote_delete_pending');
+        assert.match(envelope.humanText, /validation collection deletion is still pending/i);
+        assert.match(envelope.humanText, /local index state was not changed/i);
+        assert.deepEqual(envelope.hints?.retry, {
+            tool: 'manage_index',
+            args: { action: 'create', path: repoPath }
+        });
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.deepEqual(snapshotEvents.indexing, []);
+    });
+});
+
+test('cloud reconcile skips codebases with matching clear tombstone collection', async () => {
+    const repaired: string[] = [];
+    const tombstonedPath = '/repo/cleared';
+    const vectorStore = {
+        listCollections: async () => ['hybrid_code_chunks_deadbeef'],
+        query: async () => [{ metadata: JSON.stringify({ codebasePath: tombstonedPath }) }],
+    };
+    const context = {
+        getVectorStore: () => vectorStore,
+        getIndexCompletionMarker: async () => ({
+            kind: 'satori_index_completion_v1',
+            codebasePath: tombstonedPath,
+            fingerprint: RUNTIME_FINGERPRINT,
+            indexedFiles: 3,
+            totalChunks: 9,
+            completedAt: '2026-04-30T00:00:00.000Z',
+            runId: 'run_tombstone_test'
+        })
+    } as any;
+    const snapshotManager = {
+        getAllCodebases: () => [],
+        getCodebaseInfo: () => undefined,
+        isCodebaseCleared: (codebasePath: string, collectionName?: string) => {
+            assert.equal(collectionName, 'hybrid_code_chunks_deadbeef');
+            return codebasePath === tombstonedPath;
+        },
+        setCodebaseIndexed: (codebasePath: string) => repaired.push(codebasePath),
+        saveCodebaseSnapshot: () => undefined,
+    } as any;
+    const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+    await (handlers as any).syncIndexedCodebasesFromCloud();
+
+    assert.deepEqual(repaired, []);
+});
+
+test('cloud reconcile repairs same path when clear tombstone belongs to a different collection', async () => {
+    const repaired: string[] = [];
+    const codebasePath = '/repo/reindexed-elsewhere';
+    const vectorStore = {
+        listCollections: async () => ['hybrid_code_chunks_newvalid'],
+        query: async () => [{ metadata: JSON.stringify({ codebasePath }) }],
+    };
+    const context = {
+        getVectorStore: () => vectorStore,
+        getIndexCompletionMarker: async () => ({
+            kind: 'satori_index_completion_v1',
+            codebasePath,
+            fingerprint: RUNTIME_FINGERPRINT,
+            indexedFiles: 3,
+            totalChunks: 9,
+            completedAt: '2026-04-30T00:00:00.000Z',
+            runId: 'run_tombstone_repair_test'
+        })
+    } as any;
+    const snapshotManager = {
+        getAllCodebases: () => [],
+        getCodebaseInfo: () => undefined,
+        isCodebaseCleared: (checkedPath: string, collectionName?: string) => {
+            assert.equal(collectionName, 'hybrid_code_chunks_newvalid');
+            return checkedPath === codebasePath
+                && collectionName === 'hybrid_code_chunks_oldcleared';
+        },
+        setCodebaseIndexed: (repairedPath: string) => repaired.push(repairedPath),
+        saveCodebaseSnapshot: () => undefined,
+    } as any;
+    const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+    await (handlers as any).syncIndexedCodebasesFromCloud();
+
+    assert.deepEqual(repaired, [codebasePath]);
 });

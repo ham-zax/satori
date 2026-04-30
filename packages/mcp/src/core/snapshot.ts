@@ -8,6 +8,7 @@ import {
     CodebaseInfoIndexing,
     CodebaseInfoRequiresReindex,
     CodebaseInfoSyncCompleted,
+    CodebaseClearTombstone,
     CodebaseSnapshotV1,
     CodebaseSnapshotV2,
     CodebaseSnapshotV3,
@@ -92,7 +93,9 @@ export class SnapshotManager {
     private indexingCodebases: Map<string, number> = new Map();
     private codebaseFileCount: Map<string, number> = new Map();
     private codebaseInfoMap: Map<string, CodebaseInfo> = new Map();
+    private clearTombstones: Map<string, CodebaseClearTombstone> = new Map();
     private pendingRemovals: Set<string> = new Set();
+    private pendingTombstoneRemovals: Set<string> = new Set();
     private isDirty = false;
     private runtimeFingerprint: IndexFingerprint;
 
@@ -159,6 +162,8 @@ export class SnapshotManager {
 
     private markCodebasePresent(codebasePath: string): void {
         this.pendingRemovals.delete(codebasePath);
+        this.clearTombstones.delete(codebasePath);
+        this.pendingTombstoneRemovals.add(codebasePath);
     }
 
     private markDirty(): void {
@@ -425,6 +430,13 @@ export class SnapshotManager {
         }
     }
 
+    private isValidClearTombstoneShape(value: unknown): value is CodebaseClearTombstone {
+        return isRecord(value)
+            && typeof value.clearedAt === "string"
+            && !Number.isNaN(Date.parse(value.clearedAt))
+            && (value.collectionName === undefined || typeof value.collectionName === "string");
+    }
+
     private toCodebaseInfo(rawInfo: unknown, sourceLabel: string, codebasePath: string): CodebaseInfo | null {
         if (!this.isValidCodebaseInfoShape(rawInfo)) {
             console.warn(`[SNAPSHOT] Skipping malformed ${sourceLabel} entry for '${codebasePath}'`);
@@ -488,6 +500,21 @@ export class SnapshotManager {
         return map;
     }
 
+    private tombstoneMapFromV3Snapshot(snapshot: CodebaseSnapshotV3): Map<string, CodebaseClearTombstone> {
+        const map = new Map<string, CodebaseClearTombstone>();
+        if (!isRecord(snapshot.clearTombstones)) {
+            return map;
+        }
+        for (const [codebasePath, rawTombstone] of Object.entries(snapshot.clearTombstones)) {
+            if (!this.isValidClearTombstoneShape(rawTombstone)) {
+                console.warn(`[SNAPSHOT] Skipping malformed clear tombstone for '${codebasePath}'`);
+                continue;
+            }
+            map.set(codebasePath, rawTombstone);
+        }
+        return map;
+    }
+
     private mapToCodebaseRecord(map: Map<string, CodebaseInfo>): Record<string, CodebaseInfo> {
         const entries = Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
         const codebases: Record<string, CodebaseInfo> = {};
@@ -495,6 +522,18 @@ export class SnapshotManager {
             codebases[codebasePath] = info;
         }
         return codebases;
+    }
+
+    private mapToTombstoneRecord(map: Map<string, CodebaseClearTombstone>): Record<string, CodebaseClearTombstone> | undefined {
+        if (map.size === 0) {
+            return undefined;
+        }
+        const entries = Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
+        const tombstones: Record<string, CodebaseClearTombstone> = {};
+        for (const [codebasePath, tombstone] of entries) {
+            tombstones[codebasePath] = tombstone;
+        }
+        return tombstones;
     }
 
     private codebaseRecordsEqual(left: Record<string, CodebaseInfo>, right: Record<string, CodebaseInfo>): boolean {
@@ -538,6 +577,23 @@ export class SnapshotManager {
         }
     }
 
+    private readTombstoneMapFromDisk(): Map<string, CodebaseClearTombstone> {
+        if (!fs.existsSync(this.snapshotFilePath)) {
+            return new Map();
+        }
+
+        try {
+            const snapshotData = fs.readFileSync(this.snapshotFilePath, "utf8");
+            const snapshot: unknown = JSON.parse(snapshotData);
+            if (this.isV3Format(snapshot)) {
+                return this.tombstoneMapFromV3Snapshot(snapshot);
+            }
+        } catch (error: any) {
+            console.warn("[SNAPSHOT] Unable to read persisted clear tombstones for merge:", error?.message || error);
+        }
+        return new Map();
+    }
+
     private mergeWithPersistedSnapshot(): Map<string, CodebaseInfo> {
         const merged = this.readCodebaseMapFromDisk();
 
@@ -557,21 +613,38 @@ export class SnapshotManager {
         return merged;
     }
 
+    private mergeTombstonesWithPersistedSnapshot(): Map<string, CodebaseClearTombstone> {
+        const merged = this.readTombstoneMapFromDisk();
+
+        for (const removedPath of this.pendingTombstoneRemovals) {
+            merged.delete(removedPath);
+        }
+
+        for (const [codebasePath, tombstone] of this.clearTombstones.entries()) {
+            merged.set(codebasePath, tombstone);
+        }
+
+        return merged;
+    }
+
     private loadV1Format(snapshot: CodebaseSnapshotV1): void {
         console.log('[SNAPSHOT] Loading v1 format snapshot');
         this.codebaseInfoMap = this.mapFromV1Snapshot(snapshot);
+        this.clearTombstones.clear();
         this.refreshDerivedState();
     }
 
     private loadV2Format(snapshot: CodebaseSnapshotV2): void {
         console.log('[SNAPSHOT] Loading v2 format snapshot');
         this.codebaseInfoMap = this.mapFromV2Snapshot(snapshot);
+        this.clearTombstones.clear();
         this.refreshDerivedState();
     }
 
     private loadV3Format(snapshot: CodebaseSnapshotV3): void {
         console.log('[SNAPSHOT] Loading v3 format snapshot');
         this.codebaseInfoMap = this.mapFromV3Snapshot(snapshot);
+        this.clearTombstones = this.tombstoneMapFromV3Snapshot(snapshot);
         this.refreshDerivedState();
     }
 
@@ -610,6 +683,7 @@ export class SnapshotManager {
 
         try {
             this.pendingRemovals.clear();
+            this.pendingTombstoneRemovals.clear();
             this.isDirty = false;
             if (!fs.existsSync(this.snapshotFilePath)) {
                 console.log('[SNAPSHOT] Snapshot file does not exist. Starting with empty codebase list.');
@@ -634,6 +708,7 @@ export class SnapshotManager {
             } else {
                 this.quarantineCorruptSnapshot(new Error('Snapshot format is malformed'));
                 this.codebaseInfoMap.clear();
+                this.clearTombstones.clear();
                 this.refreshDerivedState();
                 this.isDirty = false;
                 return;
@@ -646,14 +721,16 @@ export class SnapshotManager {
         } catch (error: any) {
             this.quarantineCorruptSnapshot(error);
             this.codebaseInfoMap.clear();
+            this.clearTombstones.clear();
             this.pendingRemovals.clear();
+            this.pendingTombstoneRemovals.clear();
             this.refreshDerivedState();
             this.isDirty = false;
         }
     }
 
     public saveCodebaseSnapshot(forceWrite = false): void {
-        if (!forceWrite && !this.isDirty && this.pendingRemovals.size === 0) {
+        if (!forceWrite && !this.isDirty && this.pendingRemovals.size === 0 && this.pendingTombstoneRemovals.size === 0) {
             return;
         }
 
@@ -672,11 +749,13 @@ export class SnapshotManager {
             }
 
             const mergedCodebaseMap = this.mergeWithPersistedSnapshot();
+            const mergedTombstones = this.mergeTombstonesWithPersistedSnapshot();
             const codebases = this.mapToCodebaseRecord(mergedCodebaseMap);
 
             const snapshot: CodebaseSnapshotV3 = {
                 formatVersion: 'v3',
                 codebases,
+                clearTombstones: this.mapToTombstoneRecord(mergedTombstones),
                 lastUpdated: new Date().toISOString(),
             };
 
@@ -684,7 +763,9 @@ export class SnapshotManager {
             fs.writeFileSync(tempSnapshotPath, JSON.stringify(snapshot, null, 2));
             fs.renameSync(tempSnapshotPath, this.snapshotFilePath);
             this.codebaseInfoMap = mergedCodebaseMap;
+            this.clearTombstones = mergedTombstones;
             this.pendingRemovals.clear();
+            this.pendingTombstoneRemovals.clear();
             this.isDirty = false;
             this.refreshDerivedState();
 
@@ -733,6 +814,27 @@ export class SnapshotManager {
 
     public getAllCodebases(): Array<{ path: string; info: CodebaseInfo }> {
         return Array.from(this.codebaseInfoMap.entries()).map(([p, info]) => ({ path: p, info }));
+    }
+
+    public markCodebaseCleared(codebasePath: string, collectionName?: string): void {
+        this.removeCodebaseCompletely(codebasePath);
+        this.clearTombstones.set(codebasePath, {
+            clearedAt: new Date().toISOString(),
+            collectionName,
+        });
+        this.pendingTombstoneRemovals.delete(codebasePath);
+        this.markDirty();
+    }
+
+    public isCodebaseCleared(codebasePath: string, collectionName?: string): boolean {
+        const tombstone = this.clearTombstones.get(codebasePath);
+        if (!tombstone) {
+            return false;
+        }
+        if (collectionName === undefined || tombstone.collectionName === undefined) {
+            return true;
+        }
+        return tombstone.collectionName === collectionName;
     }
 
     public getFailedCodebases(): string[] {

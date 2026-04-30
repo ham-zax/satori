@@ -13,6 +13,10 @@ All notable changes to this repository are documented in this file.
 - Updated MCP install/config examples from `@zokizuan/satori-mcp@4.4.1` to `@zokizuan/satori-mcp@4.7.0`.
 - Annotated `list_codebases` Ready entries when completion-proof probing is indeterminate, while preserving the non-authoritative "keep local ready state" behavior.
 
+### Fixed
+- Scoped clear tombstones to the deleted collection so a later valid cloud re-index of the same path can repair local state.
+- Reset per-attempt remote-delete diagnostics and lengthened the default verification window for Milvus/Zilliz delete convergence.
+
 ## [2026-04-30] Zilliz/Milvus Timeout-Safe Index Lifecycle
 
 ### Release Versions

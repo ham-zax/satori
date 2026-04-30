@@ -56,6 +56,11 @@ export interface CodebaseIndexManifest {
     updatedAt: string;
 }
 
+export interface CodebaseClearTombstone {
+    clearedAt: string;
+    collectionName?: string;
+}
+
 // Legacy format (v1) - for backward compatibility
 export interface CodebaseSnapshotV1 {
     indexedCodebases: string[];
@@ -129,6 +134,7 @@ export interface CodebaseSnapshotV2 {
 export interface CodebaseSnapshotV3 {
     formatVersion: 'v3';
     codebases: Record<string, CodebaseInfo>;  // codebasePath -> CodebaseInfo
+    clearTombstones?: Record<string, CodebaseClearTombstone>;
     lastUpdated: string;
 }
 

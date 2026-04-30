@@ -1,0 +1,7 @@
+{
+  "name": "satori-landing",
+  "private": true,
+  "scripts": {
+    "build": "echo static site"
+  }
+}

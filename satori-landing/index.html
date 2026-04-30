@@ -1100,6 +1100,21 @@
           </p>
         </article>
         <article class="card">
+          <h4>You want read-only repo context</h4>
+          <p>
+            Satori does not expose source-code write tools. It gives agents
+            search, navigation, and read evidence; edits stay in your normal
+            editor or host workflow.
+          </p>
+        </article>
+        <article class="card">
+          <h4>You work inside packages</h4>
+          <p>
+            Search can start from a subdirectory inside an indexed repo, while
+            Satori keeps the root identity and navigation paths consistent.
+          </p>
+        </article>
+        <article class="card">
           <h4>You want a practical trial path</h4>
           <p>
             Satori is MIT/open source. Zilliz and VoyageAI may offer free
@@ -1154,8 +1169,8 @@
     <section class="section">
       <h3>Reduce Blind Edits</h3>
       <p class="section-intro">
-        Satori does not claim to prevent broken code. It makes the agent&apos;s
-        investigation specific, repeatable, and easier to audit before editing.
+        Satori does not claim to prevent broken code, replace tests, or replace
+        review. It gives the agent specific repo evidence before editing.
       </p>
       <div class="grid">
         <article class="card">
@@ -1199,8 +1214,9 @@
         <article class="card">
           <h4>Find relevant code</h4>
           <p>
-            <code>search_codebase</code> searches indexed code with runtime,
-            docs, or mixed scope and returns grouped navigation hints.
+            <code>search_codebase</code> searches by intent and exact terms
+            with runtime, docs, or mixed scope, then returns grouped navigation
+            hints.
           </p>
         </article>
         <article class="card">
@@ -1329,10 +1345,39 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
           </p>
         </article>
         <article class="card">
+          <h4>Hybrid retrieval</h4>
+          <p>
+            Dense semantic search can be paired with BM25 keyword retrieval and
+            reciprocal-rank fusion, so concepts and exact tokens both matter.
+          </p>
+        </article>
+        <article class="card">
+          <h4>AST-aware chunks</h4>
+          <p>
+            Supported languages are split around real code structure, so search
+            results are less likely to cut through function or class boundaries.
+          </p>
+        </article>
+        <article class="card">
           <h4>Scope filtering</h4>
           <p>
             <code>scope=runtime</code> excludes docs/tests, <code>docs</code>
             targets documentation, and <code>mixed</code> includes everything.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Honest capability states</h4>
+          <p>
+            TypeScript, JavaScript, and Python get the strongest graph/outline
+            support. Other languages still search, but unsupported graph states
+            return explicit fallback guidance.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Capability-aware defaults</h4>
+          <p>
+            Cloud and local providers use different search budgets and rerank
+            policies, so Ollama-style local workflows stay responsive.
           </p>
         </article>
         <article class="card">

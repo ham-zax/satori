@@ -997,6 +997,20 @@
             <p>Vector store, call-graph sidecar, local snapshots, and Merkle state.</p>
           </article>
         </div>
+        <div class="grid-3 layer-grid">
+          <article class="card">
+            <h3><code>@zokizuan/satori-core</code></h3>
+            <p>Owns indexing, sync, chunking, metadata, and retrieval primitives.</p>
+          </article>
+          <article class="card">
+            <h3><code>@zokizuan/satori-mcp</code></h3>
+            <p>Owns the MCP server, six-tool contract, lifecycle state, and agent envelopes.</p>
+          </article>
+          <article class="card">
+            <h3><code>@zokizuan/satori-cli</code></h3>
+            <p>Installs managed client config, copies first-party skills, and exposes shell tool calls.</p>
+          </article>
+        </div>
       </section>
 
       <section class="section">
@@ -1030,7 +1044,8 @@
         <p class="intro">
           Satori exposes six MCP tools. The point is not a large API; it is a
           small set of operations that return state, warnings, and next steps
-          when context is unsafe.
+          when context is unsafe. The MCP server does not expose source-code
+          write tools.
         </p>
         <div class="grid-3">
           <article class="tool-group">
@@ -1232,9 +1247,24 @@
           <article class="card">
             <h3>Search Pipeline</h3>
             <p>
-              Freshness gate -> operator parse -> bounded retrieval ->
+              Freshness gate -> operator parse -> dense/BM25 retrieval ->
               deterministic filters -> rerank policy -> grouping -> stable
               tie-breaks.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Hybrid Retrieval</h3>
+            <p>
+              Dense vector hits and BM25 sparse keyword hits merge through
+              reciprocal rank fusion, so concepts and exact tokens both count.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Language Capabilities</h3>
+            <p>
+              TypeScript, JavaScript, and Python have the strongest graph and
+              outline support. Other languages use AST chunking or text
+              fallback with explicit unsupported states.
             </p>
           </article>
           <article class="card">
@@ -1253,11 +1283,19 @@
             </p>
           </article>
           <article class="card">
-            <h3>Rerank Policy</h3>
+            <h3>Provider Profiles</h3>
             <p>
-              Capability profile controls limits and rerank use. Docs scope
-              skips rerank; rerank failure returns warnings and stable fallback
-              ordering.
+              Cloud and local providers use different result budgets. Rerank
+              is capability-driven, docs scope skips rerank, and failures
+              degrade with warnings.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Subdirectory Roots</h3>
+            <p>
+              Search can start from a package path inside an indexed parent.
+              Satori resolves the effective root while keeping navigation
+              fallbacks executable.
             </p>
           </article>
           <article class="card">

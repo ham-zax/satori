@@ -4,15 +4,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Satori — Agent-Safe Code Retrieval via MCP</title>
+  <title>Satori - Make AI Coding Agents Understand Your Repo</title>
   <meta name="description"
-    content="Give your AI agent exact, structurally-aware access to your codebase. Ask in natural language, get back symbols, call graphs, and exact file spans. Free tier. Any MCP agent." />
-  <meta property="og:title" content="Satori | Your agent finally knows your codebase" />
-  <meta property="og:description" content="Semantic retrieval purpose-built for code. Index once. Ask forever." />
+    content="Satori helps AI coding agents investigate real repo context before editing: search code, open exact symbols, follow callers and callees, and warn when context is stale." />
+  <meta property="og:title" content="Satori | Your AI coding agent is flying blind" />
+  <meta property="og:description" content="Make MCP-style coding agents investigate real repo context before they edit: exact symbols, callers and callees, stale-index warnings, and bounded file evidence." />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Satori | Your agent finally knows your codebase" />
-  <meta name="twitter:description" content="Ask your codebase a question. Get back the exact symbol." />
+  <meta name="twitter:title" content="Satori | Your AI coding agent is flying blind" />
+  <meta name="twitter:description" content="Satori helps agents search real repo code, open exact symbols, follow callers and callees, and avoid stale context before editing." />
   <link rel="preconnect" href="https://fonts.googleapis.com" media="(min-width: 861px)" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin media="(min-width: 861px)" />
   <link
@@ -60,48 +60,52 @@
 
     /* Section Color Themes */
     section:nth-of-type(1) { /* Hero */
-      --accent: #dfff00; 
+      --accent: #dfff00;
       --accent-dim: rgba(223, 255, 0, 0.15);
     }
-    section:nth-of-type(2) { /* Install Strip */
-      --accent: #00ffff; 
+    section:nth-of-type(2) { /* Pain */
+      --accent: #00ffff;
       --accent-dim: rgba(0, 255, 255, 0.15);
     }
-    section:nth-of-type(3) { /* Agents Are Flying Blind */
-      --accent: #ff0055; 
+    section:nth-of-type(3) { /* Demo */
+      --accent: #ff0055;
       --accent-dim: rgba(255, 0, 85, 0.15);
     }
-    section:nth-of-type(4) { /* Four Tool Calls */
-      --accent: #00aaff; 
+    section:nth-of-type(4) { /* Audience */
+      --accent: #00aaff;
       --accent-dim: rgba(0, 170, 255, 0.15);
     }
-    section:nth-of-type(5) { /* Built for real conditions */
-      --accent: #ffaa00; 
+    section:nth-of-type(5) { /* Workflow */
+      --accent: #ffaa00;
       --accent-dim: rgba(255, 170, 0, 0.15);
     }
-    section:nth-of-type(6) { /* The Same Query Returns */
-      --accent: #8a2be2; 
+    section:nth-of-type(6) { /* Safety */
+      --accent: #8a2be2;
       --accent-dim: rgba(138, 43, 226, 0.15);
     }
-    section:nth-of-type(7) { /* Six Tools */
-      --accent: #00ff88; 
+    section:nth-of-type(7) { /* Tools */
+      --accent: #00ff88;
       --accent-dim: rgba(0, 255, 136, 0.15);
     }
-    section:nth-of-type(8) { /* Failure States */
-      --accent: #ff00aa; 
+    section:nth-of-type(8) { /* Quickstart */
+      --accent: #ff00aa;
       --accent-dim: rgba(255, 0, 170, 0.15);
     }
-    section:nth-of-type(9) { /* Quickstart */
-      --accent: #00ffcc; 
+    section:nth-of-type(9) { /* Technical Depth */
+      --accent: #00ffcc;
       --accent-dim: rgba(0, 255, 204, 0.15);
     }
-    section:nth-of-type(10) { /* Terminal / Trace Replay */
-      --accent: #dfff00; 
+    section:nth-of-type(10) { /* Failure States */
+      --accent: #dfff00;
+      --accent-dim: rgba(223, 255, 0, 0.15);
+    }
+    section:nth-of-type(11) { /* Terminal / Trace Replay */
+      --accent: #dfff00;
       --accent-dim: rgba(223, 255, 0, 0.15);
     }
 
-    /* Cursed Energy Aura Background */
-    .cursed-energy {
+    /* Ambient energy background */
+    .ambient-energy {
       position: fixed;
       top: 0;
       left: 0;
@@ -111,58 +115,58 @@
       pointer-events: none;
       overflow: hidden;
       opacity: 0.3; /* Lower overall opacity */
-      background: 
+      background:
         radial-gradient(circle at 20% 30%, rgba(138, 43, 226, 0.08) 0%, transparent 40%), /* Reduced purple */
         radial-gradient(circle at 80% 70%, rgba(0, 170, 255, 0.05) 0%, transparent 40%), /* Reduced blue */
         radial-gradient(circle at 50% 50%, rgba(255, 0, 85, 0.08) 0%, transparent 50%);
       filter: blur(40px);
-      animation: cursed-pulse 10s ease-in-out infinite alternate;
+      animation: ambient-pulse 10s ease-in-out infinite alternate;
     }
-    
-    .cursed-wisp {
+
+    .ambient-wisp {
       position: absolute;
       width: 200%;
       height: 200%;
       top: -50%;
       left: -50%;
-      background: 
-        conic-gradient(from 0deg at 50% 50%, 
-          transparent 0deg, 
+      background:
+        conic-gradient(from 0deg at 50% 50%,
+          transparent 0deg,
           rgba(138, 43, 226, 0.05) 90deg, /* Reduced purple */
-          transparent 180deg, 
+          transparent 180deg,
           rgba(0, 170, 255, 0.03) 270deg, /* Reduced blue */
           transparent 360deg);
-      animation: cursed-rotate 20s linear infinite;
+      animation: ambient-rotate 20s linear infinite;
       mix-blend-mode: screen;
     }
-    
-    .cursed-wisp:nth-child(2) {
+
+    .ambient-wisp:nth-child(2) {
       animation-direction: reverse;
       animation-duration: 25s;
       opacity: 0.5; /* Lower overall opacity */
-      background: 
-        conic-gradient(from 180deg at 50% 50%, 
-          transparent 0deg, 
-          rgba(255, 0, 85, 0.05) 90deg, 
-          transparent 180deg, 
+      background:
+        conic-gradient(from 180deg at 50% 50%,
+          transparent 0deg,
+          rgba(255, 0, 85, 0.05) 90deg,
+          transparent 180deg,
           rgba(138, 43, 226, 0.05) 270deg, /* Reduced purple */
           transparent 360deg);
     }
 
-    @keyframes cursed-pulse {
+    @keyframes ambient-pulse {
       0% { transform: scale(1); opacity: 0.3; }
       50% { transform: scale(1.1); opacity: 0.5; }
       100% { transform: scale(1); opacity: 0.3; }
     }
-    
-    @keyframes cursed-rotate {
+
+    @keyframes ambient-rotate {
       0% { transform: rotate(0deg) scale(1); }
       50% { transform: rotate(180deg) scale(1.2); }
       100% { transform: rotate(360deg) scale(1); }
     }
 
-    /* Subliminal Gojo Background Motif */
-    .gojo-subliminal-bg {
+    /* Ambient background motif */
+    .ambient-subliminal-bg {
       position: fixed;
       top: 40%;
       left: 50%;
@@ -316,23 +320,63 @@
       color: var(--muted);
       max-width: 700px;
       font-weight: 300;
-      font-size: 1.1rem;
+      font-size: 1.16rem;
     }
 
-    .hero-meta {
+    .hero-actions {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 1rem;
       margin-top: 2rem;
+    }
+
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--bg);
+      font-weight: 700;
+      padding: 0.82rem 1.25rem;
+      box-shadow: 0 0 24px var(--accent-dim);
+    }
+
+    .btn.secondary {
+      border-color: rgba(255, 255, 255, 0.45);
+      color: rgba(255, 255, 255, 0.76);
+    }
+
+    .trust-chips {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      margin-top: 1.25rem;
+      max-width: 840px;
+    }
+
+    .trust-chip {
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.035);
+      padding: 0.45rem 0.7rem;
       font-family: var(--mono);
-      font-size: 0.75rem;
-      color: var(--accent);
+      font-size: 0.7rem;
+      color: rgba(255, 255, 255, 0.72);
       text-transform: uppercase;
-      letter-spacing: 0.15em;
+      letter-spacing: 0.12em;
+    }
+
+    .section-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-top: 1.5rem;
     }
 
     .install-strip {
       margin-top: 1rem;
       border: 1px solid var(--line);
       background: transparent;
-      /* allow the gojo svg to show through */
+      /* allow the ambient motif to show through */
       backdrop-filter: blur(8px);
       padding: 3rem 2rem;
       display: flex;
@@ -403,13 +447,13 @@
       gap: 1rem;
       min-width: 0;
     }
-    
+
     .config-head .install-title {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    
+
     .config-head .btn {
       flex-shrink: 0;
     }
@@ -478,7 +522,7 @@
       margin-top: 1rem;
       border: 1px solid var(--line);
       background: transparent;
-      /* allow the gojo svg to show through */
+      /* allow the ambient motif to show through */
       backdrop-filter: blur(8px);
       padding: 4rem 2rem;
       position: relative;
@@ -502,7 +546,7 @@
 
     .section-intro {
       font-family: var(--sans);
-      font-size: 1.1rem;
+      font-size: 1.16rem;
       font-weight: 300;
       color: var(--muted);
       max-width: 800px;
@@ -587,9 +631,48 @@
     .card p {
       font-family: var(--sans);
       color: var(--muted);
-      font-size: 0.95rem;
+      font-size: 1rem;
       font-weight: 300;
-      line-height: 1.6;
+      line-height: 1.68;
+    }
+
+    .flow-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      border: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .flow-item {
+      min-height: 170px;
+      background: rgba(0, 0, 0, 0.54);
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      position: relative;
+    }
+
+    .flow-index {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+    }
+
+    .flow-item strong {
+      font-family: var(--serif);
+      font-size: clamp(1.4rem, 2vw, 2rem);
+      line-height: 0.95;
+      font-weight: 300;
+    }
+
+    .flow-item p {
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.65;
     }
 
     .steps {
@@ -631,7 +714,7 @@
 
     .step p {
       font-family: var(--sans);
-      font-size: 0.95rem;
+      font-size: 1rem;
       font-weight: 300;
       color: var(--muted);
     }
@@ -679,77 +762,6 @@
       margin: 0;
     }
 
-    .terminal {
-      margin-top: 1rem;
-      border: 1px solid var(--line);
-      background: rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(10px);
-      padding: 2rem;
-      height: 360px;
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-      position: relative;
-    }
-
-    .terminal::before {
-      content: "";
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 2px;
-      background: var(--accent);
-    }
-
-    .terminal-head {
-      font-family: var(--mono);
-      font-size: 0.85rem;
-      text-transform: uppercase;
-      letter-spacing: 0.15em;
-      color: var(--muted);
-      border-bottom: 1px dotted var(--line);
-      padding-bottom: 1rem;
-      display: flex;
-      justify-content: space-between;
-    }
-
-    .terminal-body {
-      flex: 1;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
-      gap: 0.4rem;
-      font-family: var(--mono);
-    }
-
-    .line {
-      font-size: 0.8rem;
-      opacity: 0.4;
-      transition: all 0.1s;
-    }
-
-    .line::before {
-      content: ">> ";
-      opacity: 0.5;
-    }
-
-    .line.active {
-      color: var(--accent);
-      opacity: 1;
-      text-shadow: 0 0 8px var(--accent-dim);
-    }
-
-    .terminal-actions {
-      display: flex;
-      gap: 1rem;
-      flex-wrap: wrap;
-      margin-top: 1rem;
-      border-top: 1px dotted var(--line);
-      padding-top: 1rem;
-    }
-
     .footer {
       margin-top: 1rem;
       border: 1px solid var(--line);
@@ -763,171 +775,6 @@
       font-size: 0.85rem;
       color: var(--muted);
       font-weight: 300;
-    }
-
-    /* --- Easter Egg Styles --- */
-    #domain-expansion-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background-color: #000;
-      z-index: 999999;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-
-      opacity: 0;
-      visibility: hidden;
-      pointer-events: none;
-      /* Add pointer-events none when hidden */
-      transition: opacity 1.2s ease-in-out, visibility 1.2s;
-    }
-
-    #domain-expansion-overlay.active {
-      opacity: 1;
-      visibility: visible;
-      pointer-events: auto;
-      /* Re-enable pointer events when active */
-      cursor: pointer;
-    }
-
-    .void-bg {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: -1;
-      pointer-events: none;
-    }
-
-    .eye-container {
-      width: 90%;
-      max-width: 700px;
-    }
-
-    .domain-text {
-      color: #80e5ff;
-      font-family: var(--mono);
-      letter-spacing: 0.5rem;
-      text-transform: uppercase;
-      margin-top: -2rem;
-      opacity: 0;
-      filter: drop-shadow(0 0 12px #00aaff);
-      transition: opacity 2s ease-in 1s;
-    }
-
-    #domain-expansion-overlay.active .domain-text {
-      opacity: 1;
-    }
-
-    .pupil-tracker {
-      transition: transform 0.15s cubic-bezier(0.2, 0.8, 0.2, 1);
-    }
-
-    /* Animated Void Elements */
-    .kanji-bg {
-      font-family: var(--serif);
-      font-size: clamp(8rem, 25vw, 25rem);
-      font-weight: 700;
-      fill: rgba(255, 255, 255, 0.02);
-      letter-spacing: 2rem;
-      pointer-events: none;
-    }
-
-    .eclipse {
-      fill: #000;
-      stroke: rgba(128, 229, 255, 0.1);
-      stroke-width: 2;
-      filter: url(#eclipse-glow);
-    }
-
-    .ring {
-      fill: none;
-      stroke: rgba(128, 229, 255, 0.15);
-      stroke-width: 1;
-      stroke-dasharray: 4 12;
-      transform-origin: 50% 50%;
-    }
-
-    .ring-1 {
-      animation: spin 40s linear infinite;
-      stroke-dasharray: 2 6;
-      opacity: 0.5;
-    }
-
-    .ring-2 {
-      animation: spin 60s linear infinite reverse;
-      stroke-dasharray: 8 24;
-      stroke-width: 2;
-    }
-
-    .ring-3 {
-      animation: spin 90s linear infinite;
-      stroke-dasharray: 1 4;
-      opacity: 0.3;
-    }
-
-    @keyframes spin {
-      100% {
-        transform: rotate(360deg);
-      }
-    }
-
-    .floating-cloth {
-      fill: none;
-      stroke: rgba(0, 0, 0, 0.8);
-      stroke-width: 15vw;
-      stroke-linecap: round;
-      filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.9));
-      opacity: 0;
-      transition: opacity 2s ease-in 0.5s;
-      transform-origin: center;
-      animation: clothSway 15s ease-in-out infinite;
-    }
-
-    .cloth-delayed {
-      animation-delay: -7s;
-      animation-duration: 20s;
-      stroke-width: 8vw;
-    }
-
-    #domain-expansion-overlay.active .floating-cloth {
-      opacity: 0.9;
-    }
-
-    @keyframes clothSway {
-
-      0%,
-      100% {
-        transform: translateY(0) scaleY(1);
-      }
-
-      50% {
-        transform: translateY(-30px) scaleY(1.05);
-      }
-    }
-
-    .watermark {
-      font-family: var(--mono);
-      font-size: 0.85rem;
-      letter-spacing: 0.4em;
-      fill: rgba(255, 255, 255, 0.1);
-    }
-
-    /* Mask Pull Down Animation */
-    .mask-group {
-      transform-origin: 50% 50%;
-      transition: transform 2s cubic-bezier(0.2, 0.8, 0.2, 1) 0.5s, opacity 1s ease-in;
-    }
-
-    #domain-expansion-overlay.active .mask-group {
-      transform: translateY(120px) rotate(5deg);
-      opacity: 0;
-      /* Fade it out slightly as it drops out of frame */
     }
 
     @media (max-width: 860px) {
@@ -957,7 +804,7 @@
 
       nav,
       .hero,
-      .terminal {
+      .hero {
         backdrop-filter: none;
       }
 
@@ -970,6 +817,25 @@
         padding: 4rem 1.5rem;
       }
 
+      .hero-actions {
+        width: 100%;
+      }
+
+      .hero-actions .btn {
+        width: 100%;
+        text-align: center;
+      }
+
+      .trust-chips {
+        justify-content: flex-start;
+        width: 100%;
+      }
+
+      .trust-chip {
+        font-size: 0.66rem;
+        line-height: 1.35;
+      }
+
       .section {
         padding: 3rem 1.5rem;
       }
@@ -977,7 +843,6 @@
       .hero,
       .card,
       .btn,
-      .line,
       .step,
       details,
       a {
@@ -1005,6 +870,10 @@
         grid-template-columns: 1fr;
       }
 
+      .flow-strip {
+        grid-template-columns: 1fr;
+      }
+
       .install-strip {
         padding: 2rem 1.5rem;
         transition: border-left-color 0.3s, border-color 0.3s;
@@ -1014,16 +883,12 @@
   border-left: 2px solid var(--accent);
 }
 
-      .terminal {
-        padding: 1.5rem;
-        height: 400px;
-      }
     }
   </style>
 </head>
 
 <body>
-  
+
 
 
 
@@ -1046,26 +911,26 @@
     <rect width="100" height="100" fill="url(#grid)" />
     <!-- Gradient Fade -->
     <rect width="100" height="100" fill="url(#fade)" />
-    
+
     <!-- Abstract Geometric Tech Elements -->
     <g stroke="rgba(255, 255, 255, 0.04)" stroke-width="0.1" fill="none">
       <circle cx="85" cy="20" r="15" stroke-dasharray="0.5 1" />
       <circle cx="85" cy="20" r="10" />
       <path d="M 85 5 L 85 35 M 70 20 L 100 20" stroke="rgba(255, 255, 255, 0.02)" />
-      
+
       <circle cx="15" cy="80" r="25" stroke-dasharray="0.2 0.8" />
       <circle cx="15" cy="80" r="18" stroke="rgba(0, 170, 255, 0.05)" />
       <path d="M 0 80 L 40 80" stroke="rgba(0, 170, 255, 0.03)" />
-      
+
       <!-- Tech lines -->
       <path d="M 0 40 L 30 40 L 40 50 L 100 50" stroke="rgba(138, 43, 226, 0.05)" />
       <path d="M 20 0 L 20 20 L 30 30 L 30 100" stroke="rgba(255, 0, 85, 0.05)" />
     </g>
   </svg>
 
-  <div class="cursed-energy">
-    <div class="cursed-wisp"></div>
-    <div class="cursed-wisp"></div>
+  <div class="ambient-energy">
+    <div class="ambient-wisp"></div>
+    <div class="ambient-wisp"></div>
   </div>
 
   <div class="canvas-wrap">
@@ -1076,7 +941,7 @@
     <nav>
       <div class="nav-brand">
         <div class="status-dot"></div>
-        <span>Satori // MCP Engine // Six Tools • Six Eyes</span>
+        <span>Satori // Repo Context for Agents</span>
       </div>
       <div class="nav-links">
         <a href="https://github.com/ham-zax/satori" target="_blank">[ Repository ]</a>
@@ -1087,417 +952,319 @@
 
     <section class="hero">
       <h1>Satori</h1>
-      <h2>Your agent finally knows your codebase.</h2>
+      <h2>Your AI coding agent is flying blind.</h2>
       <p>
-        Agents <span class="sel sel-risk">re-implement what already exists</span>,
-        call functions with <span class="sel sel-risk">the wrong signatures</span>,
-        and miss the right abstraction — because they&apos;re
-        <span class="sel sel-risk">navigating blind</span>. Satori is an MCP
-        server that gives agents
-        <span class="sel sel-core">exact, structurally-aware access</span> to
-        your code. <span class="sel sel-flow">Ask in natural language</span>.
-        Get back <span class="sel sel-trust">the exact symbol</span>.
+        Satori helps AI coding agents investigate real repo context before
+        they edit. It searches code, opens exact symbols, follows
+        callers/callees, and warns when repo context is stale.
       </p>
-      <div class="hero-meta">
-        MIT and free to use. Works with any MCP-capable agent or client.
+      <div class="hero-actions">
+        <a class="btn primary" href="#quickstart">Install Satori</a>
+        <a class="btn secondary" href="#demo">See investigation flow</a>
       </div>
-      <div class="hero-meta">
-        Zilliz Cloud (Milvus) free tier supports indexing up to 5 codebases.
-      </div>
-      <div class="hero-meta">Six tools. One workflow. (Six eyes mode.)</div>
-      <div class="hero-meta">
-        Index your repo in 2 minutes. Ask it something only a senior engineer
-        would know.
-      </div>
-    </section>
-
-    <section class="install-strip">
-      <div class="install-top">
-        <div class="install-title">Get Running in 30 Seconds</div>
-      </div>
-      <p class="install-note">
-        Add this block to your agent&apos;s MCP config. That&apos;s it.
-      </p>
-      <div class="config-grid">
-        <div class="config-card">
-          <div class="config-head">
-            <div class="install-title">For Codex (TOML)</div>
-            <button class="btn copy-btn" data-copy="codex-config-top">
-              Copy Codex
-            </button>
-          </div>
-          <pre><code id="codex-config-top">[mcp_servers.satori]
-command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.7.0"]
-startup_timeout_ms = 180000
-env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
-        </div>
-        <div class="config-card">
-          <div class="config-head">
-            <div class="install-title">For OpenCode / Claude</div>
-            <button class="btn copy-btn" data-copy="claude-config-top">
-              Copy OpenCode/Claude
-            </button>
-          </div>
-          <pre><code id="claude-config-top">"satori": {
-  "type": "local",
-  "command": [
-    "npx",
-    "-y",
-    "--prefer-offline",
-    "@zokizuan/satori-mcp@3.7.0"
-  ],
-  "enabled": true,
-  "timeout": 30000,
-  "environment": {
-    "MILVUS_ADDRESS": "your-milvus-endpoint",
-    "MILVUS_TOKEN": "your-milvus-token",
-    "VOYAGEAI_API_KEY": "your-api-key",
-    "EMBEDDING_PROVIDER": "VoyageAI",
-    "EMBEDDING_MODEL": "voyage-4-large",
-    "EMBEDDING_OUTPUT_DIMENSION": "1024",
-    "VOYAGEAI_RERANKER_MODEL": "rerank-2.5"
-  }
-}</code></pre>
-        </div>
+      <div class="trust-chips" aria-label="Satori trust signals">
+        <span class="trust-chip">MIT open source</span>
+        <span class="trust-chip">Works with MCP agents</span>
+        <span class="trust-chip">Free to start with supported providers</span>
       </div>
     </section>
 
     <section class="section">
-      <h3>Agents Are Flying Blind</h3>
+      <h3>Search Is Not Repo Understanding</h3>
       <p class="section-intro">
-        <span class="sel sel-risk">grep doesn&apos;t understand behavior</span>.
-        <span class="sel sel-risk">Generic RAG gives context-free chunks</span>.
-        Neither knows your <span class="sel sel-core">call graph</span>, your
-        <span class="sel sel-core">symbol map</span>, or
-        <span class="sel sel-risk">what changed ten minutes ago</span>.
+        AI agents can grep files. Real repos need more: exact symbols, callers,
+        callees, freshness checks, and bounded evidence before an edit.
       </p>
       <div class="grid">
         <article class="card">
-          <h4>&quot;Your agent just rebuilt utils/retry.ts. Again.&quot;</h4>
+          <h4>&quot;It edited the obvious file.&quot;</h4>
           <p>
-            Without structural awareness, agents can&apos;t find what already
-            exists. They write new code instead of using yours.
+            Nearby text is not the same as the right implementation path.
+            Satori gives the agent a way to inspect the code it is about to
+            rely on.
           </p>
         </article>
         <article class="card">
-          <h4>&quot;Called with 2 args. Takes 4.&quot;</h4>
+          <h4>&quot;It missed the caller.&quot;</h4>
           <p>
-            Stale or missing context means wrong calls. Every time an agent
-            works from a hallucinated understanding of your API surface, it
-            produces broken code.
+            A change can look small until another function depends on it.
+            Satori exposes callers and callees when call graph data is ready.
           </p>
         </article>
         <article class="card">
-          <h4>&quot;Test fixtures in first position. Again.&quot;</h4>
+          <h4>&quot;It used stale context.&quot;</h4>
           <p>
-            Generic retrieval doesn&apos;t understand runtime vs test noise.
-            You get contaminated context, and the agent builds on it.
+            Active repos move while agents work. Satori checks freshness and
+            returns explicit reindex guidance instead of silently trusting old
+            data.
           </p>
         </article>
         <article class="card">
-          <h4>&quot;What did the agent actually read?&quot;</h4>
+          <h4>&quot;I cannot tell what it read.&quot;</h4>
           <p>
-            Without cited sources and exact line spans, you can&apos;t audit
-            AI decisions. You&apos;re reviewing changes you can&apos;t trace.
+            Satori returns file paths, symbols, spans, warnings, and fallback
+            navigation so agent decisions are easier to inspect.
           </p>
         </article>
       </div>
     </section>
 
-    <section class="section">
-      <h3>Four Tool Calls. A Complete Investigation.</h3>
+    <section class="section" id="demo">
+      <h3>One Flow: Investigate Before Editing</h3>
       <p class="section-intro">
-        Satori exposes <span class="sel sel-flow">exactly six MCP tools</span>.
-        The <span class="sel sel-flow">north-star workflow</span> gets from
-        question to edit-ready context in
-        <span class="sel sel-trust">four deterministic, cited steps</span>.
-      </p>
-      <div class="steps">
-        <div class="step">
-          <strong>1. Search</strong>
-          <code>search_codebase({
-  path: "/repo",
-  query: "auth token refresh flow",
-  scope: "runtime",
-  resultMode: "grouped",
-  groupBy: "symbol",
-  limit: 5
-})</code>
-          <p>
-            Semantic search over runtime code only. Returns symbol-grouped
-            results with a <code>callGraphHint</code> ready for the next
-            tool.
-          </p>
-        </div>
-        <div class="step">
-          <strong>2. Traverse</strong>
-          <code>call_graph({
-  path: "/repo",
-  symbolRef: &lt;from callGraphHint&gt;,
-  direction: "both",
-  depth: 2
-})</code>
-          <p>
-            Callers + callees, depth-bounded. Before editing, the agent
-            understands blast radius.
-          </p>
-        </div>
-        <div class="step">
-          <strong>3. Map</strong>
-          <code>file_outline({
-  path: "/repo",
-  file: "src/auth/session.ts",
-  limitSymbols: 50
-})</code>
-          <p>
-            Deterministic symbol map for the file. Use
-            <code>resolveMode=exact</code> to jump by label or ID.
-          </p>
-        </div>
-        <div class="step">
-          <strong>4. Read</strong>
-          <code>read_file({
-  path: "/repo",
-  open_symbol: "refreshToken",
-  mode: "annotated"
-})</code>
-          <p>
-            Exact symbol span opens. Annotated mode returns content +
-            outline status in one call.
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <section class="section">
-      <h3>Built for the Real Conditions of Active Repos</h3>
-      <p class="section-intro">
-        Most retrieval tools work in demos. Satori is designed for repos that
-        are <span class="sel sel-risk">changing</span>,
-        <span class="sel sel-risk">messy</span>, and
-        <span class="sel sel-core">real</span>.
+        One compact demo is enough: ask for a change, inspect real repo
+        context, then edit with fewer blind spots.
       </p>
       <div class="grid">
         <article class="card">
-          <h4>Merkle Incremental Sync</h4>
+          <h4>Without Satori</h4>
           <p>
-            Stat-first hash-on-change. Only files that actually changed get
-            re-embedded. Most syncs are seconds.
+            The agent searches a few nearby files, guesses which function
+            matters, edits from partial context, and leaves you to discover
+            what it missed.
           </p>
         </article>
         <article class="card">
-          <h4>Git-Aware Ranking</h4>
+          <h4>With Satori</h4>
           <p>
-            <code>rankingMode=auto_changed_first</code> boosts recently-changed
-            files so results match what you’re working on now.
-          </p>
-        </article>
-        <article class="card">
-          <h4>Scope Filtering</h4>
-          <p>
-            <code>scope=runtime</code> excludes tests/fixtures/docs from code
-            search. <code>docs</code> targets documentation only.
-            <code>mixed</code> includes everything.
-          </p>
-        </article>
-        <article class="card">
-          <h4>Noise Self-Healing</h4>
-          <p>
-            When noise dominates top results,
-            <code>hints.noiseMitigation</code> tells you exactly what to add
-            to <code>.satoriignore</code>. Wait one debounce window (default
-            5s). Done.
-          </p>
-        </article>
-        <article class="card">
-          <h4>Fingerprint Gates</h4>
-          <p>
-            Incompatible index states are blocked with a deterministic
-            <code>requires_reindex</code> envelope — no silent stale reads.
-          </p>
-        </article>
-        <article class="card">
-          <h4>Partial-Scan Safety</h4>
-          <p>
-            If a file is temporarily unreadable, prior state is preserved. No
-            false removals, no destructive churn.
+            The agent asks the repo, follows the returned navigation, reads the
+            exact implementation span, and checks caller/callee context before
+            proposing an edit.
           </p>
         </article>
       </div>
-    </section>
-
-    <section class="section">
-      <h3>The Same Query Returns the Same Result. Always.</h3>
-      <p class="section-intro">
-        <span class="sel sel-trust">Determinism is a design contract</span>,
-        not an aspiration. Every comparator, tie-break chain, group selection,
-        and warning is <span class="sel sel-trust">explicit in code</span> and
-        <span class="sel sel-flow">verified in a regression matrix</span>.
-      </p>
-      <pre><code>Deterministic tie-break chain:
-score desc → file asc → start_line asc → symbol label asc → symbol id asc</code></pre>
-      <p class="section-intro" style="margin-top: 1.5rem">
-        <span class="sel sel-trust">Deterministic retrieval</span> makes agent
-        behavior reproducible: when something breaks, you can
-        <span class="sel sel-flow">replay it</span>. When something works, you
-        can <span class="sel sel-flow">rely on it repeating</span>.
-      </p>
-    </section>
-
-    <section class="section">
-      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 2rem;">
-        <div style="flex: 1; min-width: 300px;">
-          <h3>Six Tools. Six Eyes.</h3>
-          <p class="section-intro">
-            The whole API footprint is
-            <span class="sel sel-flow">six MCP tools</span> —
-            <span class="sel sel-core">minimal routing</span>,
-            <span class="sel sel-trust">maximal auditability</span>. Perfect
-            clarity.
+      <div class="steps" style="margin-top: 1.5rem;">
+        <div class="step">
+          <strong>1. Find relevant code</strong>
+          <p>
+            Natural-language search over indexed code returns grouped results,
+            warnings, freshness state, and navigation hints.
           </p>
         </div>
-        <!-- Geometric Six Eyes Motif -->
-        <svg width="140" height="140" viewBox="0 0 100 100"
-          style="opacity: 0.8; filter: drop-shadow(0 0 8px var(--accent-dim)); margin-bottom: 2rem;">
-          <!-- Outer Limitless Boundary -->
-          <circle cx="50" cy="50" r="45" fill="none" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 4" />
-          <circle cx="50" cy="50" r="35" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity="0.5" />
-
-          <!-- 6 glowing crystalline nodes (The Six Eyes) -->
-          <circle cx="50" cy="20" r="4" fill="var(--accent)" />
-          <circle cx="50" cy="80" r="4" fill="var(--accent)" />
-          <circle cx="20" cy="50" r="4" fill="var(--accent)" />
-          <circle cx="80" cy="50" r="4" fill="var(--accent)" />
-          <circle cx="35" cy="35" r="3" fill="#ffffff" />
-          <circle cx="65" cy="65" r="3" fill="#ffffff" />
-
-          <!-- Sacred Geometry Connecting Lines -->
-          <path d="M 50 20 L 80 50 L 50 80 L 20 50 Z" fill="none" stroke="var(--accent)" stroke-width="1"
-            opacity="0.6" />
-          <path d="M 35 35 L 65 65" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.4"
-            stroke-dasharray="2 2" />
-          <circle cx="50" cy="50" r="10" fill="none" stroke="var(--accent)" stroke-width="1" />
-          <circle cx="50" cy="50" r="2" fill="#ffffff" />
-        </svg>
+        <div class="step">
+          <strong>2. Open the exact symbol</strong>
+          <p>
+            The agent uses deterministic file outlines and symbol spans instead
+            of copying the nearest text chunk into a prompt.
+          </p>
+        </div>
+        <div class="step">
+          <strong>3. Follow callers and callees</strong>
+          <p>
+            When the sidecar is ready, call graph traversal shows surrounding
+            code paths. When it is not ready, Satori returns a runnable
+            navigation fallback.
+          </p>
+        </div>
+        <div class="step">
+          <strong>4. Edit with fresher context</strong>
+          <p>
+            Satori does not promise bug-free changes. It reduces blind edits by
+            giving agents specific repo evidence first.
+          </p>
+        </div>
       </div>
+      <div class="section-actions">
+        <a class="btn primary" href="#quickstart">Install Satori</a>
+        <a class="btn secondary" href="architecture.html">Read the architecture</a>
+      </div>
+    </section>
+
+    <section class="section">
+      <h3>Built for Devs Using Agents on Real Repos</h3>
+      <p class="section-intro">
+        For indie devs and vibe coders using Claude Code, Codex, MCP clients,
+        or Cursor-style agent workflows where the repo is too large to paste
+        into chat.
+      </p>
       <div class="grid">
         <article class="card">
-          <h4><code>list_codebases</code></h4>
+          <h4>You want faster shipping</h4>
           <p>
-            Shows tracked repos grouped by state (Ready / Indexing / Requires
-            Reindex / Failed). Start every session here.
+            Keep the agent moving, but make investigation part of the workflow
+            before it touches important files.
           </p>
         </article>
         <article class="card">
-          <h4><code>manage_index</code></h4>
+          <h4>Your repo is not a demo</h4>
           <p>
-            Create, reindex, sync, status, clear. First-time setup, recovery,
-            or manual freshness triggers.
+            Mixed docs, tests, generated files, stale indexes, and renamed
+            paths are normal. Satori treats those as first-class states.
           </p>
         </article>
         <article class="card">
-          <h4><code>search_codebase</code></h4>
+          <h4>You need visible evidence</h4>
           <p>
-            Primary retrieval: scope + grouping + ranking + sync-on-read
-            freshness. The tool you call most.
+            Results point to real files, symbols, line spans, warning states,
+            and exact next tool calls.
           </p>
         </article>
         <article class="card">
-          <h4><code>file_outline</code></h4>
+          <h4>You want a practical trial path</h4>
           <p>
-            Deterministic symbol map + exact resolver
-            (<code>resolveMode=exact</code>). Use before editing.
-          </p>
-        </article>
-        <article class="card">
-          <h4><code>call_graph</code></h4>
-          <p>
-            Callers/callees traversal, depth-bounded. Know blast radius
-            before touching critical code.
-          </p>
-        </article>
-        <article class="card">
-          <h4><code>read_file</code></h4>
-          <p>
-            Content + exact spans + <code>open_symbol</code> + annotated
-            envelope. Final step: open only what matters.
+            Satori is MIT/open source. Zilliz and VoyageAI may offer free
+            allowances suitable for a trial; provider limits can change.
           </p>
         </article>
       </div>
     </section>
 
     <section class="section">
-      <h3>Failure States Have Deterministic Fixes</h3>
+      <h3>How It Works</h3>
       <p class="section-intro">
-        When things go wrong, the tool tells you
-        <span class="sel sel-flow">exactly what to do next</span> —
-        <span class="sel sel-trust">no guesswork</span>.
+        Index once, then let the agent investigate through a small MCP surface:
+        search, outline, graph, read, sync, and lifecycle management.
+      </p>
+      <div class="flow-strip">
+        <div class="flow-item">
+          <span class="flow-index">01</span>
+          <strong>Index repo</strong>
+          <p>
+            Satori chunks code, stores embeddings, builds sidecar metadata, and
+            tracks fingerprints so incompatible indexes do not look ready.
+          </p>
+        </div>
+        <div class="flow-item">
+          <span class="flow-index">02</span>
+          <strong>Ask agent</strong>
+          <p>
+            Your MCP-compatible client calls Satori tools instead of relying on
+            ad hoc file search alone.
+          </p>
+        </div>
+        <div class="flow-item">
+          <span class="flow-index">03</span>
+          <strong>Inspect context</strong>
+          <p>
+            The agent follows search results into exact outlines, call graph
+            context, and bounded file reads.
+          </p>
+        </div>
+        <div class="flow-item">
+          <span class="flow-index">04</span>
+          <strong>Edit with guardrails</strong>
+          <p>
+            Requires-reindex, backend timeout, missing sidecar, and noisy-result
+            states return explicit guidance instead of silent degradation.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h3>Reduce Blind Edits</h3>
+      <p class="section-intro">
+        Satori does not claim to prevent broken code. It makes the agent&apos;s
+        investigation specific, repeatable, and easier to audit before editing.
+      </p>
+      <div class="grid">
+        <article class="card">
+          <h4>Exact spans</h4>
+          <p>
+            Open the symbol or file range that matters instead of dumping broad
+            context into the model.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Callers/callees</h4>
+          <p>
+            Depth-bounded call graph context helps the agent see nearby code
+            relationships before changing a function.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Stale-index warnings</h4>
+          <p>
+            Fingerprint gates and freshness decisions stop old indexes from
+            pretending to be current.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Deterministic output</h4>
+          <p>
+            Stable sorting, warning codes, and fallback payloads make results
+            easier to replay and debug.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h3>Questions Your Agent Should Ask First</h3>
+      <p class="section-intro">
+        The six MCP tools stay small. The outcomes are what matter during a
+        coding session.
+      </p>
+      <div class="grid">
+        <article class="card">
+          <h4>Find relevant code</h4>
+          <p>
+            <code>search_codebase</code> searches indexed code with runtime,
+            docs, or mixed scope and returns grouped navigation hints.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Understand a file</h4>
+          <p>
+            <code>file_outline</code> maps symbols and resolves exact labels or
+            IDs without guessing on ambiguity.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Follow callers</h4>
+          <p>
+            <code>call_graph</code> traverses callers and callees when graph
+            support is ready for the symbol.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Read exact evidence</h4>
+          <p>
+            <code>read_file</code> opens files, line ranges, or exact symbols
+            with optional outline metadata.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Check freshness</h4>
+          <p>
+            <code>list_codebases</code> and search freshness states show what
+            is ready, indexing, failed, or requires reindex.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Repair lifecycle state</h4>
+          <p>
+            <code>manage_index</code> handles create, sync, reindex, status,
+            and clear with explicit destructive-action semantics.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="quickstart">
+      <h3>Install in One Path First</h3>
+      <p class="section-intro">
+        Start with one repo and one MCP client. Add providers later. Use the
+        CLI installer first; open manual config only when you need to wire a
+        client yourself.
       </p>
       <div class="accordion-list">
-        <details>
-          <summary>Requires Reindex</summary>
+        <details open>
+          <summary>CLI Installer</summary>
           <div class="details-body">
+            <pre><code>npx -y @zokizuan/satori-cli@0.2.0 install --client codex
+npx -y @zokizuan/satori-cli@0.2.0 install --client claude
+npx -y @zokizuan/satori-cli@0.2.0 install --client all --dry-run</code></pre>
             <p>
-              Any <code>requires_reindex</code> response includes
-              <code>hints.reindex</code> with the exact command to run:
-            </p>
-            <pre><code>manage_index({ action: "reindex", path: &lt;hints.reindex.args.path&gt; })
-// then retry the original tool call</code></pre>
-          </div>
-        </details>
-        <details>
-          <summary>Noisy Results</summary>
-          <div class="details-body">
-            <p>
-              If <code>hints.noiseMitigation</code> appears, apply the
-              suggested <code>.satoriignore</code> patterns, wait one debounce
-              window (default 5s), then rerun search.
+              The installer writes managed client config and copies the
+              first-party <code>satori-search</code>,
+              <code>satori-navigation</code>, and
+              <code>satori-indexing</code> skills.
             </p>
           </div>
         </details>
         <details>
-          <summary>Call Graph Not Ready</summary>
-          <div class="details-body">
-            <p>
-              If <code>call_graph</code> returns <code>not_ready</code> /
-              missing sidecar, reindex. While waiting, every search result
-              includes <code>navigationFallback</code> (executable readSpan +
-              optional fileOutlineWindow).
-            </p>
-          </div>
-        </details>
-        <details>
-          <summary>File Not Found</summary>
-          <div class="details-body">
-            <p>
-              Run <code>search_codebase</code> with the filename in the query
-              and <code>scope: docs</code> or <code>scope: mixed</code>, then
-              pivot to the canonical path.
-            </p>
-          </div>
-        </details>
-        <details>
-          <summary>Collection Limit Reached</summary>
-          <div class="details-body">
-            <p>
-              Zilliz free tier limits collections.
-              <code>manage_index create</code> returns guided text naming a
-              collection to drop. Retry with <code>zillizDropCollection</code>.
-            </p>
-          </div>
-        </details>
-      </div>
-    </section>
-
-    <section class="section">
-      <h3>Quickstart (Progressive Disclosure)</h3>
-      <p class="section-intro">
-        Start with the minimum. Open details only when you need them.
-      </p>
-      <div class="accordion-list">
-        <details>
-          <summary>MCP Config (Copy-Paste)</summary>
+          <summary>MCP Config</summary>
           <div class="details-body">
             <div class="config-grid">
               <div class="config-card">
@@ -1509,13 +1276,13 @@ score desc → file asc → start_line asc → symbol label asc → symbol id as
                 </div>
                 <pre><code id="codex-config">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "--prefer-offline", "@zokizuan/satori-mcp@3.7.0"]
+args = ["-y", "@zokizuan/satori-mcp@4.8.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
               </div>
               <div class="config-card">
                 <div class="config-head">
-                  <div class="install-title">OpenCode / Claude</div>
+                  <div class="install-title">Claude / JSON Clients</div>
                   <button class="btn copy-btn" data-copy="claude-config">
                     Copy
                   </button>
@@ -1525,11 +1292,10 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
   "command": [
     "npx",
     "-y",
-    "--prefer-offline",
-    "@zokizuan/satori-mcp@3.7.0"
+    "@zokizuan/satori-mcp@4.8.0"
   ],
   "enabled": true,
-  "timeout": 30000,
+  "timeout": 180000,
   "environment": {
     "MILVUS_ADDRESS": "your-milvus-endpoint",
     "MILVUS_TOKEN": "your-milvus-token",
@@ -1544,67 +1310,113 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
             </div>
           </div>
         </details>
-
-        <details>
-          <summary>Search Options (Six Eyes Mode: Scope, Grouping, Graph Jump)</summary>
-          <div class="details-body">
-            <pre><code># Runtime-first grouped search (default mode)
-satori.search_codebase({"path":"/repo","query":"auth flow","scope":"runtime","resultMode":"grouped","groupBy":"symbol","limit":10})
-
-# Docs-only investigation
-satori.search_codebase({"path":"/repo","query":"migration guide","scope":"docs","resultMode":"raw","limit":10})
-
-# File-level grouping + debug traces
-satori.search_codebase({"path":"/repo","query":"retry policy","scope":"mixed","resultMode":"grouped","groupBy":"file","limit":12,"debug":true})
-
-# Call graph jump from grouped result hint
-satori.call_graph({"path":"/repo","symbolRef":{"file":"src/auth.ts","symbolId":"sym_auth_refresh"},"direction":"both","depth":2,"limit":20})</code></pre>
-            <p>
-              Grouped mode returns freshness + symbol metadata and a
-              discriminated <code>callGraphHint</code> (`supported: true|false`).
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>
-            Real Agent Trace (Docs Investigation + Missing Path Recovery)
-          </summary>
-          <div class="details-body">
-            <pre><code>Called satori.file_outline({"path":"/home/hamza/repo/tradingview_ratio","file":"src/auth/session.ts","limitSymbols":50})
-Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/CLI_COMMANDS.md","start_line":1,"end_line":220,"mode":"annotated"})
-Result: "QAP CLI Command Reference ..."
-
-Called satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"MASTER_AUDIT.md location current path archived","scope":"docs","resultMode":"raw","limit":10})
-Hit: docs/research/PHASES_OVERVIEW.md:322-371
-
-Called satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/archive/docs/northstar/core/INVARIANTS.md","start_line":1,"end_line":220,"mode":"annotated"})
-Error: File not found
-
-Fallback:
-satori.search_codebase({"path":"/home/hamza/repo/tradingview_ratio","query":"northstar/core/INVARIANTS.md docs/INVARIANTS.md reference mismatch","scope":"docs","resultMode":"raw","limit":10})
-satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md","start_line":480,"end_line":620,"mode":"annotated"})</code></pre>
-          </div>
-        </details>
       </div>
     </section>
 
-    <section class="terminal">
-      <div class="terminal-head">
-        <span>Satori Agent Trace Replay</span>
-        <span>SYS.READY</span>
+    <section class="section">
+      <h3>For People Who Want the Details</h3>
+      <p class="section-intro">
+        The landing page stays simple. The technical depth is still here:
+        deterministic ranking, sync-on-read search, fingerprint gates,
+        completion-proof checks, and timeout-safe lifecycle recovery.
+      </p>
+      <div class="grid">
+        <article class="card">
+          <h4>Incremental sync</h4>
+          <p>
+            Stat-first hash-on-change updates changed files instead of
+            re-embedding the whole repo on every sync.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Scope filtering</h4>
+          <p>
+            <code>scope=runtime</code> excludes docs/tests, <code>docs</code>
+            targets documentation, and <code>mixed</code> includes everything.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Cloud completion proof</h4>
+          <p>
+            Cloud collections repair local ready state only after marker,
+            path, and fingerprint validation.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Timeout-safe lifecycle</h4>
+          <p>
+            Indeterminate Milvus/Zilliz delete or validation timeouts are
+            returned as backend state, not repo failure.
+          </p>
+        </article>
       </div>
-      <div class="terminal-body" id="term-body">
-        <div class="line">
-          ready. click replay to run a realistic transcript.
-        </div>
-        <div class="line">
-          pattern: status check, semantic search, read, fallback, recover.
-        </div>
-      </div>
-      <div class="terminal-actions">
-        <button class="btn" id="replay-btn">Replay Trace</button>
-        <button class="btn" id="clear-btn">Clear</button>
+      <pre style="margin-top: 1.5rem;"><code>Deterministic tie-break chain:
+score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc</code></pre>
+      <p class="section-intro" style="margin-top: 1.5rem">
+        The architecture page keeps the deeper system view:
+        <a href="architecture.html">open architecture.html</a>.
+      </p>
+    </section>
+
+    <section class="section">
+      <h3>Failure States Are Explicit</h3>
+      <p class="section-intro">
+        If context is not safe to trust, Satori says so and gives the next
+        recovery step.
+      </p>
+      <div class="accordion-list">
+        <details>
+          <summary>Requires Reindex</summary>
+          <div class="details-body">
+            <p>
+              Any <code>requires_reindex</code> response includes
+              <code>hints.reindex</code> with the exact path to repair before
+              retrying the original call.
+            </p>
+            <pre><code>manage_index({ action: "reindex", path: &lt;hints.reindex.args.path&gt; })
+// then retry the original tool call</code></pre>
+          </div>
+        </details>
+        <details>
+          <summary>Noisy Results</summary>
+          <div class="details-body">
+            <p>
+              If <code>hints.noiseMitigation</code> appears, apply the
+              suggested <code>.satoriignore</code> patterns, wait one debounce
+              window when provided, then rerun search.
+            </p>
+          </div>
+        </details>
+        <details>
+          <summary>Call Graph Not Ready</summary>
+          <div class="details-body">
+            <p>
+              If <code>call_graph</code> returns <code>not_ready</code>, search
+              results still include <code>navigationFallback</code> with a
+              runnable read span and optional file outline window.
+            </p>
+          </div>
+        </details>
+        <details>
+          <summary>Backend Timeout</summary>
+          <div class="details-body">
+            <p>
+              If Zilliz/Milvus times out during collection validation or
+              deletion, Satori returns retryable backend guidance and preserves
+              local state unless remote absence is verified.
+            </p>
+          </div>
+        </details>
+        <details>
+          <summary>Collection Limit Reached</summary>
+          <div class="details-body">
+            <p>
+              Zilliz free tier limits collections.
+              <code>manage_index create</code> can return guided text naming a
+              collection to drop. Retry with <code>zillizDropCollection</code>.
+            </p>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -1612,268 +1424,12 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
       <span>Docs:
         <a href="https://github.com/ham-zax/satori/blob/main/README.md" target="_blank">README.md</a>
         · Architecture: <a href="architecture.html">architecture.html</a> ·
-        Free tier: 5 codebases on Zilliz Cloud.</span>
-      <span>Keep landing pages short. Keep docs deep. <span id="gojo-trigger"
-          style="cursor: pointer; user-select: none; color: var(--line); transition: color 0.3s; padding: 0 4px;"
-          title="Six Eyes Mode">[ • ]</span></span>
+        Start free when provider allowances fit your usage; limits can change.</span>
+      <span>Keep landing pages sharp. Keep docs deep.</span>
     </footer>
-    <style>
-      #gojo-trigger:hover {
-        color: var(--accent) !important;
-        text-shadow: 0 0 8px var(--accent-dim);
-      }
-    </style>
-  </div>
-
-  <!-- The Easter Egg Overlay -->
-  <div id="domain-expansion-overlay">
-    <svg class="void-bg" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
-      <defs>
-        <pattern id="grid-void" width="60" height="60" patternUnits="userSpaceOnUse">
-          <path d="M 60 0 L 0 0 0 60" fill="none" stroke="rgba(128, 229, 255, 0.04)" stroke-width="1" />
-        </pattern>
-        <radialGradient id="void-core" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="#000000" stop-opacity="0.6" />
-          <stop offset="100%" stop-color="#000000" stop-opacity="1" />
-        </radialGradient>
-        <filter id="eclipse-glow">
-          <feGaussianBlur stdDeviation="15" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-
-      <!-- Base Dark & Grid -->
-      <rect width="100%" height="100%" fill="url(#void-core)" />
-      <rect width="100%" height="100%" fill="url(#grid-void)" />
-
-      <!-- Massive Background Kanji: 無量空処 (Infinite Void) -->
-      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" class="kanji-bg">無量空処</text>
-
-      <!-- Domain Expansion Eclipse (Black Hole) -->
-      <circle cx="50%" cy="50%" r="30vw" class="eclipse" />
-
-      <!-- Rotating Limitless Data Rings -->
-      <g class="rings-container">
-        <circle cx="50%" cy="50%" r="35vw" class="ring ring-1" />
-        <circle cx="50%" cy="50%" r="42vw" class="ring ring-2" />
-        <circle cx="50%" cy="50%" r="48vw" class="ring ring-3" />
-      </g>
-
-      <!-- Faint Floating Blindfold Line-art -->
-      <path d="M -120 180 Q 360 70 760 260 T 1600 520" class="floating-cloth" />
-      <path d="M -120 760 Q 420 860 860 640 T 1700 360" class="floating-cloth cloth-delayed" />
-
-      <!-- Gojo Watermark -->
-      <text x="50%" y="90%" text-anchor="middle" class="watermark">SATORU GOJO // DOMAIN EXPANSION</text>
-    </svg>
-
-    <div class="eye-container">
-      <svg id="gojo-eyes" viewBox="0 0 800 300" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <filter id="cyan-glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="15" result="blur1" />
-            <feGaussianBlur stdDeviation="30" result="blur2" />
-            <feGaussianBlur stdDeviation="60" result="blur3" />
-            <feMerge>
-              <feMergeNode in="blur3" />
-              <feMergeNode in="blur2" />
-              <feMergeNode in="blur1" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="subtle-glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="8" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-
-          <radialGradient id="iris-gradient" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="#ffffff" />
-            <stop offset="15%" stop-color="#e6ffff" />
-            <stop offset="35%" stop-color="#80e5ff" />
-            <stop offset="60%" stop-color="#00aaff" />
-            <stop offset="85%" stop-color="#0055ff" />
-            <stop offset="100%" stop-color="#001144" />
-          </radialGradient>
-
-          <!-- Crystalline pattern for the iris -->
-          <pattern id="crystal" viewBox="0 0 20 20" width="10" height="10" patternUnits="userSpaceOnUse">
-            <path d="M10 0 L20 10 L10 20 L0 10 Z" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="0.5" />
-            <path d="M10 5 L15 10 L10 15 L5 10 Z" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="0.5" />
-          </pattern>
-        </defs>
-
-        <g id="eyes-group">
-          <!-- LEFT EYE -->
-          <g transform="translate(150, 100)">
-            <path d="M -20 50 Q 80 -10 180 50 Q 100 90 -20 50" fill="#000000" stroke="#0a0a0a" stroke-width="2" />
-            <path d="M -30 45 Q 80 -25 190 45" fill="none" stroke="#000000" stroke-width="12" stroke-linecap="round"
-              filter="url(#subtle-glow)" />
-            <path d="M -20 55 Q 80 100 180 55" fill="none" stroke="#000000" stroke-width="6" stroke-linecap="round"
-              filter="url(#subtle-glow)" />
-
-            <!-- Eyelashes -->
-            <path d="M -10 40 Q 10 20 20 15" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" />
-            <path d="M 30 25 Q 40 5 50 0" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" />
-            <path d="M 140 25 Q 150 5 160 0" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" />
-            <path d="M 170 40 Q 185 20 195 15" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" />
-
-            <g class="pupil-tracker" transform-origin="80 45">
-              <!-- Main Iris -->
-              <circle cx="80" cy="45" r="32" fill="url(#iris-gradient)" filter="url(#cyan-glow)" />
-              <!-- Crystal Overlay -->
-              <circle cx="80" cy="45" r="32" fill="url(#crystal)" opacity="0.6" />
-
-              <!-- Center Core -->
-              <circle cx="80" cy="45" r="10" fill="#ffffff" filter="url(#subtle-glow)" />
-              <circle cx="80" cy="45" r="5" fill="#e6ffff" />
-
-              <!-- Inner rings -->
-              <circle cx="80" cy="45" r="16" fill="none" stroke="#ffffff" stroke-width="1" stroke-dasharray="1 3"
-                opacity="0.9" />
-              <circle cx="80" cy="45" r="22" fill="none" stroke="#80e5ff" stroke-width="0.5" opacity="0.6" />
-              <circle cx="80" cy="45" r="28" fill="none" stroke="#ffffff" stroke-width="2" stroke-dasharray="4 8"
-                opacity="0.7" />
-
-              <!-- Outer glow rim -->
-              <circle cx="80" cy="45" r="33" fill="none" stroke="#00aaff" stroke-width="1.5" opacity="0.8"
-                filter="url(#subtle-glow)" />
-
-              <!-- Light reflection / catchlight -->
-              <ellipse cx="65" cy="25" rx="6" ry="4" fill="#ffffff" opacity="0.9" transform="rotate(-30 65 25)" />
-              <circle cx="95" cy="65" r="2" fill="#ffffff" opacity="0.6" />
-            </g>
-          </g>
-
-          <!-- RIGHT EYE -->
-          <g transform="translate(470, 100)">
-            <path d="M -20 50 Q 80 -10 180 50 Q 100 90 -20 50" fill="#000000" stroke="#0a0a0a" stroke-width="2" />
-            <path d="M -30 45 Q 80 -25 190 45" fill="none" stroke="#000000" stroke-width="12" stroke-linecap="round"
-              filter="url(#subtle-glow)" />
-            <path d="M -20 55 Q 80 100 180 55" fill="none" stroke="#000000" stroke-width="6" stroke-linecap="round"
-              filter="url(#subtle-glow)" />
-
-            <!-- Eyelashes -->
-            <path d="M -10 40 Q 10 20 20 15" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" />
-            <path d="M 30 25 Q 40 5 50 0" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" />
-            <path d="M 140 25 Q 150 5 160 0" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" />
-            <path d="M 170 40 Q 185 20 195 15" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" />
-
-            <g class="pupil-tracker" transform-origin="80 45">
-              <!-- Main Iris -->
-              <circle cx="80" cy="45" r="32" fill="url(#iris-gradient)" filter="url(#cyan-glow)" />
-              <!-- Crystal Overlay -->
-              <circle cx="80" cy="45" r="32" fill="url(#crystal)" opacity="0.6" />
-
-              <!-- Center Core -->
-              <circle cx="80" cy="45" r="10" fill="#ffffff" filter="url(#subtle-glow)" />
-              <circle cx="80" cy="45" r="5" fill="#e6ffff" />
-
-              <!-- Inner rings -->
-              <circle cx="80" cy="45" r="16" fill="none" stroke="#ffffff" stroke-width="1" stroke-dasharray="1 3"
-                opacity="0.9" />
-              <circle cx="80" cy="45" r="22" fill="none" stroke="#80e5ff" stroke-width="0.5" opacity="0.6" />
-              <circle cx="80" cy="45" r="28" fill="none" stroke="#ffffff" stroke-width="2" stroke-dasharray="4 8"
-                opacity="0.7" />
-
-              <!-- Outer glow rim -->
-              <circle cx="80" cy="45" r="33" fill="none" stroke="#00aaff" stroke-width="1.5" opacity="0.8"
-                filter="url(#subtle-glow)" />
-
-              <!-- Light reflection / catchlight -->
-              <ellipse cx="65" cy="25" rx="6" ry="4" fill="#ffffff" opacity="0.9" transform="rotate(-30 65 25)" />
-              <circle cx="95" cy="65" r="2" fill="#ffffff" opacity="0.6" />
-            </g>
-          </g>
-
-          <!-- THE BLINDFOLD MASK (Pulls down when triggered) -->
-          <g class="mask-group">
-            <!-- Deep drop shadow behind mask -->
-            <path d="M 0 0 L 800 0 L 800 180 Q 400 230 0 180 Z" fill="rgba(0,0,0,0.8)" filter="url(#subtle-glow)" />
-
-            <!-- Main Mask Fabric -->
-            <path d="M -50 0 L 850 0 L 850 170 Q 400 210 -50 170 Z" fill="#050507" />
-
-            <!-- Fabric Folds & Highlights (Black/Dark Grey) -->
-            <path d="M 100 160 Q 200 80 400 190" fill="none" stroke="#111" stroke-width="6" stroke-linecap="round" />
-            <path d="M 350 195 Q 500 100 700 150" fill="none" stroke="#111" stroke-width="4" stroke-linecap="round" />
-            <path d="M 250 20 Q 300 100 280 180" fill="none" stroke="#020202" stroke-width="15" stroke-linecap="round"
-              opacity="0.5" />
-            <path d="M 550 10 Q 500 100 520 170" fill="none" stroke="#020202" stroke-width="12" stroke-linecap="round"
-              opacity="0.5" />
-
-            <!-- Bottom jagged edge for realism -->
-            <path d="M -50 170 Q 150 200 400 210 Q 650 200 850 170 L 850 175 Q 650 205 400 215 Q 150 205 -50 175 Z"
-              fill="#000000" />
-          </g>
-
-        </g>
-      </svg>
-    </div>
-
-    <p class="domain-text">Infinite Void</p>
   </div>
 
   <script>
-    // --- Easter Egg Logic ---
-    document.addEventListener('DOMContentLoaded', () => {
-      const trigger = document.getElementById('gojo-trigger');
-      const overlay = document.getElementById('domain-expansion-overlay');
-      const pupils = document.querySelectorAll('.pupil-tracker');
-
-      let clickCount = 0;
-      let clickTimeout;
-
-      if (trigger) {
-        trigger.addEventListener('click', (e) => {
-          e.preventDefault();
-          clickCount++;
-          clearTimeout(clickTimeout);
-
-          if (clickCount >= 1) { // Trigger on single click now since it's an explicit button
-            overlay.classList.add('active');
-            clickCount = 0;
-          } else {
-            clickTimeout = setTimeout(() => clickCount = 0, 1500);
-          }
-        });
-      }
-
-      if (overlay) {
-        overlay.addEventListener('click', () => {
-          overlay.classList.remove('active');
-          setTimeout(() => {
-            pupils.forEach(pupil => pupil.style.transform = `translate(0px, 0px)`);
-          }, 1200);
-        });
-
-        function moveEyes(clientX, clientY) {
-          if (!overlay.classList.contains('active')) return;
-
-          const moveX = (clientX - window.innerWidth / 2) / (window.innerWidth / 2);
-          const moveY = (clientY - window.innerHeight / 2) / (window.innerHeight / 2);
-
-          const maxMovement = 20;
-
-          pupils.forEach(pupil => {
-            pupil.style.transform = `translate(${moveX * maxMovement}px, ${moveY * maxMovement}px)`;
-          });
-        }
-
-        overlay.addEventListener('mousemove', (e) => moveEyes(e.clientX, e.clientY));
-
-        overlay.addEventListener('touchmove', (e) => {
-          e.preventDefault();
-          moveEyes(e.touches[0].clientX, e.touches[0].clientY);
-        }, { passive: false });
-      }
-    });
-
     const canvas = document.getElementById("vector-canvas");
     const ctx = canvas.getContext("2d");
     let w = 0;
@@ -1895,15 +1451,15 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
         this.life = Math.random();
         this.history = [];
         this.maxHistory = Math.floor(Math.random() * 15) + 5;
-        
-        // JJK Colors: Red, Blue, Purple
+
+        // Accent colors: red, blue, purple
         const rand = Math.random();
         if (rand > 0.8) {
-          this.color = 'rgba(255, 0, 85, 0.8)'; // Red Reversal
+          this.color = 'rgba(255, 0, 85, 0.8)'; // red accent
         } else if (rand > 0.5) {
-          this.color = 'rgba(0, 170, 255, 0.5)'; // Blue Lapse (lower opacity)
+          this.color = 'rgba(0, 170, 255, 0.5)'; // blue accent (lower opacity)
         } else {
-          this.color = 'rgba(138, 43, 226, 0.5)'; // Hollow Purple (lower opacity)
+          this.color = 'rgba(138, 43, 226, 0.5)'; // purple accent (lower opacity)
         }
       }
 
@@ -1912,16 +1468,16 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
         this.vx += (Math.random() - 0.5) * 0.1;
         // Dampen horizontal velocity
         this.vx *= 0.95;
-        
+
         this.x += this.vx;
         this.y += this.vy;
-        
+
         // Save history for trail
         this.history.push({x: this.x, y: this.y});
         if (this.history.length > this.maxHistory) {
           this.history.shift();
         }
-        
+
         if (this.y < -50 || this.x < -50 || this.x > w + 50) {
           this.y = h + 10;
           this.x = Math.random() * w;
@@ -1931,13 +1487,13 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
 
       draw() {
         if (this.history.length < 2) return;
-        
+
         ctx.beginPath();
         ctx.moveTo(this.history[0].x, this.history[0].y);
         for (let i = 1; i < this.history.length; i++) {
           ctx.lineTo(this.history[i].x, this.history[i].y);
         }
-        
+
         ctx.strokeStyle = this.color;
         ctx.lineWidth = this.r;
         ctx.lineCap = 'round';
@@ -1945,7 +1501,7 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
         ctx.shadowBlur = 10;
         ctx.shadowColor = this.color;
         ctx.stroke();
-        
+
         ctx.shadowBlur = 0; // reset
       }
     }
@@ -2000,62 +1556,6 @@ satori.read_file({"path":"/home/hamza/repo/tradingview_ratio/docs/INVARIANTS.md"
       });
     });
 
-    const termBody = document.getElementById("term-body");
-    function addLog(line, active = false) {
-      const row = document.createElement("div");
-      row.className = `line${active ? " active" : ""}`;
-      row.textContent = line;
-      termBody.appendChild(row);
-      if (termBody.children.length > 14) {
-        termBody.removeChild(termBody.firstChild);
-      }
-    }
-
-    const traceLines = [
-      "Called satori.list_codebases({})",
-      "→ Ready: /home/hamza/repo/satori",
-      'Called satori.manage_index({action: "status", path: "/repo"})',
-      "sync completed | +0 added, -0 removed, ~0 modified",
-      'Called satori.search_codebase({query: "auth refresh token flow", scope: "runtime", resultMode: "grouped", groupBy: "symbol", limit: 5})',
-      "→ Hit: src/auth/session.ts:88-141",
-      '→ callGraphHint.symbolRef: { file: "src/auth/session.ts", symbolId: "sym_auth_refresh" }',
-      'Called satori.call_graph({symbolRef: { file: "src/auth/session.ts", symbolId: "sym_auth_refresh" }, direction: "both", depth: 2})',
-      "→ 6 nodes | 8 edges | 1 unresolved note",
-      'Called satori.file_outline({path: "/repo", file: "src/auth/session.ts", limitSymbols: 50})',
-      "→ 12 symbols resolved | spans locked",
-      'Called satori.read_file({path: "src/auth/session.ts", open_symbol: "refreshToken", mode: "annotated"})',
-      "→ lines 88-141 | outlineStatus: ok | no warnings",
-    ];
-
-    const replayBtn = document.getElementById("replay-btn");
-    const clearBtn = document.getElementById("clear-btn");
-    let traceInterval;
-
-    replayBtn.addEventListener("click", () => {
-      clearInterval(traceInterval);
-      let i = 0;
-      traceInterval = setInterval(() => {
-        if (i >= traceLines.length) {
-          clearInterval(traceInterval);
-          return;
-        }
-        const active =
-          traceLines[i].startsWith("Hit:") ||
-          traceLines[i].startsWith("→ Hit:") ||
-          traceLines[i].startsWith("Error:");
-        addLog(traceLines[i], active);
-        i++;
-      }, 170);
-    });
-
-    clearBtn.addEventListener("click", () => {
-      clearInterval(traceInterval);
-      termBody.innerHTML = "";
-      addLog("ready. click replay to run a realistic transcript.");
-      addLog(
-        "pattern: status check, semantic search, read, fallback, recover.",
-      );
-    });
   </script>
 </body>
 

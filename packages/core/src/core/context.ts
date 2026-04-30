@@ -20,7 +20,8 @@ import {
     IndexCompletionMarkerDocument,
     INDEX_COMPLETION_MARKER_DOC_ID,
     INDEX_COMPLETION_MARKER_FILE_EXTENSION,
-    INDEX_COMPLETION_MARKER_RELATIVE_PATH
+    INDEX_COMPLETION_MARKER_RELATIVE_PATH,
+    deleteCollectionWithVerification
 } from '../vectordb';
 import { SemanticSearchRequest, SemanticSearchResult } from '../types';
 import { envManager } from '../utils/env-manager';
@@ -783,24 +784,7 @@ export class Context {
         progressCallback?.({ phase: 'Removing index data...', current: 50, total: 100, percentage: 50 });
 
         if (collectionExists) {
-            try {
-                await this.vectorDatabase.dropCollection(collectionName);
-            } catch (error) {
-                let collectionStillExists = true;
-                try {
-                    collectionStillExists = await this.vectorDatabase.hasCollection(collectionName);
-                } catch {
-                    // Remote state is indeterminate: preserve local state so operators can retry safely.
-                    throw error;
-                }
-
-                if (collectionStillExists) {
-                    throw error;
-                }
-
-                const message = error instanceof Error ? error.message : String(error);
-                console.warn(`[Context] dropCollection for '${collectionName}' returned an error, but the collection is absent after verification; continuing local cleanup. Error: ${message}`);
-            }
+            await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
         }
 
         // Delete snapshot file

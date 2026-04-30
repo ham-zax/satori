@@ -22,6 +22,7 @@ import {
     VectorStoreBackendInfo,
 } from './types';
 import { ClusterManager } from './zilliz-utils';
+import { deleteCollectionWithVerification } from './remote-delete';
 
 export interface MilvusRestfulConfig {
     address?: string;
@@ -884,7 +885,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
 
         try {
             await createCollectionWithLimitCheck(this.makeRequest.bind(this), collectionSchema);
-            await this.dropCollection(collectionName);
+            await deleteCollectionWithVerification(this, collectionName);
             return true;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);

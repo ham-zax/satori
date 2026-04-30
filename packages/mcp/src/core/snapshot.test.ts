@@ -690,6 +690,48 @@ test('metadata-only changes are persisted on next save without changing indexed 
     });
 });
 
+test('clear tombstones persist and are removed when codebase is indexed again', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-tombstone');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.markCodebaseCleared(codebase, 'hybrid_code_chunks_deadbeef');
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.isCodebaseCleared(codebase), true);
+
+        reader.setCodebaseIndexed(codebase, {
+            indexedFiles: 1,
+            totalChunks: 1,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+        assert.equal(reader.isCodebaseCleared(codebase), false);
+    });
+});
+
+test('markCodebaseCleared removes existing codebase entry and scopes tombstone to collection', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-cleared-entry');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexed(codebase, {
+            indexedFiles: 1,
+            totalChunks: 1,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+
+        manager.markCodebaseCleared(codebase, 'hybrid_code_chunks_deadbeef');
+
+        assert.equal(manager.getCodebaseInfo(codebase), undefined);
+        assert.equal(manager.isCodebaseCleared(codebase, 'hybrid_code_chunks_deadbeef'), true);
+        assert.equal(manager.isCodebaseCleared(codebase, 'hybrid_code_chunks_newvalid'), false);
+    });
+});
+
 test('negative ignore rules version is rejected', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo-ignore');

@@ -11,6 +11,7 @@ import {
     VectorStoreBackendInfo,
 } from './types';
 import { ClusterManager } from './zilliz-utils';
+import { deleteCollectionWithVerification } from './remote-delete';
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -912,12 +913,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
         try {
             await this.client.createCollection(createCollectionParams);
-            // Immediately drop the collection after successful creation
-            if (await this.client.hasCollection({ collection_name: collectionName })) {
-                await this.client.dropCollection({
-                    collection_name: collectionName,
-                });
-            }
+            await deleteCollectionWithVerification(this, collectionName);
             return true;
         } catch (error: any) {
             const errorMessage = stringifyMilvusError(error);

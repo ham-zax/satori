@@ -7,7 +7,11 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { Context } = require('../../packages/core/dist/context.js');
-const { FileSynchronizer } = require('../../packages/core/dist/index.js');
+const {
+  FileSynchronizer,
+  RemoteCollectionDeletePendingError,
+  deleteCollectionWithVerification
+} = require('../../packages/core/dist/index.js');
 
 class DeterministicEmbedding {
   async detectDimension() {
@@ -225,6 +229,27 @@ class IndeterminateDeadlineVectorDatabase extends InMemoryVectorDatabase {
   }
 }
 
+class RetryThenDeleteVectorDatabase extends InMemoryVectorDatabase {
+  constructor() {
+    super();
+    this.dropAttempts = 0;
+  }
+
+  async dropCollection(collectionName) {
+    this.dropAttempts += 1;
+    if (this.dropAttempts < 3) {
+      throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
+    }
+    this.collections.delete(collectionName);
+  }
+}
+
+class SuccessfulNoopDropVectorDatabase extends InMemoryVectorDatabase {
+  async dropCollection() {
+    // Simulates an acknowledged drop RPC that did not remove the remote collection.
+  }
+}
+
 test('integration: index_codebase persists searchable chunks', async () => {
   const { context } = createContext();
   const codebasePath = createTempCodebase({
@@ -349,6 +374,45 @@ test('integration: clearIndex treats drop timeout as success only when collectio
   }
 });
 
+test('integration: clearIndex retries timed-out remote drops until verified absent', async () => {
+  const vectorDatabase = new RetryThenDeleteVectorDatabase();
+  const { context } = createContext({
+    vectorDatabase,
+  });
+  const codebasePath = createTempCodebase({
+    'src/service.ts': 'export const service = "ready";',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+    await context.clearIndex(codebasePath);
+    assert.equal(vectorDatabase.dropAttempts, 3);
+    assert.equal(await context.hasIndexedCollection(codebasePath), false);
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: clearIndex rejects successful drop calls that leave collection present', async () => {
+  const { context } = createContext({
+    vectorDatabase: new SuccessfulNoopDropVectorDatabase(),
+  });
+  const codebasePath = createTempCodebase({
+    'src/service.ts': 'export const service = "ready";',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+    await assert.rejects(
+      () => context.clearIndex(codebasePath),
+      /Remote collection deletion did not complete/
+    );
+    assert.equal(await context.hasIndexedCollection(codebasePath), true);
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
 test('integration: clearIndex preserves local state when drop timeout leaves collection present', async () => {
   const { context } = createContext({
     vectorDatabase: new PersistentDeadlineVectorDatabase(),
@@ -411,6 +475,35 @@ test('integration: clearIndex removes local sync state when remote collection is
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }
+});
+
+test('integration: verified collection deletion reports latest successful-drop pending state', async () => {
+  let dropAttempts = 0;
+  const vectorDatabase = {
+    async hasCollection() {
+      return true;
+    },
+    async dropCollection() {
+      dropAttempts += 1;
+      if (dropAttempts === 1) {
+        throw new Error('first timeout');
+      }
+    }
+  };
+
+  await assert.rejects(
+    () => deleteCollectionWithVerification(vectorDatabase, 'hybrid_code_chunks_pending', {
+      maxAttempts: 2,
+      initialBackoffMs: 0,
+      sleep: async () => undefined
+    }),
+    (error) => {
+      assert.ok(error instanceof RemoteCollectionDeletePendingError);
+      assert.match(error.message, /dropCollection returned successfully but 'hybrid_code_chunks_pending' still exists/);
+      assert.doesNotMatch(error.message, /first timeout/);
+      return true;
+    }
+  );
 });
 
 test('integration: index_codebase rejects when chunk persistence fails', async () => {

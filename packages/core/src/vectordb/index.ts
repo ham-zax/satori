@@ -25,6 +25,12 @@ export {
 export { MilvusRestfulVectorDatabase, MilvusRestfulConfig } from './milvus-restful-vectordb';
 export { MilvusVectorDatabase, MilvusConfig } from './milvus-vectordb';
 export {
+    RemoteCollectionDeletePendingError,
+    deleteCollectionWithVerification,
+    VerifiedCollectionDeleteOptions,
+    VerifiedCollectionDeleteResult
+} from './remote-delete';
+export {
     ClusterManager,
     ZillizConfig,
     Project,

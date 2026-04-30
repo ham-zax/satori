@@ -10,6 +10,7 @@ const DEFAULT_PACKAGE_JSON_PATHS = [
 
 const DEFAULT_SCAN_PATHS = [
   'README.md',
+  'server.json',
   'packages/mcp/README.md',
   'packages/cli/README.md',
   'packages/mcp/src/config.ts',

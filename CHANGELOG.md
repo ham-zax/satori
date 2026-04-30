@@ -2,7 +2,13 @@
 
 All notable changes to this repository are documented in this file.
 
-## [Unreleased] Repository Quality Gate Hardening
+## [2026-04-30] Repository Quality Gate and Remote Delete Hardening
+
+### Release Versions
+- Repository version: `0.4.0`
+- `@zokizuan/satori-core`: `1.5.0`
+- `@zokizuan/satori-mcp`: `4.8.0`
+- `@zokizuan/satori-cli`: `0.2.0`
 
 ### Added
 - Added a root `versions:check` guard that fails when docs/config examples pin stale published Satori package versions.
@@ -10,7 +16,7 @@ All notable changes to this repository are documented in this file.
 
 ### Changed
 - Migrated ESLint configuration to ESLint 9 flat config and fixed the surfaced lint errors so `pnpm -r lint` is usable again.
-- Updated MCP install/config examples from `@zokizuan/satori-mcp@4.4.1` to `@zokizuan/satori-mcp@4.7.0`.
+- Updated MCP install/config examples from `@zokizuan/satori-mcp@4.4.1` to `@zokizuan/satori-mcp@4.8.0`.
 - Annotated `list_codebases` Ready entries when completion-proof probing is indeterminate, while preserving the non-authoritative "keep local ready state" behavior.
 
 ### Fixed

@@ -210,11 +210,12 @@ export interface SearchResponseHints extends Record<string, unknown> {
     debugSearch?: SearchDebugHint;
 }
 
-export type NonOkReason = "indexing" | "requires_reindex" | "not_indexed";
+export type NonOkReason = "indexing" | "requires_reindex" | "not_indexed" | "missing_provider_config";
 
 interface SearchBaseResponseEnvelope {
     status: "ok" | "requires_reindex" | "not_indexed" | "not_ready";
     reason?: NonOkReason;
+    code?: "MISSING_PROVIDER_CONFIG";
     path: string;
     query: string;
     scope: SearchScope;

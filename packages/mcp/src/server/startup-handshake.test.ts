@@ -1,0 +1,281 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { PassThrough } from "node:stream";
+
+type InProcessSession = {
+    request: (method: string, params?: Record<string, unknown>) => Promise<any>;
+    close: () => Promise<void>;
+};
+
+type SessionEnvResult = {
+    session: InProcessSession;
+    tempDir: string;
+    logs: string[];
+};
+
+const EXPECTED_TOOLS = [
+    "manage_index",
+    "search_codebase",
+    "call_graph",
+    "file_outline",
+    "read_file",
+    "list_codebases",
+];
+
+const PROVIDER_ENV_KEYS = [
+    "EMBEDDING_PROVIDER",
+    "OPENAI_API_KEY",
+    "VOYAGEAI_API_KEY",
+    "GEMINI_API_KEY",
+    "MILVUS_ADDRESS",
+    "MILVUS_TOKEN",
+];
+
+function clearProviderEnv(): Record<string, string | undefined> {
+    const saved: Record<string, string | undefined> = {};
+    for (const key of PROVIDER_ENV_KEYS) {
+        saved[key] = process.env[key];
+        delete process.env[key];
+    }
+    return saved;
+}
+
+function restoreProviderEnv(saved: Record<string, string | undefined>): void {
+    for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) {
+            delete process.env[key];
+        } else {
+            process.env[key] = value;
+        }
+    }
+}
+
+async function createSession(): Promise<InProcessSession> {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const pending = new Map<number, (response: any) => void>();
+    let nextId = 1;
+    let stdoutBuffer = "";
+
+    stdout.on("data", (chunk) => {
+        stdoutBuffer += String(chunk);
+        while (stdoutBuffer.includes("\n")) {
+            const newline = stdoutBuffer.indexOf("\n");
+            const raw = stdoutBuffer.slice(0, newline).trim();
+            stdoutBuffer = stdoutBuffer.slice(newline + 1);
+            if (!raw) {
+                continue;
+            }
+            const response = JSON.parse(raw);
+            if (typeof response.id === "number") {
+                pending.get(response.id)?.(response);
+                pending.delete(response.id);
+            }
+        }
+    });
+
+    const { startMcpServerFromEnv } = await import("./start-server.js");
+    const server = await startMcpServerFromEnv({
+        runMode: "cli",
+        protocolStdin: stdin,
+        protocolStdout: stdout,
+        args: [],
+    });
+    assert.ok(server);
+
+    const request = async (method: string, params: Record<string, unknown> = {}): Promise<any> => {
+        const id = nextId++;
+        const responsePromise = new Promise<any>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error(`Timed out waiting for response id=${id}`));
+            }, 1000);
+            pending.set(id, (response) => {
+                clearTimeout(timeout);
+                resolve(response);
+            });
+        });
+        stdin.write(JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method,
+            params,
+        }) + "\n");
+        return responsePromise;
+    };
+
+    const initialize = await request("initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: {
+            name: "satori-startup-test",
+            version: "1.0.0",
+        },
+    });
+    assert.equal(initialize.error, undefined);
+    stdin.write(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+    }) + "\n");
+
+    return {
+        request,
+        close: async () => {
+            await server.shutdown();
+            stdin.destroy();
+            stdout.destroy();
+        },
+    };
+}
+
+async function withProviderEnvSession(
+    envOverrides: Record<string, string>,
+    run: (result: SessionEnvResult) => Promise<void>
+): Promise<void> {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-empty-env-"));
+    const homeDir = path.join(tempDir, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const savedEnv = clearProviderEnv();
+    const savedHome = process.env.HOME;
+    const originalConsole = {
+        log: console.log,
+        warn: console.warn,
+        error: console.error,
+    };
+    const logs: string[] = [];
+    const capture = (...args: any[]) => {
+        logs.push(args.map((value) => typeof value === "string" ? value : JSON.stringify(value)).join(" "));
+    };
+    process.env.HOME = homeDir;
+    Object.assign(process.env, envOverrides);
+    console.log = capture;
+    console.warn = capture;
+    console.error = capture;
+    let session: InProcessSession | null = null;
+    try {
+        session = await createSession();
+        await run({ session, tempDir, logs });
+    } finally {
+        if (session) {
+            await session.close();
+        }
+        console.log = originalConsole.log;
+        console.warn = originalConsole.warn;
+        console.error = originalConsole.error;
+        restoreProviderEnv(savedEnv);
+        if (savedHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = savedHome;
+        }
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+}
+
+async function withEmptyEnvSession(run: (session: InProcessSession, tempDir: string) => Promise<void>): Promise<void> {
+    await withProviderEnvSession({}, async ({ session, tempDir }) => {
+        await run(session, tempDir);
+    });
+}
+
+function parseToolPayload(response: any): any {
+    assert.equal(response.error, undefined);
+    const text = response.result?.content?.find((item: any) => item?.type === "text")?.text;
+    assert.equal(typeof text, "string");
+    return JSON.parse(text);
+}
+
+test("empty provider env still handshakes and lists exactly the six MCP tools", async () => {
+    await withEmptyEnvSession(async (session) => {
+        const response = await session.request("tools/list");
+        assert.equal(response.error, undefined);
+        const names = (response.result?.tools || []).map((tool: any) => tool.name).sort();
+        assert.deepEqual(names, [...EXPECTED_TOOLS].sort());
+    });
+});
+
+test("configured provider env does not instantiate embedding or Milvus during startup or tools/list", async () => {
+    await withProviderEnvSession({
+        EMBEDDING_PROVIDER: "VoyageAI",
+        VOYAGEAI_API_KEY: "pa-test",
+        MILVUS_ADDRESS: "localhost:19530",
+    }, async ({ session, logs }) => {
+        const response = await session.request("tools/list");
+        assert.equal(response.error, undefined);
+        const names = (response.result?.tools || []).map((tool: any) => tool.name).sort();
+        assert.deepEqual(names, [...EXPECTED_TOOLS].sort());
+
+        const joinedLogs = logs.join("\n");
+        assert.doesNotMatch(joinedLogs, /\[EMBEDDING\] Creating/);
+        assert.doesNotMatch(joinedLogs, /Connecting to Milvus/i);
+    });
+});
+
+test("manage_index status works with empty provider env for an unindexed path", async () => {
+    await withEmptyEnvSession(async (session, tempDir) => {
+        const repoDir = path.join(tempDir, "repo");
+        fs.mkdirSync(repoDir);
+
+        const response = await session.request("tools/call", {
+            name: "manage_index",
+            arguments: {
+                action: "status",
+                path: repoDir,
+            },
+        });
+
+        const payload = parseToolPayload(response);
+        assert.equal(payload.status, "not_indexed");
+        assert.equal(payload.reason, "not_indexed");
+        assert.equal(payload.code, undefined);
+    });
+});
+
+test("manage_index create returns MISSING_PROVIDER_CONFIG with empty provider env", async () => {
+    await withEmptyEnvSession(async (session, tempDir) => {
+        const repoDir = path.join(tempDir, "repo");
+        fs.mkdirSync(repoDir);
+
+        const response = await session.request("tools/call", {
+            name: "manage_index",
+            arguments: {
+                action: "create",
+                path: repoDir,
+            },
+        });
+
+        const payload = parseToolPayload(response);
+        assert.equal(payload.status, "error");
+        assert.equal(payload.reason, "missing_provider_config");
+        assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
+        assert.deepEqual(payload.hints.setup.missingEnv, ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"]);
+
+        const toolsAfterError = await session.request("tools/list");
+        assert.deepEqual((toolsAfterError.result?.tools || []).map((tool: any) => tool.name).sort(), [...EXPECTED_TOOLS].sort());
+    });
+});
+
+test("search_codebase returns MISSING_PROVIDER_CONFIG with empty provider env", async () => {
+    await withEmptyEnvSession(async (session, tempDir) => {
+        const repoDir = path.join(tempDir, "repo");
+        fs.mkdirSync(repoDir);
+
+        const response = await session.request("tools/call", {
+            name: "search_codebase",
+            arguments: {
+                path: repoDir,
+                query: "authentication flow",
+            },
+        });
+
+        const payload = parseToolPayload(response);
+        assert.equal(payload.status, "not_ready");
+        assert.equal(payload.reason, "missing_provider_config");
+        assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
+        assert.deepEqual(payload.results, []);
+        assert.deepEqual(payload.hints.setup.missingEnv, ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"]);
+    });
+});

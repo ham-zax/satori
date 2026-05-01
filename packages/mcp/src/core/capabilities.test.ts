@@ -42,3 +42,12 @@ test('capability resolver disables default rerank on slow profile', () => {
     assert.equal(resolver.getPerformanceProfile(), 'slow');
     assert.equal(resolver.getDefaultRerankEnabled(), false);
 });
+
+test('capability resolver does not treat token-only Milvus config as vector-ready', () => {
+    const resolver = new CapabilityResolver(baseConfig({
+        milvusEndpoint: undefined,
+        milvusApiToken: 'token-only',
+    }));
+
+    assert.equal(resolver.hasVectorStore(), false);
+});

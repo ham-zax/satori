@@ -9,6 +9,10 @@ type ServerHandle = {
 let activeServer: ServerHandle | null = null;
 let shuttingDown = false;
 let guardDisabledWarningEmitted = false;
+const bootstrapKeepAlive = setInterval(() => {
+    // Node may otherwise exit before top-level async ESM imports finish and stdio transport connects.
+    // The server owns steady-state lifetime after startMcpServerFromEnv resolves.
+}, 60 * 60 * 1000);
 
 function resolveRunMode(): "mcp" | "cli" {
     return process.env.SATORI_RUN_MODE === "cli" ? "cli" : "mcp";
@@ -92,7 +96,10 @@ process.on("SIGTERM", () => {
     void handleShutdownSignal("SIGTERM");
 });
 
-main().catch((error) => {
+main().then(() => {
+    clearInterval(bootstrapKeepAlive);
+}).catch((error) => {
+    clearInterval(bootstrapKeepAlive);
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("E_PROTOCOL_FAILURE")) {
         console.error(`E_PROTOCOL_FAILURE ${message}`);

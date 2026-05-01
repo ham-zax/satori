@@ -4,8 +4,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Writable } from "node:stream";
-import { Context, MilvusVectorDatabase, VoyageAIReranker } from "@zokizuan/satori-core";
+import { Readable, Writable } from "node:stream";
 import {
     buildRuntimeIndexFingerprint,
     ContextMcpConfig,
@@ -14,7 +13,6 @@ import {
     logConfigurationSummary,
     showHelpMessage,
 } from "../config.js";
-import { createEmbeddingInstance, logEmbeddingProviderInfo } from "../embedding.js";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import { SyncManager } from "../core/sync.js";
@@ -23,11 +21,13 @@ import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { decideInterruptedIndexingRecovery } from "../core/indexing-recovery.js";
 import { ToolContext } from "../tools/types.js";
 import { getMcpToolList, toolRegistry } from "../tools/registry.js";
+import { createLocalOnlyContext, ProviderRuntime, resolveConfiguredEmbeddingDimension } from "./provider-runtime.js";
 
 export type ServerRunMode = "mcp" | "cli";
 
 export interface StartMcpServerOptions {
     runMode?: ServerRunMode;
+    protocolStdin?: Readable;
     protocolStdout?: Writable;
     args?: string[];
 }
@@ -94,22 +94,25 @@ function migrateLegacyStateDir(): void {
 
 class ContextMcpServer {
     private server: Server;
-    private context: Context;
+    private toolContext: ToolContext;
     private snapshotManager: SnapshotManager;
     private syncManager: SyncManager;
     private toolHandlers: ToolHandlers;
-    private reranker: VoyageAIReranker | null = null;
     private capabilities: CapabilityResolver;
     private runtimeFingerprint: IndexFingerprint;
     private readFileMaxLines: number;
     private watchSyncEnabled: boolean;
     private watchDebounceMs: number;
     private callGraphManager: CallGraphSidecarManager;
+    private providerRuntime: ProviderRuntime;
     private runMode: ServerRunMode;
+    private protocolStdin?: Readable;
     private protocolStdout?: Writable;
+    private keepAliveTimer: NodeJS.Timeout | null = null;
 
-    constructor(config: ContextMcpConfig, runMode: ServerRunMode, protocolStdout?: Writable) {
+    constructor(config: ContextMcpConfig, runMode: ServerRunMode, protocolStdout?: Writable, protocolStdin?: Readable) {
         this.runMode = runMode;
+        this.protocolStdin = protocolStdin;
         this.protocolStdout = protocolStdout;
 
         this.server = new Server(
@@ -124,124 +127,97 @@ class ContextMcpServer {
             }
         );
 
-        console.log(`[EMBEDDING] Initializing embedding provider: ${config.encoderProvider}`);
-        console.log(`[EMBEDDING] Using model: ${config.encoderModel}`);
-
-        const embedding = createEmbeddingInstance(config);
-        logEmbeddingProviderInfo(config, embedding);
-
         this.capabilities = new CapabilityResolver(config);
-        this.runtimeFingerprint = buildRuntimeIndexFingerprint(config, embedding.getDimension());
+        this.runtimeFingerprint = buildRuntimeIndexFingerprint(config, resolveConfiguredEmbeddingDimension(config));
         this.readFileMaxLines = Math.max(1, config.readFileMaxLines ?? 1000);
         this.watchSyncEnabled = config.watchSyncEnabled === true;
         this.watchDebounceMs = Math.max(1, config.watchDebounceMs ?? 5000);
         console.log(`[FINGERPRINT] Runtime index fingerprint: ${JSON.stringify(this.runtimeFingerprint)}`);
 
-        const vectorDatabase = new MilvusVectorDatabase({
-            address: config.milvusEndpoint,
-            ...(config.milvusApiToken && { token: config.milvusApiToken }),
-        });
-
-        this.context = new Context({
-            embedding,
-            vectorDatabase,
-        });
-
         this.snapshotManager = new SnapshotManager(this.runtimeFingerprint);
         this.callGraphManager = new CallGraphSidecarManager(this.runtimeFingerprint);
-        this.syncManager = new SyncManager(this.context, this.snapshotManager, {
+        const localContext = createLocalOnlyContext(config);
+        this.syncManager = new SyncManager(localContext, this.snapshotManager, {
             watchEnabled: this.watchSyncEnabled,
             watchDebounceMs: this.watchDebounceMs,
-            onSyncCompleted: async (codebasePath, stats) => {
-                try {
-                    const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
-                        codebasePath,
-                        stats.changedFiles,
-                        this.context.getActiveIgnorePatterns(codebasePath)
-                    );
-                    if (sidecar) {
-                        this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
-                        this.snapshotManager.saveCodebaseSnapshot();
-                        console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
-                    }
-                } catch (error: any) {
-                    console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${error?.message || error}`);
-                }
-            }
         });
-
-        if (this.capabilities.hasReranker()) {
-            this.reranker = new VoyageAIReranker({
-                apiKey: config.voyageKey as string,
-                model: config.rankerModel || "rerank-2.5",
-            });
-            console.log(`[RERANKER] VoyageAI Reranker initialized with model: ${config.rankerModel || "rerank-2.5"}`);
-        }
         this.toolHandlers = new ToolHandlers(
-            this.context,
+            localContext,
             this.snapshotManager,
             this.syncManager,
             this.runtimeFingerprint,
             this.capabilities,
             () => Date.now(),
             this.callGraphManager,
-            this.reranker
+            null
         );
+        this.providerRuntime = new ProviderRuntime({
+            config,
+            snapshotManager: this.snapshotManager,
+            runtimeFingerprint: this.runtimeFingerprint,
+            capabilities: this.capabilities,
+            readFileMaxLines: this.readFileMaxLines,
+            watchSyncEnabled: this.watchSyncEnabled,
+            watchDebounceMs: this.watchDebounceMs,
+            callGraphManager: this.callGraphManager,
+        });
+        this.toolContext = {
+            context: localContext,
+            snapshotManager: this.snapshotManager,
+            syncManager: this.syncManager,
+            capabilities: this.capabilities,
+            reranker: null,
+            runtimeFingerprint: this.runtimeFingerprint,
+            toolHandlers: this.toolHandlers,
+            readFileMaxLines: this.readFileMaxLines,
+            providerRuntime: this.providerRuntime,
+        };
 
         this.snapshotManager.loadCodebaseSnapshot();
         this.setupTools();
     }
 
     private getCliTransportStdout(): Writable {
+        if (this.protocolStdout) {
+            return this.protocolStdout;
+        }
         if (this.runMode !== "cli") {
             return process.stdout;
         }
-        if (!this.protocolStdout) {
-            throw new Error("E_PROTOCOL_FAILURE Missing protocolStdout for cli mode");
-        }
-        return this.protocolStdout;
+        throw new Error("E_PROTOCOL_FAILURE Missing protocolStdout for cli mode");
     }
 
     private getToolContext(): ToolContext {
-        return {
-            context: this.context,
-            snapshotManager: this.snapshotManager,
-            syncManager: this.syncManager,
-            capabilities: this.capabilities,
-            reranker: this.reranker,
-            runtimeFingerprint: this.runtimeFingerprint,
-            toolHandlers: this.toolHandlers,
-            readFileMaxLines: this.readFileMaxLines,
-        };
+        return this.toolContext;
     }
 
     /**
      * Verify cloud state and fix interrupted indexing snapshots.
      */
-    private async verifyCloudState(): Promise<void> {
+    private async verifyCloudState(toolContext: ToolContext): Promise<void> {
         console.log("[STARTUP] Verifying interrupted indexing state against completion markers...");
-        const indexingCodebases = this.snapshotManager.getIndexingCodebases();
+        const indexingCodebases = toolContext.snapshotManager.getIndexingCodebases();
         let promotedCount = 0;
         let failedCount = 0;
 
         for (const codebasePath of indexingCodebases) {
-            const marker = typeof (this.context as any).getIndexCompletionMarker === "function"
-                ? await (this.context as any).getIndexCompletionMarker(codebasePath)
+            const marker = typeof (toolContext.context as any).getIndexCompletionMarker === "function"
+                ? await (toolContext.context as any).getIndexCompletionMarker(codebasePath)
                 : null;
             const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
             if (decision.action === "promote_indexed") {
-                this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, this.runtimeFingerprint, "verified");
+                toolContext.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, this.runtimeFingerprint, "verified");
                 promotedCount++;
                 console.log(`[STARTUP] Recovered interrupted indexing from marker: ${codebasePath} -> indexed`);
                 continue;
             }
-            this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message);
+            toolContext.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message);
             failedCount++;
             console.log(`[STARTUP] Marked interrupted indexing as failed: ${codebasePath} (${decision.reason})`);
         }
 
         if (promotedCount > 0 || failedCount > 0) {
-            this.snapshotManager.saveCodebaseSnapshot();
+            toolContext.snapshotManager.saveCodebaseSnapshot();
             console.log(`[STARTUP] Recovery summary: promoted=${promotedCount}, failed=${failedCount}`);
         } else {
             console.log("[STARTUP] No interrupted indexing states required recovery");
@@ -276,27 +252,28 @@ class ContextMcpServer {
     async start(): Promise<void> {
         console.log("Starting Satori MCP server...");
 
-        const transport = this.runMode === "cli"
-            ? new StdioServerTransport(process.stdin, this.getCliTransportStdout())
+        const transportStdin = this.protocolStdin ?? process.stdin;
+        const transport = this.runMode === "cli" || this.protocolStdin || this.protocolStdout
+            ? new StdioServerTransport(transportStdin, this.getCliTransportStdout())
             : new StdioServerTransport();
         await this.server.connect(transport);
+        transportStdin.resume();
+        this.keepAliveTimer = setInterval(() => {
+            // Keep stdio MCP process alive when startup has no background provider lifecycle.
+        }, 60 * 60 * 1000);
 
         console.log("MCP server started and listening on stdio.");
-        await runPostConnectStartupLifecycle(this.runMode, {
-            watchSyncEnabled: this.watchSyncEnabled,
-            verifyCloudState: () => this.verifyCloudState(),
-            onVerifyCloudStateError: (error) => {
-                const message = error instanceof Error ? error.message : String(error);
-                console.error("[STARTUP] Error verifying cloud state:", message);
-            },
-            syncManager: this.syncManager,
-        });
     }
 
     async shutdown(): Promise<void> {
         console.log("Shutting down Satori MCP server...");
+        if (this.keepAliveTimer) {
+            clearInterval(this.keepAliveTimer);
+            this.keepAliveTimer = null;
+        }
         this.syncManager.stopBackgroundSync();
         await this.syncManager.stopWatcherMode();
+        await this.providerRuntime.shutdown();
     }
 }
 
@@ -318,7 +295,7 @@ export async function startMcpServerFromEnv(options: StartMcpServerOptions = {})
     const config = createMcpConfig();
     logConfigurationSummary(config);
 
-    const server = new ContextMcpServer(config, runMode, options.protocolStdout);
+    const server = new ContextMcpServer(config, runMode, options.protocolStdout, options.protocolStdin);
     await server.start();
     return server;
 }

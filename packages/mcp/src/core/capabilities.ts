@@ -34,7 +34,7 @@ export class CapabilityResolver {
             performanceProfile = 'standard';
         }
 
-        const hasVectorStore = Boolean(this.config.milvusEndpoint || this.config.milvusApiToken);
+        const hasVectorStore = Boolean(this.config.milvusEndpoint);
         const hasReranker = Boolean(this.config.voyageKey);
 
         const defaultSearchLimit =

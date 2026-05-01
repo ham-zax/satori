@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
+import { formatManageProviderConfigError, isMissingProviderConfigIssue } from "./setup-errors.js";
 
 const actionEnum = z.enum(["create", "reindex", "sync", "status", "clear"]);
 
@@ -31,18 +32,29 @@ export const manageIndexTool: McpTool = {
         }
 
         const input = parsed.data;
+        const providerOperation = input.action === "clear"
+            ? "vector_only"
+            : (input.action === "create" || input.action === "reindex" || input.action === "sync")
+                ? "embedding_vector"
+                : null;
+        const executionContext = providerOperation && ctx.providerRuntime
+            ? await ctx.providerRuntime.requireToolContext(providerOperation)
+            : ctx;
+        if (isMissingProviderConfigIssue(executionContext)) {
+            return formatManageProviderConfigError(input.action, input.path, executionContext);
+        }
 
         switch (input.action) {
             case 'create':
-                return ctx.toolHandlers.handleIndexCodebase(input);
+                return executionContext.toolHandlers.handleIndexCodebase(input);
             case 'reindex':
-                return ctx.toolHandlers.handleReindexCodebase(input);
+                return executionContext.toolHandlers.handleReindexCodebase(input);
             case 'sync':
-                return ctx.toolHandlers.handleSyncCodebase(input);
+                return executionContext.toolHandlers.handleSyncCodebase(input);
             case 'status':
-                return ctx.toolHandlers.handleGetIndexingStatus(input);
+                return executionContext.toolHandlers.handleGetIndexingStatus(input);
             case 'clear':
-                return ctx.toolHandlers.handleClearIndex(input);
+                return executionContext.toolHandlers.handleClearIndex(input);
             default:
                 return {
                     content: [{

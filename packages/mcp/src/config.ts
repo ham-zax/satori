@@ -30,7 +30,7 @@ export interface ContextMcpConfig {
     ollamaEncoderModel?: string;
     ollamaEndpoint?: string;
     // Vector database configuration
-    milvusEndpoint?: string; // Optional, can be auto-resolved from token
+    milvusEndpoint?: string; // Required for provider-backed tool calls
     milvusApiToken?: string;
     // Reranker configuration
     rankerModel?: 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite';
@@ -265,8 +265,8 @@ export function createMcpConfig(): ContextMcpConfig {
         // Ollama configuration
         ollamaEncoderModel: envManager.get('OLLAMA_MODEL'),
         ollamaEndpoint: envManager.get('OLLAMA_HOST'),
-        // Vector database configuration - address can be auto-resolved from token
-        milvusEndpoint: envManager.get('MILVUS_ADDRESS'), // Optional, can be resolved from token
+        // Vector database configuration
+        milvusEndpoint: envManager.get('MILVUS_ADDRESS'),
         milvusApiToken: envManager.get('MILVUS_TOKEN'),
         // Reranker configuration
         rankerModel,
@@ -287,7 +287,7 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
     console.log(`[MCP]   Server: ${config.name} v${config.version}`);
     console.log(`[MCP]   Embedding Provider: ${config.encoderProvider}`);
     console.log(`[MCP]   Embedding Model: ${config.encoderModel}`);
-    console.log(`[MCP]   Milvus Address: ${config.milvusEndpoint || (config.milvusApiToken ? '[Auto-resolve from token]' : '[Not configured]')}`);
+    console.log(`[MCP]   Milvus Address: ${config.milvusEndpoint || '[Not configured]'}`);
     console.log(`[MCP]   Proactive Watcher: ${config.watchSyncEnabled ? `enabled (${config.watchDebounceMs || DEFAULT_WATCH_DEBOUNCE_MS}ms debounce)` : 'disabled'}`);
 
     // Log provider-specific configuration without exposing sensitive data
@@ -345,8 +345,8 @@ Environment Variables:
   OLLAMA_MODEL            Ollama model name (alternative to EMBEDDING_MODEL for Ollama)
 
   Vector Database Configuration:
-  MILVUS_ADDRESS          Milvus address (optional, can be auto-resolved from token)
-  MILVUS_TOKEN            Milvus token (optional, used for authentication and address resolution)
+  MILVUS_ADDRESS          Milvus address (required for index/search/clear tool calls)
+  MILVUS_TOKEN            Milvus token (optional, used for authenticated endpoints)
 
   Read File Configuration:
   READ_FILE_MAX_LINES     Max lines returned by read_file when no explicit range is provided (default: 1000)
@@ -360,12 +360,12 @@ Examples:
   OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 npx -y @zokizuan/satori-mcp@4.8.0
 
   # Start MCP server with VoyageAI and specific model
-  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-4-large MILVUS_TOKEN=your-token npx -y @zokizuan/satori-mcp@4.8.0
+  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-4-large MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token npx -y @zokizuan/satori-mcp@4.8.0
 
   # Start MCP server with Gemini and specific model
-  EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 MILVUS_TOKEN=your-token npx -y @zokizuan/satori-mcp@4.8.0
+  EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token npx -y @zokizuan/satori-mcp@4.8.0
 
   # Start MCP server with Ollama and specific model
-  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text MILVUS_TOKEN=your-token npx -y @zokizuan/satori-mcp@4.8.0
+  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text MILVUS_ADDRESS=localhost:19530 npx -y @zokizuan/satori-mcp@4.8.0
         `);
 }

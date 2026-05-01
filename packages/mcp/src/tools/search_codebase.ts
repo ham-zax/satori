@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { McpTool, ToolContext, ToolResponse, formatZodError } from "./types.js";
 import { emitSearchTelemetry } from "../telemetry/search.js";
+import { formatSearchProviderConfigError, isMissingProviderConfigIssue } from "./setup-errors.js";
 
 interface SearchDiagnostics {
     resultsBeforeFilter: number;
@@ -115,12 +116,44 @@ export const searchCodebaseTool: McpTool = {
             };
         }
 
-        const input = parsed.data;
+        const input = {
+            ...parsed.data,
+            scope: parsed.data.scope ?? "runtime",
+            resultMode: parsed.data.resultMode ?? "grouped",
+            groupBy: parsed.data.groupBy ?? "symbol",
+            rankingMode: parsed.data.rankingMode ?? "auto_changed_first",
+        };
         const startedAt = Date.now();
         const limit = Math.max(1, Math.min(ctx.capabilities.getMaxSearchLimit(), input.limit ?? ctx.capabilities.getDefaultSearchLimit()));
         const profile = getProfile(ctx);
+        const executionContext = ctx.providerRuntime
+            ? await ctx.providerRuntime.requireToolContext("embedding_vector")
+            : ctx;
+        if (isMissingProviderConfigIssue(executionContext)) {
+            const response = formatSearchProviderConfigError({
+                ...input,
+                limit,
+            }, executionContext);
+            emitSearchTelemetry({
+                event: "search_executed",
+                tool_name: "search_codebase",
+                profile,
+                query_length: input.query.length,
+                limit_requested: limit,
+                results_before_filter: 0,
+                results_after_filter: 0,
+                results_returned: 0,
+                excluded_by_ignore: 0,
+                reranker_used: false,
+                reranker_attempted: false,
+                latency_ms: Date.now() - startedAt,
+                parallel_fanout: true,
+                error: executionContext.code,
+            });
+            return response;
+        }
 
-        const response = await ctx.toolHandlers.handleSearchCode({
+        const response = await executionContext.toolHandlers.handleSearchCode({
             ...input,
             limit
         });

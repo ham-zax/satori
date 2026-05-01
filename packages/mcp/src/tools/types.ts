@@ -6,6 +6,22 @@ import { SyncManager } from "../core/sync.js";
 import { IndexFingerprint } from "../config.js";
 import { ToolHandlers } from "../core/handlers.js";
 
+export type ProviderBackedOperation = "embedding_vector" | "vector_only";
+
+export interface MissingProviderConfigIssue {
+    ok: false;
+    code: "MISSING_PROVIDER_CONFIG";
+    missingEnv: string[];
+    message: string;
+    hints: {
+        setup: {
+            code: "MISSING_PROVIDER_CONFIG";
+            missingEnv: string[];
+            nextSteps: string[];
+        };
+    };
+}
+
 export interface ToolResponse {
     content: Array<{ type: string; text: string }>;
     isError?: boolean;
@@ -21,6 +37,9 @@ export interface ToolContext {
     runtimeFingerprint: IndexFingerprint;
     toolHandlers: ToolHandlers;
     readFileMaxLines: number;
+    providerRuntime?: {
+        requireToolContext(operation: ProviderBackedOperation): Promise<ToolContext | MissingProviderConfigIssue>;
+    };
 }
 
 export interface McpTool<TSchema extends z.ZodTypeAny = z.ZodTypeAny> {

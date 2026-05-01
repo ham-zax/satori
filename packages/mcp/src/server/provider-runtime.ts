@@ -1,0 +1,275 @@
+import {
+    Context,
+    Embedding,
+    EmbeddingVector,
+    MilvusVectorDatabase,
+    VectorDatabase,
+    VoyageAIReranker,
+} from "@zokizuan/satori-core";
+import { CapabilityResolver } from "../core/capabilities.js";
+import { CallGraphSidecarManager } from "../core/call-graph.js";
+import { ToolHandlers } from "../core/handlers.js";
+import { SnapshotManager } from "../core/snapshot.js";
+import { SyncManager } from "../core/sync.js";
+import { ContextMcpConfig, IndexFingerprint } from "../config.js";
+import { createEmbeddingInstance, logEmbeddingProviderInfo } from "../embedding.js";
+import { MissingProviderConfigIssue, ProviderBackedOperation, ToolContext } from "../tools/types.js";
+
+class MetadataOnlyEmbedding extends Embedding {
+    protected maxTokens = 1;
+    private readonly provider: string;
+    private readonly dimension: number;
+
+    constructor(provider: string, dimension: number) {
+        super();
+        this.provider = provider;
+        this.dimension = dimension;
+    }
+
+    async detectDimension(): Promise<number> {
+        return this.dimension;
+    }
+
+    async embed(_text: string): Promise<EmbeddingVector> {
+        throw new Error("MISSING_PROVIDER_CONFIG embedding provider is not configured");
+    }
+
+    async embedBatch(_texts: string[]): Promise<EmbeddingVector[]> {
+        throw new Error("MISSING_PROVIDER_CONFIG embedding provider is not configured");
+    }
+
+    getDimension(): number {
+        return this.dimension;
+    }
+
+    getProvider(): string {
+        return this.provider;
+    }
+}
+
+class UnconfiguredVectorDatabase implements VectorDatabase {
+    private throwMissing(): never {
+        throw new Error("MISSING_PROVIDER_CONFIG MILVUS_ADDRESS is not configured");
+    }
+
+    async createCollection(): Promise<void> { this.throwMissing(); }
+    async createHybridCollection(): Promise<void> { this.throwMissing(); }
+    async dropCollection(): Promise<void> { this.throwMissing(); }
+    async hasCollection(): Promise<boolean> { this.throwMissing(); }
+    async listCollections(): Promise<string[]> { this.throwMissing(); }
+    async insert(): Promise<void> { this.throwMissing(); }
+    async insertHybrid(): Promise<void> { this.throwMissing(); }
+    async search(): Promise<any[]> { this.throwMissing(); }
+    async hybridSearch(): Promise<any[]> { this.throwMissing(); }
+    async delete(): Promise<void> { this.throwMissing(); }
+    async query(): Promise<Record<string, any>[]> { this.throwMissing(); }
+    async checkCollectionLimit(): Promise<boolean> { this.throwMissing(); }
+}
+
+// Local-only startup scaffolding: these satisfy Context/ToolHandlers constructor
+// contracts for provider-free tools. They must not perform provider I/O.
+// Provider-backed tools must use ProviderRuntime.requireToolContext instead.
+export function resolveConfiguredEmbeddingDimension(config: ContextMcpConfig): number {
+    switch (config.encoderProvider) {
+        case "OpenAI":
+            if (config.encoderModel === "text-embedding-3-large") return 3072;
+            return 1536;
+        case "Gemini":
+            return 3072;
+        case "Ollama":
+            return 768;
+        case "VoyageAI":
+        default:
+            return config.encoderOutputDimension || 1024;
+    }
+}
+
+export function createLocalOnlyContext(config: ContextMcpConfig): Context {
+    return new Context({
+        embedding: new MetadataOnlyEmbedding(config.encoderProvider, resolveConfiguredEmbeddingDimension(config)),
+        vectorDatabase: new UnconfiguredVectorDatabase(),
+    });
+}
+
+function createMissingConfigIssue(missingEnv: string[]): MissingProviderConfigIssue {
+    const uniqueMissing = [...new Set(missingEnv)];
+    const message = `Satori provider setup is incomplete. Missing required environment variable(s): ${uniqueMissing.join(", ")}. MCP startup does not require provider credentials, but this tool call does.`;
+    return {
+        ok: false,
+        code: "MISSING_PROVIDER_CONFIG",
+        missingEnv: uniqueMissing,
+        message,
+        hints: {
+            setup: {
+                code: "MISSING_PROVIDER_CONFIG",
+                missingEnv: uniqueMissing,
+                nextSteps: uniqueMissing.map((name) => `Set ${name}, restart the MCP server, then retry the tool call.`),
+            }
+        }
+    };
+}
+
+export class ProviderRuntime {
+    private readonly config: ContextMcpConfig;
+    private readonly snapshotManager: SnapshotManager;
+    private readonly runtimeFingerprint: IndexFingerprint;
+    private readonly capabilities: CapabilityResolver;
+    private readonly readFileMaxLines: number;
+    private readonly watchSyncEnabled: boolean;
+    private readonly watchDebounceMs: number;
+    private readonly callGraphManager: CallGraphSidecarManager;
+    private readonly now: () => number;
+    private embeddingRuntimePromise: Promise<ToolContext> | null = null;
+    private vectorRuntimePromise: Promise<ToolContext> | null = null;
+    private activeContexts: ToolContext[] = [];
+
+    constructor(args: {
+        config: ContextMcpConfig;
+        snapshotManager: SnapshotManager;
+        runtimeFingerprint: IndexFingerprint;
+        capabilities: CapabilityResolver;
+        readFileMaxLines: number;
+        watchSyncEnabled: boolean;
+        watchDebounceMs: number;
+        callGraphManager: CallGraphSidecarManager;
+        now?: () => number;
+    }) {
+        this.config = args.config;
+        this.snapshotManager = args.snapshotManager;
+        this.runtimeFingerprint = args.runtimeFingerprint;
+        this.capabilities = args.capabilities;
+        this.readFileMaxLines = args.readFileMaxLines;
+        this.watchSyncEnabled = args.watchSyncEnabled;
+        this.watchDebounceMs = args.watchDebounceMs;
+        this.callGraphManager = args.callGraphManager;
+        this.now = args.now || (() => Date.now());
+    }
+
+    public validate(operation: ProviderBackedOperation): MissingProviderConfigIssue | null {
+        const missing: string[] = [];
+        if (operation === "embedding_vector") {
+            switch (this.config.encoderProvider) {
+                case "OpenAI":
+                    if (!this.config.openaiKey) missing.push("OPENAI_API_KEY");
+                    break;
+                case "VoyageAI":
+                    if (!this.config.voyageKey) missing.push("VOYAGEAI_API_KEY");
+                    break;
+                case "Gemini":
+                    if (!this.config.geminiKey) missing.push("GEMINI_API_KEY");
+                    break;
+                case "Ollama":
+                    break;
+            }
+        }
+
+        if (!this.config.milvusEndpoint) {
+            missing.push("MILVUS_ADDRESS");
+        }
+
+        return missing.length > 0 ? createMissingConfigIssue(missing) : null;
+    }
+
+    public async requireToolContext(operation: ProviderBackedOperation): Promise<ToolContext | MissingProviderConfigIssue> {
+        const validation = this.validate(operation);
+        if (validation) {
+            return validation;
+        }
+
+        if (operation === "vector_only") {
+            if (!this.vectorRuntimePromise) {
+                this.vectorRuntimePromise = this.createRuntime(false).catch((error) => {
+                    this.vectorRuntimePromise = null;
+                    throw error;
+                });
+            }
+            return this.vectorRuntimePromise;
+        }
+
+        if (!this.embeddingRuntimePromise) {
+            this.embeddingRuntimePromise = this.createRuntime(true).catch((error) => {
+                this.embeddingRuntimePromise = null;
+                throw error;
+            });
+        }
+        return this.embeddingRuntimePromise;
+    }
+
+    private async createRuntime(requireEmbedding: boolean): Promise<ToolContext> {
+        const embedding = requireEmbedding
+            ? createEmbeddingInstance(this.config)
+            : new MetadataOnlyEmbedding(this.config.encoderProvider, resolveConfiguredEmbeddingDimension(this.config));
+        if (requireEmbedding) {
+            logEmbeddingProviderInfo(this.config, embedding as ReturnType<typeof createEmbeddingInstance>);
+        }
+
+        const vectorDatabase = new MilvusVectorDatabase({
+            address: this.config.milvusEndpoint,
+            ...(this.config.milvusApiToken && { token: this.config.milvusApiToken }),
+        });
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+        });
+        const syncManager = new SyncManager(context, this.snapshotManager, {
+            watchEnabled: this.watchSyncEnabled,
+            watchDebounceMs: this.watchDebounceMs,
+            onSyncCompleted: async (codebasePath, stats) => {
+                try {
+                    const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
+                        codebasePath,
+                        stats.changedFiles,
+                        context.getActiveIgnorePatterns(codebasePath)
+                    );
+                    if (sidecar) {
+                        this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
+                        this.snapshotManager.saveCodebaseSnapshot();
+                        console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
+                    }
+                } catch (error: any) {
+                    console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${error?.message || error}`);
+                }
+            }
+        });
+        const reranker = requireEmbedding && this.capabilities.hasReranker()
+            ? new VoyageAIReranker({
+                apiKey: this.config.voyageKey as string,
+                model: this.config.rankerModel || "rerank-2.5",
+            })
+            : null;
+        if (reranker) {
+            console.log(`[RERANKER] VoyageAI Reranker initialized with model: ${this.config.rankerModel || "rerank-2.5"}`);
+        }
+        const toolHandlers = new ToolHandlers(
+            context,
+            this.snapshotManager,
+            syncManager,
+            this.runtimeFingerprint,
+            this.capabilities,
+            this.now,
+            this.callGraphManager,
+            reranker
+        );
+
+        const toolContext = {
+            context,
+            snapshotManager: this.snapshotManager,
+            syncManager,
+            capabilities: this.capabilities,
+            reranker,
+            runtimeFingerprint: this.runtimeFingerprint,
+            toolHandlers,
+            readFileMaxLines: this.readFileMaxLines,
+            providerRuntime: this,
+        };
+        this.activeContexts.push(toolContext);
+        return toolContext;
+    }
+
+    public async shutdown(): Promise<void> {
+        await Promise.all(this.activeContexts.map(async (toolContext) => {
+            toolContext.syncManager.stopBackgroundSync();
+            await toolContext.syncManager.stopWatcherMode();
+        }));
+    }
+}

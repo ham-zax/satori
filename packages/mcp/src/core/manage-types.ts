@@ -17,7 +17,8 @@ export type ManageIndexReason =
     | "unnecessary_reindex_ignore_only"
     | "preflight_unknown"
     | "backend_timeout"
-    | "remote_delete_pending";
+    | "remote_delete_pending"
+    | "missing_provider_config";
 
 export type ManageReindexPreflightOutcome =
     | "reindex_required"
@@ -37,6 +38,7 @@ export interface ManageIndexResponseEnvelope {
     path: string;
     status: ManageIndexStatus;
     reason?: ManageIndexReason;
+    code?: "MISSING_PROVIDER_CONFIG";
     message: string;
     humanText: string;
     warnings?: WarningCode[];

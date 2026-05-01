@@ -1,6 +1,6 @@
 ---
 name: satori-indexing
-description: Index lifecycle and remediation for Satori. Use when codebases are not indexed, stale, blocked, or need freshness recovery.
+description: Use when Satori codebases are not indexed, stale, blocked, still indexing, or need lifecycle recovery.
 ---
 
 # Satori Indexing
@@ -27,11 +27,12 @@ Use only:
 - Never call `manage_index(action="clear")` unless the user explicitly requests destructive reset.
 - Treat ignore-only churn as a `sync` problem first.
 - Respect blocked and indexing states instead of forcing retries blindly.
+- Use `status` and `list_codebases` freely; provider credentials are only needed for provider-backed lifecycle actions.
 
 ## Status Handling
 
 - `requires_reindex`: run `manage_index(action="reindex")`.
 - `not_ready` with indexing reason: check status and wait for terminal completion.
 - `not_indexed`: create the index.
-- `MISSING_PROVIDER_CONFIG` is active only when it appears as the tool response `code` or `reason`; seeing the string in search results can just mean matched code content.
+- `MISSING_PROVIDER_CONFIG`: run `satori-cli doctor` when available, then set missing provider or Milvus env before retrying create/reindex/sync/search.
 - Ignore-rule noise mitigation: update `.satoriignore`, wait debounce, and run `sync` for immediate convergence.

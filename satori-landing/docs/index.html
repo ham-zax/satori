@@ -457,7 +457,9 @@
           <p>
             Use <code>--client all</code> to install both clients, and
             <code>uninstall</code> with the same selector to remove only
-            Satori-managed config and skills.
+            Satori-managed config and skills. Run
+            <code>npx -y @zokizuan/satori-cli@0.2.0 doctor</code> to check
+            provider and Milvus setup without starting an MCP client.
           </p>
         </div>
         <div class="grid">
@@ -530,11 +532,12 @@ MILVUS_TOKEN=your-milvus-token</code></pre>
             <pre><code>EMBEDDING_PROVIDER=Ollama
 EMBEDDING_MODEL=nomic-embed-text
 OLLAMA_HOST=http://127.0.0.1:11434
-MILVUS_ADDRESS=localhost:19530
-MILVUS_TOKEN=your-token</code></pre>
+MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               Use this path when you want local embeddings. Keep model and
               dimension stable for any repo you have already indexed.
+              <code>MILVUS_TOKEN</code> is optional auth only and is not a
+              substitute for <code>MILVUS_ADDRESS</code>.
             </p>
           </div>
         </div>
@@ -841,6 +844,15 @@ MILVUS_TOKEN=your-token</code></pre>
               <code>.satoriignore</code>, then run
               <code>manage_index(action="sync")</code> for immediate
               convergence.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Missing provider config</h3>
+            <p>
+              If indexing or search returns
+              <code>MISSING_PROVIDER_CONFIG</code>, run
+              <code>npx -y @zokizuan/satori-cli@0.2.0 doctor</code>, set the
+              missing provider or Milvus values, then retry the same tool call.
             </p>
           </div>
           <div class="panel">

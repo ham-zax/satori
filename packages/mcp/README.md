@@ -183,6 +183,8 @@ startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
 
+`MILVUS_TOKEN` is optional auth for endpoints that require it; local unauthenticated Milvus only needs `MILVUS_ADDRESS`.
+
 ### Local development (when working on this repo)
 
 ```json
@@ -232,6 +234,7 @@ npx -y @zokizuan/satori-cli@0.2.0 install --client codex
 npx -y @zokizuan/satori-cli@0.2.0 install --client claude
 npx -y @zokizuan/satori-cli@0.2.0 install --client all --dry-run
 npx -y @zokizuan/satori-cli@0.2.0 uninstall --client codex
+npx -y @zokizuan/satori-cli@0.2.0 doctor
 ```
 
 Install and uninstall run before MCP session startup, only touch Satori-managed config, and copy/remove these packaged skills:
@@ -285,6 +288,10 @@ When spawned by `satori-cli`, server process mode is `SATORI_RUN_MODE=cli`:
 - tool behavior stays on-demand and uses the same six MCP tools
 
 `SATORI_CLI_STDOUT_GUARD=drop|redirect` controls accidental non-protocol stdout handling (`drop` default).
+
+### Startup vs Provider Setup
+
+MCP startup does not require provider credentials, network access, or a live Milvus backend. The server should complete `initialize` and expose the six tools with an empty provider environment. Provider-backed calls (`manage_index create|reindex|sync|clear` and `search_codebase`) validate their required environment at call time and return `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 
 ## Development
 

@@ -11,6 +11,8 @@ import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope } 
 import { executeInstallCommand } from "./install.js";
 import { verifyManagedPackageInstallability } from "./package-installability.js";
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
+import { runDoctor } from "./doctor.js";
+import type { DoctorResult } from "./doctor.js";
 
 const MANAGE_INDEX_MIN_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -26,6 +28,7 @@ interface RunCliOptions {
     callTimeoutMs?: number;
     cwd?: string;
     installabilityVerifier?: () => string | Promise<string>;
+    doctorRunner?: (options: { env: NodeJS.ProcessEnv }) => DoctorResult;
     connectSession?: (options: {
         command: string;
         args: string[];
@@ -86,6 +89,7 @@ function buildHelpPayload() {
         commands: [
             "install [--client all|codex|claude] [--dry-run]",
             "uninstall [--client all|codex|claude] [--dry-run]",
+            "doctor",
             "tools list",
             "tool call <toolName> --args-json '<json>'",
             "tool call <toolName> --args-file <path>",
@@ -270,6 +274,20 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 writers.writeStderr("satori-cli version shown.\n");
             }
             return 0;
+        }
+
+        if (parsed.command.kind === "doctor") {
+            const result = (options.doctorRunner || ((doctorOptions: { env: NodeJS.ProcessEnv }) => runDoctor({ env: doctorOptions.env })))({
+                env: effectiveEnv,
+            });
+            emitJson(writers, result);
+            if (parsed.globals.format === "text") {
+                writers.writeStderr(`satori-cli doctor status=${result.status}.\n`);
+                for (const step of result.nextSteps) {
+                    writers.writeStderr(`next: ${step}\n`);
+                }
+            }
+            return result.status === "error" ? 1 : 0;
         }
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {

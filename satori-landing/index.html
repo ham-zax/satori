@@ -1271,12 +1271,14 @@
           <div class="details-body">
             <pre><code>npx -y @zokizuan/satori-cli@0.2.0 install --client codex
 npx -y @zokizuan/satori-cli@0.2.0 install --client claude
-npx -y @zokizuan/satori-cli@0.2.0 install --client all --dry-run</code></pre>
+npx -y @zokizuan/satori-cli@0.2.0 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.2.0 doctor</code></pre>
             <p>
               The installer writes managed client config and copies the
               first-party <code>satori-search</code>,
               <code>satori-navigation</code>, and
-              <code>satori-indexing</code> skills.
+              <code>satori-indexing</code> skills. The doctor command checks
+              provider and Milvus setup without starting an MCP client.
             </p>
           </div>
         </details>
@@ -1320,6 +1322,11 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
 }</code></pre>
               </div>
             </div>
+            <p>
+              <code>MILVUS_TOKEN</code> is only needed for authenticated
+              Milvus or Zilliz endpoints; local unauthenticated Milvus only
+              needs <code>MILVUS_ADDRESS</code>.
+            </p>
           </div>
         </details>
       </div>

@@ -17,6 +17,7 @@ export type RawArgsMode =
 export type ParsedCommand =
     | { kind: "help" }
     | { kind: "version" }
+    | { kind: "doctor" }
     | { kind: "install"; client: InstallClient; dryRun: boolean }
     | { kind: "uninstall"; client: InstallClient; dryRun: boolean }
     | { kind: "tools-list" }
@@ -35,7 +36,7 @@ export interface ResolveRawArgsOptions {
 
 export type InstallClient = "all" | "claude" | "codex";
 
-const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "install", "uninstall"]);
+const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "doctor", "install", "uninstall"]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
 function parsePositiveInteger(value: string, flagName: string): number {
@@ -193,6 +194,16 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
         return {
             globals,
             command: { kind: "version" }
+        };
+    }
+
+    if (rest[0] === "doctor") {
+        if (rest.length !== 1) {
+            throw new CliError("E_USAGE", `Unknown arguments for doctor: ${rest.slice(1).join(" ")}`, 2);
+        }
+        return {
+            globals,
+            command: { kind: "doctor" }
         };
     }
 

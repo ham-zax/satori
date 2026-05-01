@@ -146,6 +146,7 @@ If you use Codex CLI or Claude Code, install the dedicated CLI package. It write
 ```bash
 npx -y @zokizuan/satori-cli@0.2.0 install --client codex
 npx -y @zokizuan/satori-cli@0.2.0 install --client claude
+npx -y @zokizuan/satori-cli@0.2.0 doctor
 ```
 
 Use `--client all` to install both, and `uninstall` with the same selector to remove only Satori-managed config and skills.
@@ -199,6 +200,8 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
 Results include file paths, line ranges, code snippets, and structural scope annotations.
 
 Cold starts can take time on first install. Keep `timeout` / `startup_timeout_ms` at `180000`.
+
+MCP startup is provider-safe: it does not require network access, embedding credentials, or a live Milvus backend to complete the handshake. Missing provider setup is reported from provider-backed tool calls such as `manage_index create` and `search_codebase` with `MISSING_PROVIDER_CONFIG`.
 
 ### First-Party Skills
 
@@ -362,7 +365,7 @@ SYNC
 | `EMBEDDING_PROVIDER` | yes | — | `OpenAI`, `VoyageAI`, `Gemini`, or `Ollama` |
 | `EMBEDDING_MODEL` | yes | — | Model name for your provider |
 | `MILVUS_ADDRESS` | yes | — | Milvus/Zilliz endpoint |
-| `MILVUS_TOKEN` | yes | — | Milvus/Zilliz auth token |
+| `MILVUS_TOKEN` | no | — | Milvus/Zilliz auth token for authenticated endpoints |
 | `EMBEDDING_OUTPUT_DIMENSION` | no | provider default | Output dimension |
 | `VOYAGEAI_RERANKER_MODEL` | no | — | Reranker model (e.g. `rerank-2.5`) |
 | `HYBRID_MODE` | no | `true` | Dense + BM25 hybrid search |
@@ -428,6 +431,12 @@ If MCP startup fails (`initialize response` closed), check:
 2. Increase startup timeout to `180000` (cold start package download can be slow)
 3. Remove local link shadowing: `npm unlink -g @zokizuan/satori-mcp` (and local `npm unlink @zokizuan/satori-mcp` if needed)
 4. Restart MCP client
+
+If MCP starts but indexing/search returns `MISSING_PROVIDER_CONFIG`, run:
+
+```bash
+npx -y @zokizuan/satori-cli@0.2.0 doctor
+```
 
 ## Tech Stack
 

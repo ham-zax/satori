@@ -35,6 +35,18 @@ test("parseCliArgs supports install with explicit client and dry-run", () => {
     assert.equal(parsed.command.dryRun, true);
 });
 
+test("parseCliArgs supports doctor command", () => {
+    const parsed = parseCliArgs(["doctor"]);
+    assert.equal(parsed.command.kind, "doctor");
+});
+
+test("parseCliArgs rejects doctor arguments", () => {
+    assert.throws(
+        () => parseCliArgs(["doctor", "--live"]),
+        /Unknown arguments for doctor/
+    );
+});
+
 test("parseCliArgs defaults install client to all", () => {
     const parsed = parseCliArgs(["install"]);
     assert.equal(parsed.command.kind, "install");

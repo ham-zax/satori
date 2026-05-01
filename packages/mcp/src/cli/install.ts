@@ -129,7 +129,7 @@ function buildCodexManagedBlock(packageSpecifier: string): string {
         MANAGED_BLOCK_START,
         "[mcp_servers.satori]",
         'command = "npx"',
-        `args = ["-y", "--package", "${packageSpecifier}", "satori"]`,
+        `args = ["-y", "${packageSpecifier}"]`,
         `startup_timeout_ms = ${MANAGED_TIMEOUT_MS}`,
         MANAGED_BLOCK_END,
         "",
@@ -230,9 +230,13 @@ function parseJsonObject(filePath: string): Record<string, unknown> {
 function buildClaudeServerConfig(packageSpecifier: string): Record<string, unknown> {
     return {
         command: "npx",
-        args: ["-y", "--package", packageSpecifier, "satori"],
+        args: ["-y", packageSpecifier],
         timeout: MANAGED_TIMEOUT_MS,
     };
+}
+
+function isManagedPackageSpecifier(value: unknown): value is string {
+    return typeof value === "string" && /^@zokizuan\/satori-mcp@.+$/.test(value);
 }
 
 function isManagedClaudeEntry(value: unknown): value is Record<string, unknown> {
@@ -246,14 +250,19 @@ function isManagedClaudeEntry(value: unknown): value is Record<string, unknown> 
     if (entry.timeout !== MANAGED_TIMEOUT_MS) {
         return false;
     }
-    if (!Array.isArray(entry.args) || entry.args.length !== 4) {
+    if (!Array.isArray(entry.args)) {
         return false;
     }
-    return entry.args[0] === "-y"
-        && entry.args[1] === "--package"
-        && typeof entry.args[2] === "string"
-        && /^@zokizuan\/satori-mcp@.+$/.test(entry.args[2])
-        && entry.args[3] === "satori";
+    if (entry.args.length === 2) {
+        return entry.args[0] === "-y" && isManagedPackageSpecifier(entry.args[1]);
+    }
+    if (entry.args.length === 4) {
+        return entry.args[0] === "-y"
+            && entry.args[1] === "--package"
+            && isManagedPackageSpecifier(entry.args[2])
+            && entry.args[3] === "satori";
+    }
+    return false;
 }
 
 function prepareClaudeInstall(filePath: string, packageSpecifier: string): FileMutation {

@@ -18,6 +18,7 @@ npx -y @zokizuan/satori-cli@0.2.0 install --client codex
 npx -y @zokizuan/satori-cli@0.2.0 install --client claude
 npx -y @zokizuan/satori-cli@0.2.0 install --client all --dry-run
 npx -y @zokizuan/satori-cli@0.2.0 uninstall --client codex
+npx -y @zokizuan/satori-cli@0.2.0 doctor
 ```
 
 Managed install writes MCP config that launches:
@@ -32,6 +33,7 @@ startup_timeout_ms = 180000
 ## Commands
 
 ```bash
+satori-cli doctor
 satori-cli tools list
 satori-cli tool call <toolName> --args-json '{"path":"/abs/repo","query":"auth"}'
 satori-cli tool call <toolName> --args-file ./args.json
@@ -40,6 +42,8 @@ satori-cli <toolName> [schema-subset flags]
 ```
 
 Global flags (`--startup-timeout-ms`, `--call-timeout-ms`, `--format`, `--debug`) must appear before the command token.
+
+`doctor` checks local setup without starting an MCP client: Node version, npm package visibility, provider env, and Milvus env.
 
 ## Development
 

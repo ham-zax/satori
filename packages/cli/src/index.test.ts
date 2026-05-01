@@ -188,6 +188,56 @@ test("runCli install updates config without starting an MCP session", async () =
     }
 });
 
+test("runCli doctor emits diagnostics without starting an MCP session", async () => {
+    const io = captureIo();
+
+    const exitCode = await runCli(["doctor"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        env: { ...process.env, VOYAGEAI_API_KEY: "", MILVUS_ADDRESS: "" },
+        doctorRunner: ({ env }) => ({
+            status: env.MILVUS_ADDRESS ? "ok" : "error",
+            checks: [
+                { name: "node_version", status: "ok", message: "Node is supported." },
+                { name: "milvus_address", status: "error", message: "MILVUS_ADDRESS is required." }
+            ],
+            nextSteps: ["Set MILVUS_ADDRESS."]
+        }),
+        connectSession: async () => {
+            throw new Error("doctor should not connect to MCP");
+        },
+    });
+
+    const { stdout } = io.read();
+    assert.equal(exitCode, 1);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.status, "error");
+    assert.equal(parsed.checks[1].name, "milvus_address");
+});
+
+test("runCli doctor text mode prints next steps to stderr", async () => {
+    const io = captureIo();
+
+    const exitCode = await runCli(["--format", "text", "doctor"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        env: { ...process.env },
+        doctorRunner: () => ({
+            status: "warning",
+            checks: [
+                { name: "milvus_token", status: "warning", message: "optional token missing" }
+            ],
+            nextSteps: ["Verify npm can access @zokizuan/satori-mcp from this machine."]
+        }),
+    });
+
+    const { stdout, stderr } = io.read();
+    assert.equal(exitCode, 0);
+    assert.equal(JSON.parse(stdout).status, "warning");
+    assert.equal(stderr.includes("satori-cli doctor status=warning"), true);
+    assert.equal(stderr.includes("next: Verify npm can access"), true);
+});
+
 test("runCli install fails preflight with explicit package guidance before writing config", async () => {
     const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-preflight-home-"));
     const io = captureIo();

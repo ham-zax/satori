@@ -40,11 +40,24 @@ function main(): void {
             encoding: "utf8",
             env: {
                 ...process.env,
+                EMBEDDING_PROVIDER: "Ollama",
+                MILVUS_ADDRESS: "localhost:19530",
                 npm_config_package_lock: "false",
             },
             stdio: ["ignore", "pipe", "pipe"],
         });
-        console.log("[release:smoke] CLI tarball starts via npm exec.");
+        execFileSync("npm", ["exec", "--yes", "--package", path.join(smokePackDir, tarballName), "--", "satori-cli", "doctor"], {
+            cwd: smokeExecDir,
+            encoding: "utf8",
+            env: {
+                ...process.env,
+                EMBEDDING_PROVIDER: "Ollama",
+                MILVUS_ADDRESS: "localhost:19530",
+                npm_config_package_lock: "false",
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+        });
+        console.log("[release:smoke] CLI tarball starts and runs doctor via npm exec.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";

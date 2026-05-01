@@ -9,7 +9,7 @@ import { executeInstallCommand } from "./install.js";
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_JSON = JSON.parse(
     fs.readFileSync(path.resolve(PACKAGE_ROOT, "..", "mcp", "package.json"), "utf8")
-) as { name: string; version: string };
+) as { name: string; version: string; bin?: Record<string, string> };
 const EXPECTED_PACKAGE_SPECIFIER = `${PACKAGE_JSON.name}@${PACKAGE_JSON.version}`;
 
 function withTempHome(run: (homeDir: string) => void): void {
@@ -49,6 +49,12 @@ test("install writes managed Codex config block and copies packaged skills", () 
     });
 });
 
+test("managed MCP package exposes a single satori bin for npx package execution", () => {
+    assert.deepEqual(PACKAGE_JSON.bin, {
+        satori: "dist/index.js",
+    });
+});
+
 test("install is idempotent for managed Codex config", () => {
     withTempHome((homeDir) => {
         executeInstallCommand({
@@ -66,6 +72,70 @@ test("install is idempotent for managed Codex config", () => {
         assert.equal(second.results[0]?.configChanged, false);
         assert.equal(second.results[0]?.skillsChanged, false);
         assert.equal(second.results[0]?.status, "unchanged");
+    });
+});
+
+test("install replaces legacy managed Codex package-exec args with current package form", () => {
+    withTempHome((homeDir) => {
+        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+        fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
+        fs.writeFileSync(
+            codexConfigPath,
+            [
+                'model = "gpt-5"',
+                "",
+                "# >>> satori-cli managed satori start >>>",
+                "[mcp_servers.satori]",
+                'command = "npx"',
+                `args = ["-y", "--package", "${EXPECTED_PACKAGE_SPECIFIER}", "satori"]`,
+                "startup_timeout_ms = 180000",
+                "# <<< satori-cli managed satori end <<<",
+                "",
+            ].join("\n"),
+            "utf8"
+        );
+
+        executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+        }, { homeDir });
+
+        const content = readFile(codexConfigPath);
+        assert.equal(content.includes(`args = ["-y", "${EXPECTED_PACKAGE_SPECIFIER}"]`), true);
+        assert.equal(content.includes("--package"), false);
+    });
+});
+
+test("uninstall removes legacy managed Codex package-exec args", () => {
+    withTempHome((homeDir) => {
+        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+        fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
+        fs.writeFileSync(
+            codexConfigPath,
+            [
+                'model = "gpt-5"',
+                "",
+                "# >>> satori-cli managed satori start >>>",
+                "[mcp_servers.satori]",
+                'command = "npx"',
+                `args = ["-y", "--package", "${EXPECTED_PACKAGE_SPECIFIER}", "satori"]`,
+                "startup_timeout_ms = 180000",
+                "# <<< satori-cli managed satori end <<<",
+                "",
+            ].join("\n"),
+            "utf8"
+        );
+
+        executeInstallCommand({
+            kind: "uninstall",
+            client: "codex",
+            dryRun: false,
+        }, { homeDir });
+
+        const content = readFile(codexConfigPath);
+        assert.equal(content.includes("[mcp_servers.satori]"), false);
+        assert.equal(content.includes("--package"), false);
     });
 });
 
@@ -189,6 +259,31 @@ test("install upgrades legacy managed Claude entries to the bare MCP package lau
 
         const installed = JSON.parse(readFile(settingsPath));
         assert.deepEqual(installed.mcpServers.satori.args, ["-y", EXPECTED_PACKAGE_SPECIFIER]);
+    });
+});
+
+test("uninstall removes legacy managed Claude package-exec entries", () => {
+    withTempHome((homeDir) => {
+        const settingsPath = path.join(homeDir, ".claude", "settings.json");
+        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+        fs.writeFileSync(settingsPath, JSON.stringify({
+            mcpServers: {
+                satori: {
+                    command: "npx",
+                    args: ["-y", "--package", "@zokizuan/satori-mcp@4.4.1", "satori"],
+                    timeout: 180000,
+                }
+            }
+        }, null, 2), "utf8");
+
+        executeInstallCommand({
+            kind: "uninstall",
+            client: "claude",
+            dryRun: false,
+        }, { homeDir });
+
+        const removed = JSON.parse(readFile(settingsPath));
+        assert.equal(Boolean(removed.mcpServers?.satori), false);
     });
 });
 

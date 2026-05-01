@@ -230,11 +230,11 @@ Supported installer targets in Phase 1:
 Examples:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.0 install --client codex
-npx -y @zokizuan/satori-cli@0.3.0 install --client claude
-npx -y @zokizuan/satori-cli@0.3.0 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.3.0 uninstall --client codex
-npx -y @zokizuan/satori-cli@0.3.0 doctor
+npx -y @zokizuan/satori-cli@0.3.1 install --client codex
+npx -y @zokizuan/satori-cli@0.3.1 install --client claude
+npx -y @zokizuan/satori-cli@0.3.1 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.3.1 uninstall --client codex
+npx -y @zokizuan/satori-cli@0.3.1 doctor
 ```
 
 Install and uninstall run before MCP session startup, only touch Satori-managed config, and copy/remove these packaged skills:

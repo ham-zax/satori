@@ -437,7 +437,7 @@
         <div class="grid">
           <div class="panel">
             <h3>Codex</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.3.0 install --client codex</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.3.1 install --client codex</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
               and installs Satori skills in <code>~/.codex/skills</code>.
@@ -445,7 +445,7 @@
           </div>
           <div class="panel">
             <h3>Claude</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.3.0 install --client claude</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.3.1 install --client claude</code></pre>
             <p>
               Writes the Satori MCP entry to
               <code>~/.claude/settings.json</code> and installs Satori skills
@@ -458,7 +458,7 @@
             Use <code>--client all</code> to install both clients, and
             <code>uninstall</code> with the same selector to remove only
             Satori-managed config and skills. Run
-            <code>npx -y @zokizuan/satori-cli@0.3.0 doctor</code> to check
+            <code>npx -y @zokizuan/satori-cli@0.3.1 doctor</code> to check
             provider and Milvus setup without starting an MCP client.
           </p>
         </div>
@@ -474,7 +474,7 @@
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@4.9.0"],
+      "args": ["-y", "@zokizuan/satori-mcp@4.9.1"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -851,7 +851,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               If indexing or search returns
               <code>MISSING_PROVIDER_CONFIG</code>, run
-              <code>npx -y @zokizuan/satori-cli@0.3.0 doctor</code>, set the
+              <code>npx -y @zokizuan/satori-cli@0.3.1 doctor</code>, set the
               missing provider or Milvus values, then retry the same tool call.
               It is an active setup failure only when it appears as the tool
               response <code>code</code> or <code>reason</code>; inside

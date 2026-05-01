@@ -2,6 +2,15 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-05-02] CLI Installer Pin Hotfix
+
+### Release Versions
+- `@zokizuan/satori-cli`: `0.3.1`
+
+### Changed
+- Updated public CLI install snippets and Pi bridge fallback to `@zokizuan/satori-cli@0.3.1`.
+- Published CLI package should now carry the tightened packaged skills and install config targeting `@zokizuan/satori-mcp@4.9.1`.
+
 ## [2026-05-02] MCP Stdout Guard Hotfix
 
 ### Release Versions

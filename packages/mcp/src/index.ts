@@ -66,19 +66,17 @@ async function main(): Promise<void> {
     const originalStdoutWrite = process.stdout.write.bind(process.stdout);
     const protocolStdout = createProtocolStdout(originalStdoutWrite);
 
-    const { installCliStdoutRedirect, installConsoleToStderrPatch } = await import("./server/stdio-safety.js");
-    installConsoleToStderrPatch();
-    if (runMode === "cli") {
-        const guardMode = resolveGuardMode();
-        if (guardMode !== "off") {
-            installCliStdoutRedirect({
-                mode: guardMode,
-            });
-        } else if (!guardDisabledWarningEmitted) {
-            guardDisabledWarningEmitted = true;
-            console.error("[STDOUT_GUARD_DISABLED] SATORI_CLI_STDOUT_GUARD=off");
-        }
-    }
+    const { installBootstrapStdioSafety } = await import("./server/bootstrap-stdio.js");
+    installBootstrapStdioSafety({
+        runMode,
+        guardMode: resolveGuardMode(),
+        onGuardDisabled: () => {
+            if (!guardDisabledWarningEmitted) {
+                guardDisabledWarningEmitted = true;
+                console.error("[STDOUT_GUARD_DISABLED] SATORI_CLI_STDOUT_GUARD=off");
+            }
+        },
+    });
 
     const { startMcpServerFromEnv } = await import("./server/start-server.js");
     activeServer = await startMcpServerFromEnv({

@@ -2,6 +2,15 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-05-02] MCP Stdout Guard Hotfix
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `4.9.1`
+
+### Fixed
+- Guarded process stdout in MCP mode so provider libraries cannot corrupt JSON-RPC stdio during provider-backed tool calls.
+- Preserved protocol writes through the captured MCP stdout stream while redirecting non-protocol stdout writes to stderr diagnostics.
+
 ## [2026-05-02] Provider-Safe MCP Startup and CLI Doctor
 
 ### Release Versions

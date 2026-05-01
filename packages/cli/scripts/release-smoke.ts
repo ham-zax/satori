@@ -17,46 +17,46 @@ function npmOutput(error: unknown): string {
     return `${stdout}\n${stderr}\n${error.message}`.trim();
 }
 
+function packPackage(packageRoot: string, smokePackDir: string): string {
+    const beforeFiles = new Set(fs.readdirSync(smokePackDir));
+    execFileSync("pnpm", ["pack", "--pack-destination", smokePackDir], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    const tarballName = fs.readdirSync(smokePackDir).find((entry) => entry.endsWith(".tgz") && !beforeFiles.has(entry));
+    if (!tarballName) {
+        throw new Error(`pnpm pack did not produce a tarball for ${packageRoot}.`);
+    }
+    return path.join(smokePackDir, tarballName);
+}
+
+function runCliSmoke(commandArgs: string[], cliTarballPath: string, mcpTarballPath: string, smokeExecDir: string): void {
+    execFileSync("npm", ["exec", "--yes", "--package", cliTarballPath, "--package", mcpTarballPath, "--", "satori-cli", ...commandArgs], {
+        cwd: smokeExecDir,
+        encoding: "utf8",
+        env: {
+            ...process.env,
+            EMBEDDING_PROVIDER: "Ollama",
+            MILVUS_ADDRESS: "localhost:19530",
+            npm_config_package_lock: "false",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+}
+
 function main(): void {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
+    const mcpPackageRoot = path.resolve(packageRoot, "..", "mcp");
     const smokePackDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-smoke-"));
     const smokeExecDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-exec-"));
 
     try {
-        const beforeFiles = new Set(fs.readdirSync(smokePackDir));
-        execFileSync("pnpm", ["pack", "--pack-destination", smokePackDir], {
-            cwd: packageRoot,
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-        const tarballName = fs.readdirSync(smokePackDir).find((entry) => entry.endsWith(".tgz") && !beforeFiles.has(entry));
-        if (!tarballName) {
-            throw new Error("pnpm pack did not produce a tarball.");
-        }
-
-        execFileSync("npm", ["exec", "--yes", "--package", path.join(smokePackDir, tarballName), "--", "satori-cli", "--help"], {
-            cwd: smokeExecDir,
-            encoding: "utf8",
-            env: {
-                ...process.env,
-                EMBEDDING_PROVIDER: "Ollama",
-                MILVUS_ADDRESS: "localhost:19530",
-                npm_config_package_lock: "false",
-            },
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-        execFileSync("npm", ["exec", "--yes", "--package", path.join(smokePackDir, tarballName), "--", "satori-cli", "doctor"], {
-            cwd: smokeExecDir,
-            encoding: "utf8",
-            env: {
-                ...process.env,
-                EMBEDDING_PROVIDER: "Ollama",
-                MILVUS_ADDRESS: "localhost:19530",
-                npm_config_package_lock: "false",
-            },
-            stdio: ["ignore", "pipe", "pipe"],
-        });
+        const cliTarballPath = packPackage(packageRoot, smokePackDir);
+        const mcpTarballPath = packPackage(mcpPackageRoot, smokePackDir);
+        runCliSmoke(["--help"], cliTarballPath, mcpTarballPath, smokeExecDir);
+        runCliSmoke(["doctor"], cliTarballPath, mcpTarballPath, smokeExecDir);
         console.log("[release:smoke] CLI tarball starts and runs doctor via npm exec.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

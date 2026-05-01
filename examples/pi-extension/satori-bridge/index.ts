@@ -22,7 +22,7 @@ import {
 	type CliCommandType,
 } from "./recovery.js";
 
-const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-mcp@4.8.0";
+const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-cli@0.3.0";
 const DEFAULT_STARTUP_TIMEOUT_MS = 180_000;
 const DEFAULT_CALL_TIMEOUT_MS = 600_000;
 const MANAGE_INDEX_POLL_MIN_TIMEOUT_MS = 180_000;
@@ -288,7 +288,7 @@ function resolveCliInvocationConfig(cwd: string): CliInvocationConfig {
 		env.SATORI_CLI_LOCAL_PATH?.trim() ||
 		fileConfig?.cliPath?.trim() ||
 		fileConfig?.localPath?.trim() ||
-		"packages/mcp/dist/cli/index.js";
+		"packages/cli/dist/index.js";
 
 	const localPath = resolvePath(localPathRaw, targetCwd);
 	const legacyDerivedCliPath = deriveCliPathFromLegacyServerPath(localPath);

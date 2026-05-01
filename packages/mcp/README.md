@@ -157,7 +157,7 @@ No parameters.
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@4.8.0"],
+      "args": ["-y", "@zokizuan/satori-mcp@4.9.0"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -178,7 +178,7 @@ No parameters.
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.8.0"]
+args = ["-y", "@zokizuan/satori-mcp@4.9.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
@@ -230,11 +230,11 @@ Supported installer targets in Phase 1:
 Examples:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.2.0 install --client codex
-npx -y @zokizuan/satori-cli@0.2.0 install --client claude
-npx -y @zokizuan/satori-cli@0.2.0 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.2.0 uninstall --client codex
-npx -y @zokizuan/satori-cli@0.2.0 doctor
+npx -y @zokizuan/satori-cli@0.3.0 install --client codex
+npx -y @zokizuan/satori-cli@0.3.0 install --client claude
+npx -y @zokizuan/satori-cli@0.3.0 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.3.0 uninstall --client codex
+npx -y @zokizuan/satori-cli@0.3.0 doctor
 ```
 
 Install and uninstall run before MCP session startup, only touch Satori-managed config, and copy/remove these packaged skills:

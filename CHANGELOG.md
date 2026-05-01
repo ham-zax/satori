@@ -2,6 +2,20 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-05-02] Provider-Safe MCP Startup and CLI Doctor
+
+### Release Versions
+- `@zokizuan/satori-mcp`: `4.9.0`
+- `@zokizuan/satori-cli`: `0.3.0`
+
+### Added
+- Added lazy provider runtime validation so MCP startup can handshake with empty provider environment.
+- Added `satori-cli doctor` for checking Node, npm package access, embedding provider env, and Milvus env outside an MCP client.
+
+### Changed
+- Updated public install snippets to `@zokizuan/satori-mcp@4.9.0` and `@zokizuan/satori-cli@0.3.0`.
+- Updated CLI and Pi bridge npm fallback paths to use the standalone CLI package for `satori-cli`.
+
 ## [2026-04-30] Repository Quality Gate and Remote Delete Hardening
 
 ### Release Versions

@@ -59,9 +59,9 @@ Health check that runs `satori-cli tools list` and confirms reflection.
 The extension resolves CLI execution in this order:
 
 1. Explicit CLI command (`SATORI_CLI_COMMAND` or config `command`)
-2. Local dist CLI (`packages/mcp/dist/cli/index.js`, with legacy `dist/index.js` auto-upgrade to `dist/cli/index.js`)
+2. Local dist CLI (`packages/cli/dist/index.js`; legacy MCP CLI paths are still auto-upgraded when possible)
 3. npm fallback:
-   - `npx -y --package @zokizuan/satori-mcp@4.8.0 satori-cli ...`
+   - `npx -y --package @zokizuan/satori-cli@0.3.0 satori-cli ...`
 
 ## Config file
 
@@ -81,7 +81,7 @@ Example `config.json`:
   "envFile": ".env.satori",
   "guardRecovery": "auto",
   "forceNpx": false,
-  "npmPackage": "@zokizuan/satori-mcp@4.8.0",
+  "npmPackage": "@zokizuan/satori-cli@0.3.0",
   "startupTimeoutMs": 180000,
   "callTimeoutMs": 600000,
   "debug": false

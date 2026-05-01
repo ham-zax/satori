@@ -144,9 +144,9 @@ The MCP surface is intentionally constrained to 6 tools. Smaller surface area ke
 If you use Codex CLI or Claude Code, install the dedicated CLI package. It writes the client config and copies first-party Satori skills:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.0 install --client codex
-npx -y @zokizuan/satori-cli@0.3.0 install --client claude
-npx -y @zokizuan/satori-cli@0.3.0 doctor
+npx -y @zokizuan/satori-cli@0.3.1 install --client codex
+npx -y @zokizuan/satori-cli@0.3.1 install --client claude
+npx -y @zokizuan/satori-cli@0.3.1 doctor
 ```
 
 Use `--client all` to install both, and `uninstall` with the same selector to remove only Satori-managed config and skills.
@@ -435,7 +435,7 @@ If MCP startup fails (`initialize response` closed), check:
 If MCP starts but indexing/search returns `MISSING_PROVIDER_CONFIG`, run:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.0 doctor
+npx -y @zokizuan/satori-cli@0.3.1 doctor
 ```
 
 Treat `MISSING_PROVIDER_CONFIG` as an active setup failure only when it appears as the tool response `code` or `reason`. If it appears inside `search_codebase` results, it may simply be matching code content from Satori itself.

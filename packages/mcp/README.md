@@ -293,6 +293,8 @@ When spawned by `satori-cli`, server process mode is `SATORI_RUN_MODE=cli`:
 
 MCP startup does not require provider credentials, network access, or a live Milvus backend. The server should complete `initialize` and expose the six tools with an empty provider environment. Provider-backed calls (`manage_index create|reindex|sync|clear` and `search_codebase`) validate their required environment at call time and return `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 
+`MISSING_PROVIDER_CONFIG` is an active setup failure only when it appears as a tool response `code` or `reason`. Seeing the string inside `search_codebase` results can simply mean the query matched Satori code that implements the setup error.
+
 ## Development
 
 ```bash

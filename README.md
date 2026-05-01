@@ -438,6 +438,8 @@ If MCP starts but indexing/search returns `MISSING_PROVIDER_CONFIG`, run:
 npx -y @zokizuan/satori-cli@0.3.0 doctor
 ```
 
+Treat `MISSING_PROVIDER_CONFIG` as an active setup failure only when it appears as the tool response `code` or `reason`. If it appears inside `search_codebase` results, it may simply be matching code content from Satori itself.
+
 ## Tech Stack
 
 | Category | Technology |

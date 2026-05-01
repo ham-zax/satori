@@ -33,4 +33,5 @@ Use only:
 - `requires_reindex`: run `manage_index(action="reindex")`.
 - `not_ready` with indexing reason: check status and wait for terminal completion.
 - `not_indexed`: create the index.
+- `MISSING_PROVIDER_CONFIG` is active only when it appears as the tool response `code` or `reason`; seeing the string in search results can just mean matched code content.
 - Ignore-rule noise mitigation: update `.satoriignore`, wait debounce, and run `sync` for immediate convergence.

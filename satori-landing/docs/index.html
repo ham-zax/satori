@@ -853,6 +853,10 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               <code>MISSING_PROVIDER_CONFIG</code>, run
               <code>npx -y @zokizuan/satori-cli@0.3.0 doctor</code>, set the
               missing provider or Milvus values, then retry the same tool call.
+              It is an active setup failure only when it appears as the tool
+              response <code>code</code> or <code>reason</code>; inside
+              <code>search_codebase</code> results it may just be matched code
+              content.
             </p>
           </div>
           <div class="panel">

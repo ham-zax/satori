@@ -33,4 +33,5 @@ Use only:
 
 - `requires_reindex`: run `manage_index(action="reindex")`, not `sync`.
 - `not_ready` with indexing reason: wait or check `manage_index(action="status")`.
+- `MISSING_PROVIDER_CONFIG` is active only when it appears as the tool response `code` or `reason`. If it appears inside `search_codebase` results, it may just be matched code content.
 - Noise mitigation hint: update `.satoriignore`, wait debounce, rerun search, and use `manage_index(action="sync")` only for immediate convergence.

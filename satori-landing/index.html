@@ -1307,10 +1307,10 @@
         <details open>
           <summary>CLI Installer</summary>
           <div class="details-body">
-            <pre><code>npx -y @zokizuan/satori-cli@0.3.1 install --client codex
-npx -y @zokizuan/satori-cli@0.3.1 install --client claude
-npx -y @zokizuan/satori-cli@0.3.1 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.3.1 doctor</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.3.2 install --client codex
+npx -y @zokizuan/satori-cli@0.3.2 install --client claude
+npx -y @zokizuan/satori-cli@0.3.2 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.3.2 doctor</code></pre>
             <p>
               The installer writes managed client config and copies the
               first-party <code>satori-search</code>,
@@ -1333,7 +1333,7 @@ npx -y @zokizuan/satori-cli@0.3.1 doctor</code></pre>
                 </div>
                 <pre><code id="codex-config">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.10.0"]
+args = ["-y", "@zokizuan/satori-mcp@4.10.1"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
               </div>
@@ -1346,7 +1346,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
                 </div>
                 <pre><code id="claude-config">"satori": {
   "command": "npx",
-  "args": ["-y", "@zokizuan/satori-mcp@4.10.0"],
+  "args": ["-y", "@zokizuan/satori-mcp@4.10.1"],
   "timeout": 180000,
   "env": {
     "EMBEDDING_PROVIDER": "VoyageAI",

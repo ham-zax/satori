@@ -93,7 +93,7 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 
 ### `call_graph`
 
-Traverse the prebuilt call graph sidecar for callers/callees/bidirectional symbol relationships (language support follows the core callGraphQuery capability set; currently TS/JS/Python).
+Traverse the prebuilt call graph sidecar for callers/callees/bidirectional symbol relationships (language support follows the core callGraphQuery capability set; currently TS/JS/Python). When present, testReferences are static call-graph references from test-like files to returned symbols; they are investigation hints and do not prove runtime coverage, assertion coverage, or that a test executed a path.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|

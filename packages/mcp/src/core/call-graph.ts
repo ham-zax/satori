@@ -46,6 +46,21 @@ export interface CallGraphEdge {
     confidence: number;
 }
 
+export interface CallGraphTestReference {
+    file: string;
+    symbolId: string;
+    symbolLabel?: string;
+    span: CallGraphSpan;
+    site: {
+        file: string;
+        startLine: number;
+        endLine?: number;
+    };
+    targetSymbolId: string;
+    kind: CallGraphEdgeKind;
+    confidence: number;
+}
+
 export interface CallGraphNote {
     type: 'unresolved_edge' | 'dynamic_edge' | 'missing_symbol_metadata';
     file: string;
@@ -79,6 +94,7 @@ export interface CallGraphResponseSupported {
     edges: CallGraphEdge[];
     notes: CallGraphNote[];
     warnings?: string[];
+    testReferences?: CallGraphTestReference[];
     notesTruncated: boolean;
     totalNoteCount: number;
     returnedNoteCount: number;
@@ -100,6 +116,7 @@ const QUERY_SUPPORTED_EXTENSIONS = new Set(getSupportedExtensionsForCapability('
 const QUERY_SUPPORTED_LANGUAGE_IDS = getSupportedLanguageIdsForCapability('callGraphQuery');
 const DEFAULT_IGNORE_PATTERNS = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/.next/**'];
 const DEFAULT_CALL_GRAPH_NOTE_LIMIT = 200;
+const DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT = 50;
 const CALL_KEYWORDS = new Set([
     'if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'typeof', 'function', 'class', 'def', 'await', 'with', 'from', 'import',
 ]);
@@ -360,6 +377,7 @@ export class CallGraphSidecarManager {
         const notes = relevantNotes.slice(0, this.noteLimit);
         const notesTruncated = totalNoteCount > notes.length;
         const warnings = notesTruncated ? ['CALL_GRAPH_NOTES_TRUNCATED'] : undefined;
+        const testReferences = this.buildTestReferences(sidecar, nodeById, visited).slice(0, DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT);
 
         return {
             supported: true,
@@ -370,6 +388,7 @@ export class CallGraphSidecarManager {
             edges,
             notes,
             warnings,
+            ...(testReferences.length > 0 ? { testReferences } : {}),
             notesTruncated,
             totalNoteCount,
             returnedNoteCount: notes.length,
@@ -379,6 +398,46 @@ export class CallGraphSidecarManager {
                 edgeCount: sidecar.edges.length,
             },
         };
+    }
+
+    private buildTestReferences(
+        sidecar: CallGraphSidecar,
+        nodeById: Map<string, CallGraphNode>,
+        targetSymbolIds: Set<string>
+    ): CallGraphTestReference[] {
+        const referencesByKey = new Map<string, CallGraphTestReference>();
+
+        for (const edge of sidecar.edges) {
+            if (!targetSymbolIds.has(edge.dstSymbolId)) {
+                continue;
+            }
+
+            const source = nodeById.get(edge.srcSymbolId);
+            if (!source || !this.isTestPath(source.file)) {
+                continue;
+            }
+
+            const reference: CallGraphTestReference = {
+                file: source.file,
+                symbolId: source.symbolId,
+                symbolLabel: source.symbolLabel,
+                span: {
+                    startLine: source.span.startLine,
+                    endLine: source.span.endLine,
+                },
+                site: {
+                    file: edge.site.file,
+                    startLine: edge.site.startLine,
+                    ...(Number.isFinite(edge.site.endLine) ? { endLine: edge.site.endLine } : {}),
+                },
+                targetSymbolId: edge.dstSymbolId,
+                kind: edge.kind,
+                confidence: edge.confidence,
+            };
+            referencesByKey.set(this.getTestReferenceKey(reference), reference);
+        }
+
+        return this.sortTestReferences(Array.from(referencesByKey.values()));
     }
 
     private async buildGraph(codebaseRoot: string, files: string[]): Promise<{ nodes: CallGraphNode[]; edges: CallGraphEdge[]; notes: CallGraphNote[] }> {
@@ -714,7 +773,7 @@ export class CallGraphSidecarManager {
             supported: false,
             reason: 'unsupported_language',
             hints: {
-                supportedExtensions: Array.from(QUERY_SUPPORTED_EXTENSIONS).sort((a, b) => a.localeCompare(b)),
+                supportedExtensions: Array.from(QUERY_SUPPORTED_EXTENSIONS as Set<string>).sort((a, b) => a.localeCompare(b)),
                 supportedLanguages: QUERY_SUPPORTED_LANGUAGE_IDS,
                 message: 'call_graph currently supports TypeScript, JavaScript, and Python symbols.',
             },
@@ -772,6 +831,25 @@ export class CallGraphSidecarManager {
         return `${edge.srcSymbolId}:${edge.dstSymbolId}:${edge.kind}:${edge.site.file}:${edge.site.startLine}`;
     }
 
+    private getTestReferenceKey(reference: CallGraphTestReference): string {
+        return `${reference.symbolId}:${reference.targetSymbolId}:${reference.kind}:${reference.site.file}:${reference.site.startLine}`;
+    }
+
+    private isTestPath(relativePath: string): boolean {
+        const normalizedPath = relativePath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+        return this.hasPathSegment(normalizedPath, 'test')
+            || this.hasPathSegment(normalizedPath, 'tests')
+            || this.hasPathSegment(normalizedPath, '__tests__')
+            || /\.test\.[^/]+$/.test(normalizedPath)
+            || /\.spec\.[^/]+$/.test(normalizedPath);
+    }
+
+    private hasPathSegment(normalizedPath: string, segment: string): boolean {
+        return normalizedPath === segment
+            || normalizedPath.startsWith(`${segment}/`)
+            || normalizedPath.includes(`/${segment}/`);
+    }
+
     private sortNodes(nodes: CallGraphNode[]): CallGraphNode[] {
         return nodes.sort((a, b) => {
             const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
@@ -792,6 +870,24 @@ export class CallGraphSidecarManager {
             if (dstCmp !== 0) return dstCmp;
             const kindCmp = this.compareNullableStringsAsc(a.kind, b.kind);
             if (kindCmp !== 0) return kindCmp;
+            return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
+        });
+    }
+
+    private sortTestReferences(references: CallGraphTestReference[]): CallGraphTestReference[] {
+        return references.sort((a, b) => {
+            const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
+            if (fileCmp !== 0) return fileCmp;
+            const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+            if (startCmp !== 0) return startCmp;
+            const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+            if (labelCmp !== 0) return labelCmp;
+            const symbolCmp = this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+            if (symbolCmp !== 0) return symbolCmp;
+            const targetCmp = this.compareNullableStringsAsc(a.targetSymbolId, b.targetSymbolId);
+            if (targetCmp !== 0) return targetCmp;
+            const siteFileCmp = this.compareNullableStringsAsc(a.site?.file, b.site?.file);
+            if (siteFileCmp !== 0) return siteFileCmp;
             return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
         });
     }

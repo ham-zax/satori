@@ -1433,8 +1433,8 @@ Goal: configure Satori in Codex or Claude without manual config editing.
 Workflow:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.1 install --client codex
-npx -y @zokizuan/satori-cli@0.3.1 install --client claude
+npx -y @zokizuan/satori-cli@0.3.2 install --client codex
+npx -y @zokizuan/satori-cli@0.3.2 install --client claude
 ```
 
 Why Satori is better:

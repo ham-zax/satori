@@ -1,62 +1,64 @@
 # @zokizuan/satori-mcp
 
-MCP server for Satori — agent-safe semantic code search and indexing.
+Read-only MCP server for Satori. It gives coding agents six deterministic tools for repo search, symbol navigation, call graph context, bounded file reads, and index lifecycle management.
 
-## Features
+## Install
 
-- Capability-driven execution via `CapabilityResolver`
-- Runtime-first `search_codebase` with explicit `scope`, `resultMode`, `groupBy`, and optional `debug` traces
-- Deterministic query-prefix operators in `search_codebase` (`lang:`, `path:`, `-path:`, `must:`, `exclude:`)
-- Default grouped-result diversity and auto changed-files ranking (`rankingMode="auto_changed_first"`)
-- First-class `call_graph` tool with deterministic node/edge sorting and capability-driven language support (currently TS/JS/Python)
-- Sidecar-backed `file_outline` tool for per-file symbol navigation and direct call_graph jump handles
-- Snapshot v3 safety with index fingerprints and strict `requires_reindex` access gates
-- Deterministic train-in-the-error responses for incompatible or legacy index states
-- Query-time exclusion support with `.gitignore`-style matching
-- Structured search telemetry logs (`[TELEMETRY]` JSON to `stderr`)
-- Zod-first tool schemas converted to MCP JSON Schema for `ListTools`
-- Auto-generated tool docs from live tool schemas
-- `read_file` line-range retrieval with default large-file truncation guard and optional `mode="annotated"` metadata envelope
-- Optional proactive sync watcher mode (debounced filesystem events for explicitly touched roots in the current session)
-- Index-time AST scope breadcrumbs (TS/JS/Python) rendered in search output as `🧬 Scope`
-- Fingerprint schema `dense_v3`/`hybrid_v3` with hard gate for all pre-v3 indexes
+Prefer the CLI installer when possible:
 
-## Architecture
-
-```
-[MCP Client]
-    -> [index.ts bootstrap + ListTools/CallTool]
-    -> [tool registry]
-    -> [manage_index | search_codebase | call_graph | file_outline | read_file | list_codebases]
-    -> [ToolContext DI]
-       -> [CapabilityResolver]
-       -> [SnapshotManager v3 + access gate]
-       -> [Context / Vector store / Embedding / Reranker adapters]
+```bash
+npx -y @zokizuan/satori-cli@0.3.2 install --client codex
+npx -y @zokizuan/satori-cli@0.3.2 install --client claude
+npx -y @zokizuan/satori-cli@0.3.2 doctor
 ```
 
-Tool surface is hard-broken to 6 tools. This keeps routing explicit while exposing call-chain traversal and file-level navigation as first-class operations.
+Manual MCP config:
 
-## read_file Behavior
+```json
+{
+  "mcpServers": {
+    "satori": {
+      "command": "npx",
+      "args": ["-y", "@zokizuan/satori-mcp@4.10.1"],
+      "timeout": 180000,
+      "env": {
+        "EMBEDDING_PROVIDER": "VoyageAI",
+        "EMBEDDING_MODEL": "voyage-4-large",
+        "EMBEDDING_OUTPUT_DIMENSION": "1024",
+        "VOYAGEAI_API_KEY": "your-api-key",
+        "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
+        "MILVUS_ADDRESS": "your-milvus-endpoint",
+        "MILVUS_TOKEN": "your-milvus-token"
+      }
+    }
+  }
+}
+```
 
-- Supports optional `start_line` and `end_line` (1-based, inclusive)
-- When no range is provided and file length exceeds `READ_FILE_MAX_LINES` (default `1000`), output is truncated and includes a continuation hint with `path` and next `start_line`
-- Optional `mode="annotated"` returns content plus `outlineStatus`, `outline`, `hasMore`, and reindex hints when sidecar data is unavailable
+Keep startup timeout at `180000` for first-run package resolution.
 
-## Proactive Sync
+## Agent Workflow
 
-- Enabled by default. Set `MCP_ENABLE_WATCHER=false` to disable
-- Debounce window via `MCP_WATCH_DEBOUNCE_MS` (default `5000`)
-- Watchers are session-scoped: startup does not watch every indexed codebase, only roots touched by successful index/search/navigation/read flows in the current session
-- Watch events reuse the same incremental sync pipeline (`reindexByChange`)
-- Ignore control files (`.satoriignore`, root `.gitignore`) trigger no-reindex reconciliation:
-  - delete indexed paths now ignored by active rules
-  - incremental sync picks up newly unignored files
-  - signature checks in `ensureFreshness` keep this working even when watcher events are missed
-- Safety gates:
-  - Watch-triggered sync only runs for `indexed`/`sync_completed` codebases
-  - Events are dropped for `indexing`, `indexfailed`, and `requires_reindex`
-  - Ignored/hidden paths are excluded (`node_modules`, `.git`, build artifacts, dotfiles)
-- On shutdown (`SIGINT`/`SIGTERM`), watchers are explicitly closed
+```text
+list_codebases
+manage_index action="create" path="/absolute/path/to/repo"
+search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
+file_outline path="/absolute/path/to/repo" file="src/auth.ts"
+call_graph path="/absolute/path/to/repo" symbolRef={...} direction="both"
+read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
+```
+
+Important defaults:
+
+- `search_codebase` starts with runtime code, grouped by symbol.
+- `search_codebase` runs freshness checks before returning results.
+- `read_file` is bounded and can return continuation hints.
+- `requires_reindex` means reindex first, then retry the original call.
+- `manage_index action="clear"` is destructive and should be explicit.
+
+## Runtime Requirements
+
+Configure an embedding provider and Milvus-compatible backend before indexing. Supported embedding providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model, dimension, vector store, or schema requires a reindex because those values are part of the index fingerprint.
 
 <!-- TOOLS_START -->
 
@@ -139,171 +141,21 @@ No parameters.
 
 <!-- TOOLS_END -->
 
-### `read_file.open_symbol` Fields
+## Notes
 
-`open_symbol` resolves symbols inside the same file passed in `read_file.path`.
+- `open_symbol` resolves exact symbols inside the same file passed to `read_file.path`.
+- `MILVUS_TOKEN` is optional auth; local unauthenticated Milvus only needs `MILVUS_ADDRESS`.
+- MCP startup does not require provider credentials or a live Milvus backend. Provider-backed calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
+- `MISSING_PROVIDER_CONFIG` is an active setup failure only when it appears as a tool response `code` or `reason`.
 
-- `symbolId` (string, optional): deterministic symbol id to resolve in `path`.
-- `symbolLabel` (string, optional): exact symbol label to resolve in `path`.
-- `start_line` (integer, optional): direct 1-based start line for span-based jump.
-- `end_line` (integer, optional): direct 1-based end line (inclusive).
-
-## MCP Config Examples
-
-### JSON-style (Claude Desktop, Cursor)
-
-```json
-{
-  "mcpServers": {
-    "satori": {
-      "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@4.10.0"],
-      "timeout": 180000,
-      "env": {
-        "EMBEDDING_PROVIDER": "VoyageAI",
-        "EMBEDDING_MODEL": "voyage-4-large",
-        "EMBEDDING_OUTPUT_DIMENSION": "1024",
-        "VOYAGEAI_API_KEY": "your-api-key",
-        "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
-        "MILVUS_ADDRESS": "your-milvus-endpoint",
-        "MILVUS_TOKEN": "your-milvus-token"
-      }
-    }
-  }
-}
-```
-
-### TOML-style (Claude Code CLI)
-
-```toml
-[mcp_servers.satori]
-command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.10.0"]
-startup_timeout_ms = 180000
-env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
-```
-
-`MILVUS_TOKEN` is optional auth for endpoints that require it; local unauthenticated Milvus only needs `MILVUS_ADDRESS`.
-
-### Local development (when working on this repo)
-
-```json
-{
-  "mcpServers": {
-    "satori": {
-      "command": "node",
-      "args": ["/absolute/path/to/satori/packages/mcp/dist/index.js"],
-      "timeout": 180000,
-      "env": {
-        "EMBEDDING_PROVIDER": "VoyageAI",
-        "EMBEDDING_MODEL": "voyage-4-large",
-        "EMBEDDING_OUTPUT_DIMENSION": "1024",
-        "VOYAGEAI_API_KEY": "your-api-key",
-        "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
-        "MILVUS_ADDRESS": "your-milvus-endpoint",
-        "MILVUS_TOKEN": "your-milvus-token"
-      }
-    }
-  }
-}
-```
-
-Never commit real API keys/tokens into repo config files.
-
-## Run Locally
+## Local Development
 
 ```bash
 pnpm --filter @zokizuan/satori-mcp start
-```
-
-## Shell CLI (`@zokizuan/satori-cli`)
-
-The shell-first installer/client now lives in a separate package: `@zokizuan/satori-cli`.
-
-### Install / Uninstall
-
-Supported installer targets in Phase 1:
-- `codex`
-- `claude`
-- `all`
-
-Examples:
-
-```bash
-npx -y @zokizuan/satori-cli@0.3.1 install --client codex
-npx -y @zokizuan/satori-cli@0.3.1 install --client claude
-npx -y @zokizuan/satori-cli@0.3.1 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.3.1 uninstall --client codex
-npx -y @zokizuan/satori-cli@0.3.1 doctor
-```
-
-Install and uninstall run before MCP session startup, only touch Satori-managed config, and copy/remove these packaged skills:
-- `satori-search`
-- `satori-navigation`
-- `satori-indexing`
-
-### Commands
-
-```bash
-satori-cli tools list
-satori-cli tool call <toolName> --args-json '{"path":"/abs/repo","query":"auth"}'
-satori-cli tool call <toolName> --args-file ./args.json
-satori-cli tool call <toolName> --args-json @-
-satori-cli <toolName> [schema-subset flags]
-```
-
-Global flags (`--startup-timeout-ms`, `--call-timeout-ms`, `--format`, `--debug`) must appear before the command token.
-Example: `satori-cli --debug tools list`.
-
-### Output + Exit Contract
-
-- `stdout`: JSON only
-- `stderr`: diagnostics and text summaries
-- exit `0`: success
-- exit `1`: tool-level error (`isError=true` or structured envelope `status!="ok"`)
-- exit `2`: usage/argument/schema-subset errors
-- exit `3`: startup/transport/protocol/timeout failures
-
-### Wrapper Flag Support
-
-Wrapper mode (`satori-cli <toolName> ...`) supports a strict subset from reflected `tools/list` schemas:
-
-- primitive properties (`string|number|integer|boolean`)
-- enums of primitives
-- arrays of primitives (repeat flags in insertion order)
-- object properties only via `--<prop>-json '{...}'`
-
-Tool-level flags that overlap global names are preserved in wrapper mode once command parsing starts.
-Example: `satori-cli search_codebase --path /repo --query auth --debug` forwards `debug=true` to the tool.
-For boolean wrapper flags, `--flag` implies `true` and `--flag false` is supported.
-
-Unsupported schema shapes (for example `oneOf`, `anyOf`, `$ref`, complex arrays, nested expansion) return `E_SCHEMA_UNSUPPORTED` with fallback guidance to `--args-json` / `--args-file`.
-
-### Run Mode Semantics
-
-When spawned by `satori-cli`, server process mode is `SATORI_RUN_MODE=cli`:
-
-- startup background loops are disabled (`verifyCloudState`, watcher mode, background sync)
-- stdio safety hardening is enabled (`stdout` protocol-only, logs to `stderr`)
-- tool behavior stays on-demand and uses the same six MCP tools
-
-`SATORI_CLI_STDOUT_GUARD=drop|redirect` controls accidental non-protocol stdout handling (`drop` default).
-
-### Startup vs Provider Setup
-
-MCP startup does not require provider credentials, network access, or a live Milvus backend. The server should complete `initialize` and expose the six tools with an empty provider environment. Provider-backed calls (`manage_index create|reindex|sync|clear` and `search_codebase`) validate their required environment at call time and return `MISSING_PROVIDER_CONFIG` when setup is incomplete.
-
-`MISSING_PROVIDER_CONFIG` is an active setup failure only when it appears as a tool response `code` or `reason`. Seeing the string inside `search_codebase` results can simply mean the query matched Satori code that implements the setup error.
-
-## Development
-
-```bash
 pnpm --filter @zokizuan/satori-mcp build
 pnpm --filter @zokizuan/satori-mcp typecheck
 pnpm --filter @zokizuan/satori-mcp test
 pnpm --filter @zokizuan/satori-mcp docs:check
-pnpm --filter @zokizuan/satori-cli build
-pnpm --filter @zokizuan/satori-cli test
 ```
 
-`build` automatically runs docs generation from tool schemas.
+`build` regenerates the tool reference from live tool schemas.

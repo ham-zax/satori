@@ -1,17 +1,17 @@
 # @zokizuan/satori-core
 
 Core indexing and retrieval engine used by Satori.
-This package handles the heavy lifting behind indexing, semantic retrieval, and incremental sync.
 
-Maintained by: `ham-zax` (`@zokizuan`).
+Use this package when you want the lower-level engine directly. Most agent workflows should install `@zokizuan/satori-mcp` or `@zokizuan/satori-cli` instead.
 
-## Responsibilities
+## What It Owns
 
-- codebase file discovery and filtering
-- code splitting (AST + LangChain fallback)
-- embedding generation
-- vector persistence and search via Milvus
-- incremental sync via stat-first change detection with hash-on-change verification
+- File discovery and ignore filtering.
+- AST-aware chunking with LangChain fallback.
+- OpenAI, VoyageAI, Gemini, and Ollama embeddings.
+- Milvus/Zilliz vector persistence and search.
+- Dense/BM25 hybrid retrieval and optional reranking.
+- Incremental sync with stat-first, hash-on-change file tracking.
 
 ## Install
 
@@ -19,7 +19,7 @@ Maintained by: `ham-zax` (`@zokizuan`).
 npm install @zokizuan/satori-core
 ```
 
-## Minimal Usage
+## Minimal Use
 
 ```ts
 import { Context, OpenAIEmbedding, MilvusVectorDatabase } from '@zokizuan/satori-core';
@@ -36,9 +36,10 @@ const context = new Context({
 });
 
 await context.indexCodebase('/absolute/path/to/repo');
+
 const results = await context.semanticSearch({
   codebasePath: '/absolute/path/to/repo',
-  query: 'authentication logic',
+  query: 'authentication refresh flow',
   topK: 5,
   retrievalMode: 'hybrid',
   scorePolicy: { kind: 'topk_only' }
@@ -48,7 +49,7 @@ const results = await context.semanticSearch({
 ## Development
 
 ```bash
-pnpm build
-pnpm typecheck
-pnpm test:integration
+pnpm --filter @zokizuan/satori-core build
+pnpm --filter @zokizuan/satori-core typecheck
+pnpm --filter @zokizuan/satori-core test:integration
 ```

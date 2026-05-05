@@ -21,7 +21,7 @@ const callGraphInputSchema = z.object({
 
 export const callGraphTool: McpTool = {
     name: 'call_graph',
-    description: () => 'Traverse the prebuilt call graph sidecar for callers/callees/bidirectional symbol relationships (language support follows the core callGraphQuery capability set; currently TS/JS/Python).',
+    description: () => 'Traverse the prebuilt call graph sidecar for callers/callees/bidirectional symbol relationships (language support follows the core callGraphQuery capability set; currently TS/JS/Python). When present, testReferences are static call-graph references from test-like files to returned symbols; they are investigation hints and do not prove runtime coverage, assertion coverage, or that a test executed a path.',
     inputSchemaZod: () => callGraphInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const normalizedArgs = (args && typeof args === 'object')

@@ -219,6 +219,7 @@ Inputs/defaults:
 Outputs:
 - JSON envelope with `status` plus graph payload.
 - Status variants via handler mapping: `ok|not_found|unsupported|not_ready|requires_reindex|not_indexed`.
+- `testReferences` are static call-graph references from test-like files to returned symbols. They are investigation hints only; they do not prove runtime coverage, assertion coverage, or that a test executed a path.
 
 Warnings/hints:
 - Missing sidecar: reindex hint.

@@ -163,6 +163,69 @@ test('handleSearchCode grouped output includes symbol metadata and callGraphHint
     });
 });
 
+test('handleSearchCode grouped output includes runnable nextActions for supported symbols', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_auth_validate',
+            symbolLabel: 'method validateSession(token: string)'
+        }]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const result = payload.results[0];
+
+        assert.equal(result.callGraphHint.supported, true);
+        assert.deepEqual(result.nextActions.openSymbol, {
+            tool: 'read_file',
+            args: {
+                path: path.resolve(repoPath, 'src/auth.ts'),
+                open_symbol: {
+                    symbolId: 'sym_auth_validate',
+                    symbolLabel: 'method validateSession(token: string)',
+                    start_line: 3,
+                    end_line: 6
+                }
+            }
+        });
+        assert.deepEqual(result.nextActions.traceCallers, {
+            tool: 'call_graph',
+            args: {
+                path: repoPath,
+                symbolRef: result.callGraphHint.symbolRef,
+                direction: 'callers',
+                depth: 1,
+                limit: 20
+            }
+        });
+        assert.deepEqual(result.nextActions.traceCallees, {
+            tool: 'call_graph',
+            args: {
+                path: repoPath,
+                symbolRef: result.callGraphHint.symbolRef,
+                direction: 'callees',
+                depth: 1,
+                limit: 20
+            }
+        });
+        assert.equal(result.navigationFallback, undefined);
+    });
+});
+
 test('handleSearchCode runtime scope excludes docs and tests', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [
@@ -619,6 +682,122 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
         });
         const defaultPayload = JSON.parse(defaultResponse.content[0]?.text || '{}');
         assert.equal(defaultPayload.results[0].file, 'src/unchanged.ts');
+    });
+});
+
+test('handleSearchCode debug exposes changed tracked symbols and direct callers from sidecar data', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => ([
+                {
+                    content: 'export function changed() { return true; }',
+                    relativePath: 'src/changed.ts',
+                    startLine: 1,
+                    endLine: 3,
+                    language: 'typescript',
+                    score: 0.98,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_changed',
+                    symbolLabel: 'function changed()'
+                }
+            ])
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const callGraphManager = {
+            loadSidecar: () => ({
+                nodes: [
+                    {
+                        symbolId: 'sym_changed',
+                        symbolLabel: 'function changed()',
+                        file: 'src/changed.ts',
+                        language: 'typescript',
+                        span: { startLine: 1, endLine: 3 }
+                    },
+                    {
+                        symbolId: 'sym_caller',
+                        symbolLabel: 'function caller()',
+                        file: 'src/caller.ts',
+                        language: 'typescript',
+                        span: { startLine: 5, endLine: 7 }
+                    }
+                ],
+                edges: [
+                    {
+                        srcSymbolId: 'sym_caller',
+                        dstSymbolId: 'sym_changed',
+                        kind: 'call',
+                        site: { file: 'src/caller.ts', startLine: 6 },
+                        confidence: 0.8
+                    }
+                ],
+                notes: []
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            DENSE_RUNTIME_FINGERPRINT,
+            CAPABILITIES_NO_RERANK,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+            callGraphManager
+        );
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set(['src/changed.ts'])
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'changed symbol',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.deepEqual(payload.hints?.debugSearch?.changedCode?.files, ['src/changed.ts']);
+        assert.deepEqual(payload.hints?.debugSearch?.changedCode?.symbols, [
+            {
+                file: 'src/changed.ts',
+                symbolId: 'sym_changed',
+                symbolLabel: 'function changed()',
+                span: { startLine: 1, endLine: 3 }
+            }
+        ]);
+        assert.deepEqual(payload.hints?.debugSearch?.changedCode?.directCallers, [
+            {
+                targetSymbolId: 'sym_changed',
+                file: 'src/caller.ts',
+                symbolId: 'sym_caller',
+                symbolLabel: 'function caller()',
+                span: { startLine: 5, endLine: 7 },
+                site: { file: 'src/caller.ts', startLine: 6 },
+                kind: 'call',
+                confidence: 0.8
+            }
+        ]);
     });
 });
 
@@ -1840,6 +2019,81 @@ test('handleSearchCode emits deterministic noiseMitigation hint when top grouped
         assert.match(payload.hints?.noiseMitigation?.nextStep || '', /\"action\":\"sync\"/);
         assert.match(payload.hints?.noiseMitigation?.nextStep || '', /Reindex is only required when you see requires_reindex/i);
         assert.doesNotMatch(payload.hints?.noiseMitigation?.nextStep || '', /already covered by root \.gitignore/i);
+    });
+});
+
+test('handleSearchCode emits generic verification hint for generated output results', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const runtime = true;',
+                relativePath: 'src/app.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime',
+                symbolLabel: 'const runtime'
+            },
+            {
+                content: 'const bundled = true;',
+                relativePath: 'dist/app.js',
+                startLine: 1,
+                endLine: 2,
+                language: 'javascript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_dist',
+                symbolLabel: 'const bundled'
+            },
+            {
+                content: 'const output = true;',
+                relativePath: '.output/app.js',
+                startLine: 1,
+                endLine: 2,
+                language: 'javascript',
+                score: 0.97,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_output',
+                symbolLabel: 'const output'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'verify generated output for app',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.deepEqual(payload.hints?.verification?.generatedArtifacts, {
+            reason: 'generated_outputs_present',
+            message: 'Generated or build output appeared in search context. Source matches do not prove generated output is current; verify the artifact directly when behavior depends on it.',
+            files: ['.output/app.js', 'dist/app.js'],
+            nextSteps: [
+                {
+                    tool: 'read_file',
+                    args: {
+                        path: path.resolve(repoPath, '.output/app.js'),
+                        start_line: 1,
+                        end_line: 2
+                    }
+                },
+                {
+                    tool: 'read_file',
+                    args: {
+                        path: path.resolve(repoPath, 'dist/app.js'),
+                        start_line: 1,
+                        end_line: 2
+                    }
+                }
+            ]
+        });
     });
 });
 

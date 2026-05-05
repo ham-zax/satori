@@ -325,7 +325,10 @@ Behavior:
 - bounded depth,
 - bounded edge count,
 - deterministic node/edge/note sorting,
+- optional `testReferences` static references from test-like files to returned symbols,
 - status mapping for unsupported/not-ready/not-found cases.
+
+`testReferences` are useful investigation hints, but they do not prove runtime coverage, assertion coverage, or that a test executed a path.
 
 Use cases:
 

@@ -158,7 +158,7 @@ Use `--client all` to install both, and `uninstall` with the same selector to re
   "mcpServers": {
     "satori": {
       "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@4.9.1"],
+      "args": ["-y", "@zokizuan/satori-mcp@4.10.0"],
       "timeout": 180000,
       "env": {
         "EMBEDDING_PROVIDER": "VoyageAI",
@@ -179,7 +179,7 @@ Use `--client all` to install both, and `uninstall` with the same selector to re
 ```toml
 [mcp_servers.satori]
 command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.9.1"]
+args = ["-y", "@zokizuan/satori-mcp@4.10.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
 ```
@@ -427,7 +427,7 @@ pnpm --filter @zokizuan/satori-mcp start        # run MCP server locally
 
 If MCP startup fails (`initialize response` closed), check:
 
-1. Pin a published version: `@zokizuan/satori-mcp@4.9.1`
+1. Pin a published version: `@zokizuan/satori-mcp@4.10.0`
 2. Increase startup timeout to `180000` (cold start package download can be slow)
 3. Remove local link shadowing: `npm unlink -g @zokizuan/satori-mcp` (and local `npm unlink @zokizuan/satori-mcp` if needed)
 4. Restart MCP client

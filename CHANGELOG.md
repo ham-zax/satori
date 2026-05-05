@@ -2,6 +2,21 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-05-05] Search Workflow Diagnostics
+
+### Release Versions
+- `@zokizuan/satori-core`: `1.5.1`
+- `@zokizuan/satori-mcp`: `4.10.0`
+
+### Added
+- Added runnable search `nextActions` so grouped results can point agents to exact symbol reads, outline windows, and caller/callee traces.
+- Added debug-only changed-code context with changed files, changed symbols, and direct callers from call graph metadata.
+- Added generated-artifact verification hints when build outputs appear in search context.
+- Added static call graph `testReferences` for test-like file references, explicitly documented as investigation hints rather than coverage proof.
+
+### Changed
+- Updated website and install snippets to describe Satori as an agent navigation system, not just semantic code search.
+
 ## [2026-05-02] CLI Installer Pin Hotfix
 
 ### Release Versions

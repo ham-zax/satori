@@ -6,13 +6,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Satori - Make AI Coding Agents Understand Your Repo</title>
   <meta name="description"
-    content="Satori helps AI coding agents investigate real repo context before editing: search code, open exact symbols, follow callers and callees, and warn when context is stale." />
+    content="Satori helps AI coding agents investigate real repo context before editing: search code, open exact symbols, follow callers and callees, and decide what to inspect next." />
   <meta property="og:title" content="Satori | Your AI coding agent is flying blind" />
-  <meta property="og:description" content="Make MCP-style coding agents investigate real repo context before they edit: exact symbols, callers and callees, stale-index warnings, and bounded file evidence." />
+  <meta property="og:description" content="Make MCP-style coding agents investigate real repo context before they edit: exact symbols, runnable next steps, callers and callees, stale-index warnings, and bounded file evidence." />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Satori | Your AI coding agent is flying blind" />
-  <meta name="twitter:description" content="Satori helps agents search real repo code, open exact symbols, follow callers and callees, and avoid stale context before editing." />
+  <meta name="twitter:description" content="Satori helps agents search real repo code, open exact symbols, follow callers and callees, and decide what to inspect next." />
   <link rel="preconnect" href="https://fonts.googleapis.com" media="(min-width: 861px)" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin media="(min-width: 861px)" />
   <link
@@ -956,8 +956,9 @@
       <h2>Your AI coding agent is flying blind.</h2>
       <p>
         Satori helps AI coding agents investigate real repo context before
-        they edit. It searches code, opens exact symbols, follows
-        callers/callees, and warns when repo context is stale.
+        they edit. It searches code, opens exact symbols, suggests runnable
+        next steps, follows callers/callees, and warns when repo context is
+        stale.
       </p>
       <div class="hero-actions">
         <a class="btn primary" href="#quickstart">Install Satori</a>
@@ -973,8 +974,9 @@
     <section class="section">
       <h3>Search Is Not Repo Understanding</h3>
       <p class="section-intro">
-        AI agents can grep files. Real repos need more: exact symbols, callers,
-        callees, freshness checks, and bounded evidence before an edit.
+        AI agents can grep files. Real repos need more: exact symbols, runnable
+        next steps, callers, callees, freshness checks, and bounded evidence
+        before an edit.
       </p>
       <div class="grid">
         <article class="card">
@@ -1007,6 +1009,13 @@
             navigation so agent decisions are easier to inspect.
           </p>
         </article>
+        <article class="card">
+          <h4>&quot;It found code, then stalled.&quot;</h4>
+          <p>
+            Search results can include suggested follow-up actions: read the
+            exact symbol, inspect the outline, or trace callers and callees.
+          </p>
+        </article>
       </div>
     </section>
 
@@ -1028,7 +1037,7 @@
         <article class="card">
           <h4>With Satori</h4>
           <p>
-            The agent asks the repo, follows the returned navigation, reads the
+            The agent asks the repo, follows returned next actions, reads the
             exact implementation span, and checks caller/callee context before
             proposing an edit.
           </p>
@@ -1039,7 +1048,7 @@
           <strong>1. Find relevant code</strong>
           <p>
             Natural-language search over indexed code returns grouped results,
-            warnings, freshness state, and navigation hints.
+            warnings, freshness state, and runnable next actions.
           </p>
         </div>
         <div class="step">
@@ -1150,10 +1159,10 @@
         </div>
         <div class="flow-item">
           <span class="flow-index">03</span>
-          <strong>Inspect context</strong>
+          <strong>Choose next step</strong>
           <p>
-            The agent follows search results into exact outlines, call graph
-            context, and bounded file reads.
+            Search results tell the agent whether to read the exact symbol,
+            inspect the outline, or trace caller/callee context next.
           </p>
         </div>
         <div class="flow-item">
@@ -1170,8 +1179,9 @@
     <section class="section">
       <h3>Reduce Blind Edits</h3>
       <p class="section-intro">
-        Satori does not claim to prevent broken code, replace tests, or replace
-        review. It gives the agent specific repo evidence before editing.
+        Satori does not just help your agent find code. It helps your agent
+        decide what to inspect next, while staying honest about what static
+        evidence can and cannot prove.
       </p>
       <div class="grid">
         <article class="card">
@@ -1186,6 +1196,34 @@
           <p>
             Depth-bounded call graph context helps the agent see nearby code
             relationships before changing a function.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Agent-ready next steps</h4>
+          <p>
+            Search results include suggested follow-up actions: open the exact
+            symbol, inspect the outline, or trace callers and callees.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Changed-code context</h4>
+          <p>
+            Debug active branches faster with changed files, changed symbols,
+            and direct callers surfaced from call graph metadata.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Static test references</h4>
+          <p>
+            Find static references from test-like files to the symbol under
+            investigation without claiming false coverage.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Generated-output checks</h4>
+          <p>
+            When build artifacts appear in context, Satori reminds agents to
+            verify the generated file directly.
           </p>
         </article>
         <article class="card">
@@ -1216,8 +1254,8 @@
           <h4>Find relevant code</h4>
           <p>
             <code>search_codebase</code> searches by intent and exact terms
-            with runtime, docs, or mixed scope, then returns grouped navigation
-            hints.
+            with runtime, docs, or mixed scope, then returns grouped results
+            with navigation hints and next actions.
           </p>
         </article>
         <article class="card">
@@ -1295,7 +1333,7 @@ npx -y @zokizuan/satori-cli@0.3.1 doctor</code></pre>
                 </div>
                 <pre><code id="codex-config">[mcp_servers.satori]
 command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.9.1"]
+args = ["-y", "@zokizuan/satori-mcp@4.10.0"]
 startup_timeout_ms = 180000
 env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
               </div>
@@ -1308,7 +1346,7 @@ env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMB
                 </div>
                 <pre><code id="claude-config">"satori": {
   "command": "npx",
-  "args": ["-y", "@zokizuan/satori-mcp@4.9.1"],
+  "args": ["-y", "@zokizuan/satori-mcp@4.10.0"],
   "timeout": 180000,
   "env": {
     "EMBEDDING_PROVIDER": "VoyageAI",
@@ -1432,6 +1470,18 @@ score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc</c
               If <code>hints.noiseMitigation</code> appears, apply the
               suggested <code>.satoriignore</code> patterns, wait one debounce
               window when provided, then rerun search.
+            </p>
+          </div>
+        </details>
+        <details>
+          <summary>Generated Output in Context</summary>
+          <div class="details-body">
+            <p>
+              If generated files like <code>dist</code>, <code>build</code>,
+              or <code>.output</code> appear in search context,
+              <code>hints.verification.generatedArtifacts</code> points to
+              direct artifact reads. Source matches do not prove generated
+              output is current.
             </p>
           </div>
         </details>

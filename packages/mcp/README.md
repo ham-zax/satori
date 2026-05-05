@@ -60,6 +60,8 @@ Important defaults:
 
 Configure an embedding provider and Milvus-compatible backend before indexing. Supported embedding providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model, dimension, vector store, or schema requires a reindex because those values are part of the index fingerprint.
 
+The full generated tool reference below is kept in the npm README for MCP clients and package consumers.
+
 <!-- TOOLS_START -->
 
 ## Tool Reference

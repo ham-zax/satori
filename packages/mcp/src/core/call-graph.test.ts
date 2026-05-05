@@ -379,6 +379,76 @@ test('call graph query filters notes to returned scope and emits truncation meta
     });
 });
 
+test('call graph query exposes static test references for symbols referenced by test files', async () => {
+    await withTempRepo(async (repoPath) => {
+        const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
+        const sidecarPath = (manager as any).getSidecarPath(repoPath) as string;
+        fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+
+        fs.writeFileSync(sidecarPath, JSON.stringify({
+            formatVersion: 'v3',
+            codebasePath: repoPath,
+            builtAt: '2026-01-01T00:00:00.000Z',
+            fingerprint: RUNTIME_FINGERPRINT,
+            nodes: [
+                {
+                    symbolId: 'sym_runtime',
+                    symbolLabel: 'function runtime()',
+                    file: 'src/runtime.ts',
+                    language: 'typescript',
+                    span: { startLine: 1, endLine: 3 }
+                },
+                {
+                    symbolId: 'sym_runtime_test',
+                    symbolLabel: 'test runtime behavior',
+                    file: 'src/runtime.test.ts',
+                    language: 'typescript',
+                    span: { startLine: 5, endLine: 9 }
+                }
+            ],
+            edges: [
+                {
+                    srcSymbolId: 'sym_runtime_test',
+                    dstSymbolId: 'sym_runtime',
+                    kind: 'call',
+                    site: {
+                        file: 'src/runtime.test.ts',
+                        startLine: 7
+                    },
+                    confidence: 0.8
+                }
+            ],
+            notes: []
+        }, null, 2));
+
+        const response = manager.queryGraph(repoPath, {
+            file: 'src/runtime.ts',
+            symbolId: 'sym_runtime',
+            symbolLabel: 'function runtime()'
+        }, {
+            direction: 'callees',
+            depth: 1,
+            limit: 20
+        });
+
+        assert.equal(response.supported, true);
+        if (!response.supported) return;
+
+        assert.deepEqual(response.testReferences, [
+            {
+                file: 'src/runtime.test.ts',
+                symbolId: 'sym_runtime_test',
+                symbolLabel: 'test runtime behavior',
+                span: { startLine: 5, endLine: 9 },
+                site: { file: 'src/runtime.test.ts', startLine: 7 },
+                targetSymbolId: 'sym_runtime',
+                kind: 'call',
+                confidence: 0.8
+            }
+        ]);
+    });
+});
+
 test('call graph collector includes hidden directories when not ignored', async () => {
     await withTempRepo(async (repoPath) => {
         const hiddenDir = path.join(repoPath, '.hidden');

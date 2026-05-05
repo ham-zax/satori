@@ -20,6 +20,48 @@ export type CallGraphHint =
     | { supported: true; symbolRef: CallGraphSymbolRef }
     | { supported: false; reason: "missing_symbol" | "unsupported_language" };
 
+export interface SearchNextActionReadSymbol {
+    tool: "read_file";
+    args: {
+        path: string;
+        open_symbol: {
+            symbolId: string;
+            symbolLabel?: string;
+            start_line: number;
+            end_line: number;
+        };
+    };
+}
+
+export interface SearchNextActionFileOutlineWindow {
+    tool: "file_outline";
+    args: {
+        path: string;
+        file: string;
+        start_line: number;
+        end_line: number;
+        resolveMode: "outline";
+    };
+}
+
+export interface SearchNextActionCallGraph {
+    tool: "call_graph";
+    args: {
+        path: string;
+        symbolRef: CallGraphSymbolRef;
+        direction: "callers" | "callees";
+        depth: number;
+        limit: number;
+    };
+}
+
+export interface SearchNextActions {
+    openSymbol?: SearchNextActionReadSymbol;
+    outlineWindow?: SearchNextActionFileOutlineWindow;
+    traceCallers?: SearchNextActionCallGraph;
+    traceCallees?: SearchNextActionCallGraph;
+}
+
 export interface SearchChunkResult {
     kind: "chunk";
     file: string;
@@ -59,6 +101,7 @@ export interface SearchGroupResult {
     collapsedChunkCount: number;
     callGraphHint: CallGraphHint;
     navigationFallback?: SearchNavigationFallback;
+    nextActions?: SearchNextActions;
     preview: string;
     debug?: {
         representativeChunkCount: number;
@@ -181,6 +224,29 @@ export interface SearchDebugHint {
         multiplier: number;
         boostedCandidates: number;
     };
+    changedCode?: {
+        files: string[];
+        symbols: Array<{
+            file: string;
+            symbolId: string;
+            symbolLabel?: string;
+            span: SearchSpan;
+        }>;
+        directCallers: Array<{
+            targetSymbolId: string;
+            file: string;
+            symbolId: string;
+            symbolLabel?: string;
+            span: SearchSpan;
+            site: {
+                file: string;
+                startLine: number;
+                endLine?: number;
+            };
+            kind: "call" | "import" | "dynamic";
+            confidence: number;
+        }>;
+    };
     rerank?: {
         enabledByPolicy: boolean;
         skippedByScopeDocs: boolean;
@@ -208,6 +274,14 @@ export interface SearchResponseHints extends Record<string, unknown> {
     version?: 1;
     noiseMitigation?: SearchNoiseMitigationHint;
     debugSearch?: SearchDebugHint;
+    verification?: {
+        generatedArtifacts?: {
+            reason: "generated_outputs_present";
+            message: string;
+            files: string[];
+            nextSteps: SearchNavigationFallbackReadSpan[];
+        };
+    };
 }
 
 export type NonOkReason = "indexing" | "requires_reindex" | "not_indexed" | "missing_provider_config";

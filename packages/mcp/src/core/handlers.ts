@@ -1194,11 +1194,12 @@ export class ToolHandlers {
     }
 
     private isGeneratedPath(normalizedPath: string): boolean {
-        return normalizedPath.includes('/dist/')
-            || normalizedPath.includes('/build/')
-            || normalizedPath.includes('/coverage/')
-            || normalizedPath.includes('/.next/')
-            || normalizedPath.includes('/generated/')
+        return this.hasPathSegment(normalizedPath, 'dist')
+            || this.hasPathSegment(normalizedPath, 'build')
+            || this.hasPathSegment(normalizedPath, 'coverage')
+            || this.hasPathSegment(normalizedPath, '.next')
+            || this.hasPathSegment(normalizedPath, '.output')
+            || this.hasPathSegment(normalizedPath, 'generated')
             || normalizedPath.endsWith('.min.js')
             || normalizedPath.endsWith('.min.css');
     }
@@ -1232,7 +1233,8 @@ export class ToolHandlers {
         if (this.isGeneratedPath(normalized)
             || this.hasPathSegment(normalized, 'coverage')
             || this.hasPathSegment(normalized, 'dist')
-            || this.hasPathSegment(normalized, 'build')) return 'generated';
+            || this.hasPathSegment(normalized, 'build')
+            || this.hasPathSegment(normalized, '.output')) return 'generated';
         if (this.isTestPath(normalized)) return 'tests';
         if (this.isFixturePath(normalized)) return 'fixtures';
         if (this.isDocPath(normalized)) return 'docs';
@@ -2464,6 +2466,234 @@ export class ToolHandlers {
         }
 
         return fallback;
+    }
+
+    private buildSearchNextActions(
+        codebaseRoot: string,
+        relativeFilePath: string,
+        span: SearchSpan,
+        callGraphHint: CallGraphHint,
+        sidecarReadyForOutline: boolean
+    ): SearchGroupResult['nextActions'] | undefined {
+        if (!callGraphHint.supported) {
+            return undefined;
+        }
+
+        const normalizedFile = this.sanitizeIndexedRelativeFilePath(relativeFilePath);
+        if (!normalizedFile) {
+            return undefined;
+        }
+
+        const safeStartLine = Number.isFinite(span.startLine) ? Math.max(1, Number(span.startLine)) : 1;
+        const safeEndLine = Number.isFinite(span.endLine) ? Math.max(safeStartLine, Number(span.endLine)) : safeStartLine;
+        const absolutePath = path.resolve(codebaseRoot, normalizedFile);
+        const symbolRef = {
+            ...callGraphHint.symbolRef,
+            file: normalizedFile,
+            span: {
+                startLine: safeStartLine,
+                endLine: safeEndLine,
+            }
+        };
+
+        const nextActions: SearchGroupResult['nextActions'] = {
+            openSymbol: {
+                tool: 'read_file',
+                args: {
+                    path: absolutePath,
+                    open_symbol: {
+                        symbolId: symbolRef.symbolId,
+                        ...(symbolRef.symbolLabel ? { symbolLabel: symbolRef.symbolLabel } : {}),
+                        start_line: safeStartLine,
+                        end_line: safeEndLine,
+                    }
+                }
+            },
+            traceCallers: {
+                tool: 'call_graph',
+                args: {
+                    path: codebaseRoot,
+                    symbolRef,
+                    direction: 'callers',
+                    depth: 1,
+                    limit: 20,
+                }
+            },
+            traceCallees: {
+                tool: 'call_graph',
+                args: {
+                    path: codebaseRoot,
+                    symbolRef,
+                    direction: 'callees',
+                    depth: 1,
+                    limit: 20,
+                }
+            }
+        };
+
+        if (sidecarReadyForOutline && this.getOutlineStatusForLanguage(normalizedFile) === 'ok') {
+            nextActions.outlineWindow = {
+                tool: 'file_outline',
+                args: {
+                    path: codebaseRoot,
+                    file: normalizedFile,
+                    start_line: safeStartLine,
+                    end_line: safeEndLine,
+                    resolveMode: 'outline',
+                }
+            };
+        }
+
+        return nextActions;
+    }
+
+    private buildChangedCodeDebug(
+        codebaseRoot: string,
+        changedFilesState: { available: boolean; files: Set<string> }
+    ): SearchDebugHint['changedCode'] | undefined {
+        if (!changedFilesState.available || changedFilesState.files.size === 0) {
+            return undefined;
+        }
+
+        const loadSidecar = (this.callGraphManager as any)?.loadSidecar;
+        if (typeof loadSidecar !== 'function') {
+            return undefined;
+        }
+
+        const sidecar = loadSidecar.call(this.callGraphManager, codebaseRoot);
+        if (!sidecar || !Array.isArray(sidecar.nodes) || !Array.isArray(sidecar.edges)) {
+            return undefined;
+        }
+
+        const changedFiles = Array.from(changedFilesState.files)
+            .map((file) => this.normalizeRelativeFilePath(file))
+            .filter((file) => file.length > 0 && !file.startsWith('..') && !path.posix.isAbsolute(file))
+            .sort((a, b) => a.localeCompare(b));
+        const changedFileSet = new Set(changedFiles);
+        const nodeById = new Map<string, any>();
+        for (const node of sidecar.nodes) {
+            if (node && typeof node.symbolId === 'string') {
+                nodeById.set(node.symbolId, node);
+            }
+        }
+
+        const changedSymbols = sidecar.nodes
+            .filter((node: any) => node && typeof node.file === 'string' && changedFileSet.has(this.normalizeRelativeFilePath(node.file)))
+            .map((node: any) => ({
+                file: this.normalizeRelativeFilePath(node.file),
+                symbolId: String(node.symbolId),
+                ...(typeof node.symbolLabel === 'string' ? { symbolLabel: node.symbolLabel } : {}),
+                span: {
+                    startLine: Number.isFinite(node.span?.startLine) ? Number(node.span.startLine) : 1,
+                    endLine: Number.isFinite(node.span?.endLine) ? Number(node.span.endLine) : (Number.isFinite(node.span?.startLine) ? Number(node.span.startLine) : 1),
+                }
+            }))
+            .sort((a: any, b: any) => {
+                const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
+                if (fileCmp !== 0) return fileCmp;
+                const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+                if (startCmp !== 0) return startCmp;
+                const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+                if (labelCmp !== 0) return labelCmp;
+                return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+            });
+
+        const changedSymbolIds = new Set(changedSymbols.map((symbol: any) => symbol.symbolId));
+        const directCallers = sidecar.edges
+            .filter((edge: any) => edge && changedSymbolIds.has(edge.dstSymbolId))
+            .map((edge: any) => {
+                const caller = nodeById.get(edge.srcSymbolId);
+                if (!caller) {
+                    return null;
+                }
+                const startLine = Number.isFinite(caller.span?.startLine) ? Number(caller.span.startLine) : 1;
+                const endLine = Number.isFinite(caller.span?.endLine) ? Number(caller.span.endLine) : startLine;
+                return {
+                    targetSymbolId: String(edge.dstSymbolId),
+                    file: this.normalizeRelativeFilePath(caller.file),
+                    symbolId: String(caller.symbolId),
+                    ...(typeof caller.symbolLabel === 'string' ? { symbolLabel: caller.symbolLabel } : {}),
+                    span: {
+                        startLine,
+                        endLine,
+                    },
+                    site: {
+                        file: this.normalizeRelativeFilePath(edge.site?.file || caller.file),
+                        startLine: Number.isFinite(edge.site?.startLine) ? Number(edge.site.startLine) : startLine,
+                        ...(Number.isFinite(edge.site?.endLine) ? { endLine: Number(edge.site.endLine) } : {}),
+                    },
+                    kind: edge.kind === 'import' || edge.kind === 'dynamic' ? edge.kind : 'call',
+                    confidence: Number.isFinite(edge.confidence) ? Number(edge.confidence) : 0,
+                };
+            })
+            .filter((caller: any): caller is NonNullable<typeof caller> => Boolean(caller))
+            .sort((a: any, b: any) => {
+                const targetCmp = this.compareNullableStringsAsc(a.targetSymbolId, b.targetSymbolId);
+                if (targetCmp !== 0) return targetCmp;
+                const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
+                if (fileCmp !== 0) return fileCmp;
+                const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+                if (startCmp !== 0) return startCmp;
+                const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+                if (labelCmp !== 0) return labelCmp;
+                const symbolCmp = this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+                if (symbolCmp !== 0) return symbolCmp;
+                return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
+            });
+
+        return {
+            files: changedFiles,
+            symbols: changedSymbols.slice(0, 50),
+            directCallers: directCallers.slice(0, 50),
+        };
+    }
+
+    private buildGeneratedArtifactsVerificationHint(
+        codebaseRoot: string,
+        results: Array<{ file: string; span: SearchSpan }>
+    ): NonNullable<NonNullable<SearchResponseEnvelope['hints']>['verification']>['generatedArtifacts'] | undefined {
+        const byFile = new Map<string, SearchSpan>();
+
+        for (const result of results) {
+            const normalizedFile = this.sanitizeIndexedRelativeFilePath(result.file);
+            if (!normalizedFile) {
+                continue;
+            }
+            if (this.classifyNoiseCategory(normalizedFile) !== 'generated') {
+                continue;
+            }
+            const safeStartLine = Number.isFinite(result.span.startLine) ? Math.max(1, Number(result.span.startLine)) : 1;
+            const safeEndLine = Number.isFinite(result.span.endLine) ? Math.max(safeStartLine, Number(result.span.endLine)) : safeStartLine;
+            const existing = byFile.get(normalizedFile);
+            byFile.set(normalizedFile, existing
+                ? {
+                    startLine: Math.min(existing.startLine, safeStartLine),
+                    endLine: Math.max(existing.endLine, safeEndLine),
+                }
+                : { startLine: safeStartLine, endLine: safeEndLine });
+        }
+
+        const files = Array.from(byFile.keys()).sort((a, b) => a.localeCompare(b)).slice(0, 5);
+        if (files.length === 0) {
+            return undefined;
+        }
+
+        return {
+            reason: 'generated_outputs_present',
+            message: 'Generated or build output appeared in search context. Source matches do not prove generated output is current; verify the artifact directly when behavior depends on it.',
+            files,
+            nextSteps: files.map((file) => {
+                const span = byFile.get(file)!;
+                return {
+                    tool: 'read_file',
+                    args: {
+                        path: path.resolve(codebaseRoot, file),
+                        start_line: span.startLine,
+                        end_line: span.endLine,
+                    }
+                };
+            }),
+        };
     }
 
     private normalizeRelativeFilePath(relativeFilePath: string): string {
@@ -3786,6 +4016,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const changedFilesState = input.rankingMode === 'auto_changed_first'
                 ? this.getChangedFilesForCodebase(effectiveRoot)
                 : { available: false, files: new Set<string>() };
+            const debugChangedFilesState = input.debug
+                ? (input.rankingMode === 'auto_changed_first' ? changedFilesState : this.getChangedFilesForCodebase(effectiveRoot))
+                : undefined;
             const changedFilesCount = changedFilesState.files.size;
             const changedFilesBoostWithinThreshold = changedFilesCount > 0 && changedFilesCount <= SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES;
             const changedFilesBoostEnabled = changedFilesState.available && changedFilesBoostWithinThreshold;
@@ -4095,6 +4328,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
                         boostedCandidates,
                     },
+                    ...(debugChangedFilesState ? {
+                        changedCode: this.buildChangedCodeDebug(effectiveRoot, debugChangedFilesState),
+                    } : {}),
                     rerank: {
                         enabledByPolicy: rerankDecision.enabledByPolicy,
                         skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
@@ -4149,12 +4385,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     } : {})
                 }));
                 const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, rawResults.map((result) => result.file));
+                const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, rawResults.map((result) => ({
+                    file: result.file,
+                    span: result.span,
+                })));
                 const responseHints: Record<string, unknown> = {};
-                if (noiseMitigationHint || debugHintBase || proofDebugHint) {
+                if (noiseMitigationHint || debugHintBase || proofDebugHint || generatedArtifactsHint) {
                     responseHints.version = 1 as const;
                 }
                 if (noiseMitigationHint) {
                     responseHints.noiseMitigation = noiseMitigationHint;
+                }
+                if (generatedArtifactsHint) {
+                    responseHints.verification = {
+                        generatedArtifacts: generatedArtifactsHint,
+                    };
                 }
                 if (debugHintBase) {
                     responseHints.debugSearch = debugHintBase;
@@ -4249,6 +4494,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     callGraphHint,
                     sidecarReadyForOutline
                 );
+                const nextActions = this.buildSearchNextActions(
+                    effectiveRoot,
+                    representative.result.relativePath,
+                    span,
+                    callGraphHint,
+                    sidecarReadyForOutline
+                );
 
                 groupedResults.push({
                     kind: "group",
@@ -4264,6 +4516,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     collapsedChunkCount: group.chunks.length,
                     callGraphHint,
                     ...(navigationFallback ? { navigationFallback } : {}),
+                    ...(nextActions ? { nextActions } : {}),
                     preview: truncateContent(String(representative.result.content || ''), 4000),
                     __exactLexicalMatch: representative.exactLexicalMatch,
                     ...(input.debug ? {
@@ -4302,12 +4555,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const diversityApplied = this.applyGroupDiversity(rankedGroupedResults, input.limit, input.groupBy);
             const visibleGroupedResults = diversityApplied.selected;
             const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file));
+            const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, visibleGroupedResults.map((result) => ({
+                file: result.file,
+                span: result.span,
+            })));
             const responseHints: Record<string, unknown> = {};
-            if (noiseMitigationHint || debugHintBase || proofDebugHint) {
+            if (noiseMitigationHint || debugHintBase || proofDebugHint || generatedArtifactsHint) {
                 responseHints.version = 1 as const;
             }
             if (noiseMitigationHint) {
                 responseHints.noiseMitigation = noiseMitigationHint;
+            }
+            if (generatedArtifactsHint) {
+                responseHints.verification = {
+                    generatedArtifacts: generatedArtifactsHint,
+                };
             }
             if (debugHintBase) {
                 responseHints.debugSearch = {

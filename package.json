@@ -31,19 +31,19 @@
         "benchmark": "node scripts/build-benchmark.js"
     },
     "devDependencies": {
-        "@eslint/js": "^9.25.1",
+        "@eslint/js": "^9.28.0",
         "@types/node": "^20.0.0",
-        "@typescript-eslint/eslint-plugin": "^8.31.1",
-        "@typescript-eslint/parser": "^8.31.1",
+        "@typescript-eslint/eslint-plugin": "^8.33.1",
+        "@typescript-eslint/parser": "^8.33.1",
         "assert": "^2.1.0",
         "browserify-zlib": "^0.2.0",
-        "eslint": "^9.25.1",
+        "eslint": "^9.28.0",
         "https-browserify": "^1.0.0",
         "os-browserify": "^0.3.0",
-        "rimraf": "^6.0.1",
+        "rimraf": "^6.1.3",
         "stream-http": "^3.2.0",
-        "typescript": "^5.8.3",
         "tree-sitter-cli": "^0.25.6",
+        "typescript": "^5.8.3",
         "url": "^0.11.4",
         "vm-browserify": "^1.1.2"
     },
@@ -51,6 +51,13 @@
     "engines": {
         "node": ">=20.0.0",
         "pnpm": ">=10.0.0"
+    },
+    "pnpm": {
+        "overrides": {
+            "flatted": "^3.4.2",
+            "jws": "^4.0.1",
+            "path-to-regexp": "^8.4.0"
+        }
     },
     "repository": {
         "type": "git",

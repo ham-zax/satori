@@ -58,7 +58,7 @@ export class VoyageAIReranker {
 
         console.log(`[VoyageAI Reranker] Reranking ${documents.length} documents with model: ${this.model}`);
 
-        const requestBody: Record<string, any> = {
+        const requestBody: Record<string, unknown> = {
             query,
             documents,
             model: this.model,
@@ -85,17 +85,37 @@ export class VoyageAIReranker {
                 throw new Error(`VoyageAI Rerank API error (${response.status}): ${errorText}`);
             }
 
-            const result = await response.json() as { data?: Array<{ index: number; relevance_score: number; document?: string }> };
+            const result = await response.json() as { data?: unknown };
 
             if (!result.data || !Array.isArray(result.data)) {
                 throw new Error('VoyageAI Rerank API returned invalid response');
             }
 
-            const rerankResults: RerankResult[] = result.data.map((item) => ({
-                index: item.index,
-                relevanceScore: item.relevance_score,
-                ...(returnDocuments && item.document && { document: item.document }),
-            }));
+            const rerankResults: RerankResult[] = result.data.map((item, responseIndex) => {
+                if (!item || typeof item !== 'object') {
+                    throw new Error(`VoyageAI Rerank API returned invalid response row at index ${responseIndex}`);
+                }
+
+                const row = item as Record<string, unknown>;
+                if (!Number.isInteger(row.index) || (row.index as number) < 0 || (row.index as number) >= documents.length) {
+                    throw new Error(`VoyageAI Rerank API returned invalid response row at index ${responseIndex}`);
+                }
+                if (typeof row.relevance_score !== 'number' || !Number.isFinite(row.relevance_score)) {
+                    throw new Error(`VoyageAI Rerank API returned invalid response row at index ${responseIndex}`);
+                }
+
+                const mapped: RerankResult = {
+                    index: row.index as number,
+                    relevanceScore: row.relevance_score,
+                };
+                if (returnDocuments && Object.prototype.hasOwnProperty.call(row, 'document')) {
+                    if (typeof row.document !== 'string') {
+                        throw new Error(`VoyageAI Rerank API returned invalid response row at index ${responseIndex}`);
+                    }
+                    mapped.document = row.document;
+                }
+                return mapped;
+            });
 
             console.log(`[VoyageAI Reranker] ✅ Reranked ${rerankResults.length} results. Top score: ${rerankResults[0]?.relevanceScore?.toFixed(4) || 'N/A'}`);
 

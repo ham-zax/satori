@@ -1,5 +1,9 @@
 # Satori
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![CI](https://github.com/ham-zax/satori/actions/workflows/ci.yml/badge.svg)](https://github.com/ham-zax/satori/actions/workflows/ci.yml)
+[![npm CLI](https://img.shields.io/npm/v/@zokizuan/satori-cli?label=satori-cli)](https://www.npmjs.com/package/@zokizuan/satori-cli)
+
 Agent-safe code retrieval for developers who use MCP coding agents on real repos.
 
 Satori indexes a repository, keeps the index fresh, and gives agents a fixed six-tool MCP surface for finding code, opening exact spans, checking callers/callees, and reading bounded evidence before an edit. It is read-only from MCP: source edits stay in your editor or agent host.
@@ -24,11 +28,11 @@ Satori indexes a repository, keeps the index fresh, and gives agents a fixed six
 
 ## Quick Start
 
-Install managed MCP config for all supported clients:
+Install managed MCP config for every supported local client:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.0 install --client all
-npx -y @zokizuan/satori-cli@0.4.0 doctor
+npx -y @zokizuan/satori-cli@0.4.1 install --client all
+npx -y @zokizuan/satori-cli@0.4.1 doctor
 ```
 
 Supported installers: `codex`, `claude`, `opencode`, and `all`.
@@ -43,27 +47,79 @@ Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/sa
 
 Restart the MCP client after changing config.
 
-## Index a Repo
+## First Repo Workflow
 
-Once provider env is configured and your MCP client has restarted:
+1. Run the CLI installer and `doctor`.
+2. Restart your MCP client.
+3. Index one absolute repository path.
+4. Search, outline, graph, and read exact spans before edits.
 
 ```text
 manage_index action="create" path="/absolute/path/to/repo"
-list_codebases
-```
-
-Then search and navigate with the six-tool workflow:
-
-```text
 search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
 file_outline path="/absolute/path/to/repo" file="src/auth.ts"
 call_graph path="/absolute/path/to/repo" symbolRef={...} direction="both"
 read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
 ```
 
+If any tool returns `requires_reindex`, run the hinted `manage_index action="reindex"` call first, then retry the original tool call. Use `manage_index action="sync"` for ordinary file or ignore-rule convergence.
+
 ## Runtime Setup
 
-Satori needs an embedding provider and a Milvus-compatible vector store before indexing.
+Satori needs an embedding provider and a Milvus-compatible vector store before indexing. MCP startup, `tools list`, and `doctor` do not require provider credentials; provider-backed tool calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
+
+Run `npx -y @zokizuan/satori-cli@0.4.1 doctor` after setting env values to check the local setup before indexing.
+
+Installer config and runtime config are intentionally separate:
+
+- The installer owns the launcher and MCP client wiring.
+- Satori runtime settings come from environment variables at MCP startup.
+- Supported client installs expose the Satori runtime variable names in native client config so the setup is visible and editable:
+  - Codex writes active `env_vars` forwarding plus an optional commented `[mcp_servers.satori.env]` template in `~/.codex/config.toml`.
+  - Claude Code writes per-server `mcpServers.satori.env` entries in `~/.claude.json` using `${VAR:-}` pass-through values.
+  - OpenCode writes per-server `mcp.satori.environment` entries in `~/.config/opencode/opencode.json` using `{env:VAR}` pass-through values.
+- If you prefer storing literal values in a client config, replace the generated pass-through value for that client. In Codex, uncomment or add this table outside the installer-managed launcher block so reinstalls keep your edits:
+
+```toml
+[mcp_servers.satori.env]
+EMBEDDING_PROVIDER = "VoyageAI"
+EMBEDDING_MODEL = "voyage-4-large"
+EMBEDDING_OUTPUT_DIMENSION = "1024"
+VOYAGEAI_API_KEY = "pa-..."
+VOYAGEAI_RERANKER_MODEL = "rerank-2.5"
+MILVUS_ADDRESS = "https://your-zilliz-endpoint"
+MILVUS_TOKEN = "your-zilliz-token"
+```
+
+Claude example:
+
+```json
+{
+  "mcpServers": {
+    "satori": {
+      "env": {
+        "VOYAGEAI_API_KEY": "pa-...",
+        "MILVUS_TOKEN": "your-zilliz-token"
+      }
+    }
+  }
+}
+```
+
+OpenCode example:
+
+```json
+{
+  "mcp": {
+    "satori": {
+      "environment": {
+        "VOYAGEAI_API_KEY": "pa-...",
+        "MILVUS_TOKEN": "your-zilliz-token"
+      }
+    }
+  }
+}
+```
 
 Cloud quality start:
 
@@ -76,6 +132,8 @@ VOYAGEAI_RERANKER_MODEL=rerank-2.5
 MILVUS_ADDRESS=your-milvus-endpoint
 MILVUS_TOKEN=your-milvus-token
 ```
+
+Get `VOYAGEAI_API_KEY` from the Voyage AI dashboard API keys page. For Zilliz Cloud, use the cluster public endpoint as `MILVUS_ADDRESS` and the API key or cluster credential as `MILVUS_TOKEN`. Local unauthenticated Milvus usually uses `MILVUS_ADDRESS=localhost:19530` and no token.
 
 Local-first start:
 
@@ -144,9 +202,9 @@ pnpm test:integration
 
 Current release versions:
 
-- `@zokizuan/satori-core@1.6.0`
-- `@zokizuan/satori-mcp@4.11.0`
-- `@zokizuan/satori-cli@0.4.0`
+- `@zokizuan/satori-core@1.6.1`
+- `@zokizuan/satori-mcp@4.11.1`
+- `@zokizuan/satori-cli@0.4.1`
 
 Preflight before publishing:
 
@@ -165,8 +223,8 @@ pnpm run release:smoke:cli
 Recommended public release path:
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.5.1
+git push origin v0.5.1
 ```
 
 The GitHub Actions release uses npm provenance and requires the `NPM_TOKEN` secret. Use the manual fallback only when you intentionally want to publish from a local authenticated shell without CI provenance:
@@ -194,8 +252,16 @@ npm view @zokizuan/satori-cli@<version> dist.integrity dist.shasum
 - [Architecture](./ARCHITECTURE.md)
 - [End-to-end behavior spec](./docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md)
 - [Features and use cases](./docs/SATORI_FEATURES_AND_USE_CASES.md)
+- [Public launch checklist](./docs/LAUNCH_CHECKLIST.md)
+- [Contributing](./CONTRIBUTING.md)
+- [Security policy](./SECURITY.md)
+- [Code of conduct](./CODE_OF_CONDUCT.md)
 - [MCP package README](./packages/mcp/README.md)
+
+## Open Source
+
+Satori is open source under the MIT License. The public MCP surface is intentionally read-only and fixed to six tools, so users can inspect behavior, self-host the index runtime, and contribute without expanding the agent write surface.
 
 ## License
 
-MIT (c) Hamza (@ham-zax)
+Satori is released under the [MIT License](./LICENSE).

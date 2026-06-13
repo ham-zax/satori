@@ -597,7 +597,7 @@ Bad chunking can hide important context or split functions badly.
 Satori uses:
 
 - AST-aware splitting when possible
-- LangChain fallback splitting otherwise
+- Recursive fallback splitting otherwise
 
 Implementation:
 
@@ -945,7 +945,7 @@ This allows:
 
 - OpenAI/VoyageAI/Gemini/Ollama embeddings
 - Milvus gRPC and REST vector DBs
-- AST splitter and LangChain fallback splitter
+- AST splitter and recursive fallback splitter
 
 ### Dependency Injection
 

@@ -3,6 +3,8 @@
 This repository is intentionally narrow. Keep changes focused on:
 - `packages/core`: semantic indexing engine
 - `packages/mcp`: MCP server runtime
+- `packages/cli`: installer, doctor, and shell entrypoints
+- `docs/` and `satori-landing/`: public documentation and launch collateral
 
 Do not add UI extensions, eval sidecars, or parallel product surfaces here.
 
@@ -15,9 +17,10 @@ pnpm install
 ## Common Commands
 
 ```bash
+pnpm run check
 pnpm build
-pnpm typecheck
-pnpm lint
+pnpm --filter @zokizuan/satori-mcp test
+pnpm --filter @zokizuan/satori-cli test
 pnpm test:integration
 ```
 
@@ -33,7 +36,10 @@ pnpm test:integration
 Before opening a PR, run:
 
 ```bash
+pnpm run check
 pnpm build
+pnpm --filter @zokizuan/satori-mcp test
+pnpm --filter @zokizuan/satori-cli test
 pnpm test:integration
 ```
 
@@ -48,6 +54,12 @@ Integration tests should continue validating:
 - Keep PRs small and scoped.
 - Include rationale for architecture-impacting changes.
 - Avoid bundling unrelated refactors.
+- Update docs, generated manifests, and tests in the same PR when behavior or public contracts change.
+- Do not expand the public MCP tool surface without an explicit contract update.
+
+## Security
+
+Do not include secrets, provider tokens, private repository code, or sensitive logs in public issues or PRs. See [SECURITY.md](./SECURITY.md) for vulnerability reporting.
 
 ## License
 

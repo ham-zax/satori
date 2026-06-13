@@ -1,6 +1,6 @@
 {
     "name": "satori",
-    "version": "0.5.0",
+    "version": "0.5.1",
     "description": "Satori: sudden-insight semantic code indexing + MCP integration",
     "private": true,
     "scripts": {

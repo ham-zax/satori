@@ -162,7 +162,7 @@ AST splitter support currently covers:
 - C#: `.cs`
 - Scala: `.scala`
 
-Fallback file types are handled by LangChain splitting.
+Fallback file types are handled by the in-package recursive splitter.
 
 Why it matters:
 
@@ -1432,7 +1432,7 @@ Goal: configure Satori in Codex, Claude, or OpenCode without manual config editi
 Workflow:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.0 install --client all
+npx -y @zokizuan/satori-cli@0.4.1 install --client all
 ```
 
 Why Satori is better:

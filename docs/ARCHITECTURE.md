@@ -31,7 +31,7 @@ graph TD
     
     subgraph "Core Engine Layer (`packages/core`)"
         Context[Context Orchestrator]
-        Split[AST / LangChain Splitter]
+        Split[AST / Recursive Fallback Splitter]
         Embed[Embedding Providers<br/>OpenAI/VoyageAI/Gemini/Ollama]
         VecDB[Vector DB Adapter<br/>Milvus/Zilliz]
         
@@ -98,7 +98,7 @@ flowchart LR
     A[Raw File on Disk] --> B{Tree-sitter Parser}
     
     B -->|Language Supported| C[AST Node Extraction<br/>Functions/Classes]
-    B -->|Fallback| D[LangChain Text Splitter]
+    B -->|Fallback| D[Recursive Text Splitter]
     
     C --> E{Size Check}
     D --> E
@@ -140,7 +140,7 @@ MCP Client
 +---------------------------------------------------------------+
 | Core Engine (`packages/core`)                                |
 |  - Context orchestrator                                      |
-|  - Splitter (AST + LangChain fallback)                       |
+|  - Splitter (AST + recursive fallback)                       |
 |  - Embedding providers                                       |
 |  - Vector DB adapters (Milvus gRPC / REST)                   |
 +---------------------+----------------------+------------------+

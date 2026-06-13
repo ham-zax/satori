@@ -4422,6 +4422,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         throw new Error('reranker_parse_failed');
                     }
 
+                    let rerankerUpdatedCandidates = 0;
                     for (let idx = 0; idx < rerankSlice.length; idx++) {
                         const rank = rerankRanks.get(idx);
                         if (!rank) {
@@ -4430,10 +4431,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         const rerankRrf = 1 / (SEARCH_RERANK_RRF_K + rank);
                         rerankSlice[idx].fusionScore += SEARCH_RERANK_WEIGHT * rerankRrf;
                         rerankSlice[idx].finalScore = (rerankSlice[idx].fusionScore + rerankSlice[idx].lexicalScore) * rerankSlice[idx].pathMultiplier * rerankSlice[idx].changedFilesMultiplier;
+                        rerankerUpdatedCandidates++;
                     }
 
                     exactMatchPinningApplied = this.sortSearchCandidates(scored, rerankDecision.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
-                    rerankerApplied = true;
+                    rerankerApplied = rerankerUpdatedCandidates > 0;
                 } catch {
                     if (!rerankerFailurePhase) {
                         rerankerFailurePhase = 'parse_results';

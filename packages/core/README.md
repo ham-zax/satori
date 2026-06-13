@@ -7,7 +7,7 @@ Use this package when you want the lower-level engine directly. Most agent workf
 ## What It Owns
 
 - File discovery and ignore filtering.
-- AST-aware chunking with LangChain fallback.
+- AST-aware chunking with an in-package recursive fallback splitter. The legacy `LangChainCodeSplitter` class name remains for API compatibility, but `langchain` is no longer a runtime dependency.
 - OpenAI, VoyageAI, Gemini, and Ollama embeddings.
 - Milvus/Zilliz vector persistence and search.
 - Dense/BM25 hybrid retrieval and optional reranking.

@@ -30,6 +30,35 @@ function selectedProvider(env: NodeJS.ProcessEnv): string {
     return env.EMBEDDING_PROVIDER || "VoyageAI";
 }
 
+function defaultModelForProvider(provider: string): string {
+    switch (provider) {
+        case "OpenAI":
+            return "text-embedding-3-small";
+        case "VoyageAI":
+            return "voyage-4-large";
+        case "Gemini":
+            return "gemini-embedding-001";
+        case "Ollama":
+            return "nomic-embed-text";
+        default:
+            return "voyage-4-large";
+    }
+}
+
+function selectedModel(env: NodeJS.ProcessEnv, provider: string): string {
+    if (provider === "Ollama") {
+        return env.OLLAMA_MODEL || env.EMBEDDING_MODEL || defaultModelForProvider(provider);
+    }
+    return env.EMBEDDING_MODEL || defaultModelForProvider(provider);
+}
+
+function selectedDimension(env: NodeJS.ProcessEnv, provider: string): string {
+    if (env.EMBEDDING_OUTPUT_DIMENSION) {
+        return env.EMBEDDING_OUTPUT_DIMENSION;
+    }
+    return provider === "VoyageAI" ? "1024" : "provider default";
+}
+
 function requiredEmbeddingEnv(provider: string): string | null {
     switch (provider) {
         case "OpenAI":
@@ -89,17 +118,25 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
     }
 
     const provider = selectedProvider(env);
+    addCheck(checks, "embedding_provider", "ok", `Embedding provider: ${provider}.`);
+    addCheck(checks, "embedding_model", "ok", `Embedding model: ${selectedModel(env, provider)}.`);
+    addCheck(checks, "embedding_dimension", "ok", `Embedding output dimension: ${selectedDimension(env, provider)}.`);
+
     const requiredKey = requiredEmbeddingEnv(provider);
     if (requiredKey && !env[requiredKey]) {
         addCheck(checks, "embedding_provider_env", "error", `${provider} requires ${requiredKey}.`);
-        nextSteps.push(`Set ${requiredKey}.`);
+        if (provider === "VoyageAI") {
+            nextSteps.push("Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.");
+        } else {
+            nextSteps.push(`Set ${requiredKey}.`);
+        }
     } else {
         addCheck(checks, "embedding_provider_env", "ok", requiredKey ? `${requiredKey} is present.` : `${provider} does not require an API key.`);
     }
 
     if (!env.MILVUS_ADDRESS) {
         addCheck(checks, "milvus_address", "error", "MILVUS_ADDRESS is required for index/search/clear operations.");
-        nextSteps.push("Set MILVUS_ADDRESS.");
+        nextSteps.push("Set MILVUS_ADDRESS to a Zilliz Cloud public endpoint or local Milvus address such as localhost:19530.");
     } else {
         addCheck(checks, "milvus_address", "ok", "MILVUS_ADDRESS is present.");
     }
@@ -108,6 +145,10 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
         addCheck(checks, "milvus_token", "ok", "MILVUS_TOKEN is present.");
     } else {
         addCheck(checks, "milvus_token", "ok", "MILVUS_TOKEN is not set; local/unauthenticated Milvus endpoints are supported.");
+    }
+
+    if (nextSteps.length > 0) {
+        nextSteps.push("Restart your MCP client after changing Satori environment variables.");
     }
 
     return {

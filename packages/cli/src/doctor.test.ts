@@ -10,11 +10,15 @@ test("runDoctor reports missing default VoyageAI and Milvus env", () => {
     });
 
     assert.equal(result.status, "error");
+    assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "Embedding provider: VoyageAI.");
+    assert.equal(result.checks.find((check) => check.name === "embedding_model")?.message, "Embedding model: voyage-4-large.");
+    assert.equal(result.checks.find((check) => check.name === "embedding_dimension")?.message, "Embedding output dimension: 1024.");
     assert.equal(result.checks.some((check) => check.name === "embedding_provider_env" && check.status === "error"), true);
     assert.equal(result.checks.some((check) => check.name === "milvus_address" && check.status === "error"), true);
     assert.deepEqual(result.nextSteps, [
-        "Set VOYAGEAI_API_KEY.",
-        "Set MILVUS_ADDRESS.",
+        "Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.",
+        "Set MILVUS_ADDRESS to a Zilliz Cloud public endpoint or local Milvus address such as localhost:19530.",
+        "Restart your MCP client after changing Satori environment variables.",
     ]);
 });
 
@@ -29,6 +33,9 @@ test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () 
     });
 
     assert.equal(result.status, "ok");
+    assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "Embedding provider: Ollama.");
+    assert.equal(result.checks.find((check) => check.name === "embedding_model")?.message, "Embedding model: nomic-embed-text.");
+    assert.equal(result.checks.find((check) => check.name === "embedding_dimension")?.message, "Embedding output dimension: provider default.");
     assert.equal(result.checks.find((check) => check.name === "embedding_provider_env")?.status, "ok");
     assert.equal(result.checks.find((check) => check.name === "milvus_address")?.status, "ok");
     assert.equal(result.checks.find((check) => check.name === "milvus_token")?.status, "ok");

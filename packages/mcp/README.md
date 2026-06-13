@@ -4,14 +4,20 @@ Read-only MCP server for Satori. It gives coding agents six deterministic tools 
 
 ## Install
 
-Prefer the CLI installer when possible:
+Use the CLI installer for normal setup:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.2 install --client all
-npx -y @zokizuan/satori-cli@0.3.2 doctor
+npx -y @zokizuan/satori-cli@0.4.0 install --client all
+npx -y @zokizuan/satori-cli@0.4.0 doctor
 ```
 
 The CLI installer supports `codex`, `claude`, `opencode`, and `all`. It creates the runtime cache, writes the stable launcher, and writes client config for you. Avoid using `npx` as the resident MCP server command; first-run package resolution can exceed normal MCP startup timeouts.
+
+Advanced direct execution is available through the package bin:
+
+```bash
+npx -y @zokizuan/satori-mcp@4.11.0 --help
+```
 
 ## Agent Workflow
 
@@ -35,6 +41,18 @@ Important defaults:
 ## Runtime Requirements
 
 Configure an embedding provider and Milvus-compatible backend before indexing. Supported embedding providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model, dimension, vector store, or schema requires a reindex because those values are part of the index fingerprint.
+
+Cloud-quality setup:
+
+```bash
+EMBEDDING_PROVIDER=VoyageAI
+EMBEDDING_MODEL=voyage-4-large
+EMBEDDING_OUTPUT_DIMENSION=1024
+VOYAGEAI_API_KEY=your-api-key
+VOYAGEAI_RERANKER_MODEL=rerank-2.5
+MILVUS_ADDRESS=your-milvus-endpoint
+MILVUS_TOKEN=your-milvus-token
+```
 
 The full generated tool reference below is kept in the npm README for MCP clients and package consumers.
 

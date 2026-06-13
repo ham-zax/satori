@@ -2,16 +2,17 @@
 
 Agent-safe code retrieval for developers who use MCP coding agents on real repos.
 
-Satori indexes a repo, keeps that index fresh, and gives agents a fixed six-tool surface for finding code, opening exact spans, checking callers/callees, and reading bounded evidence before an edit. It is read-only from MCP: source edits stay in your normal editor or agent host.
+Satori indexes a repository, keeps the index fresh, and gives agents a fixed six-tool MCP surface for finding code, opening exact spans, checking callers/callees, and reading bounded evidence before an edit. It is read-only from MCP: source edits stay in your editor or agent host.
 
-## Why Developers Use It
+## What You Get
 
 - Find behavior by intent, not just filenames or exact tokens.
 - Keep search focused on runtime code before pulling in docs or tests.
 - Open exact files, line ranges, and symbols instead of dumping broad context.
 - Trace nearby callers/callees when sidecar data is ready.
 - Get explicit `requires_reindex`, stale-state, and noise guidance instead of silent bad context.
-- Install the MCP server and first-party workflow skill with one CLI command.
+- Install the MCP server and first-party workflow skill with one command.
+- Avoid resident MCP startup through `npx`; clients launch an installer-owned Node launcher.
 
 ## Packages
 
@@ -23,11 +24,11 @@ Satori indexes a repo, keeps that index fresh, and gives agents a fixed six-tool
 
 ## Quick Start
 
-Install managed MCP config for your client:
+Install managed MCP config for all supported clients:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.2 install --client all
-npx -y @zokizuan/satori-cli@0.3.2 doctor
+npx -y @zokizuan/satori-cli@0.4.0 install --client all
+npx -y @zokizuan/satori-cli@0.4.0 doctor
 ```
 
 Supported installers: `codex`, `claude`, `opencode`, and `all`.
@@ -41,6 +42,24 @@ It also installs the MCP server once under `~/.satori/mcp-runtime/`, writes a st
 Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
 
 Restart the MCP client after changing config.
+
+## Index a Repo
+
+Once provider env is configured and your MCP client has restarted:
+
+```text
+manage_index action="create" path="/absolute/path/to/repo"
+list_codebases
+```
+
+Then search and navigate with the six-tool workflow:
+
+```text
+search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
+file_outline path="/absolute/path/to/repo" file="src/auth.ts"
+call_graph path="/absolute/path/to/repo" symbolRef={...} direction="both"
+read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
+```
 
 ## Runtime Setup
 
@@ -69,18 +88,7 @@ MILVUS_ADDRESS=localhost:19530
 
 Provider, model, dimension, vector store, and schema are part of the index fingerprint. If they change, Satori blocks search with `requires_reindex` until you rebuild the index.
 
-## Agent Workflow
-
-Use Satori as the investigation layer before edits:
-
-```text
-list_codebases
-manage_index action="create" path="/absolute/path/to/repo"
-search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
-file_outline path="/absolute/path/to/repo" file="src/auth.ts"
-call_graph path="/absolute/path/to/repo" symbolRef={...} direction="both"
-read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
-```
+## Search Defaults
 
 Default search behavior is developer-oriented:
 
@@ -130,6 +138,43 @@ pnpm -C packages/mcp manifest:check
 pnpm --filter @zokizuan/satori-mcp test
 pnpm --filter @zokizuan/satori-cli test
 pnpm test:integration
+```
+
+## Release Commands
+
+Current release versions:
+
+- `@zokizuan/satori-core@1.6.0`
+- `@zokizuan/satori-mcp@4.11.0`
+- `@zokizuan/satori-cli@0.4.0`
+
+Preflight before publishing:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run versions:check
+pnpm build
+pnpm -C packages/mcp docs:check
+pnpm -C packages/mcp manifest:check
+pnpm --filter @zokizuan/satori-mcp test
+pnpm --filter @zokizuan/satori-cli test
+pnpm run release:smoke:mcp
+pnpm run release:smoke:cli
+```
+
+Recommended public release path:
+
+```bash
+git tag v0.5.0
+git push origin v0.5.0
+```
+
+The GitHub Actions release uses npm provenance and requires the `NPM_TOKEN` secret. Use the manual fallback only when you intentionally want to publish from a local authenticated shell without CI provenance:
+
+```bash
+pnpm run release:login
+pnpm run release:all
+pnpm run release:verify
 ```
 
 ## Release Proof

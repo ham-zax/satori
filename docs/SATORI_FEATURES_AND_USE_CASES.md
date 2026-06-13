@@ -1432,7 +1432,7 @@ Goal: configure Satori in Codex, Claude, or OpenCode without manual config editi
 Workflow:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.2 install --client all
+npx -y @zokizuan/satori-cli@0.4.0 install --client all
 ```
 
 Why Satori is better:

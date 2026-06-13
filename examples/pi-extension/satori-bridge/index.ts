@@ -23,7 +23,7 @@ import {
 } from "./recovery.js";
 
 const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-cli@0.3.1";
-const DEFAULT_STARTUP_TIMEOUT_MS = 180_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_CALL_TIMEOUT_MS = 600_000;
 const MANAGE_INDEX_POLL_MIN_TIMEOUT_MS = 180_000;
 const HEALTHCHECK_TIMEOUT_MS = 15_000;

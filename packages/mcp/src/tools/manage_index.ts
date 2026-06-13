@@ -1,6 +1,11 @@
 import { z } from "zod";
-import { McpTool, ToolContext, formatZodError } from "./types.js";
-import { formatManageProviderConfigError, isMissingProviderConfigIssue } from "./setup-errors.js";
+import { McpTool, MissingProviderConfigIssue, ToolContext, ToolResponse, formatZodError } from "./types.js";
+import {
+    classifyVectorBackendError,
+    formatManageProviderConfigError,
+    formatManageVectorBackendError,
+    isMissingProviderConfigIssue
+} from "./setup-errors.js";
 
 const actionEnum = z.enum(["create", "reindex", "sync", "status", "clear"]);
 
@@ -37,32 +42,56 @@ export const manageIndexTool: McpTool = {
             : (input.action === "create" || input.action === "reindex" || input.action === "sync")
                 ? "embedding_vector"
                 : null;
-        const executionContext = providerOperation && ctx.providerRuntime
-            ? await ctx.providerRuntime.requireToolContext(providerOperation)
-            : ctx;
+        let executionContext: ToolContext | MissingProviderConfigIssue;
+        try {
+            executionContext = providerOperation && ctx.providerRuntime
+                ? await ctx.providerRuntime.requireToolContext(providerOperation)
+                : ctx;
+        } catch (error) {
+            const diagnostic = classifyVectorBackendError(error);
+            if (!diagnostic) {
+                throw error;
+            }
+            return formatManageVectorBackendError(input.action, input.path, diagnostic);
+        }
         if (isMissingProviderConfigIssue(executionContext)) {
             return formatManageProviderConfigError(input.action, input.path, executionContext);
         }
 
-        switch (input.action) {
-            case 'create':
-                return executionContext.toolHandlers.handleIndexCodebase(input);
-            case 'reindex':
-                return executionContext.toolHandlers.handleReindexCodebase(input);
-            case 'sync':
-                return executionContext.toolHandlers.handleSyncCodebase(input);
-            case 'status':
-                return executionContext.toolHandlers.handleGetIndexingStatus(input);
-            case 'clear':
-                return executionContext.toolHandlers.handleClearIndex(input);
-            default:
-                return {
-                    content: [{
-                        type: 'text',
-                        text: `Error: Unsupported action '${input.action}'. Use one of: create, reindex, sync, status, clear.`
-                    }],
-                    isError: true
-                };
+        try {
+            let response: ToolResponse;
+            switch (input.action) {
+                case 'create':
+                    response = await executionContext.toolHandlers.handleIndexCodebase(input);
+                    break;
+                case 'reindex':
+                    response = await executionContext.toolHandlers.handleReindexCodebase(input);
+                    break;
+                case 'sync':
+                    response = await executionContext.toolHandlers.handleSyncCodebase(input);
+                    break;
+                case 'status':
+                    response = await executionContext.toolHandlers.handleGetIndexingStatus(input);
+                    break;
+                case 'clear':
+                    response = await executionContext.toolHandlers.handleClearIndex(input);
+                    break;
+                default:
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: `Error: Unsupported action '${input.action}'. Use one of: create, reindex, sync, status, clear.`
+                        }],
+                        isError: true
+                    };
+            }
+            return response;
+        } catch (error) {
+            const diagnostic = classifyVectorBackendError(error);
+            if (!diagnostic) {
+                throw error;
+            }
+            return formatManageVectorBackendError(input.action, input.path, diagnostic);
         }
     }
 };

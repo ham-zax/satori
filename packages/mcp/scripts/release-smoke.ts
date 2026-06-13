@@ -17,7 +17,12 @@ function npmOutput(error: unknown): string {
     return `${stdout}\n${stderr}\n${error.message}`.trim();
 }
 
-function runInitializeSmoke(tarballPath: string, smokeExecDir: string): Promise<void> {
+function runInitializeSmoke(
+    command: string,
+    args: string[],
+    smokeExecDir: string,
+    timeoutMs: number
+): Promise<void> {
     const initializeInput = JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
@@ -33,7 +38,7 @@ function runInitializeSmoke(tarballPath: string, smokeExecDir: string): Promise<
     }) + "\n";
 
     return new Promise((resolve, reject) => {
-        const child = spawn("npm", ["exec", "--yes", "--package", tarballPath, "--", "satori"], {
+        const child = spawn(command, args, {
             cwd: smokeExecDir,
             env: {
                 PATH: process.env.PATH || "",
@@ -77,7 +82,7 @@ function runInitializeSmoke(tarballPath: string, smokeExecDir: string): Promise<
             settled = true;
             terminateChild();
             reject(new Error(`MCP initialize smoke timed out. stdout=${stdout} stderr=${stderr}`));
-        }, 60000);
+        }, timeoutMs);
 
         const settleOk = () => {
             if (settled) return;
@@ -125,6 +130,39 @@ function runInitializeSmoke(tarballPath: string, smokeExecDir: string): Promise<
     });
 }
 
+async function runNpmExecInitializeSmoke(tarballPath: string, smokeExecDir: string): Promise<void> {
+    await runInitializeSmoke("npm", ["exec", "--yes", "--package", tarballPath, "--", "satori"], smokeExecDir, 60000);
+}
+
+async function runDirectRuntimeInitializeSmoke(tarballPath: string, smokeExecDir: string): Promise<void> {
+    const runtimeRoot = path.join(smokeExecDir, ".satori", "mcp-runtime", "release-smoke");
+    execFileSync("npm", [
+        "install",
+        "--prefix",
+        runtimeRoot,
+        "--omit=dev",
+        "--no-package-lock",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        tarballPath,
+    ], {
+        cwd: smokeExecDir,
+        encoding: "utf8",
+        env: {
+            ...process.env,
+            npm_config_package_lock: "false",
+            npm_config_cache: path.join(smokeExecDir, ".npm-cache"),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    const serverEntry = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp", "dist", "index.js");
+    if (!fs.existsSync(serverEntry)) {
+        throw new Error(`Direct runtime smoke could not find server entry: ${serverEntry}`);
+    }
+    await runInitializeSmoke(process.execPath, [serverEntry], smokeExecDir, 30000);
+}
+
 async function main(): Promise<void> {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
@@ -153,8 +191,9 @@ async function main(): Promise<void> {
             },
             stdio: ["ignore", "pipe", "pipe"],
         });
-        await runInitializeSmoke(tarballPath, smokeExecDir);
-        console.log("[release:smoke] MCP tarball starts and responds to initialize with empty provider env.");
+        await runNpmExecInitializeSmoke(tarballPath, smokeExecDir);
+        await runDirectRuntimeInitializeSmoke(tarballPath, smokeExecDir);
+        console.log("[release:smoke] MCP tarball starts via npm exec and direct runtime node entry with empty provider env.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";

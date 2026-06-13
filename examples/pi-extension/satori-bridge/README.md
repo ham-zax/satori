@@ -82,7 +82,7 @@ Example `config.json`:
   "guardRecovery": "auto",
   "forceNpx": false,
   "npmPackage": "@zokizuan/satori-cli@0.3.1",
-  "startupTimeoutMs": 180000,
+  "startupTimeoutMs": 30000,
   "callTimeoutMs": 600000,
   "debug": false
 }
@@ -107,7 +107,7 @@ Example `config.json`:
 
 - Provide required Satori runtime env vars (embedding/vector DB/API keys) through your shell or `envFile`.
 - Tool `path` inputs are absolute paths; `file_outline.file` is repo-relative to the indexed codebase root.
-- Default timeouts are `startupTimeoutMs=180000` and `callTimeoutMs=600000`; `/satori-mcp` health check clamps both to `15000`.
+- Default timeouts are `startupTimeoutMs=30000` and `callTimeoutMs=600000`; `/satori-mcp` health check clamps both to `15000`.
 - Keep global config repo-agnostic; set repo-specific `cwd` / `cliPath` only in project-local `.pi/satori-bridge.json`.
 - Bridge auto-recovery retries once with `SATORI_CLI_STDOUT_GUARD=off` only for protocol/transport failures.
 - Missing `envFile` is non-fatal (bridge continues and uses process/config env values).

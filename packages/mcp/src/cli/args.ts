@@ -59,7 +59,7 @@ function stripFlagPrefix(token: string): string {
 
 function parseGlobalOptions(argv: string[]): { globals: GlobalOptions; rest: string[] } {
     const globals: GlobalOptions = {
-        startupTimeoutMs: 180000,
+        startupTimeoutMs: 30000,
         callTimeoutMs: 600000,
         format: "json",
         debug: false,

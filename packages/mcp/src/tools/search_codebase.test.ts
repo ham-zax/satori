@@ -223,3 +223,76 @@ test('search_codebase returns validation error for invalid arguments', async () 
     assert.equal(response.isError, true);
     assert.match(response.content[0].text, /Invalid arguments for 'search_codebase'/);
 });
+
+test('search_codebase returns structured backend diagnostics when provider runtime fails', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+
+    const ctx = {
+        capabilities,
+        reranker: null,
+        providerRuntime: {
+            requireToolContext: async () => {
+                throw new Error('16 UNAUTHENTICATED: The action is unavailable under current cluster status STOPPED.');
+            }
+        },
+        toolHandlers: {
+            handleSearchCode: async () => {
+                throw new Error('should not run');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const telemetry = await captureTelemetry(async () => {
+        const response = await searchCodebaseTool.execute({
+            path: '/repo',
+            query: 'auth',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 10
+        }, ctx);
+        const payload = JSON.parse(response.content[0].text);
+
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'vector_backend_unavailable');
+        assert.equal(payload.code, 'ZILLIZ_CLUSTER_STOPPED');
+        assert.equal(payload.freshnessDecision, null);
+        assert.deepEqual(payload.results, []);
+        assert.equal(payload.hints.backend.code, 'ZILLIZ_CLUSTER_STOPPED');
+        assert.match(payload.hints.backend.nextSteps.join(' '), /Resume the Zilliz Cloud cluster/);
+        assert.doesNotMatch(payload.message, /UNAUTHENTICATED/);
+    });
+
+    assert.equal(telemetry.length, 1);
+    const payload = JSON.parse(telemetry[0].replace(/^\[TELEMETRY\]\s*/, ''));
+    assert.equal(payload.error, 'ZILLIZ_CLUSTER_STOPPED');
+});
+
+test('search_codebase returns structured backend diagnostics when handler backend call fails', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+
+    const ctx = {
+        capabilities,
+        reranker: null,
+        toolHandlers: {
+            handleSearchCode: async () => {
+                throw new Error('Connection closed');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        scope: 'runtime',
+        resultMode: 'grouped',
+        groupBy: 'symbol',
+        limit: 10
+    }, ctx);
+    const payload = JSON.parse(response.content[0].text);
+
+    assert.equal(payload.status, 'not_ready');
+    assert.equal(payload.reason, 'vector_backend_unavailable');
+    assert.equal(payload.code, 'VECTOR_BACKEND_CONNECTION_CLOSED');
+    assert.deepEqual(payload.results, []);
+});

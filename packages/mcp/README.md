@@ -12,30 +12,7 @@ npx -y @zokizuan/satori-cli@0.3.2 install --client claude
 npx -y @zokizuan/satori-cli@0.3.2 doctor
 ```
 
-Manual MCP config:
-
-```json
-{
-  "mcpServers": {
-    "satori": {
-      "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@4.10.1"],
-      "timeout": 180000,
-      "env": {
-        "EMBEDDING_PROVIDER": "VoyageAI",
-        "EMBEDDING_MODEL": "voyage-4-large",
-        "EMBEDDING_OUTPUT_DIMENSION": "1024",
-        "VOYAGEAI_API_KEY": "your-api-key",
-        "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
-        "MILVUS_ADDRESS": "your-milvus-endpoint",
-        "MILVUS_TOKEN": "your-milvus-token"
-      }
-    }
-  }
-}
-```
-
-Keep startup timeout at `180000` for first-run package resolution.
+The CLI installer creates the runtime cache and writes client config for you. Avoid using `npx` as the resident MCP server command; first-run package resolution can exceed normal MCP startup timeouts.
 
 ## Agent Workflow
 
@@ -88,7 +65,7 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 |---|---|---|---|---|
 | `path` | string | yes |  | ABSOLUTE path to an indexed codebase or subdirectory. |
 | `query` | string | yes |  | Natural-language query. |
-| `scope` | enum("runtime", "mixed", "docs") | no | `"runtime"` | Search scope policy. runtime excludes docs/tests, docs returns docs/tests only, mixed includes all. Docs scope skips reranker by policy in the current tool surface. |
+| `scope` | enum("runtime", "mixed", "docs") | no | `"runtime"` | Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns docs/tests only; mixed includes all. Docs scope skips reranker by policy in the current tool surface. |
 | `resultMode` | enum("grouped", "raw") | no | `"grouped"` | Output mode. grouped returns merged search groups, raw returns chunk hits. |
 | `groupBy` | enum("symbol", "file") | no | `"symbol"` | Grouping strategy in grouped mode. |
 | `rankingMode` | enum("default", "auto_changed_first") | no | `"auto_changed_first"` | Ranking policy. auto_changed_first boosts files changed in the current git working tree when available. |

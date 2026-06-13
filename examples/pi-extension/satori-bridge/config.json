@@ -12,7 +12,7 @@
   "env": {
     "SATORI_CLI_STDOUT_GUARD": "drop"
   },
-  "startupTimeoutMs": 180000,
+  "startupTimeoutMs": 30000,
   "callTimeoutMs": 600000,
   "debug": false
 }

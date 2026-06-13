@@ -320,7 +320,9 @@ export function showHelpMessage(): void {
     console.log(`
 Satori MCP Server
 
-Usage: npx -y @zokizuan/satori-mcp@4.10.1 [options]
+Usage:
+  satori [options]
+  node /path/to/@zokizuan/satori-mcp/dist/index.js [options]
 
 Options:
   --help, -h                          Show this help message
@@ -356,16 +358,19 @@ Environment Variables:
   MCP_WATCH_DEBOUNCE_MS   Debounce window for watch-triggered sync in milliseconds (default: 5000)
 
 Examples:
+  # Install resident MCP config without package-manager startup on every client launch
+  npx -y @zokizuan/satori-cli@0.3.2 install --client codex
+
   # Start MCP server with OpenAI and explicit Milvus address
-  OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 npx -y @zokizuan/satori-mcp@4.10.1
+  OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 satori
 
   # Start MCP server with VoyageAI and specific model
-  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-4-large MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token npx -y @zokizuan/satori-mcp@4.10.1
+  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-4-large MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
 
   # Start MCP server with Gemini and specific model
-  EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token npx -y @zokizuan/satori-mcp@4.10.1
+  EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
 
   # Start MCP server with Ollama and specific model
-  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text MILVUS_ADDRESS=localhost:19530 npx -y @zokizuan/satori-mcp@4.10.1
+  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text MILVUS_ADDRESS=localhost:19530 satori
         `);
 }

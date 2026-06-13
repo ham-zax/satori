@@ -841,7 +841,7 @@ Why it matters:
 
 ### 50. Server Manifest
 
-`server.json` records package name, version, install command, startup timeout, and supported client config paths.
+`server.json` records package name, version, installer bootstrap command, managed-runtime behavior, and supported client config paths.
 
 Why it matters:
 

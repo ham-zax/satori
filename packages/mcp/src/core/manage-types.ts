@@ -18,7 +18,15 @@ export type ManageIndexReason =
     | "preflight_unknown"
     | "backend_timeout"
     | "remote_delete_pending"
-    | "missing_provider_config";
+    | "missing_provider_config"
+    | "vector_backend_unavailable";
+
+export type VectorBackendResponseCode =
+    | "ZILLIZ_CLUSTER_STOPPED"
+    | "VECTOR_BACKEND_AUTH_FAILED"
+    | "VECTOR_BACKEND_UNREACHABLE"
+    | "VECTOR_BACKEND_TIMEOUT"
+    | "VECTOR_BACKEND_CONNECTION_CLOSED";
 
 export type ManageReindexPreflightOutcome =
     | "reindex_required"
@@ -38,7 +46,7 @@ export interface ManageIndexResponseEnvelope {
     path: string;
     status: ManageIndexStatus;
     reason?: ManageIndexReason;
-    code?: "MISSING_PROVIDER_CONFIG";
+    code?: "MISSING_PROVIDER_CONFIG" | VectorBackendResponseCode;
     message: string;
     humanText: string;
     warnings?: WarningCode[];

@@ -68,6 +68,14 @@ Never hallucinate additional tools or write capabilities. Only these tools exist
 5. call_graph
 6. read_file
 
+INSTALLER / STARTUP UX CONTRACT
+
+* Public setup must stay installer-first: use `satori-cli install` for supported clients.
+* Generated resident MCP config must not use `npx`, `npm`, or package-manager resolution on every client startup.
+* Runtime cache paths under `~/.satori/` are implementation details owned by the installer, not primary copy/paste documentation.
+* If a supported-client config format changes, update the installer, generated manifest/docs, and proving tests in the same patch.
+* Manual config examples are advanced fallback material only and must not replace the one-command install path.
+
 TOOL OUTPUT SHAPES (IMPORTANT)
 
 * list_codebases: returns plain text (bucketed Ready/Indexing/Requires Reindex/Failed). Deterministic bucket order and lexicographic path sort.

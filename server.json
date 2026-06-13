@@ -9,9 +9,12 @@
     "command": "npx",
     "args": [
       "-y",
-      "@zokizuan/satori-mcp@4.10.1"
+      "@zokizuan/satori-cli@0.3.2",
+      "install",
+      "--client",
+      "all"
     ],
-    "startupTimeoutMs": 180000
+    "managedRuntime": true
   },
   "clients": {
     "codex": {

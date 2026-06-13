@@ -105,6 +105,13 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
     };
 }
 
+function fakeInstallRuntimeCommand(homeDir: string) {
+    return {
+        command: process.execPath,
+        args: [path.join(homeDir, ".satori", "mcp-runtime", "fake", "node_modules", "@zokizuan", "satori-mcp", "dist", "index.js")],
+    };
+}
+
 test("runCli tools list succeeds and emits JSON to stdout", async () => {
     const io = captureIo();
 
@@ -171,6 +178,7 @@ test("runCli install updates config without starting an MCP session", async () =
             writeStderr: io.writeStderr,
             env: { ...process.env, HOME: homeDir },
             installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
             serverCommand: process.execPath,
             serverArgs: ["/path/that/does/not/exist.mjs"],
             startupTimeoutMs: 100,

@@ -748,6 +748,7 @@ Why it matters:
 
 - Codex,
 - Claude,
+- OpenCode,
 - all supported clients.
 
 Why it matters:
@@ -766,19 +767,17 @@ Why it matters:
 - It avoids deleting unrelated user config.
 - It supports safer upgrade/uninstall flows.
 
-### 44. Packaged First-Party Skills
+### 44. Packaged First-Party Skill
 
-Satori ships first-party agent skills:
+Satori ships one first-party agent skill:
 
-- `satori-search`
-- `satori-navigation`
-- `satori-indexing`
+- `satori`
 
 Why it matters:
 
 - The recommended workflow is installed alongside the server.
-- Skills do not add new MCP tools.
-- Agents learn when to search, navigate, and remediate index state.
+- The skill does not add new MCP tools.
+- Agents learn when to search, navigate, and remediate index state from one workflow entrypoint.
 
 ### 45. Direct Shell Tool Invocation
 
@@ -1428,20 +1427,19 @@ Tradeoffs:
 
 ### Use Case: MCP Client Installation
 
-Goal: configure Satori in Codex or Claude without manual config editing.
+Goal: configure Satori in Codex, Claude, or OpenCode without manual config editing.
 
 Workflow:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.2 install --client codex
-npx -y @zokizuan/satori-cli@0.3.2 install --client claude
+npx -y @zokizuan/satori-cli@0.3.2 install --client all
 ```
 
 Why Satori is better:
 
 - Managed entries are owned and removable.
 - First-party skills are copied with the config.
-- Installed package versions are pinned.
+- Installed package versions are resolved once and launched through the installer-owned stable launcher.
 
 ### Use Case: CLI Automation
 
@@ -2067,7 +2065,7 @@ Primary evidence files:
 - `packages/mcp/src/server/stdio-safety.ts`: MCP stdout/stderr protection.
 - `packages/mcp/src/telemetry/search.ts`: search telemetry.
 - `packages/cli/src/*.ts`: CLI installer, direct tool calls, schema-backed flags, output contract.
-- `packages/mcp/assets/skills/*/SKILL.md`: first-party Satori skills.
+- `packages/mcp/assets/skills/satori/SKILL.md`: first-party Satori skill.
 - `examples/pi-extension/satori-bridge`: PI bridge through CLI delegation.
 - `server.json`: package install manifest.
 - `scripts/check-version-freshness.mjs`: public version freshness guard.

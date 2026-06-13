@@ -33,7 +33,7 @@ export interface ResolveRawArgsOptions {
     stdinTimeoutMs: number;
 }
 
-export type InstallClient = "all" | "claude" | "codex";
+export type InstallClient = "all" | "claude" | "codex" | "opencode";
 
 const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "install", "uninstall"]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
@@ -163,8 +163,8 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
         const token = args[i];
         if (token === "--client") {
             const next = args[i + 1];
-            if (next !== "all" && next !== "claude" && next !== "codex") {
-                throw new CliError("E_USAGE", "--client must be one of: all, claude, codex.", 2);
+            if (next !== "all" && next !== "claude" && next !== "codex" && next !== "opencode") {
+                throw new CliError("E_USAGE", "--client must be one of: all, claude, codex, opencode.", 2);
             }
             client = next;
             i += 1;

@@ -28,8 +28,7 @@ pids
 *.pid
 *.seed
 *.pid.lock
-
-
+.satori/
 
 # IDE
 # .vscode/
@@ -67,7 +66,8 @@ CLAUDE.md
 .serena/
 .omc/
 
-# Local opencode config (may contain secrets)
+# Local MCP/client config (may contain secrets)
+opencode.json
 opencode.jsonc
 
 evaluation/repos

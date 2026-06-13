@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reduce idle watcher cost, make Satori easier to install and remove, and ship first-party skills that steer agents onto the six-tool workflow.
+**Goal:** Reduce idle watcher cost, make Satori easier to install and remove, and ship one first-party skill that steers agents onto the six-tool workflow.
 
-**Architecture:** Keep the existing six-tool MCP surface unchanged. Watch state remains MCP-owned and session-scoped inside `SyncManager`, install and uninstall remain CLI concerns in `packages/mcp`, and client skills are packaged assets copied by the installer rather than runtime-generated content.
+**Architecture:** Keep the existing six-tool MCP surface unchanged. Watch state remains MCP-owned and session-scoped inside `SyncManager`, install and uninstall remain CLI concerns in `packages/mcp`, and the client skill is a packaged asset copied by the installer rather than runtime-generated content.
 
 **Tech Stack:** TypeScript, Node 20, pnpm, MCP SDK, chokidar, GitHub Actions
 
@@ -126,7 +126,7 @@
 - Read: `README.md`
 
 - [ ] **Step 1: Decide the published install target**
-  Standardize on one install target for Phase 1. Preferred order: published npm package with `npx -y @zokizuan/satori-mcp`, then repo-local dev mode as an explicit fallback.
+  Standardize on one installer-owned launcher target for Phase 1. Preferred order: `satori-cli install` resolves the published package once and writes resident client config that runs the stable Node launcher; repo-local dev mode remains an explicit fallback.
 
 - [ ] **Step 2: Add manifest generation**
   Create a script that emits `server.json` from package version and install command metadata so the manifest is generated, not hand-edited.
@@ -153,25 +153,23 @@
   git commit -m "build: add install metadata for satori-mcp"
   ```
 
-## Chunk 3: First-Party Client Skills
+## Chunk 3: First-Party Client Skill
 
-### Task 5: Extract and package the first three Satori skills
+### Task 5: Extract and package the Satori skill
 
 **Files:**
-- Create: `packages/mcp/assets/skills/satori-search/SKILL.md`
-- Create: `packages/mcp/assets/skills/satori-navigation/SKILL.md`
-- Create: `packages/mcp/assets/skills/satori-indexing/SKILL.md`
+- Create: `packages/mcp/assets/skills/satori/SKILL.md`
 - Read: `examples/pi-extension/satori-bridge/skills/satori-cli/SKILL.md`
 - Read: `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md`
 
-- [ ] **Step 1: Split the current bridge skill into three focused skills**
-  Define one skill for semantic search defaults, one for symbol navigation (`file_outline`, `call_graph`, `read_file`), and one for index lifecycle and remediation (`manage_index`, `list_codebases`).
+- [ ] **Step 1: Condense the bridge workflow into one focused skill**
+  Define one skill with internal sections for semantic search defaults, symbol navigation (`file_outline`, `call_graph`, `read_file`), and index lifecycle/remediation (`manage_index`, `list_codebases`).
 
-- [ ] **Step 2: Keep each skill contract-bound**
-  Ensure every skill uses only the six shipped tools and the exact status and remediation semantics from the authoritative behavior spec.
+- [ ] **Step 2: Keep the skill contract-bound**
+  Ensure the skill uses only the six shipped tools and the exact status and remediation semantics from the authoritative behavior spec.
 
 - [ ] **Step 3: Add installer copy rules**
-  Update the installer module to copy these skill assets into supported client skill directories during install and remove only Satori-owned skills during uninstall.
+  Update the installer module to copy the skill asset into supported client skill directories during install and remove only Satori-owned skill files during uninstall.
 
 - [ ] **Step 4: Add focused install-skill tests**
   Extend `packages/mcp/src/cli/install.test.ts` to verify skills are copied, overwritten safely on reinstall, and removed cleanly on uninstall without deleting unrelated files.
@@ -201,8 +199,8 @@
 - [ ] **Step 2: Document install and uninstall workflows**
   Add supported client targets, config locations, dry-run behavior, and packaged-skill behavior to the root and MCP READMEs.
 
-- [ ] **Step 3: Document the first-party skill set**
-  List the three shipped skills, their intended trigger patterns, and the fact that they preserve the six-tool surface without adding new tools.
+- [ ] **Step 3: Document the first-party skill**
+  List the shipped skill, its intended trigger patterns, and the fact that it preserves the six-tool surface without adding new tools.
 
 - [ ] **Step 4: Run documentation verification**
   Run:
@@ -248,4 +246,3 @@
   1. explicit watch-list behavior
   2. installer and packaging
   3. packaged skills
-

@@ -23,7 +23,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@zokizuan/satori-mcp": "workspace:*"
+    "@zokizuan/satori-mcp": "workspace:*",
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

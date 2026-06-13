@@ -88,8 +88,8 @@ function buildHelpPayload() {
     return {
         usage: "satori-cli <command>",
         commands: [
-            "install [--client all|codex|claude] [--dry-run]",
-            "uninstall [--client all|codex|claude] [--dry-run]",
+            "install [--client all|codex|claude|opencode] [--dry-run]",
+            "uninstall [--client all|codex|claude|opencode] [--dry-run]",
             "doctor",
             "tools list",
             "tool call <toolName> --args-json '<json>'",

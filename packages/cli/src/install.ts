@@ -3,16 +3,36 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { CliError } from "./errors.js";
 import type { InstallClient } from "./args.js";
 import { resolveManagedPackageSpecifier } from "./managed-package.js";
 
 const MANAGED_BLOCK_START = "# >>> satori-cli managed satori start >>>";
 const MANAGED_BLOCK_END = "# <<< satori-cli managed satori end <<<";
-const OWNED_SKILL_DIRS = ["satori-search", "satori-navigation", "satori-indexing"] as const;
-const LEGACY_MANAGED_TIMEOUT_MS = 180000;
+const INSTRUCTIONS_BLOCK_START = "<!-- satori-mcp:start -->";
+const INSTRUCTIONS_BLOCK_END = "<!-- satori-mcp:end -->";
+const OWNED_SKILL_DIRS = ["satori"] as const;
 const MANAGED_RUNTIME_DIR = "mcp-runtime";
-const MANAGED_PACKAGE_NAME = "@zokizuan/satori-mcp";
+const MANAGED_BIN_DIR = "bin";
+const MANAGED_LAUNCHER_FILE = "satori-mcp.js";
+const OPENCODE_INSTRUCTIONS = `# Satori MCP
+
+This project uses Satori MCP for semantic code search, deterministic navigation, and index lifecycle management.
+
+## Priority Order
+1. \`search_codebase\` - find candidate code by behavior, concept, or symbol
+2. \`file_outline\` - lock exact symbol spans before reading or editing
+3. \`call_graph\` - inspect callers and callees when supported
+4. \`read_file\` - open exact spans or fallback windows
+5. \`manage_index\` - create, sync, reindex, or inspect index status
+
+## Rules
+- Prefer Satori tools before grep/glob for code discovery.
+- If a tool returns \`requires_reindex\`, run \`manage_index(action="reindex")\` and retry the original call.
+- Treat \`navigationFallback\` as authoritative when call graph is unavailable.
+- Read the relevant implementation and call sites before editing behavior.
+`;
 
 type ExecFileSyncLike = typeof execFileSync;
 
@@ -40,9 +60,11 @@ export interface InstallCommandOptions {
 export interface ClientInstallResult {
     client: ClientName;
     configPath: string;
-    skillsPath: string;
+    skillsPath?: string;
+    instructionsPath?: string;
     configChanged: boolean;
     skillsChanged: boolean;
+    instructionsChanged: boolean;
     status: "updated" | "unchanged";
     dryRun: boolean;
 }
@@ -57,13 +79,22 @@ export interface InstallCommandResult {
 interface ClientTarget {
     client: ClientName;
     configPath: string;
-    skillsPath: string;
+    companion: CompanionTarget;
+}
+
+type CompanionTarget =
+    | { kind: "skills"; path: string }
+    | { kind: "instructions"; path: string };
+
+interface CompanionMutation {
+    changed: boolean;
+    apply: () => void;
 }
 
 interface PreparedMutation {
     target: ClientTarget;
     configChanged: boolean;
-    skillsChanged: boolean;
+    companionChanged: boolean;
     apply: () => void;
 }
 
@@ -91,12 +122,26 @@ function resolveClientTargets(homeDir: string): ClientTarget[] {
         {
             client: "codex",
             configPath: path.join(homeDir, ".codex", "config.toml"),
-            skillsPath: path.join(homeDir, ".codex", "skills"),
+            companion: {
+                kind: "skills",
+                path: path.join(homeDir, ".codex", "skills"),
+            },
         },
         {
             client: "claude",
             configPath: path.join(homeDir, ".claude", "settings.json"),
-            skillsPath: path.join(homeDir, ".claude", "skills"),
+            companion: {
+                kind: "skills",
+                path: path.join(homeDir, ".claude", "skills"),
+            },
+        },
+        {
+            client: "opencode",
+            configPath: path.join(homeDir, ".config", "opencode", "opencode.json"),
+            companion: {
+                kind: "instructions",
+                path: path.join(homeDir, ".config", "opencode", "AGENTS.md"),
+            },
         },
     ];
 }
@@ -174,10 +219,75 @@ function resolveRuntimeEntryPath(packageRoot: string, packageJson?: { bin?: unkn
     return path.resolve(packageRoot, relativeEntry);
 }
 
+function resolveLauncherPath(homeDir: string): string {
+    return path.join(homeDir, ".satori", MANAGED_BIN_DIR, MANAGED_LAUNCHER_FILE);
+}
+
 function plannedManagedRuntimeCommand(homeDir: string, packageSpecifier: string): ManagedRuntimeCommand {
     return {
         command: process.execPath,
         args: [resolveRuntimeEntryPath(resolveRuntimePackageRoot(homeDir, packageSpecifier))],
+    };
+}
+
+function managedClientCommand(homeDir: string): ManagedRuntimeCommand {
+    return {
+        command: process.execPath,
+        args: [resolveLauncherPath(homeDir)],
+    };
+}
+
+function buildLauncherScript(runtimeCommand: ManagedRuntimeCommand): string {
+    return [
+        "#!/usr/bin/env node",
+        "",
+        "const { spawn } = require(\"node:child_process\");",
+        "",
+        `const command = ${JSON.stringify(runtimeCommand.command)};`,
+        `const baseArgs = ${JSON.stringify(runtimeCommand.args)};`,
+        "const child = spawn(command, [...baseArgs, ...process.argv.slice(2)], {",
+        "  stdio: \"inherit\",",
+        "  env: process.env,",
+        "});",
+        "",
+        "child.on(\"error\", (error) => {",
+        "  console.error(`Failed to start Satori MCP runtime: ${error.message}`);",
+        "  process.exit(1);",
+        "});",
+        "",
+        "child.on(\"exit\", (code, signal) => {",
+        "  if (signal) {",
+        "    console.error(`Satori MCP runtime exited from signal ${signal}`);",
+        "    process.exit(1);",
+        "  }",
+        "  process.exit(code ?? 0);",
+        "});",
+        "",
+    ].join("\n");
+}
+
+function writeTextFileAtomic(filePath: string, content: string, mode?: number): void {
+    ensureParentDir(filePath);
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tempPath, content, "utf8");
+    if (mode !== undefined) {
+        fs.chmodSync(tempPath, mode);
+    }
+    fs.renameSync(tempPath, filePath);
+}
+
+function prepareLauncherInstall(homeDir: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    const launcherPath = resolveLauncherPath(homeDir);
+    const current = readTextIfExists(launcherPath);
+    const next = buildLauncherScript(runtimeCommand);
+    return {
+        changed: current !== next,
+        apply: () => {
+            if (current === next) {
+                return;
+            }
+            writeTextFileAtomic(launcherPath, next, 0o755);
+        },
     };
 }
 
@@ -241,12 +351,6 @@ function installManagedRuntimeCommand(
         throw new CliError("E_USAGE", `Installed Satori MCP runtime entry does not exist: ${command.args[0]}`, 2);
     }
     return command;
-}
-
-function runtimeCommandsEqual(left: ManagedRuntimeCommand, right: ManagedRuntimeCommand): boolean {
-    return left.command === right.command
-        && left.args.length === right.args.length
-        && left.args.every((arg, index) => arg === right.args[index]);
 }
 
 function buildCodexManagedBlock(runtimeCommand: ManagedRuntimeCommand): string {
@@ -358,8 +462,20 @@ function buildClaudeServerConfig(runtimeCommand: ManagedRuntimeCommand): Record<
     };
 }
 
-function isManagedPackageSpecifier(value: unknown): value is string {
-    return typeof value === "string" && /^@zokizuan\/satori-mcp@.+$/.test(value);
+function isManagedLauncherPath(value: unknown): value is string {
+    return typeof value === "string" && value.replace(/\\/g, "/").endsWith(`/.satori/${MANAGED_BIN_DIR}/${MANAGED_LAUNCHER_FILE}`);
+}
+
+function isManagedCommandParts(command: unknown, args: unknown): boolean {
+    if (!Array.isArray(args)) {
+        return false;
+    }
+
+    const entryPath = args[0];
+    return typeof command === "string"
+        && command.length > 0
+        && args.length === 1
+        && isManagedLauncherPath(entryPath);
 }
 
 function isManagedClaudeEntry(value: unknown): value is Record<string, unknown> {
@@ -367,33 +483,7 @@ function isManagedClaudeEntry(value: unknown): value is Record<string, unknown> 
         return false;
     }
     const entry = value as Record<string, unknown>;
-    if (!Array.isArray(entry.args)) {
-        return false;
-    }
-    if (entry.command === "npx") {
-        if (entry.timeout !== undefined && entry.timeout !== LEGACY_MANAGED_TIMEOUT_MS) {
-            return false;
-        }
-        if (entry.args.length === 2) {
-            return entry.args[0] === "-y" && isManagedPackageSpecifier(entry.args[1]);
-        }
-        if (entry.args.length === 4) {
-            return entry.args[0] === "-y"
-                && entry.args[1] === "--package"
-                && isManagedPackageSpecifier(entry.args[2])
-                && entry.args[3] === "satori";
-        }
-        return false;
-    }
-
-    const command = entry.command;
-    const entryPath = entry.args[0];
-    if (typeof command !== "string" || command.length === 0 || entry.args.length !== 1 || typeof entryPath !== "string") {
-        return false;
-    }
-    const normalizedEntryPath = entryPath.replace(/\\/g, "/");
-    return normalizedEntryPath.includes("/.satori/mcp-runtime/")
-        && normalizedEntryPath.includes(`/node_modules/${MANAGED_PACKAGE_NAME}/`);
+    return isManagedCommandParts(entry.command, entry.args);
 }
 
 function prepareClaudeInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
@@ -475,6 +565,101 @@ function prepareClaudeUninstall(filePath: string): FileMutation {
     };
 }
 
+function parseJsoncObject(filePath: string, content: string): Record<string, unknown> {
+    const errors: ParseError[] = [];
+    const parsed = parseJsonc(content, errors, { allowTrailingComma: true, disallowComments: false });
+    if (errors.length > 0) {
+        throw new CliError("E_USAGE", `Failed to parse JSONC config at ${filePath}.`, 2);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new CliError("E_USAGE", `Expected top-level JSON object in ${filePath}.`, 2);
+    }
+    return parsed as Record<string, unknown>;
+}
+
+function buildOpenCodeServerConfig(runtimeCommand: ManagedRuntimeCommand): Record<string, unknown> {
+    return {
+        enabled: true,
+        type: "local",
+        command: [runtimeCommand.command, ...runtimeCommand.args],
+    };
+}
+
+function isManagedOpenCodeEntry(value: unknown): value is Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return false;
+    }
+    const entry = value as Record<string, unknown>;
+    if (Array.isArray(entry.command)) {
+        const [command, ...args] = entry.command;
+        return isManagedCommandParts(command, args);
+    }
+    return isManagedCommandParts(entry.command, entry.args);
+}
+
+function mutateJsonc(filePath: string, current: string, pathSegments: Array<string | number>, value: unknown): FileMutation {
+    const edits = modify(current, pathSegments, value, {
+        formattingOptions: {
+            insertSpaces: true,
+            tabSize: 2,
+            eol: "\n",
+        },
+    });
+    const next = applyEdits(current, edits);
+    return {
+        changed: next !== current,
+        apply: () => {
+            if (next === current) {
+                return;
+            }
+            ensureParentDir(filePath);
+            fs.writeFileSync(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+        },
+    };
+}
+
+function prepareOpenCodeInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    const current = readTextIfExists(filePath) ?? "{}\n";
+    const currentObject = parseJsoncObject(filePath, current);
+    const mcpValue = currentObject.mcp;
+    if (mcpValue !== undefined && (!mcpValue || typeof mcpValue !== "object" || Array.isArray(mcpValue))) {
+        throw new CliError("E_USAGE", `Expected mcp to be an object in ${filePath}.`, 2);
+    }
+    const existingSatori = (mcpValue as Record<string, unknown> | undefined)?.satori;
+    if (existingSatori !== undefined && !isManagedOpenCodeEntry(existingSatori)) {
+        throw new CliError(
+            "E_USAGE",
+            `Refusing to overwrite unmanaged Satori config in ${filePath}. Remove mcp.satori manually or align it to the managed Satori form first.`,
+            2
+        );
+    }
+    return mutateJsonc(filePath, current, ["mcp", "satori"], buildOpenCodeServerConfig(runtimeCommand));
+}
+
+function prepareOpenCodeUninstall(filePath: string): FileMutation {
+    const current = readTextIfExists(filePath);
+    if (!current) {
+        return { changed: false, apply: () => {} };
+    }
+    const currentObject = parseJsoncObject(filePath, current);
+    const mcpValue = currentObject.mcp;
+    if (!mcpValue || typeof mcpValue !== "object" || Array.isArray(mcpValue)) {
+        return { changed: false, apply: () => {} };
+    }
+    const existingSatori = (mcpValue as Record<string, unknown>).satori;
+    if (existingSatori === undefined) {
+        return { changed: false, apply: () => {} };
+    }
+    if (!isManagedOpenCodeEntry(existingSatori)) {
+        throw new CliError(
+            "E_USAGE",
+            `Refusing to remove unmanaged Satori config in ${filePath}. Remove mcp.satori manually instead.`,
+            2
+        );
+    }
+    return mutateJsonc(filePath, current, ["mcp", "satori"], undefined);
+}
+
 function prepareSkillInstall(skillsPath: string, skillAssetRoot: string): FileMutation {
     const writes: Array<{ destinationDir: string; destinationFile: string; content: string }> = [];
     let changed = false;
@@ -519,31 +704,115 @@ function prepareSkillRemoval(skillsPath: string): FileMutation {
     };
 }
 
+function buildManagedInstructionsBlock(): string {
+    return [
+        INSTRUCTIONS_BLOCK_START,
+        OPENCODE_INSTRUCTIONS.trim(),
+        INSTRUCTIONS_BLOCK_END,
+        "",
+    ].join("\n");
+}
+
+function prepareInstructionsInstall(filePath: string): FileMutation {
+    const current = readTextIfExists(filePath) ?? "";
+    const block = buildManagedInstructionsBlock();
+    let next = current;
+    if (current.includes(INSTRUCTIONS_BLOCK_START) && current.includes(INSTRUCTIONS_BLOCK_END)) {
+        next = current.replace(
+            new RegExp(`${escapeRegExp(INSTRUCTIONS_BLOCK_START)}[\\s\\S]*?${escapeRegExp(INSTRUCTIONS_BLOCK_END)}\\n?`, "m"),
+            block
+        );
+    } else if (current.trim().length === 0) {
+        next = block;
+    } else {
+        next = `${normalizeTrailingNewline(current)}\n${block}`;
+    }
+
+    return {
+        changed: next !== current,
+        apply: () => {
+            if (next === current) {
+                return;
+            }
+            ensureParentDir(filePath);
+            fs.writeFileSync(filePath, next, "utf8");
+        },
+    };
+}
+
+function prepareInstructionsRemoval(filePath: string): FileMutation {
+    const current = readTextIfExists(filePath);
+    if (!current || !current.includes(INSTRUCTIONS_BLOCK_START) || !current.includes(INSTRUCTIONS_BLOCK_END)) {
+        return { changed: false, apply: () => {} };
+    }
+
+    const next = current
+        .replace(new RegExp(`\\n?${escapeRegExp(INSTRUCTIONS_BLOCK_START)}[\\s\\S]*?${escapeRegExp(INSTRUCTIONS_BLOCK_END)}\\n?`, "m"), "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .replace(/^\n+/, "");
+
+    return {
+        changed: next !== current,
+        apply: () => {
+            if (next === current) {
+                return;
+            }
+            fs.writeFileSync(filePath, next, "utf8");
+        },
+    };
+}
+
+function prepareCompanionMutation(
+    companion: CompanionTarget,
+    command: InstallCommandInput,
+    skillAssetRoot: string
+): CompanionMutation {
+    if (companion.kind === "skills") {
+        return command.kind === "install"
+            ? prepareSkillInstall(companion.path, skillAssetRoot)
+            : prepareSkillRemoval(companion.path);
+    }
+    return command.kind === "install"
+        ? prepareInstructionsInstall(companion.path)
+        : prepareInstructionsRemoval(companion.path);
+}
+
+function prepareConfigMutation(
+    target: ClientTarget,
+    command: InstallCommandInput,
+    runtimeCommand: ManagedRuntimeCommand
+): FileMutation {
+    if (target.client === "codex") {
+        return command.kind === "install"
+            ? prepareCodexInstall(target.configPath, runtimeCommand)
+            : prepareCodexUninstall(target.configPath);
+    }
+    if (target.client === "claude") {
+        return command.kind === "install"
+            ? prepareClaudeInstall(target.configPath, runtimeCommand)
+            : prepareClaudeUninstall(target.configPath);
+    }
+    return command.kind === "install"
+        ? prepareOpenCodeInstall(target.configPath, runtimeCommand)
+        : prepareOpenCodeUninstall(target.configPath);
+}
+
 function prepareMutation(
     target: ClientTarget,
     command: InstallCommandInput,
     runtimeCommand: ManagedRuntimeCommand,
     skillAssetRoot: string
 ): PreparedMutation {
-    const configMutation = command.kind === "install"
-        ? target.client === "codex"
-            ? prepareCodexInstall(target.configPath, runtimeCommand)
-            : prepareClaudeInstall(target.configPath, runtimeCommand)
-        : target.client === "codex"
-            ? prepareCodexUninstall(target.configPath)
-            : prepareClaudeUninstall(target.configPath);
-
-    const skillsMutation = command.kind === "install"
-        ? prepareSkillInstall(target.skillsPath, skillAssetRoot)
-        : prepareSkillRemoval(target.skillsPath);
+    const configMutation = prepareConfigMutation(target, command, runtimeCommand);
+    const companionMutation = prepareCompanionMutation(target.companion, command, skillAssetRoot);
 
     return {
         target,
         configChanged: configMutation.changed,
-        skillsChanged: skillsMutation.changed,
+        companionChanged: companionMutation.changed,
         apply: () => {
             configMutation.apply();
-            skillsMutation.apply();
+            companionMutation.apply();
         },
     };
 }
@@ -555,21 +824,23 @@ export function executeInstallCommand(
     const homeDir = options.homeDir ?? os.homedir();
     const packageSpecifier = options.packageSpecifier ?? resolveDefaultPackageSpecifier();
     const skillAssetRoot = options.skillAssetRoot ?? resolveDefaultSkillAssetRoot();
-    let runtimeCommand = options.runtimeCommand ?? plannedManagedRuntimeCommand(homeDir, packageSpecifier);
+    const plannedRuntimeCommand = options.runtimeCommand ?? plannedManagedRuntimeCommand(homeDir, packageSpecifier);
+    const clientCommand = managedClientCommand(homeDir);
+    let launcherMutation = command.kind === "install"
+        ? prepareLauncherInstall(homeDir, plannedRuntimeCommand)
+        : { changed: false, apply: () => {} };
 
-    let prepared = selectTargets(homeDir, command.client).map((target) => (
-        prepareMutation(target, command, runtimeCommand, skillAssetRoot)
+    const prepared = selectTargets(homeDir, command.client).map((target) => (
+        prepareMutation(target, command, clientCommand, skillAssetRoot)
     ));
 
     if (!command.dryRun) {
         if (command.kind === "install" && !options.runtimeCommand) {
             const installedRuntimeCommand = installManagedRuntimeCommand(homeDir, packageSpecifier, options.execFileSyncImpl ?? execFileSync);
-            if (!runtimeCommandsEqual(runtimeCommand, installedRuntimeCommand)) {
-                runtimeCommand = installedRuntimeCommand;
-                prepared = selectTargets(homeDir, command.client).map((target) => (
-                    prepareMutation(target, command, runtimeCommand, skillAssetRoot)
-                ));
-            }
+            launcherMutation = prepareLauncherInstall(homeDir, installedRuntimeCommand);
+        }
+        if (command.kind === "install") {
+            launcherMutation.apply();
         }
         for (const mutation of prepared) {
             mutation.apply();
@@ -583,10 +854,12 @@ export function executeInstallCommand(
         results: prepared.map((mutation) => ({
             client: mutation.target.client,
             configPath: mutation.target.configPath,
-            skillsPath: mutation.target.skillsPath,
+            skillsPath: mutation.target.companion.kind === "skills" ? mutation.target.companion.path : undefined,
+            instructionsPath: mutation.target.companion.kind === "instructions" ? mutation.target.companion.path : undefined,
             configChanged: mutation.configChanged,
-            skillsChanged: mutation.skillsChanged,
-            status: mutation.configChanged || mutation.skillsChanged ? "updated" : "unchanged",
+            skillsChanged: mutation.target.companion.kind === "skills" ? mutation.companionChanged : false,
+            instructionsChanged: mutation.target.companion.kind === "instructions" ? mutation.companionChanged : false,
+            status: mutation.configChanged || mutation.companionChanged || launcherMutation.changed ? "updated" : "unchanged",
             dryRun: command.dryRun,
         })),
     };

@@ -40,6 +40,15 @@ test("parseCliArgs supports install with explicit client and dry-run", () => {
     assert.equal(parsed.command.dryRun, true);
 });
 
+test("parseCliArgs supports install with OpenCode client", () => {
+    const parsed = parseCliArgs(["install", "--client", "opencode"]);
+    assert.equal(parsed.command.kind, "install");
+    if (parsed.command.kind !== "install") {
+        assert.fail("Expected install command parsing");
+    }
+    assert.equal(parsed.command.client, "opencode");
+});
+
 test("parseCliArgs supports doctor command", () => {
     const parsed = parseCliArgs(["doctor"]);
     assert.equal(parsed.command.kind, "doctor");
@@ -75,6 +84,6 @@ test("parseCliArgs supports uninstall with explicit client", () => {
 test("parseCliArgs rejects unsupported install clients", () => {
     assert.throws(
         () => parseCliArgs(["install", "--client", "cursor"]),
-        /--client must be one of: all, claude, codex/
+        /--client must be one of: all, claude, codex, opencode/
     );
 });

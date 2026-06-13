@@ -402,9 +402,9 @@ Recent vs legacy:
 
 1) `callGraphHint` semantics
 - Trigger: grouped search result construction.
-- Effect: returns `{supported:true,symbolRef}` when symbol+language supported; otherwise `{supported:false,reason}`.
+- Effect: returns `{supported:true,symbolRef,validated:true,validatedAt,sidecarBuiltAt}` only when the symbol id is present in the loaded v3 sidecar for the same file; otherwise returns `{supported:false,reason}`.
 - Observability: `results[].callGraphHint`.
-- Determinism: symbolRef built from representative chunk; unsupported reasons limited and stable.
+- Determinism: supported symbolRef uses sidecar file/span metadata; unsupported reasons are limited to `missing_symbol`, `unsupported_language`, `missing_sidecar`, and `stale_symbol_ref`.
 - Performance: no graph query until explicit `call_graph` call.
 
 2) `navigationFallback`

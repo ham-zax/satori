@@ -4,6 +4,7 @@ type ConsoleMethodName = "log" | "info" | "warn" | "error" | "debug";
 
 interface ConsolePatchOptions {
     writeToStderr?: (text: string) => void;
+    methods?: ConsoleMethodName[];
 }
 
 interface CliStdoutRedirectOptions {
@@ -54,6 +55,7 @@ export function installConsoleToStderrPatch(options: ConsolePatchOptions = {}): 
     const writeToStderr = options.writeToStderr || ((text: string) => {
         process.stderr.write(text);
     });
+    const methods = options.methods || ["log", "info", "warn", "error", "debug"];
     const original: Partial<Record<ConsoleMethodName, (...args: unknown[]) => void>> = {};
 
     const patchMethod = (method: ConsoleMethodName) => {
@@ -63,11 +65,9 @@ export function installConsoleToStderrPatch(options: ConsolePatchOptions = {}): 
         };
     };
 
-    patchMethod("log");
-    patchMethod("info");
-    patchMethod("warn");
-    patchMethod("error");
-    patchMethod("debug");
+    for (const method of methods) {
+        patchMethod(method);
+    }
 
     return () => {
         for (const method of Object.keys(original) as ConsoleMethodName[]) {
@@ -95,10 +95,11 @@ export function installCliStdoutRedirect(options: CliStdoutRedirectOptions = {})
                 writeToStderr(ensureTrailingNewline(`[STDOUT_BLOCKED] ${text}`));
                 return;
             }
-            writeToStderr(ensureTrailingNewline(`[STDOUT_BLOCKED] dropped len=${text.length}`));
             return;
         }
-        writeToStderr(ensureTrailingNewline(`[STDOUT_BLOCKED_BINARY len=${chunkLength(chunk)}]`));
+        if (mode === "redirect") {
+            writeToStderr(ensureTrailingNewline(`[STDOUT_BLOCKED_BINARY len=${chunkLength(chunk)}]`));
+        }
     };
 
     const patch = (methodName: string, replacement: (...args: unknown[]) => unknown): void => {

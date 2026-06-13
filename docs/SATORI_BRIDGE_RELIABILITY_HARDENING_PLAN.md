@@ -26,7 +26,7 @@ This plan keeps the bridge **CLI-only** and fixes reliability in two layers:
 
 `installCliStdoutRedirect` currently patches low-level stdout internals (`_write`/`_writev`) in addition to top-level methods. This can intercept bytes used by MCP stdio framing, causing:
 
-- `[STDOUT_BLOCKED_BINARY ...]`
+- `[STDOUT_BLOCKED_BINARY ...]` when guard redirect diagnostics are enabled
 - transport timeout / `E_PROTOCOL_FAILURE`
 - bridge command failure (`Operation aborted`, timeout, parse errors)
 
@@ -35,6 +35,7 @@ This plan keeps the bridge **CLI-only** and fixes reliability in two layers:
 ### MCP Runtime
 
 - Keep `SATORI_CLI_STDOUT_GUARD=drop|redirect|off`.
+- `drop` is quiet by default; `redirect` emits deterministic `[STDOUT_BLOCKED...]` diagnostics for debugging.
 - In CLI mode, if guard is `off`, emit one stable stderr line once per server process:
   - `[STDOUT_GUARD_DISABLED] SATORI_CLI_STDOUT_GUARD=off`
 

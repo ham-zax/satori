@@ -76,7 +76,7 @@ import {
     ManageReindexPreflightOutcome,
 } from "./manage-types.js";
 import { WARNING_CODES, WarningCode } from "./warnings.js";
-import { CallGraphDirection, CallGraphSidecarManager, CallGraphSymbolRef } from "./call-graph.js";
+import { CallGraphDirection, CallGraphNode, CallGraphSidecarManager, CallGraphSymbolRef } from "./call-graph.js";
 import { decideInterruptedIndexingRecovery } from "./indexing-recovery.js";
 import type {
     CompletionProofReason,
@@ -2485,20 +2485,74 @@ export class ToolHandlers {
         return false;
     }
 
-    private buildCallGraphHint(file: string, span: SearchSpan, language: string, symbolId?: string, symbolLabel?: string): CallGraphHint {
+    private loadCallGraphSidecarForSearch(codebaseRoot: string): { builtAt?: string; nodes: CallGraphNode[] } | null {
+        const loadSidecar = (this.callGraphManager as any)?.loadSidecar;
+        if (typeof loadSidecar !== 'function') {
+            return null;
+        }
+
+        const sidecar = loadSidecar.call(this.callGraphManager, codebaseRoot);
+        if (!sidecar || !Array.isArray(sidecar.nodes)) {
+            return null;
+        }
+
+        return {
+            builtAt: typeof sidecar.builtAt === 'string' ? sidecar.builtAt : undefined,
+            nodes: sidecar.nodes,
+        };
+    }
+
+    private buildCallGraphHint(
+        file: string,
+        language: string,
+        sidecar: { builtAt?: string; nodes: CallGraphNode[] } | null,
+        symbolId?: string,
+        symbolLabel?: string
+    ): CallGraphHint {
         if (!symbolId) {
             return { supported: false, reason: 'missing_symbol' };
         }
         if (!this.isCallGraphLanguageSupported(language, file)) {
             return { supported: false, reason: 'unsupported_language' };
         }
+        if (!sidecar) {
+            return { supported: false, reason: 'missing_sidecar' };
+        }
+
+        const normalizedFile = this.sanitizeIndexedRelativeFilePath(file);
+        if (!normalizedFile) {
+            return { supported: false, reason: 'stale_symbol_ref' };
+        }
+
+        const sidecarNode = sidecar.nodes.find((node) => node.symbolId === symbolId);
+        const normalizedSidecarFile = sidecarNode ? this.sanitizeIndexedRelativeFilePath(sidecarNode.file) : undefined;
+        const sidecarSpan = sidecarNode?.span;
+        if (
+            !sidecarNode ||
+            normalizedSidecarFile !== normalizedFile ||
+            !sidecarSpan ||
+            !Number.isFinite(sidecarSpan.startLine) ||
+            !Number.isFinite(sidecarSpan.endLine)
+        ) {
+            return { supported: false, reason: 'stale_symbol_ref' };
+        }
+
+        const safeStartLine = Math.max(1, Number(sidecarSpan.startLine));
+        const safeEndLine = Math.max(safeStartLine, Number(sidecarSpan.endLine));
+        const validatedAt = new Date(this.now()).toISOString();
         return {
             supported: true,
+            validated: true,
+            validatedAt,
+            sidecarBuiltAt: sidecar.builtAt || validatedAt,
             symbolRef: {
-                file,
+                file: normalizedSidecarFile,
                 symbolId,
-                symbolLabel: symbolLabel || undefined,
-                span
+                symbolLabel: sidecarNode.symbolLabel || symbolLabel || undefined,
+                span: {
+                    startLine: safeStartLine,
+                    endLine: safeEndLine
+                }
             }
         };
     }
@@ -2579,13 +2633,14 @@ export class ToolHandlers {
             return undefined;
         }
 
-        const normalizedFile = this.sanitizeIndexedRelativeFilePath(relativeFilePath);
+        const normalizedFile = this.sanitizeIndexedRelativeFilePath(callGraphHint.symbolRef.file || relativeFilePath);
         if (!normalizedFile) {
             return undefined;
         }
 
-        const safeStartLine = Number.isFinite(span.startLine) ? Math.max(1, Number(span.startLine)) : 1;
-        const safeEndLine = Number.isFinite(span.endLine) ? Math.max(safeStartLine, Number(span.endLine)) : safeStartLine;
+        const actionSpan = callGraphHint.symbolRef.span || span;
+        const safeStartLine = Number.isFinite(actionSpan.startLine) ? Math.max(1, Number(actionSpan.startLine)) : 1;
+        const safeEndLine = Number.isFinite(actionSpan.endLine) ? Math.max(safeStartLine, Number(actionSpan.endLine)) : safeStartLine;
         const absolutePath = path.resolve(codebaseRoot, normalizedFile);
         const symbolRef = {
             ...callGraphHint.symbolRef,
@@ -4620,6 +4675,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? (this.snapshotManager as any).getCodebaseCallGraphSidecar(effectiveRoot)
                 : undefined;
             const sidecarReadyForOutline = Boolean(sidecarInfo && sidecarInfo.version === 'v3');
+            const callGraphSidecar = sidecarReadyForOutline ? this.loadCallGraphSidecarForSearch(effectiveRoot) : null;
             const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
             for (const group of groups.values()) {
                 exactMatchPinningApplied = this.sortSearchCandidates(group.chunks, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
@@ -4644,8 +4700,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const groupId = repSymbolId || this.buildFallbackGroupId(representative.result.relativePath, span);
                 const callGraphHint = this.buildCallGraphHint(
                     representative.result.relativePath,
-                    span,
                     representative.result.language || 'unknown',
+                    callGraphSidecar,
                     repSymbolId || undefined,
                     repSymbolLabel || undefined
                 );
@@ -5003,6 +5059,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return startsBeforeWindowEnd && endsAfterWindowStart;
             });
 
+            const outlineValidatedAt = new Date(this.now()).toISOString();
             const symbols = this.sortFileOutlineSymbols(windowed.map((node) => {
                 const symbolLabel = (typeof node.symbolLabel === 'string' && node.symbolLabel.trim().length > 0)
                     ? node.symbolLabel
@@ -5016,6 +5073,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     },
                     callGraphHint: {
                         supported: true,
+                        validated: true,
+                        validatedAt: outlineValidatedAt,
+                        sidecarBuiltAt: sidecar.builtAt,
                         symbolRef: {
                             file: normalizedFile,
                             symbolId: node.symbolId,

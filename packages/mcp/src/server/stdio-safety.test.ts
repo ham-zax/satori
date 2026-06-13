@@ -26,7 +26,33 @@ test("installConsoleToStderrPatch routes console output to stderr writer", () =>
     assert.match(joined, /debug 5/);
 });
 
-test("installCliStdoutRedirect blocks writes in drop mode and emits deterministic markers", () => {
+test("installConsoleToStderrPatch only patches selected methods", () => {
+    const writes: string[] = [];
+    const logCalls: unknown[][] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+        logCalls.push(args);
+    };
+
+    const restore = installConsoleToStderrPatch({
+        methods: ["warn"],
+        writeToStderr: (text) => {
+            writes.push(text);
+        },
+    });
+
+    console.log("startup chatter");
+    console.warn("actionable warning");
+
+    restore();
+    console.log = originalLog;
+
+    assert.deepEqual(logCalls, [["startup chatter"]]);
+    assert.equal(writes.some((line) => line.includes("startup chatter")), false);
+    assert.equal(writes.some((line) => line.includes("actionable warning")), true);
+});
+
+test("installCliStdoutRedirect blocks writes quietly in drop mode", () => {
     const writes: Array<{ chunk: unknown; encoding?: unknown }> = [];
     const stderrWrites: string[] = [];
     const privateWrites: string[] = [];
@@ -76,6 +102,30 @@ test("installCliStdoutRedirect blocks writes in drop mode and emits deterministi
     assert.equal(privateWrites.length, 2);
     assert.equal(fakeStdout._write, originalPrivateWrite);
     assert.equal(fakeStdout._writev, originalPrivateWritev);
-    assert.equal(stderrWrites.some((line) => line.includes("[STDOUT_BLOCKED]")), true);
+    assert.deepEqual(stderrWrites, []);
+});
+
+test("installCliStdoutRedirect emits deterministic markers in redirect mode", () => {
+    const stderrWrites: string[] = [];
+    const fakeStdout: Record<string, any> = {
+        write() {
+            return true;
+        }
+    };
+
+    const restore = installCliStdoutRedirect({
+        mode: "redirect",
+        stdout: fakeStdout,
+        writeToStderr: (text) => {
+            stderrWrites.push(text);
+        },
+    });
+
+    fakeStdout.write("hello");
+    fakeStdout.write(Buffer.from("abc"));
+
+    restore();
+
+    assert.equal(stderrWrites.some((line) => line.includes("[STDOUT_BLOCKED] hello")), true);
     assert.equal(stderrWrites.some((line) => line.includes("[STDOUT_BLOCKED_BINARY")), true);
 });

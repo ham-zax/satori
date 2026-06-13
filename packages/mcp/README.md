@@ -7,8 +7,8 @@ Read-only MCP server for Satori. It gives coding agents six deterministic tools 
 Use the CLI installer for normal setup:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.1 install --client all
-npx -y @zokizuan/satori-cli@0.4.1 doctor
+npx -y @zokizuan/satori-cli@0.4.2 install --client all
+npx -y @zokizuan/satori-cli@0.4.2 doctor
 ```
 
 The CLI installer supports `codex`, `claude`, `opencode`, and `all`. It creates the runtime cache, writes the stable launcher, and writes client config for you. Avoid using `npx` as the resident MCP server command; first-run package resolution can exceed normal MCP startup timeouts.
@@ -16,7 +16,7 @@ The CLI installer supports `codex`, `claude`, `opencode`, and `all`. It creates 
 Advanced direct execution is available through the package bin:
 
 ```bash
-npx -y @zokizuan/satori-mcp@4.11.1 --help
+npx -y @zokizuan/satori-mcp@4.11.2 --help
 ```
 
 Use direct package execution for inspection, smoke tests, or unsupported harnesses. For supported clients, prefer `satori-cli install` so startup does not depend on package-manager resolution.

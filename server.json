@@ -3,13 +3,13 @@
   "id": "satori",
   "name": "Satori MCP",
   "packageName": "@zokizuan/satori-mcp",
-  "version": "4.11.1",
+  "version": "4.11.2",
   "description": "MCP server for Satori with agent-safe semantic search and indexing",
   "install": {
     "command": "npx",
     "args": [
       "-y",
-      "@zokizuan/satori-cli@0.4.1",
+      "@zokizuan/satori-cli@0.4.2",
       "install",
       "--client",
       "all"

@@ -1198,7 +1198,7 @@ Grouped result metadata can include:
 - `collapsedChunkCount`,
 - aggregated `indexedAtMax`,
 - `stalenessBucket`,
-- discriminated `callGraphHint`.
+- discriminated `callGraphHint` with validation timestamps for supported graph handles.
 
 Why it matters:
 

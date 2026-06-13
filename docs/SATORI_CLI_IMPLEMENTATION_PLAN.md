@@ -113,13 +113,14 @@ Because ESM executes imported modules before importer module body, `src/index.ts
   - construct `protocolStdout` as a transport-compatible `Writable` wrapper whose `_write(...)` forwards to `originalStdoutWrite`
   - do not pass raw `write/once` captures directly into server start contract
 - Install stdio safety patch:
-  - Patch `console.log/info/warn/error/debug` to `process.stderr.write`.
+  - In MCP mode, route `console.warn/error` to `process.stderr.write`; ordinary `log/info/debug` output is blocked by the stdout guard.
+  - In CLI mode, patch `console.log/info/warn/error/debug` to `process.stderr.write`.
   - In `SATORI_RUN_MODE=cli`, patch `process.stdout.write` to block accidental non-protocol writes.
   - In `SATORI_RUN_MODE=cli`, patch `process.stdout.end` and `process.stdout.writev` (when present) to prevent bypass.
   - In `SATORI_RUN_MODE=cli`, patch `process.stdout._write` and `process.stdout._writev` (when present) to prevent bypass.
-  - Default guard behavior is `drop` (not redirect), with deterministic stderr markers.
+  - Default guard behavior is quiet `drop` (not redirect).
   - Optional override: `SATORI_CLI_STDOUT_GUARD=redirect|drop` (default `drop`).
-  - For binary/non-text blocked stdout chunks, emit deterministic stderr marker instead of raw binary spill.
+  - In redirect mode, emit deterministic stderr markers for blocked text/binary chunks instead of raw stdout spill.
 - Dynamic-import `./server/start-server.js` after patch.
 - Call `startMcpServerFromEnv({ runMode, protocolStdout })`.
 

@@ -140,7 +140,15 @@ test('handleFileOutline returns unsupported for unsupported file extensions', as
             })
         } as any;
 
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(
+            baseContext(),
+            snapshotManager,
+            {} as any,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+            callGraphManager
+        );
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
@@ -206,7 +214,15 @@ test('handleFileOutline returns deterministic symbols with hasMore and warning c
             })
         } as any;
 
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(
+            baseContext(),
+            snapshotManager,
+            {} as any,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+            callGraphManager
+        );
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
@@ -222,6 +238,9 @@ test('handleFileOutline returns deterministic symbols with hasMore and warning c
         assert.equal(payload.outline.symbols[0].symbolId, 'sym_a');
         assert.equal(payload.outline.symbols[1].symbolId, 'sym_b');
         assert.equal(payload.outline.symbols[0].callGraphHint.supported, true);
+        assert.equal(payload.outline.symbols[0].callGraphHint.validated, true);
+        assert.equal(payload.outline.symbols[0].callGraphHint.validatedAt, '2026-01-01T01:00:00.000Z');
+        assert.equal(payload.outline.symbols[0].callGraphHint.sidecarBuiltAt, '2026-01-01T00:00:00.000Z');
         assert.equal(payload.warnings[0], 'OUTLINE_MISSING_SYMBOL_METADATA:1');
     });
 });

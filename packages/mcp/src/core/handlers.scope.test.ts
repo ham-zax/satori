@@ -65,7 +65,12 @@ function createHandlers(
     repoPath: string,
     searchResults: any[],
     reranker?: any,
-    options?: { gitignoreForceReloadEveryN?: number }
+    options?: {
+        gitignoreForceReloadEveryN?: number;
+        sidecarReady?: boolean;
+        sidecarNodes?: any[];
+        sidecarBuiltAt?: string;
+    }
 ) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
@@ -76,6 +81,7 @@ function createHandlers(
         getAllCodebases: () => [],
         getIndexedCodebases: () => [repoPath],
         getIndexingCodebases: () => [],
+        getCodebaseCallGraphSidecar: () => options?.sidecarReady === false ? undefined : ({ version: 'v3' }),
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
     } as any;
 
@@ -95,6 +101,32 @@ function createHandlers(
         ...(reranker ? { voyageKey: 'test' } : {}),
     });
 
+    const sidecarNodes = options?.sidecarNodes ?? searchResults
+        .filter((result) => typeof result.symbolId === 'string')
+        .map((result) => ({
+            symbolId: result.symbolId,
+            symbolLabel: result.symbolLabel,
+            file: result.relativePath,
+            language: result.language || 'typescript',
+            span: {
+                startLine: result.startLine || 1,
+                endLine: result.endLine || result.startLine || 1
+            }
+        }));
+    const callGraphManager = {
+        loadSidecar: () => options?.sidecarReady === false
+            ? null
+            : ({
+                formatVersion: 'v3',
+                codebasePath: repoPath,
+                builtAt: options?.sidecarBuiltAt || '2026-01-01T00:45:00.000Z',
+                fingerprint: RUNTIME_FINGERPRINT,
+                nodes: sidecarNodes,
+                edges: [],
+                notes: []
+            })
+    } as any;
+
     const handlers = new ToolHandlers(
         context,
         snapshotManager,
@@ -102,7 +134,7 @@ function createHandlers(
         RUNTIME_FINGERPRINT,
         capabilities,
         () => Date.parse('2026-01-01T01:00:00.000Z'),
-        undefined,
+        callGraphManager,
         reranker || null,
         options?.gitignoreForceReloadEveryN
     );
@@ -159,6 +191,9 @@ test('handleSearchCode grouped output includes symbol metadata and callGraphHint
         assert.equal(payload.results.length, 1);
         assert.equal(payload.results[0].symbolId, 'sym_auth_validate');
         assert.equal(payload.results[0].callGraphHint.supported, true);
+        assert.equal(payload.results[0].callGraphHint.validated, true);
+        assert.equal(payload.results[0].callGraphHint.validatedAt, '2026-01-01T01:00:00.000Z');
+        assert.equal(payload.results[0].callGraphHint.sidecarBuiltAt, '2026-01-01T00:45:00.000Z');
         assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, 'sym_auth_validate');
     });
 });
@@ -224,6 +259,64 @@ test('handleSearchCode grouped output includes runnable nextActions for supporte
         });
         assert.equal(result.navigationFallback, undefined);
         assert.equal(payload.hints?.navigation?.nextStep, 'Open the selected result, then trace callers/callees when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.');
+    });
+});
+
+test('handleSearchCode downgrades stale search symbol refs to navigation fallback', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_stale_auth_validate',
+            symbolLabel: 'method validateSession(token: string)'
+        }], undefined, {
+            sidecarNodes: [{
+                symbolId: 'sym_current_auth_validate',
+                symbolLabel: 'method validateSession(token: string)',
+                file: 'src/auth.ts',
+                language: 'typescript',
+                span: { startLine: 30, endLine: 36 }
+            }]
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const result = payload.results[0];
+
+        assert.equal(result.callGraphHint.supported, false);
+        assert.equal(result.callGraphHint.reason, 'stale_symbol_ref');
+        assert.equal(result.nextActions, undefined);
+        assert.deepEqual(result.navigationFallback.readSpan, {
+            tool: 'read_file',
+            args: {
+                path: path.resolve(repoPath, 'src/auth.ts'),
+                start_line: 3,
+                end_line: 6
+            }
+        });
+        assert.deepEqual(result.navigationFallback.fileOutlineWindow, {
+            tool: 'file_outline',
+            args: {
+                path: repoPath,
+                file: 'src/auth.ts',
+                start_line: 3,
+                end_line: 6,
+                resolveMode: 'outline'
+            }
+        });
     });
 });
 
@@ -2690,7 +2783,7 @@ test('handleSearchCode grouped fallback emits stable hash groupId and unsupporte
             language: 'typescript',
             score: 0.88,
             indexedAt: '2026-01-01T00:30:00.000Z'
-        }]);
+        }], undefined, { sidecarReady: false });
 
         const args = {
             path: repoPath,

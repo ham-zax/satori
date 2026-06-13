@@ -17,8 +17,14 @@ export interface CallGraphSymbolRef {
 }
 
 export type CallGraphHint =
-    | { supported: true; symbolRef: CallGraphSymbolRef }
-    | { supported: false; reason: "missing_symbol" | "unsupported_language" };
+    | {
+        supported: true;
+        symbolRef: CallGraphSymbolRef;
+        validated: true;
+        validatedAt: string;
+        sidecarBuiltAt: string;
+    }
+    | { supported: false; reason: "missing_symbol" | "unsupported_language" | "missing_sidecar" | "stale_symbol_ref" };
 
 export interface SearchNextActionReadSymbol {
     tool: "read_file";
@@ -369,7 +375,7 @@ export interface FileOutlineSymbolResult {
     symbolId: string;
     symbolLabel: string;
     span: SearchSpan;
-    callGraphHint: { supported: true; symbolRef: CallGraphSymbolRef };
+    callGraphHint: Extract<CallGraphHint, { supported: true }>;
 }
 
 export interface FileOutlineResponseEnvelope {

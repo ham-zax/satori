@@ -132,6 +132,18 @@ pnpm --filter @zokizuan/satori-cli test
 pnpm test:integration
 ```
 
+## Release Proof
+
+The tag release workflow runs generated-doc checks, manifest checks, MCP tarball smoke tests, and CLI tarball smoke tests before publishing. The CLI installer tests also smoke `install --client all` against Codex, Claude, and OpenCode config in a temp home, asserting that resident client config launches the installer-owned Node launcher without `npx`, runtime cache paths, or custom startup timeout fields.
+
+Release publishes use npm provenance from GitHub Actions. After publish, inspect registry integrity metadata with:
+
+```bash
+npm view @zokizuan/satori-core@<version> dist.integrity dist.shasum
+npm view @zokizuan/satori-mcp@<version> dist.integrity dist.shasum
+npm view @zokizuan/satori-cli@<version> dist.integrity dist.shasum
+```
+
 ## More Docs
 
 - [Architecture](./ARCHITECTURE.md)

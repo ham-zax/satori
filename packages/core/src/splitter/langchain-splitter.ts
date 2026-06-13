@@ -1,131 +1,118 @@
-import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
 import { Splitter, CodeChunk } from './index';
 
-// Define LangChain supported language types
-type SupportedLanguage = "cpp" | "go" | "java" | "js" | "php" | "proto" | "python" | "rst" | "ruby" | "rust" | "scala" | "swift" | "markdown" | "latex" | "html" | "sol";
+interface TextChunk {
+    content: string;
+    startOffset: number;
+    endOffset: number;
+}
 
+const BOUNDARY_SEPARATORS = ['\n\n', '\n', '};', '}', ';', ' ', '\t'];
+
+// Keep the historical class name for public API compatibility.
 export class LangChainCodeSplitter implements Splitter {
     private chunkSize: number = 1000;
     private chunkOverlap: number = 200;
 
     constructor(chunkSize?: number, chunkOverlap?: number) {
-        if (chunkSize) this.chunkSize = chunkSize;
-        if (chunkOverlap) this.chunkOverlap = chunkOverlap;
+        if (chunkSize !== undefined) this.setChunkSize(chunkSize);
+        if (chunkOverlap !== undefined) this.setChunkOverlap(chunkOverlap);
     }
 
     async split(code: string, language: string, filePath?: string): Promise<CodeChunk[]> {
-        try {
-            // Create language-specific splitter
-            const mappedLanguage = this.mapLanguage(language);
-            if (mappedLanguage) {
-                const splitter = RecursiveCharacterTextSplitter.fromLanguage(
-                    mappedLanguage,
-                    {
-                        chunkSize: this.chunkSize,
-                        chunkOverlap: this.chunkOverlap,
-                    }
-                );
-
-                // Split code
-                const documents = await splitter.createDocuments([code]);
-
-                // Convert to CodeChunk format
-                return documents.map((doc) => {
-                    const lines = doc.metadata?.loc?.lines || { from: 1, to: 1 };
-                    return {
-                        content: doc.pageContent,
-                        metadata: {
-                            startLine: lines.from,
-                            endLine: lines.to,
-                            language,
-                            filePath,
-                        },
-                    };
-                });
-            } else {
-                // If language is not supported, use generic splitter directly
-                return this.fallbackSplit(code, language, filePath);
-            }
-        } catch (error) {
-            console.error('[LangChainSplitter] ❌ Error splitting code:', error);
-            // If specific language splitting fails, use generic splitter
-            return this.fallbackSplit(code, language, filePath);
+        if (code.length === 0) {
+            return [];
         }
+
+        const newlineOffsets = this.collectNewlineOffsets(code);
+        return this.splitText(code).map((chunk) => ({
+            content: chunk.content,
+            metadata: {
+                startLine: this.lineForOffset(chunk.startOffset, newlineOffsets),
+                endLine: this.lineForOffset(chunk.endOffset, newlineOffsets),
+                language,
+                filePath,
+            },
+        }));
     }
 
     setChunkSize(chunkSize: number): void {
-        this.chunkSize = chunkSize;
+        this.chunkSize = Math.max(1, Math.floor(chunkSize));
+        if (this.chunkOverlap >= this.chunkSize) {
+            this.chunkOverlap = this.chunkSize - 1;
+        }
     }
 
     setChunkOverlap(chunkOverlap: number): void {
-        this.chunkOverlap = chunkOverlap;
+        this.chunkOverlap = Math.max(0, Math.floor(chunkOverlap));
+        if (this.chunkOverlap >= this.chunkSize) {
+            this.chunkOverlap = this.chunkSize - 1;
+        }
     }
 
-    private mapLanguage(language: string): SupportedLanguage | null {
-        // Map common language names to LangChain supported formats
-        const languageMap: Record<string, SupportedLanguage> = {
-            'javascript': 'js',
-            'typescript': 'js',
-            'python': 'python',
-            'java': 'java',
-            'cpp': 'cpp',
-            'c++': 'cpp',
-            'c': 'cpp',
-            'go': 'go',
-            'rust': 'rust',
-            'php': 'php',
-            'ruby': 'ruby',
-            'swift': 'swift',
-            'scala': 'scala',
-            'html': 'html',
-            'markdown': 'markdown',
-            'md': 'markdown',
-            'latex': 'latex',
-            'tex': 'latex',
-            'solidity': 'sol',
-            'sol': 'sol',
-        };
+    private splitText(code: string): TextChunk[] {
+        const chunks: TextChunk[] = [];
+        let startOffset = 0;
 
-        return languageMap[language.toLowerCase()] || null;
-    }
+        while (startOffset < code.length) {
+            const endOffset = this.findChunkEnd(code, startOffset);
+            const content = code.slice(startOffset, endOffset);
+            if (content.length > 0) {
+                chunks.push({ content, startOffset, endOffset });
+            }
 
-    private async fallbackSplit(code: string, language: string, filePath?: string): Promise<CodeChunk[]> {
-        // Generic splitter as fallback
-        const splitter = new RecursiveCharacterTextSplitter({
-            chunkSize: this.chunkSize,
-            chunkOverlap: this.chunkOverlap,
-        });
+            if (endOffset >= code.length) {
+                break;
+            }
 
-        const documents = await splitter.createDocuments([code]);
-
-        return documents.map((doc) => {
-            const lines = this.estimateLines(doc.pageContent, code);
-            return {
-                content: doc.pageContent,
-                metadata: {
-                    startLine: lines.start,
-                    endLine: lines.end,
-                    language,
-                    filePath,
-                },
-            };
-        });
-    }
-
-    private estimateLines(chunk: string, originalCode: string): { start: number; end: number } {
-        // Simple line number estimation
-        const chunkLines = chunk.split('\n');
-
-        // Find chunk position in original code
-        const chunkStart = originalCode.indexOf(chunk);
-        if (chunkStart === -1) {
-            return { start: 1, end: chunkLines.length };
+            const overlap = Math.min(this.chunkOverlap, Math.max(0, endOffset - startOffset - 1));
+            startOffset = Math.max(startOffset + 1, endOffset - overlap);
         }
 
-        const beforeChunk = originalCode.substring(0, chunkStart);
-        const startLine = beforeChunk.split('\n').length;
-        const endLine = startLine + chunkLines.length - 1;
+        return chunks;
+    }
 
-        return { start: startLine, end: endLine };
+    private findChunkEnd(code: string, startOffset: number): number {
+        const maxEnd = Math.min(startOffset + this.chunkSize, code.length);
+        if (maxEnd >= code.length) {
+            return code.length;
+        }
+
+        const minimumBoundary = startOffset + Math.max(1, Math.floor(this.chunkSize * 0.4));
+        for (const separator of BOUNDARY_SEPARATORS) {
+            const searchFrom = Math.max(startOffset, maxEnd - separator.length);
+            const boundaryStart = code.lastIndexOf(separator, searchFrom);
+            const boundaryEnd = boundaryStart + separator.length;
+            if (boundaryStart >= minimumBoundary && boundaryEnd <= maxEnd) {
+                return boundaryEnd;
+            }
+        }
+
+        return maxEnd;
+    }
+
+    private collectNewlineOffsets(code: string): number[] {
+        const offsets: number[] = [];
+        for (let index = 0; index < code.length; index += 1) {
+            if (code[index] === '\n') {
+                offsets.push(index);
+            }
+        }
+        return offsets;
+    }
+
+    private lineForOffset(offset: number, newlineOffsets: number[]): number {
+        let low = 0;
+        let high = newlineOffsets.length;
+
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            if (newlineOffsets[mid] < offset) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        return low + 1;
     }
 }

@@ -22,13 +22,13 @@
     "test": "pnpm --filter @zokizuan/satori-mcp build:runtime && node --import tsx --test --test-concurrency=1 src/**/*.test.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@zokizuan/satori-mcp": "workspace:*",
     "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "tsx": "^4.19.4",
+    "tsx": "^4.22.4",
     "typescript": "^5.0.0"
   },
   "files": [

@@ -39,7 +39,7 @@ export class AstCodeSplitter implements Splitter {
     private chunkSize: number = 2500;
     private chunkOverlap: number = 300;
     private parser: Parser;
-    private langchainFallback: any; // LangChainCodeSplitter for fallback
+    private langchainFallback: any; // Compatibility-named recursive fallback splitter
 
     constructor(chunkSize?: number, chunkOverlap?: number) {
         if (chunkSize) this.chunkSize = chunkSize;
@@ -56,7 +56,7 @@ export class AstCodeSplitter implements Splitter {
         // Check if language is supported by AST splitter
         const langConfig = this.getLanguageConfig(normalizedLanguage);
         if (!langConfig) {
-            console.log(`📝 Language ${language} not supported by AST, using LangChain splitter for: ${filePath || 'unknown'}`);
+            console.log(`📝 Language ${language} not supported by AST, using recursive fallback splitter for: ${filePath || 'unknown'}`);
             return await this.langchainFallback.split(code, language, filePath);
         }
 
@@ -67,7 +67,7 @@ export class AstCodeSplitter implements Splitter {
             const tree = this.parser.parse(code);
 
             if (!tree.rootNode) {
-                console.warn(`[ASTSplitter] ⚠️  Failed to parse AST for ${normalizedLanguage}, falling back to LangChain: ${filePath || 'unknown'}`);
+                console.warn(`[ASTSplitter] ⚠️  Failed to parse AST for ${normalizedLanguage}, falling back to recursive splitter: ${filePath || 'unknown'}`);
                 return await this.langchainFallback.split(code, language, filePath);
             }
 
@@ -79,7 +79,7 @@ export class AstCodeSplitter implements Splitter {
 
             return refinedChunks;
         } catch (error) {
-            console.warn(`[ASTSplitter] ⚠️  AST splitter failed for ${normalizedLanguage}, falling back to LangChain: ${error}`);
+            console.warn(`[ASTSplitter] ⚠️  AST splitter failed for ${normalizedLanguage}, falling back to recursive splitter: ${error}`);
             return await this.langchainFallback.split(code, language, filePath);
         }
     }

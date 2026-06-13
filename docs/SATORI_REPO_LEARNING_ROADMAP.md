@@ -249,8 +249,8 @@ This is the standalone CLI package.
 
 Responsibilities:
 
-- install or uninstall Satori MCP config for Codex and Claude
-- copy first-party skills
+- install or uninstall Satori MCP config for Codex, Claude, and OpenCode
+- copy the first-party workflow skill
 - start an MCP stdio session for direct shell tool calls
 - reflect MCP tools through `tools/list`
 - call MCP tools through `tools/call`
@@ -268,7 +268,7 @@ Key files:
 - `packages/cli/src/errors.ts`
 - `packages/cli/src/package-installability.ts`
 - `packages/cli/src/resolve-server-entry.ts`
-- `packages/cli/assets/skills/*/SKILL.md`
+- `packages/cli/assets/skills/satori/SKILL.md`
 
 There is also CLI-related code under `packages/mcp/src/cli`. Be careful when changing installer or CLI behavior: check tests in both locations before assuming only one package is affected.
 
@@ -1648,7 +1648,7 @@ You likely need to touch:
 - `packages/cli/src/install.ts`
 - `packages/cli/src/args.ts`
 - `packages/cli/src/index.ts`
-- package assets under `packages/cli/assets/skills`
+- package the `satori` skill asset under `packages/cli/assets/skills`
 - CLI tests
 - maybe `packages/mcp/src/cli` if behavior is duplicated there
 
@@ -1746,4 +1746,3 @@ Prefer:
 - sync for normal freshness
 - reindex for compatibility problems
 - tests and specs with every behavior change
-

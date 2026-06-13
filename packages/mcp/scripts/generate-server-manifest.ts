@@ -30,6 +30,10 @@ function buildManifest(pkg: PackageJsonShape, cliPkg: PackageJsonShape) {
                 configPath: "~/.claude/settings.json",
                 configFormat: "json",
             },
+            opencode: {
+                configPath: "~/.config/opencode/opencode.json",
+                configFormat: "jsonc",
+            },
         },
     };
 }

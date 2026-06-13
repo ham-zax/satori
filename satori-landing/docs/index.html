@@ -432,7 +432,7 @@
         <p class="lede">
           Satori runs as an MCP server. The easiest path is the CLI installer:
           it writes managed client config and copies the first-party workflow
-          skills without adding new MCP tools.
+          workflow guidance without adding new MCP tools.
         </p>
         <div class="grid">
           <div class="panel">
@@ -440,7 +440,7 @@
             <pre><code>npx -y @zokizuan/satori-cli@0.3.2 install --client codex</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
-              and installs Satori skills in <code>~/.codex/skills</code>.
+              and installs the Satori skill in <code>~/.codex/skills</code>.
             </p>
           </div>
           <div class="panel">
@@ -448,14 +448,24 @@
             <pre><code>npx -y @zokizuan/satori-cli@0.3.2 install --client claude</code></pre>
             <p>
               Writes the Satori MCP entry to
-              <code>~/.claude/settings.json</code> and installs Satori skills
+              <code>~/.claude/settings.json</code> and installs the Satori skill
               in <code>~/.claude/skills</code>.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>OpenCode</h3>
+            <pre><code>npx -y @zokizuan/satori-cli@0.3.2 install --client opencode</code></pre>
+            <p>
+              Writes the Satori MCP entry to
+              <code>~/.config/opencode/opencode.json</code> and installs the
+              Satori workflow instructions in
+              <code>~/.config/opencode/AGENTS.md</code>.
             </p>
           </div>
         </div>
         <div class="callout">
           <p>
-            Use <code>--client all</code> to install both clients, and
+            Use <code>--client all</code> to install every supported client, and
             <code>uninstall</code> with the same selector to remove only
             Satori-managed config and skills. Run
             <code>npx -y @zokizuan/satori-cli@0.3.2 doctor</code> to check
@@ -464,30 +474,18 @@
         </div>
         <div class="grid">
           <div class="panel">
-            <h3>Manual MCP Config</h3>
+            <h3>Startup Model</h3>
             <p>
-              For JSON-style clients, point the MCP server at the published
-              package through <code>npx</code>. Keep the startup timeout long
-              enough for first-run package resolution.
+              The installer resolves the package once, writes the runtime under
+              <code>~/.satori/mcp-runtime/</code>, creates the stable launcher
+              <code>~/.satori/bin/satori-mcp.js</code>, and points supported
+              clients at that launcher with Node.
             </p>
-            <pre><code>{
-  "mcpServers": {
-    "satori": {
-      "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@4.10.1"],
-      "timeout": 180000,
-      "env": {
-        "EMBEDDING_PROVIDER": "VoyageAI",
-        "EMBEDDING_MODEL": "voyage-4-large",
-        "EMBEDDING_OUTPUT_DIMENSION": "1024",
-        "VOYAGEAI_API_KEY": "your-api-key",
-        "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
-        "MILVUS_ADDRESS": "your-milvus-endpoint",
-        "MILVUS_TOKEN": "your-milvus-token"
-      }
-    }
-  }
-}</code></pre>
+            <p>
+              Do not use resident <code>npx</code> commands for supported
+              clients; package-manager startup latency is exactly what the
+              installer avoids.
+            </p>
           </div>
           <div class="panel">
             <h3>Managed Files</h3>
@@ -496,6 +494,8 @@
               <li>Codex skills: <code>~/.codex/skills</code>.</li>
               <li>Claude config: <code>~/.claude/settings.json</code>.</li>
               <li>Claude skills: <code>~/.claude/skills</code>.</li>
+              <li>OpenCode config: <code>~/.config/opencode/opencode.json</code>.</li>
+              <li>OpenCode instructions: <code>~/.config/opencode/AGENTS.md</code>.</li>
             </ul>
             <p>
               The installer refuses to overwrite unmanaged Satori entries. If

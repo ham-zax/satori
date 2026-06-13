@@ -24,6 +24,10 @@
     "claude": {
       "configPath": "~/.claude/settings.json",
       "configFormat": "json"
+    },
+    "opencode": {
+      "configPath": "~/.config/opencode/opencode.json",
+      "configFormat": "jsonc"
     }
   }
 }

@@ -11,7 +11,7 @@ Satori indexes a repo, keeps that index fresh, and gives agents a fixed six-tool
 - Open exact files, line ranges, and symbols instead of dumping broad context.
 - Trace nearby callers/callees when sidecar data is ready.
 - Get explicit `requires_reindex`, stale-state, and noise guidance instead of silent bad context.
-- Install the MCP server and first-party workflow skills with one CLI command.
+- Install the MCP server and first-party workflow skill with one CLI command.
 
 ## Packages
 
@@ -26,20 +26,19 @@ Satori indexes a repo, keeps that index fresh, and gives agents a fixed six-tool
 Install managed MCP config for your client:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.3.2 install --client codex
-npx -y @zokizuan/satori-cli@0.3.2 install --client claude
+npx -y @zokizuan/satori-cli@0.3.2 install --client all
 npx -y @zokizuan/satori-cli@0.3.2 doctor
 ```
 
-The installer writes Satori-managed config and copies the first-party skills:
+Supported installers: `codex`, `claude`, `opencode`, and `all`.
 
-- `satori-search`
-- `satori-navigation`
-- `satori-indexing`
+The installer writes Satori-managed config and copies the first-party workflow skill:
 
-It also installs the MCP server once under `~/.satori/mcp-runtime/` and writes client config that starts the cached server entry directly with Node. Resident MCP startup should not perform package-manager resolution.
+- `satori`
 
-Treat the cache path as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
+It also installs the MCP server once under `~/.satori/mcp-runtime/`, writes a stable launcher at `~/.satori/bin/satori-mcp.js`, and points client config at that launcher with Node. Resident MCP startup should not perform package-manager resolution.
+
+Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
 
 Restart the MCP client after changing config.
 

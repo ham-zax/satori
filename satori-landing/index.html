@@ -1321,63 +1321,55 @@
         <details open>
           <summary>CLI Installer</summary>
           <div class="details-body">
-            <pre><code>npx -y @zokizuan/satori-cli@0.3.2 install --client codex
-npx -y @zokizuan/satori-cli@0.3.2 install --client claude
+            <pre><code>npx -y @zokizuan/satori-cli@0.3.2 install --client all
+npx -y @zokizuan/satori-cli@0.3.2 install --client opencode
 npx -y @zokizuan/satori-cli@0.3.2 install --client all --dry-run
 npx -y @zokizuan/satori-cli@0.3.2 doctor</code></pre>
             <p>
               The installer writes managed client config and copies the
-              first-party <code>satori-search</code>,
-              <code>satori-navigation</code>, and
-              <code>satori-indexing</code> skills. The doctor command checks
-              provider and Milvus setup without starting an MCP client.
+              first-party <code>satori</code> workflow skill. The doctor
+              command checks provider and Milvus setup without starting an MCP
+              client.
             </p>
           </div>
         </details>
         <details>
-          <summary>MCP Config</summary>
+          <summary>Managed Client Targets</summary>
           <div class="details-body">
             <div class="config-grid">
               <div class="config-card">
                 <div class="config-head">
-                  <div class="install-title">Codex TOML</div>
-                  <button class="btn copy-btn" data-copy="codex-config">
-                    Copy
-                  </button>
+                  <div class="install-title">Codex</div>
                 </div>
-                <pre><code id="codex-config">[mcp_servers.satori]
-command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.10.1"]
-startup_timeout_ms = 180000
-env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }</code></pre>
+                <p>
+                  Config: <code>~/.codex/config.toml</code><br />
+                  Skills: <code>~/.codex/skills</code>
+                </p>
               </div>
               <div class="config-card">
                 <div class="config-head">
-                  <div class="install-title">Claude / JSON Clients</div>
-                  <button class="btn copy-btn" data-copy="claude-config">
-                    Copy
-                  </button>
+                  <div class="install-title">Claude</div>
                 </div>
-                <pre><code id="claude-config">"satori": {
-  "command": "npx",
-  "args": ["-y", "@zokizuan/satori-mcp@4.10.1"],
-  "timeout": 180000,
-  "env": {
-    "EMBEDDING_PROVIDER": "VoyageAI",
-    "EMBEDDING_MODEL": "voyage-4-large",
-    "EMBEDDING_OUTPUT_DIMENSION": "1024",
-    "VOYAGEAI_API_KEY": "your-api-key",
-    "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
-    "MILVUS_ADDRESS": "your-milvus-endpoint",
-    "MILVUS_TOKEN": "your-milvus-token"
-  }
-}</code></pre>
+                <p>
+                  Config: <code>~/.claude/settings.json</code><br />
+                  Skills: <code>~/.claude/skills</code>
+                </p>
+              </div>
+              <div class="config-card">
+                <div class="config-head">
+                  <div class="install-title">OpenCode</div>
+                </div>
+                <p>
+                  Config: <code>~/.config/opencode/opencode.json</code><br />
+                  Instructions: <code>~/.config/opencode/AGENTS.md</code>
+                </p>
               </div>
             </div>
             <p>
-              <code>MILVUS_TOKEN</code> is only needed for authenticated
-              Milvus or Zilliz endpoints; local unauthenticated Milvus only
-              needs <code>MILVUS_ADDRESS</code>.
+              Supported clients launch Satori through the installer-owned
+              Node launcher at <code>~/.satori/bin/satori-mcp.js</code>.
+              Resident MCP config should not use <code>npx</code> or timeout
+              workarounds.
             </p>
           </div>
         </details>

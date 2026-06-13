@@ -31,6 +31,17 @@ function fakeRuntimeCommand(homeDir: string) {
     };
 }
 
+function fakeClientCommand(homeDir: string) {
+    return {
+        command: process.execPath,
+        args: [path.join(homeDir, ".satori", "bin", "satori-mcp.js")],
+    };
+}
+
+function launcherPath(homeDir: string): string {
+    return path.join(homeDir, ".satori", "bin", "satori-mcp.js");
+}
+
 function installOptions(homeDir: string) {
     return {
         homeDir,
@@ -71,7 +82,7 @@ function installRuntimePackageStub(relativeEntry: string) {
     };
 }
 
-test("install writes managed Codex config block and copies packaged skills", () => {
+test("install writes managed Codex config block and copies packaged skill", () => {
     withTempHome((homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
@@ -89,18 +100,24 @@ test("install writes managed Codex config block and copies packaged skills", () 
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("[mcp_servers.satori]"), true);
         assert.equal(content.includes(`command = "${process.execPath.replace(/\\/g, "\\\\")}"`), true);
-        assert.equal(content.includes("node_modules"), true);
-        assert.equal(content.includes("dist/index.js"), true);
+        assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), true);
+        assert.equal(content.includes("node_modules"), false);
+        assert.equal(content.includes("dist/index.js"), false);
         assert.equal(content.includes('command = "npx"'), false);
         assert.equal(content.includes("startup_timeout_ms"), false);
         assert.equal(content.includes(EXPECTED_PACKAGE_SPECIFIER), false);
-        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori-search", "SKILL.md")), true);
-        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori-navigation", "SKILL.md")), true);
-        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori-indexing", "SKILL.md")), true);
+        assert.equal(fs.existsSync(launcherPath(homeDir)), true);
+        const launcher = readFile(launcherPath(homeDir));
+        assert.equal(launcher.includes('require("node:child_process")'), true);
+        assert.equal(launcher.includes("import { spawn }"), false);
+        assert.equal(launcher.includes("node_modules"), true);
+        assert.equal(launcher.includes("dist/index.js"), true);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md")), true);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori-search")), false);
     });
 });
 
-test("install writes the actual installed runtime bin path", () => {
+test("install writes the actual installed runtime bin path into the stable launcher", () => {
     withTempHome((homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
@@ -116,10 +133,13 @@ test("install writes the actual installed runtime bin path", () => {
         });
 
         const content = readFile(codexConfigPath);
-        assert.equal(content.includes("custom/server.mjs"), true);
+        assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), true);
+        assert.equal(content.includes("custom/server.mjs"), false);
         assert.equal(content.includes("dist/index.js"), false);
         assert.equal(content.includes('command = "npx"'), false);
         assert.equal(content.includes("startup_timeout_ms"), false);
+        const launcher = readFile(launcherPath(homeDir));
+        assert.equal(launcher.includes("custom/server.mjs"), true);
     });
 });
 
@@ -149,7 +169,7 @@ test("install is idempotent for managed Codex config", () => {
     });
 });
 
-test("install replaces legacy managed Codex package-exec args with current package form", () => {
+test("install replaces an existing managed Codex block", () => {
     withTempHome((homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
@@ -160,8 +180,8 @@ test("install replaces legacy managed Codex package-exec args with current packa
                 "",
                 "# >>> satori-cli managed satori start >>>",
                 "[mcp_servers.satori]",
-                'command = "npx"',
-                `args = ["-y", "--package", "${EXPECTED_PACKAGE_SPECIFIER}", "satori"]`,
+                'command = "old-managed-satori"',
+                'args = ["old"]',
                 "startup_timeout_ms = 180000",
                 "# <<< satori-cli managed satori end <<<",
                 "",
@@ -177,14 +197,14 @@ test("install replaces legacy managed Codex package-exec args with current packa
 
         const content = readFile(codexConfigPath);
         assert.equal(content.includes(`command = "${process.execPath.replace(/\\/g, "\\\\")}"`), true);
-        assert.equal(content.includes("node_modules"), true);
-        assert.equal(content.includes("--package"), false);
-        assert.equal(content.includes('command = "npx"'), false);
+        assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), true);
+        assert.equal(content.includes("node_modules"), false);
+        assert.equal(content.includes("old-managed-satori"), false);
         assert.equal(content.includes("startup_timeout_ms"), false);
     });
 });
 
-test("uninstall removes legacy managed Codex package-exec args", () => {
+test("uninstall removes an existing managed Codex block", () => {
     withTempHome((homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
@@ -195,9 +215,8 @@ test("uninstall removes legacy managed Codex package-exec args", () => {
                 "",
                 "# >>> satori-cli managed satori start >>>",
                 "[mcp_servers.satori]",
-                'command = "npx"',
-                `args = ["-y", "--package", "${EXPECTED_PACKAGE_SPECIFIER}", "satori"]`,
-                "startup_timeout_ms = 180000",
+                `command = "${process.execPath.replace(/\\/g, "\\\\")}"`,
+                `args = ["${launcherPath(homeDir).replace(/\\/g, "\\\\")}"]`,
                 "# <<< satori-cli managed satori end <<<",
                 "",
             ].join("\n"),
@@ -212,7 +231,7 @@ test("uninstall removes legacy managed Codex package-exec args", () => {
 
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("[mcp_servers.satori]"), false);
-        assert.equal(content.includes("--package"), false);
+        assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), false);
     });
 });
 
@@ -271,9 +290,9 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
         assert.equal(installed.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, "1");
         assert.equal(installed.mcpServers.existing.command, "npx");
         assert.equal(installed.mcpServers.satori.command, process.execPath);
-        assert.deepEqual(installed.mcpServers.satori.args, fakeRuntimeCommand(homeDir).args);
+        assert.deepEqual(installed.mcpServers.satori.args, fakeClientCommand(homeDir).args);
         assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori, "timeout"), false);
-        assert.equal(fs.existsSync(path.join(skillsDir, "satori-search", "SKILL.md")), true);
+        assert.equal(fs.existsSync(path.join(skillsDir, "satori", "SKILL.md")), true);
 
         const uninstall = executeInstallCommand({
             kind: "uninstall",
@@ -286,7 +305,7 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
         assert.equal(Boolean(removed.mcpServers.satori), false);
         assert.equal(removed.mcpServers.existing.command, "npx");
         assert.equal(fs.existsSync(path.join(skillsDir, "custom-skill", "SKILL.md")), true);
-        assert.equal(fs.existsSync(path.join(skillsDir, "satori-search")), false);
+        assert.equal(fs.existsSync(path.join(skillsDir, "satori")), false);
     });
 });
 
@@ -312,58 +331,6 @@ test("install refuses to overwrite unmanaged Claude Satori entries", () => {
             }, installOptions(homeDir)),
             /Refusing to overwrite unmanaged Satori config/
         );
-    });
-});
-
-test("install upgrades legacy managed Claude entries to the bare MCP package launch form", () => {
-    withTempHome((homeDir) => {
-        const settingsPath = path.join(homeDir, ".claude", "settings.json");
-        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-        fs.writeFileSync(settingsPath, JSON.stringify({
-            mcpServers: {
-                satori: {
-                    command: "npx",
-                    args: ["-y", "--package", "@zokizuan/satori-mcp@4.4.1", "satori"],
-                    timeout: 180000,
-                }
-            }
-        }, null, 2), "utf8");
-
-        executeInstallCommand({
-            kind: "install",
-            client: "claude",
-            dryRun: false,
-        }, installOptions(homeDir));
-
-        const installed = JSON.parse(readFile(settingsPath));
-        assert.equal(installed.mcpServers.satori.command, process.execPath);
-        assert.deepEqual(installed.mcpServers.satori.args, fakeRuntimeCommand(homeDir).args);
-        assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori, "timeout"), false);
-    });
-});
-
-test("uninstall removes legacy managed Claude package-exec entries", () => {
-    withTempHome((homeDir) => {
-        const settingsPath = path.join(homeDir, ".claude", "settings.json");
-        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-        fs.writeFileSync(settingsPath, JSON.stringify({
-            mcpServers: {
-                satori: {
-                    command: "npx",
-                    args: ["-y", "--package", "@zokizuan/satori-mcp@4.4.1", "satori"],
-                    timeout: 180000,
-                }
-            }
-        }, null, 2), "utf8");
-
-        executeInstallCommand({
-            kind: "uninstall",
-            client: "claude",
-            dryRun: false,
-        }, { homeDir });
-
-        const removed = JSON.parse(readFile(settingsPath));
-        assert.equal(Boolean(removed.mcpServers?.satori), false);
     });
 });
 
@@ -395,6 +362,100 @@ test("uninstall refuses to remove unmanaged Claude Satori entries", () => {
     });
 });
 
+test("install writes OpenCode JSONC config and AGENTS instructions", () => {
+    withTempHome((homeDir) => {
+        const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, [
+            "{",
+            "  // keep this comment",
+            "  \"mcp\": {",
+            "    \"existing\": {",
+            "      \"enabled\": true,",
+            "      \"type\": \"local\",",
+            "      \"command\": [\"other-server\"]",
+            "    }",
+            "  }",
+            "}",
+            "",
+        ].join("\n"), "utf8");
+
+        const result = executeInstallCommand({
+            kind: "install",
+            client: "opencode",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        assert.equal(result.results.length, 1);
+        assert.equal(result.results[0]?.client, "opencode");
+        assert.equal(result.results[0]?.skillsChanged, false);
+        assert.equal(result.results[0]?.instructionsChanged, true);
+        assert.equal(result.results[0]?.instructionsPath, path.join(homeDir, ".config", "opencode", "AGENTS.md"));
+        const content = readFile(configPath);
+        assert.equal(content.includes("// keep this comment"), true);
+        assert.equal(content.includes("\"existing\""), true);
+        assert.equal(content.includes("\"satori\""), true);
+        assert.equal(content.includes(launcherPath(homeDir)), true);
+        assert.equal(content.includes("node_modules"), false);
+
+        const instructions = readFile(path.join(homeDir, ".config", "opencode", "AGENTS.md"));
+        assert.equal(instructions.includes("<!-- satori-mcp:start -->"), true);
+        assert.equal(instructions.includes("search_codebase"), true);
+    });
+});
+
+test("uninstall removes managed OpenCode config and instruction block only", () => {
+    withTempHome((homeDir) => {
+        const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
+        const instructionsPath = path.join(homeDir, ".config", "opencode", "AGENTS.md");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+
+        executeInstallCommand({
+            kind: "install",
+            client: "opencode",
+            dryRun: false,
+        }, installOptions(homeDir));
+        fs.writeFileSync(instructionsPath, `${readFile(instructionsPath)}\n# User Notes\n`, "utf8");
+
+        executeInstallCommand({
+            kind: "uninstall",
+            client: "opencode",
+            dryRun: false,
+        }, { homeDir });
+
+        const removed = JSON.parse(readFile(configPath));
+        assert.equal(Boolean(removed.mcp?.satori), false);
+        const instructions = readFile(instructionsPath);
+        assert.equal(instructions.includes("<!-- satori-mcp:start -->"), false);
+        assert.equal(instructions.includes("# User Notes"), true);
+    });
+});
+
+test("install refuses to overwrite unmanaged OpenCode Satori entries", () => {
+    withTempHome((homeDir) => {
+        const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify({
+            mcp: {
+                satori: {
+                    enabled: true,
+                    type: "local",
+                    command: ["node", "/custom/satori.js"],
+                }
+            }
+        }, null, 2), "utf8");
+
+        assert.throws(
+            () => executeInstallCommand({
+                kind: "install",
+                client: "opencode",
+                dryRun: false,
+            }, installOptions(homeDir)),
+            /Refusing to overwrite unmanaged Satori config/
+        );
+    });
+});
+
 test("install all preflights every target before mutating any config", () => {
     withTempHome((homeDir) => {
         const claudeSettingsPath = path.join(homeDir, ".claude", "settings.json");
@@ -411,7 +472,7 @@ test("install all preflights every target before mutating any config", () => {
         );
 
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
-        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori-search", "SKILL.md")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md")), false);
     });
 });
 
@@ -423,9 +484,11 @@ test("dry-run reports install actions without writing files", () => {
             dryRun: true,
         }, installOptions(homeDir));
 
-        assert.equal(result.results.length, 2);
+        assert.equal(result.results.length, 3);
         assert.equal(result.results.every((entry) => entry.dryRun), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".claude", "settings.json")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".config", "opencode", "opencode.json")), false);
+        assert.equal(fs.existsSync(launcherPath(homeDir)), false);
     });
 });

@@ -120,10 +120,10 @@ test('search eval matrix invariants hold for runtime/docs scope and deterministi
         const handlers = createHandlers(repoPath, FIXTURE_RESULTS);
         const matrix = [
             {
-                name: 'runtime scope excludes docs/tests',
+                name: 'runtime scope includes tests but excludes docs',
                 args: { scope: 'runtime', resultMode: 'raw', groupBy: 'symbol', query: 'auth flow', limit: 5 },
-                expectedIn: ['src/auth/runtime.ts'],
-                expectedNotIn: ['docs/auth.md', 'src/auth/auth.test.ts']
+                expectedIn: ['src/auth/runtime.ts', 'src/auth/auth.test.ts'],
+                expectedNotIn: ['docs/auth.md']
             },
             {
                 name: 'docs scope includes docs and tests only',

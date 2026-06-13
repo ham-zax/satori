@@ -9,20 +9,22 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Exactly six MCP tools are exposed via registry: `list_codebases`, `manage_index`, `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - `satori-cli` is a shell client of the same six MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
 - `satori-cli` also ships CLI-only `install` and `uninstall` commands for supported clients; these commands run before MCP session startup and do not widen the six-tool surface.
+- Managed installs perform package resolution during setup, not resident MCP startup; generated client config must avoid `npx`/package-manager launch paths.
 - `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers and responses are structured JSON envelopes.
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
 - `path:` and `-path:` operators use gitignore-style pattern matching via `ignore` against normalized repo-relative paths.
-- Scope filtering is strict: runtime excludes docs/tests, docs includes docs/tests only, mixed includes all.
+- Scope filtering is strict: runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures, docs includes docs/tests only, mixed includes all.
 - Search filtering precedence is deterministic: scope -> lang -> path include -> path exclude -> must -> exclude.
 - Must-retry is bounded and deterministic; warning is emitted only when must constraints remain unsatisfied after retries.
 - Group diversity is default-on and deterministic with fixed caps and one deterministic relaxed pass.
-- Changed-files boost is git-aware with TTL cache and hard threshold gating for large dirty trees.
+- Changed-files boost is git-aware with TTL cache and hard threshold gating for large dirty trees; search responses expose a compact freshness summary on every ok result.
+- Owner-oriented ranking favors canonical core implementation paths over adapters/tool wrappers for implementation queries.
 - Noise mitigation hint is deterministic, category-based, emitted only when noise ratio threshold is crossed in visible top-K, and root `.gitignore`-aware for redundant suggestion suppression.
 - Rerank is policy-controlled (capability/profile + docs-scope skip), runs post-filter and pre-group, top-K bounded, deterministic rank-only boost, stable failure degradation.
 - Candidate and group sorting both use explicit deterministic tie-break chains.
 - Grouping supports `symbol` and `file`; fallback groups use deterministic hashed IDs when symbol identity is unavailable.
-- `callGraphHint` contains supported/unsupported reasoned state; unsupported groups expose executable `navigationFallback`.
+- `callGraphHint` contains supported/unsupported reasoned state; unsupported groups expose executable `navigationFallback`, and search hints always include the next navigation step.
 - `file_outline` supports `resolveMode=outline|exact` with exact outcomes `ok|ambiguous|not_found`.
 - `read_file` supports `plain|annotated`; annotated mode returns `outlineStatus`, `outline`, `hasMore`, warnings/hints; `open_symbol` resolves deterministically via `file_outline exact`.
 - Reindex-compatibility gates propagate `requires_reindex` envelopes with deterministic `hints.reindex` across search/navigation tools.
@@ -46,6 +48,7 @@ Architecture in words:
 - Core sync (`packages/core`) tracks file state (stats, hashes, merkle root, partial-scan metadata).
 - MCP runtime (`packages/mcp`) owns snapshot status, freshness gating, search orchestration, call graph sidecar lifecycle, and tool routing.
 - Shell CLI runtime (`packages/mcp/src/cli`) is transport/client glue plus install/uninstall lifecycle commands; it must not duplicate MCP tool logic.
+- Installer runtime cache paths are private implementation details; public setup remains the one-command CLI installer flow.
 - Sidecar/index artifacts are consumed by `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - Agent-visible entrypoints are only the six tools from `toolRegistry`.
 
@@ -59,7 +62,7 @@ North-star workflow:
 Behavior contract:
 - Trigger: MCP server starts and tools are invoked.
 - Effect: Requests route through `ToolHandlers`, enforcing indexing/fingerprint/sync/sidecar gates before returning envelopes.
-- Observability: JSON envelopes (`status`, `hints`, `warnings`, `freshnessDecision`) and deterministic debug payload when `debug:true`.
+- Observability: JSON envelopes (`status`, `hints`, `warnings`, `freshnessDecision`, `freshnessSummary`) and deterministic debug payload when `debug:true`.
 - Determinism: Explicit sort/tie-break chains, stable warning ordering, fixed caps/thresholds/constants.
 - Performance impact: incremental sync, coalescing, bounded retries, bounded rerank top-K, cached git-status, watcher debounce.
 
@@ -123,6 +126,7 @@ Outputs:
 Warnings/hints:
 - Reindex guidance text when blocked by fingerprint mismatch.
 - Zilliz collection-limit guidance with explicit next action.
+- Vector backend failures return structured `status=error`, `reason=vector_backend_unavailable`, stable diagnostic code, and remediation in `hints.backend`.
 - `create` path resolves and can return "already indexed" guidance.
 - `reindex` preflight can emit deterministic warnings (`REINDEX_UNNECESSARY_IGNORE_ONLY`, `REINDEX_PREFLIGHT_UNKNOWN`, `IGNORE_POLICY_PROBE_FAILED`).
 
@@ -155,12 +159,13 @@ Inputs/defaults:
 - Defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `limit=capability default`, `debug=false`.
 
 Outputs:
-- JSON envelope: `status`, `path`, `query`, `scope`, `groupBy`, `resultMode`, `limit`, `freshnessDecision`, `results`, optional `warnings` and `hints`.
-- Status variants: `ok`, `not_indexed`, `requires_reindex`.
+- JSON envelope: `status`, `path`, `query`, `scope`, `groupBy`, `resultMode`, `limit`, `freshnessDecision`, `freshnessSummary`, `results`, optional `warnings`, and `hints`.
+- Status variants: `ok`, `not_indexed`, `requires_reindex`, `not_ready`.
 
 Warnings/hints:
-- `FILTER_MUST_UNSATISFIED`, `SEARCH_PASS_FAILED:*`, `RERANKER_FAILED`.
-- `hints.noiseMitigation`, `hints.debugSearch`, `hints.reindex`, `navigationFallback`.
+- `FILTER_MUST_UNSATISFIED`, `SEARCH_PASS_FAILED:*`, `RERANKER_FAILED`, `SEARCH_DIRTY_WORKTREE_NOT_SYNCED`, `SEARCH_CHANGED_FILES_BOOST_SKIPPED`.
+- `hints.navigation`, `hints.noiseMitigation`, `hints.debugSearch`, `hints.reindex`, `navigationFallback`.
+- Backend failures return structured `not_ready` envelopes with `reason=vector_backend_unavailable`, stable diagnostic codes such as `ZILLIZ_CLUSTER_STOPPED`, and remediation in `hints.backend`.
 
 Determinism:
 - deterministic operator parse, filter order, tie-breaks, warning sort, grouping logic, diversity selection.
@@ -286,7 +291,7 @@ Behavior:
 
 1) Scope semantics (`runtime|mixed|docs`)
 - Trigger: `scope` input.
-- Effect: `runtime` excludes docs/tests, `docs` includes docs/tests only, `mixed` includes all.
+- Effect: `runtime` includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures, `docs` includes docs/tests only, `mixed` includes all.
 - Observability: returned files and `hints.debugSearch.filterSummary.removedByScope`.
 - Determinism: strict category gate from `shouldIncludeCategoryInScope`.
 - Performance: early scope filtering reduces downstream scoring/grouping volume.
@@ -337,16 +342,24 @@ Behavior:
 8) Changed-files boost
 - Trigger: `rankingMode=auto_changed_first`.
 - Effect: tracked git-changed files get multiplicative boost when changed-file count is within threshold.
-- Observability: `hints.debugSearch.changedFilesBoost`.
+- Observability: `freshnessSummary.changedFileCount`, `freshnessSummary.gitDirtyFilesConsidered`, `freshnessSummary.changedFilesBoostApplied` (true only when at least one candidate was boosted), `freshnessSummary.changedFilesBoostSkippedForLargeChangeSet`, and `hints.debugSearch.changedFilesBoost` when `debug:true`.
+- Warnings: `SEARCH_DIRTY_WORKTREE_NOT_SYNCED` when tracked dirty files are visible but freshness did not sync/reconcile, and `SEARCH_CHANGED_FILES_BOOST_SKIPPED` when the dirty set exceeds the boost threshold.
 - Determinism: tracked-only porcelain parse, normalized paths, TTL-cached set, threshold disable path.
 - Performance: one cached git status call per TTL window (5s), fallback to stale cache on git failure.
+
+8a) Owner-vs-wrapper ranking
+- Trigger: implementation/owner-oriented search where adapters/tool wrappers and core implementation files both match.
+- Effect: canonical core/runtime owners receive stronger path-category weighting than adapters/wrappers; adapters remain searchable but are downweighted.
+- Observability: `hints.debugSearch` result debug includes `pathCategory` and `pathMultiplier` when `debug:true`.
+- Determinism: fixed `PathCategory` classifier and `SCOPE_PATH_MULTIPLIERS`.
+- Performance: path-only scoring adjustment; no extra backend calls.
 
 9) Noise mitigation hint
 - Trigger: top visible results exceed noise ratio threshold.
 - Effect: emits deterministic mitigation payload (`ratios`, `recommendedScope`, patterns, debounce, nextStep) with root `.gitignore` redundancy suppression.
 - Observability: `hints.noiseMitigation` with `version=1`.
 - Determinism:
-  - fixed category precedence `generated > tests > fixtures > docs > runtime`, topK fixed cap.
+  - fixed category precedence `generated > fixture > landing > artifact > tests > docs > example > adapter > entrypoint > core > srcRuntime > neutral`, topK fixed cap.
   - suggestion order remains stable (`SEARCH_NOISE_HINT_PATTERNS` order).
   - suppression is path-observed over top-K noisy files only.
   - fallback to baseline suggestions when root `.gitignore` matcher state is absent/error.
@@ -444,7 +457,7 @@ Recent vs legacy:
 2) Sync-on-read (`ensureFreshness`)
 - Trigger: `search_codebase` call.
 - Effect: runs freshness gate with threshold `3 minutes`; may sync/coalesce/skip.
-- Observability: `freshnessDecision` in search envelope (`synced|skipped_recent|coalesced|...`).
+- Observability: `freshnessDecision` in search envelope (`synced|skipped_recent|coalesced|...`) plus `freshnessSummary` (`syncMode`, `lastSyncAt`, dirty-file count, and boost application/skip booleans).
 - Determinism: fixed gate order and thresholds.
 - Performance: avoids repeated sync with throttling/coalescing.
   Implementation nuance: only `search_codebase` calls `ensureFreshness`; `file_outline` and `call_graph` do not run sync-on-read freshness and do not run cloud-state snapshot reconciliation in foreground.
@@ -727,14 +740,17 @@ Behavior contract:
 | Operator parsing + escaping | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `parses operators from query prefix...` |
 | Must warning semantics | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `emits FILTER_MUST_UNSATISFIED...`, `does not emit ... when must succeeds after retry` |
 | Diversity default behavior | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped diversity keeps multi-file coverage by default` |
-| Changed-files boost + threshold + cache fallback | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `applies changed-files boost...`, `skips boost when changed set exceeds threshold`, `reuses stale cache on git status failure` |
+| Changed-files freshness summary, boost threshold + cache fallback | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `applies changed-files boost...`, `exposes freshness summary...`, `skips boost when changed set exceeds threshold`, `reuses stale cache on git status failure` |
+| Owner-vs-wrapper ranking | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `ranks canonical owners above tool wrappers...` |
 | Rerank docs-scope policy skip | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `policy mode skips reranker for docs scope...` |
 | Rerank degraded failure path debug code | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `degrades gracefully when reranker fails` |
 | Missing reranker clamp behavior | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `rerank.enabled=false when reranker instance is missing` |
 | Rerank can alter representative chunk before grouping | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `reranker can change grouped representative chunk selection...` |
 | Noise mitigation hint deterministic payload | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `emits deterministic noiseMitigation hint...`, `omits ... runtime-dominant` |
 | Fallback groupId + navigation fallback stability | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped fallback emits stable hash groupId...` |
+| Search navigation next-step hint | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped output includes runnable nextActions...` |
 | Subdirectory query fallback context correctness | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `subdirectory query builds navigationFallback from effectiveRoot...` |
+| Backend diagnostics for stopped/unavailable vector backend | [setup-errors.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/setup-errors.test.ts), [search_codebase.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/search_codebase.test.ts), [manage_index.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/manage_index.test.ts) |
 | `file_outline` exact mode statuses | [handlers.file_outline.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.file_outline.test.ts) `exact mode resolves unique`, `returns ambiguous`, `returns not_found` |
 | `file_outline` requires_reindex/metadata warning | [handlers.file_outline.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.file_outline.test.ts) `returns requires_reindex...`, `OUTLINE_MISSING_SYMBOL_METADATA` |
 | `call_graph` requires_reindex and status mapping | [handlers.call_graph.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.call_graph.test.ts) `requires_reindex envelope...`, `maps missing_symbol to not_found` |

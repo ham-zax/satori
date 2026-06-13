@@ -37,38 +37,9 @@ The installer writes Satori-managed config and copies the first-party skills:
 - `satori-navigation`
 - `satori-indexing`
 
-Manual JSON-style MCP config:
+It also installs the MCP server once under `~/.satori/mcp-runtime/` and writes client config that starts the cached server entry directly with Node. Resident MCP startup should not perform package-manager resolution.
 
-```json
-{
-  "mcpServers": {
-    "satori": {
-      "command": "npx",
-      "args": ["-y", "@zokizuan/satori-mcp@4.10.1"],
-      "timeout": 180000,
-      "env": {
-        "EMBEDDING_PROVIDER": "VoyageAI",
-        "EMBEDDING_MODEL": "voyage-4-large",
-        "EMBEDDING_OUTPUT_DIMENSION": "1024",
-        "VOYAGEAI_API_KEY": "your-api-key",
-        "VOYAGEAI_RERANKER_MODEL": "rerank-2.5",
-        "MILVUS_ADDRESS": "your-milvus-endpoint",
-        "MILVUS_TOKEN": "your-milvus-token"
-      }
-    }
-  }
-}
-```
-
-Manual TOML-style config:
-
-```toml
-[mcp_servers.satori]
-command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.10.1"]
-startup_timeout_ms = 180000
-env = { EMBEDDING_PROVIDER = "VoyageAI", EMBEDDING_MODEL = "voyage-4-large", EMBEDDING_OUTPUT_DIMENSION = "1024", VOYAGEAI_API_KEY = "your-api-key", VOYAGEAI_RERANKER_MODEL = "rerank-2.5", MILVUS_ADDRESS = "your-milvus-endpoint", MILVUS_TOKEN = "your-milvus-token" }
-```
+Treat the cache path as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
 
 Restart the MCP client after changing config.
 

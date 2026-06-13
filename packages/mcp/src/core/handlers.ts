@@ -60,6 +60,7 @@ import {
     SearchChunkResult,
     SearchDebugHint,
     SearchGroupResult,
+    SearchFreshnessSummary,
     SearchNoiseMitigationHint,
     SearchOperatorSummary,
     SearchRequestInput,
@@ -84,6 +85,12 @@ import type {
 import {
     validateCompletionProof as validateIndexCompletionProof
 } from "./completion-proof.js";
+import {
+    classifyVectorBackendError,
+} from "./backend-diagnostics.js";
+import type {
+    VectorBackendDiagnostic
+} from "./backend-diagnostics.js";
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -103,6 +110,7 @@ const SEARCH_QUERY_STOPWORDS = new Set([
     'what', 'where', 'which', 'who', 'why'
 ]);
 const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
+const SEARCH_NAVIGATION_NEXT_STEP = 'Open the selected result, then trace callers/callees when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.';
 // Recovery probe threshold for "likely interrupted" indexing states.
 // Keep this shorter than snapshot merge stale semantics for better operator UX.
 const STALE_INDEXING_RECOVERY_GRACE_MS = 2 * 60_000;
@@ -431,6 +439,7 @@ export class ToolHandlers {
         humanText: string,
         options: {
             reason?: ManageIndexReason;
+            code?: ManageIndexResponseEnvelope["code"];
             warnings?: WarningCode[];
             hints?: Record<string, unknown>;
             preflight?: ReindexPreflightResult;
@@ -448,6 +457,9 @@ export class ToolHandlers {
         };
         if (options.reason) {
             envelope.reason = options.reason;
+        }
+        if (options.code) {
+            envelope.code = options.code;
         }
         if (Array.isArray(options.warnings) && options.warnings.length > 0) {
             envelope.warnings = [...new Set(options.warnings)];
@@ -481,6 +493,7 @@ export class ToolHandlers {
         humanText: string,
         options: {
             reason?: ManageIndexReason;
+            code?: ManageIndexResponseEnvelope["code"];
             warnings?: WarningCode[];
             hints?: Record<string, unknown>;
             preflight?: ReindexPreflightResult;
@@ -490,6 +503,20 @@ export class ToolHandlers {
         return this.manageResponseFromEnvelope(
             this.buildManageResponseEnvelope(action, codebasePath, status, humanText, options)
         );
+    }
+
+    private manageVectorBackendResponse(
+        action: ManageIndexAction,
+        codebasePath: string,
+        diagnostic: VectorBackendDiagnostic,
+        humanText = diagnostic.message
+    ): { content: Array<{ type: "text"; text: string }> } {
+        return this.manageResponse(action, codebasePath, "error", humanText, {
+            reason: "vector_backend_unavailable",
+            code: diagnostic.code,
+            message: diagnostic.message,
+            hints: diagnostic.hints
+        });
     }
 
     private buildIndexingMetadata(codebasePath: string): { progressPct: number | null; lastUpdated: string | null; phase: string | null } {
@@ -853,6 +880,34 @@ export class ToolHandlers {
         } as SearchResponseEnvelope;
     }
 
+    private buildVectorBackendSearchPayload(
+        diagnostic: VectorBackendDiagnostic,
+        searchContext: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        }
+    ): SearchResponseEnvelope {
+        return {
+            status: "not_ready",
+            reason: "vector_backend_unavailable",
+            code: diagnostic.code,
+            path: searchContext.path,
+            query: searchContext.query,
+            scope: searchContext.scope,
+            groupBy: searchContext.groupBy,
+            resultMode: searchContext.resultMode,
+            limit: searchContext.limit,
+            freshnessDecision: null,
+            message: diagnostic.message,
+            hints: diagnostic.hints,
+            results: []
+        } as SearchResponseEnvelope;
+    }
+
     private buildNotReadyFileOutlinePayload(codebasePath: string, file: string, requestedPath: string): FileOutlineResponseEnvelope & Record<string, unknown> {
         return {
             status: 'not_ready',
@@ -1172,6 +1227,10 @@ export class ToolHandlers {
             || normalizedPath.includes(`/${segment}/`);
     }
 
+    private hasLeadingPathSegment(normalizedPath: string, segment: string): boolean {
+        return normalizedPath === segment || normalizedPath.startsWith(`${segment}/`);
+    }
+
     private isTestPath(normalizedPath: string): boolean {
         return this.hasPathSegment(normalizedPath, 'test')
             || this.hasPathSegment(normalizedPath, 'tests')
@@ -1209,6 +1268,36 @@ export class ToolHandlers {
             || this.hasPathSegment(normalizedPath, '__fixtures__');
     }
 
+    private isArtifactPath(normalizedPath: string): boolean {
+        return this.hasLeadingPathSegment(normalizedPath, 'reports')
+            || this.hasLeadingPathSegment(normalizedPath, 'report')
+            || this.hasLeadingPathSegment(normalizedPath, 'investigations')
+            || this.hasLeadingPathSegment(normalizedPath, 'investigation')
+            || this.hasPathSegment(normalizedPath, '.codebase-memory')
+            || this.hasPathSegment(normalizedPath, '.satori');
+    }
+
+    private isLandingPath(normalizedPath: string): boolean {
+        return this.hasPathSegment(normalizedPath, 'satori-landing')
+            || this.hasPathSegment(normalizedPath, 'landing')
+            || this.hasPathSegment(normalizedPath, 'landing-page');
+    }
+
+    private isExamplePath(normalizedPath: string): boolean {
+        return this.hasPathSegment(normalizedPath, 'examples')
+            || this.hasPathSegment(normalizedPath, 'example')
+            || this.hasPathSegment(normalizedPath, 'demo')
+            || this.hasPathSegment(normalizedPath, 'samples')
+            || this.hasPathSegment(normalizedPath, 'sample');
+    }
+
+    private isAdapterPath(normalizedPath: string): boolean {
+        return this.hasPathSegment(normalizedPath, 'adapters')
+            || this.hasPathSegment(normalizedPath, 'adapter')
+            || this.hasPathSegment(normalizedPath, 'tools')
+            || this.hasPathSegment(normalizedPath, 'cli');
+    }
+
     private isEntrypointPath(normalizedPath: string): boolean {
         const entryNames = ['main.', 'index.', 'app.', 'server.', 'cli.', 'entry.'];
         const baseName = normalizedPath.split('/').pop() || '';
@@ -1217,9 +1306,14 @@ export class ToolHandlers {
 
     private classifyPathCategory(relativePath: string): PathCategory {
         const normalized = this.normalizeSearchPath(relativePath);
-        if (this.isDocPath(normalized)) return 'docs';
-        if (this.isTestPath(normalized)) return 'tests';
         if (this.isGeneratedPath(normalized)) return 'generated';
+        if (this.isFixturePath(normalized)) return 'fixture';
+        if (this.isLandingPath(normalized)) return 'landing';
+        if (this.isArtifactPath(normalized)) return 'artifact';
+        if (this.isTestPath(normalized)) return 'tests';
+        if (this.isDocPath(normalized)) return 'docs';
+        if (this.isExamplePath(normalized)) return 'example';
+        if (this.isAdapterPath(normalized)) return 'adapter';
         if (this.isEntrypointPath(normalized)) return 'entrypoint';
         if (normalized.includes('/src/core/') || normalized.includes('/core/')) return 'core';
         if (normalized.includes('/src/')) return 'srcRuntime';
@@ -2204,7 +2298,11 @@ export class ToolHandlers {
 
     private shouldIncludeCategoryInScope(scope: SearchScope, category: PathCategory): boolean {
         if (scope === 'runtime') {
-            return category !== 'docs' && category !== 'tests';
+            return category !== 'docs'
+                && category !== 'generated'
+                && category !== 'artifact'
+                && category !== 'landing'
+                && category !== 'fixture';
         }
         if (scope === 'docs') {
             return category === 'docs' || category === 'tests';
@@ -3509,6 +3607,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     );
                 }
 
+                const vectorBackendDiagnostic = classifyVectorBackendError(validationError);
+                if (vectorBackendDiagnostic) {
+                    return this.manageVectorBackendResponse(manageAction, absolutePath, vectorBackendDiagnostic);
+                }
+
                 const validationMessage = formatUnknownError(validationError);
                 const backendTimeout = isBackendTimeoutError(validationError);
                 const timeoutOptions = backendTimeout
@@ -3593,6 +3696,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         } catch (error: any) {
             // Enhanced error handling to prevent MCP service crash
             console.error('Error in handleIndexCodebase:', error);
+            const vectorBackendDiagnostic = classifyVectorBackendError(error);
+            if (vectorBackendDiagnostic) {
+                const errorMessage = formatUnknownError(error);
+                const preservesLocalState = errorMessage.includes('Force reindex cleanup failed before local state changes');
+                const humanText = preservesLocalState
+                    ? `${vectorBackendDiagnostic.message} ${errorMessage}`
+                    : vectorBackendDiagnostic.message;
+                return this.manageVectorBackendResponse(manageAction, ensureAbsolutePath(codebasePath), vectorBackendDiagnostic, humanText);
+            }
             const errorMessage = formatUnknownError(error);
 
             // Ensure we always return a proper MCP response, never throw
@@ -4013,15 +4125,26 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 removedByMust: 0,
                 removedByExclude: 0,
             };
+            const observedChangedFilesState = this.getChangedFilesForCodebase(effectiveRoot);
             const changedFilesState = input.rankingMode === 'auto_changed_first'
-                ? this.getChangedFilesForCodebase(effectiveRoot)
-                : { available: false, files: new Set<string>() };
-            const debugChangedFilesState = input.debug
-                ? (input.rankingMode === 'auto_changed_first' ? changedFilesState : this.getChangedFilesForCodebase(effectiveRoot))
-                : undefined;
+                ? observedChangedFilesState
+                : { available: observedChangedFilesState.available, files: new Set<string>() };
+            const debugChangedFilesState = input.debug ? observedChangedFilesState : undefined;
             const changedFilesCount = changedFilesState.files.size;
+            const observedChangedFilesCount = observedChangedFilesState.files.size;
             const changedFilesBoostWithinThreshold = changedFilesCount > 0 && changedFilesCount <= SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES;
-            const changedFilesBoostEnabled = changedFilesState.available && changedFilesBoostWithinThreshold;
+            const changedFilesBoostEnabled = input.rankingMode === 'auto_changed_first' && changedFilesState.available && changedFilesBoostWithinThreshold;
+            const changedFilesBoostSkippedForLargeChangeSet = input.rankingMode === 'auto_changed_first'
+                && changedFilesState.available
+                && changedFilesCount > SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES;
+            const freshnessSummary: SearchFreshnessSummary = {
+                syncMode: freshnessDecision.mode,
+                lastSyncAt: typeof freshnessDecision.lastSyncAt === 'string' ? freshnessDecision.lastSyncAt : null,
+                changedFileCount: observedChangedFilesCount,
+                gitDirtyFilesConsidered: observedChangedFilesState.available,
+                changedFilesBoostApplied: false,
+                changedFilesBoostSkippedForLargeChangeSet,
+            };
             let boostedCandidates = 0;
             let attemptsUsed = 0;
             const searchWarningsSet = new Set<string>();
@@ -4056,6 +4179,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }));
 
                 const successfulPasses: Array<{ id: string; results: any[] }> = [];
+                let vectorBackendDiagnostic: VectorBackendDiagnostic | null = null;
                 for (let idx = 0; idx < passSettled.length; idx++) {
                     const passResult = passSettled[idx];
                     const passDescriptor = passDescriptors[idx];
@@ -4068,6 +4192,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         continue;
                     }
 
+                    if (passResult.status === 'rejected' && vectorBackendDiagnostic === null) {
+                        vectorBackendDiagnostic = classifyVectorBackendError(passResult.reason);
+                    }
                     searchWarningsSet.add(this.buildSearchPassWarning(passDescriptor.id));
                 }
 
@@ -4075,6 +4202,25 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 searchDiagnostics.searchPassFailureCount += passDescriptors.length - successfulPasses.length;
 
                 if (successfulPasses.length === 0) {
+                    if (vectorBackendDiagnostic) {
+                        const payload = this.buildVectorBackendSearchPayload(vectorBackendDiagnostic, {
+                            path: absolutePath,
+                            query: input.query,
+                            scope: input.scope,
+                            groupBy: input.groupBy,
+                            resultMode: input.resultMode,
+                            limit: input.limit
+                        });
+                        return {
+                            content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                            meta: {
+                                searchDiagnostics: {
+                                    ...searchDiagnostics,
+                                    error: vectorBackendDiagnostic.code
+                                }
+                            }
+                        };
+                    }
                     return {
                         content: [{
                             type: "text",
@@ -4224,6 +4370,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             const searchWarnings = Array.from(searchWarningsSet);
+            const dirtyFilesNotFreshened = observedChangedFilesState.available
+                && observedChangedFilesCount > 0
+                && freshnessDecision.mode !== 'synced'
+                && freshnessDecision.mode !== 'reconciled_ignore_change';
+            if (dirtyFilesNotFreshened) {
+                searchWarnings.push(WARNING_CODES.SEARCH_DIRTY_WORKTREE_NOT_SYNCED);
+            }
+            if (changedFilesBoostSkippedForLargeChangeSet) {
+                searchWarnings.push(WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED);
+            }
+            freshnessSummary.changedFilesBoostApplied = boostedCandidates > 0;
             const rerankDecision = this.resolveRerankDecision(input.scope, queryPlan);
             let rerankerApplied = false;
             let rerankerAttempted = false;
@@ -4320,11 +4477,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     filterSummary,
                     changedFilesBoost: {
                         enabled: input.rankingMode === 'auto_changed_first',
-                        applied: changedFilesBoostEnabled,
+                        applied: boostedCandidates > 0,
                         available: changedFilesState.available,
                         changedCount: changedFilesCount,
                         maxChangedFilesForBoost: SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
-                        skippedForLargeChangeSet: changedFilesCount > SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
+                        skippedForLargeChangeSet: changedFilesBoostSkippedForLargeChangeSet,
                         multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
                         boostedCandidates,
                     },
@@ -4389,10 +4546,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     file: result.file,
                     span: result.span,
                 })));
-                const responseHints: Record<string, unknown> = {};
-                if (noiseMitigationHint || debugHintBase || proofDebugHint || generatedArtifactsHint) {
-                    responseHints.version = 1 as const;
-                }
+                const responseHints: Record<string, unknown> = {
+                    version: 1 as const,
+                    navigation: { nextStep: SEARCH_NAVIGATION_NEXT_STEP },
+                };
                 if (noiseMitigationHint) {
                     responseHints.noiseMitigation = noiseMitigationHint;
                 }
@@ -4417,8 +4574,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit,
                     resultMode: "raw",
                     freshnessDecision,
+                    freshnessSummary,
                     ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
-                    ...(Object.keys(responseHints).length > 0 ? { hints: responseHints } : {}),
+                    hints: responseHints,
                     results: rawResults
                 };
 
@@ -4559,10 +4717,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 file: result.file,
                 span: result.span,
             })));
-            const responseHints: Record<string, unknown> = {};
-            if (noiseMitigationHint || debugHintBase || proofDebugHint || generatedArtifactsHint) {
-                responseHints.version = 1 as const;
-            }
+            const responseHints: Record<string, unknown> = {
+                version: 1 as const,
+                navigation: { nextStep: SEARCH_NAVIGATION_NEXT_STEP },
+            };
             if (noiseMitigationHint) {
                 responseHints.noiseMitigation = noiseMitigationHint;
             }
@@ -4590,8 +4748,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 limit: input.limit,
                 resultMode: "grouped",
                 freshnessDecision,
+                freshnessSummary,
                 ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
-                ...(Object.keys(responseHints).length > 0 ? { hints: responseHints } : {}),
+                hints: responseHints,
                 results: visibleGroupedResults.map(({ __exactLexicalMatch: _exactLexicalMatch, ...result }) => result)
             };
 
@@ -4601,6 +4760,26 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 meta: { searchDiagnostics }
             };
         } catch (error) {
+            const vectorBackendDiagnostic = classifyVectorBackendError(error);
+            if (vectorBackendDiagnostic) {
+                const payload = this.buildVectorBackendSearchPayload(vectorBackendDiagnostic, {
+                    path: ensureAbsolutePath(input.path),
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                });
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    meta: {
+                        searchDiagnostics: {
+                            tool: 'search_codebase',
+                            error: vectorBackendDiagnostic.code
+                        }
+                    }
+                };
+            }
             const errorMessage = typeof error === 'string' ? error : (error instanceof Error ? error.message : String(error));
 
             if (errorMessage === COLLECTION_LIMIT_MESSAGE || errorMessage.includes(COLLECTION_LIMIT_MESSAGE)) {
@@ -5651,6 +5830,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
         } catch (error: any) {
             console.error(`[SYNC] Error during sync:`, error);
+            const vectorBackendDiagnostic = classifyVectorBackendError(error);
+            if (vectorBackendDiagnostic) {
+                return this.manageVectorBackendResponse("sync", requestedPath, vectorBackendDiagnostic);
+            }
             return this.manageResponse("sync", requestedPath, "error", `Error syncing codebase: ${error.message || error}`);
         }
     }

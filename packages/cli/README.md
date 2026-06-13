@@ -12,14 +12,7 @@ npx -y @zokizuan/satori-cli@0.3.2 uninstall --client codex
 npx -y @zokizuan/satori-cli@0.3.2 doctor
 ```
 
-Managed installs write config that launches:
-
-```toml
-[mcp_servers.satori]
-command = "npx"
-args = ["-y", "@zokizuan/satori-mcp@4.10.1"]
-startup_timeout_ms = 180000
-```
+The install command performs package resolution once, stores the MCP server under `~/.satori/mcp-runtime/`, and writes client-specific config that starts the cached server directly with Node. Treat that cache path as installer-owned; public setup should not require copying it by hand.
 
 The installer only manages Satori-owned config and skills:
 

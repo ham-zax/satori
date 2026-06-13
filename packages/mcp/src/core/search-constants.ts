@@ -42,6 +42,11 @@ export type PathCategory =
     | 'entrypoint'
     | 'core'
     | 'srcRuntime'
+    | 'adapter'
+    | 'example'
+    | 'fixture'
+    | 'artifact'
+    | 'landing'
     | 'neutral'
     | 'tests'
     | 'docs'
@@ -49,18 +54,28 @@ export type PathCategory =
 
 export const SCOPE_PATH_MULTIPLIERS: Record<SearchScope, Record<PathCategory, number>> = {
     runtime: {
-        entrypoint: 1.40,
-        core: 1.25,
+        entrypoint: 1.20,
+        core: 1.35,
         srcRuntime: 1.10,
-        neutral: 1.00,
-        tests: 0.65,
-        docs: 0.55,
-        generated: 0.40,
+        adapter: 0.70,
+        example: 0.60,
+        fixture: 0.35,
+        artifact: 0.30,
+        landing: 0.30,
+        neutral: 0.95,
+        tests: 0.90,
+        docs: 0.45,
+        generated: 0.30,
     },
     mixed: {
         entrypoint: 1.15,
         core: 1.10,
         srcRuntime: 1.05,
+        adapter: 0.90,
+        example: 0.85,
+        fixture: 0.65,
+        artifact: 0.65,
+        landing: 0.65,
         neutral: 1.00,
         tests: 0.90,
         docs: 0.90,
@@ -70,6 +85,11 @@ export const SCOPE_PATH_MULTIPLIERS: Record<SearchScope, Record<PathCategory, nu
         entrypoint: 0.50,
         core: 0.50,
         srcRuntime: 0.50,
+        adapter: 0.50,
+        example: 0.70,
+        fixture: 0.60,
+        artifact: 0.50,
+        landing: 0.40,
         neutral: 0.80,
         tests: 1.10,
         docs: 1.20,

@@ -166,6 +166,19 @@ export interface SearchNoiseMitigationHint {
     nextStep: string;
 }
 
+export interface SearchNavigationHint {
+    nextStep: string;
+}
+
+export interface SearchFreshnessSummary {
+    syncMode: FreshnessDecision["mode"] | "skipped_requires_reindex" | "skipped_indexing";
+    lastSyncAt: string | null;
+    changedFileCount: number;
+    gitDirtyFilesConsidered: boolean;
+    changedFilesBoostApplied: boolean;
+    changedFilesBoostSkippedForLargeChangeSet: boolean;
+}
+
 export interface SearchOperatorSummary {
     prefixBlockChars: number;
     lang: string[];
@@ -272,6 +285,7 @@ export interface SearchDebugHint {
 
 export interface SearchResponseHints extends Record<string, unknown> {
     version?: 1;
+    navigation?: SearchNavigationHint;
     noiseMitigation?: SearchNoiseMitigationHint;
     debugSearch?: SearchDebugHint;
     verification?: {
@@ -284,18 +298,31 @@ export interface SearchResponseHints extends Record<string, unknown> {
     };
 }
 
-export type NonOkReason = "indexing" | "requires_reindex" | "not_indexed" | "missing_provider_config";
+export type VectorBackendResponseCode =
+    | "ZILLIZ_CLUSTER_STOPPED"
+    | "VECTOR_BACKEND_AUTH_FAILED"
+    | "VECTOR_BACKEND_UNREACHABLE"
+    | "VECTOR_BACKEND_TIMEOUT"
+    | "VECTOR_BACKEND_CONNECTION_CLOSED";
+
+export type NonOkReason =
+    | "indexing"
+    | "requires_reindex"
+    | "not_indexed"
+    | "missing_provider_config"
+    | "vector_backend_unavailable";
 
 interface SearchBaseResponseEnvelope {
     status: "ok" | "requires_reindex" | "not_indexed" | "not_ready";
     reason?: NonOkReason;
-    code?: "MISSING_PROVIDER_CONFIG";
+    code?: "MISSING_PROVIDER_CONFIG" | VectorBackendResponseCode;
     path: string;
     query: string;
     scope: SearchScope;
     groupBy: SearchGroupBy;
     limit: number;
     freshnessDecision: FreshnessDecision | { mode: "skipped_requires_reindex" | "skipped_indexing" } | null;
+    freshnessSummary?: SearchFreshnessSummary;
     warnings?: string[];
     message?: string;
     hints?: SearchResponseHints;

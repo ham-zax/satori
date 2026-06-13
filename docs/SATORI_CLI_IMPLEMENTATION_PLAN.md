@@ -52,7 +52,7 @@ Anything else is treated as a tool name.
 - human-readable text (if any) goes to stderr only
 
 ### Global flags
-- `--startup-timeout-ms <n>` default `180000`
+- `--startup-timeout-ms <n>` default `30000`
 - `--call-timeout-ms <n>` default `600000`
 - `--format json|text` default `json` (`text` summary prints to stderr only)
 - `--debug` (stderr diagnostics)

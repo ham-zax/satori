@@ -430,7 +430,7 @@ test('handleIndexCodebase rejects zillizDropCollection for non-Zilliz backend', 
     });
 });
 
-test('handleIndexCodebase surfaces structured Zilliz validation errors without [object Object]', async () => {
+test('handleIndexCodebase returns vector backend diagnostics for Zilliz validation auth failures', async () => {
     await withTempRepo(async (repoPath) => {
         const { handlers } = createHandlersForValidation({
             backendProvider: 'zilliz',
@@ -448,14 +448,36 @@ test('handleIndexCodebase surfaces structured Zilliz validation errors without [
         const response = await handlers.handleIndexCodebase({ path: repoPath });
         const envelope = parseManageEnvelope(response);
         assert.equal(envelope.status, 'error');
-        const text = envelope.humanText;
-        assert.match(text, /permission denied while creating collection/i);
-        assert.match(text, /token is invalid/i);
-        assert.ok(!text.includes('[object Object]'));
+        assert.equal(envelope.reason, 'vector_backend_unavailable');
+        assert.equal(envelope.code, 'VECTOR_BACKEND_AUTH_FAILED');
+        const backendHint = envelope.hints?.backend as any;
+        assert.equal(backendHint.retryable, false);
+        assert.match(envelope.humanText, /Vector backend authentication failed/i);
     });
 });
 
-test('handleIndexCodebase create validation timeout does not mutate local index state', async () => {
+test('handleIndexCodebase returns vector backend diagnostics for stopped Zilliz clusters', async () => {
+    await withTempRepo(async (repoPath) => {
+        const { handlers, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => {
+                throw new Error('16 UNAUTHENTICATED: The action is unavailable under current cluster status STOPPED.');
+            }
+        });
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'error');
+        assert.equal(envelope.reason, 'vector_backend_unavailable');
+        assert.equal(envelope.code, 'ZILLIZ_CLUSTER_STOPPED');
+        const backendHint = envelope.hints?.backend as any;
+        assert.match(backendHint.nextSteps.join(' '), /Resume the Zilliz Cloud cluster/);
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.deepEqual(snapshotEvents.indexing, []);
+    });
+});
+
+test('handleIndexCodebase create validation timeout returns vector diagnostics and does not mutate local index state', async () => {
     await withTempRepo(async (repoPath) => {
         const { handlers, snapshotEvents } = createHandlersForValidation({
             backendProvider: 'zilliz',
@@ -467,15 +489,11 @@ test('handleIndexCodebase create validation timeout does not mutate local index 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
         const envelope = parseManageEnvelope(response);
         assert.equal(envelope.status, 'error');
-        assert.equal(envelope.reason, 'backend_timeout');
-        assert.match(envelope.humanText, /Backend timeout while validating Zilliz\/Milvus collection creation/i);
-        assert.match(envelope.humanText, /repo path is valid and local index state was not changed/i);
-        assert.match(envelope.humanText, /retryable\/operator-actionable/i);
-        assert.match(envelope.humanText, /DEADLINE_EXCEEDED/i);
-        assert.deepEqual(envelope.hints?.retry, {
-            tool: 'manage_index',
-            args: { action: 'create', path: repoPath }
-        });
+        assert.equal(envelope.reason, 'vector_backend_unavailable');
+        assert.equal(envelope.code, 'VECTOR_BACKEND_TIMEOUT');
+        const backendHint = envelope.hints?.backend as any;
+        assert.equal(backendHint.retryable, true);
+        assert.match(envelope.humanText, /Vector backend request timed out/i);
         assert.deepEqual(snapshotEvents.removed, []);
         assert.deepEqual(snapshotEvents.indexing, []);
     });

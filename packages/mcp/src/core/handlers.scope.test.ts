@@ -223,10 +223,11 @@ test('handleSearchCode grouped output includes runnable nextActions for supporte
             }
         });
         assert.equal(result.navigationFallback, undefined);
+        assert.equal(payload.hints?.navigation?.nextStep, 'Open the selected result, then trace callers/callees when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.');
     });
 });
 
-test('handleSearchCode runtime scope excludes docs and tests', async () => {
+test('handleSearchCode runtime scope includes tests but excludes docs and artifacts', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [
             {
@@ -257,12 +258,48 @@ test('handleSearchCode runtime scope excludes docs and tests', async () => {
                 indexedAt: '2026-01-01T00:30:00.000Z'
             },
             {
-                content: 'export const offlineFixture = true;',
-                relativePath: 'tests/fixtures/offline-corpus/credit-fallback.ts',
+                content: 'export const generated = true;',
+                relativePath: 'dist/runtime.js',
+                startLine: 1,
+                endLine: 2,
+                language: 'javascript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: 'implementation report',
+                relativePath: 'reports/runtime-audit.md',
+                startLine: 1,
+                endLine: 2,
+                language: 'text',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: 'export class RuntimeReportService {}',
+                relativePath: 'src/reports/runtime-report-service.ts',
                 startLine: 1,
                 endLine: 2,
                 language: 'typescript',
-                score: 0.99,
+                score: 0.93,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: 'investigation notes',
+                relativePath: 'investigations/runtime-notes.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.97,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: 'landing page code',
+                relativePath: 'satori-landing/src/App.tsx',
+                startLine: 1,
+                endLine: 2,
+                language: 'tsx',
+                score: 0.96,
                 indexedAt: '2026-01-01T00:30:00.000Z'
             }
         ]);
@@ -279,8 +316,8 @@ test('handleSearchCode runtime scope excludes docs and tests', async () => {
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.resultMode, 'raw');
-        assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, 'src/runtime.ts');
+        const files = payload.results.map((r: any) => r.file).sort();
+        assert.deepEqual(files, ['src/reports/runtime-report-service.ts', 'src/runtime.test.ts', 'src/runtime.ts']);
     });
 });
 
@@ -670,6 +707,9 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
         });
         const autoPayload = JSON.parse(autoResponse.content[0]?.text || '{}');
         assert.equal(autoPayload.results[0].file, 'src/changed.ts');
+        assert.equal(autoPayload.freshnessSummary.changedFileCount, 1);
+        assert.equal(autoPayload.freshnessSummary.gitDirtyFilesConsidered, true);
+        assert.equal(autoPayload.freshnessSummary.changedFilesBoostApplied, true);
 
         const defaultResponse = await handlers.handleSearchCode({
             path: repoPath,
@@ -682,6 +722,95 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
         });
         const defaultPayload = JSON.parse(defaultResponse.content[0]?.text || '{}');
         assert.equal(defaultPayload.results[0].file, 'src/unchanged.ts');
+        assert.equal(defaultPayload.freshnessSummary.changedFileCount, 1);
+        assert.equal(defaultPayload.freshnessSummary.gitDirtyFilesConsidered, true);
+        assert.equal(defaultPayload.freshnessSummary.changedFilesBoostApplied, false);
+    });
+});
+
+test('handleSearchCode freshness summary only marks changed-files boost applied when a candidate was boosted', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const unchanged = true;',
+                relativePath: 'src/unchanged.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_unchanged',
+                symbolLabel: 'const unchanged'
+            }
+        ]);
+
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set(['src/dirty-but-not-returned.ts'])
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'unchanged symbol',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            debug: true,
+            limit: 2
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.freshnessSummary.changedFileCount, 1);
+        assert.equal(payload.freshnessSummary.changedFilesBoostApplied, false);
+        assert.equal(payload.hints.debugSearch.changedFilesBoost.enabled, true);
+        assert.equal(payload.hints.debugSearch.changedFilesBoost.applied, false);
+        assert.equal(payload.hints.debugSearch.changedFilesBoost.boostedCandidates, 0);
+    });
+});
+
+test('handleSearchCode exposes freshness summary and warns when dirty files were not synced', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const changed = true;',
+                relativePath: 'src/changed.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_changed',
+                symbolLabel: 'const changed'
+            }
+        ]);
+
+        (handlers as any).syncManager = {
+            ensureFreshness: async () => ({ mode: 'skipped_recent', changed: false })
+        };
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set(['src/changed.ts'])
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'changed symbol',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.freshnessSummary.syncMode, 'skipped_recent');
+        assert.equal(payload.freshnessSummary.lastSyncAt, null);
+        assert.equal(payload.freshnessSummary.changedFileCount, 1);
+        assert.equal(payload.freshnessSummary.gitDirtyFilesConsidered, true);
+        assert.equal(payload.freshnessSummary.changedFilesBoostApplied, true);
+        assert.equal(payload.freshnessSummary.changedFilesBoostSkippedForLargeChangeSet, false);
+        assert.equal(payload.warnings.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
     });
 });
 
@@ -850,6 +979,11 @@ test('handleSearchCode auto_changed_first skips boost when changed file set exce
         });
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results[0].file, 'src/unchanged.ts');
+        assert.equal(payload.freshnessSummary.changedFileCount, SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES + 1);
+        assert.equal(payload.freshnessSummary.gitDirtyFilesConsidered, true);
+        assert.equal(payload.freshnessSummary.changedFilesBoostApplied, false);
+        assert.equal(payload.freshnessSummary.changedFilesBoostSkippedForLargeChangeSet, true);
+        assert.equal(payload.warnings.includes('SEARCH_CHANGED_FILES_BOOST_SKIPPED'), true);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.enabled, true);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.applied, false);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.changedCount, SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES + 1);
@@ -1284,6 +1418,54 @@ test('handleSearchCode prefers usage hits over declarations for reference-seekin
         assert.equal(payload.hints?.debugSearch?.rerank?.applied, true);
         assert.equal(payload.hints?.debugSearch?.rerank?.exactMatchPinningEnabled, false);
         assert.equal(payload.hints?.debugSearch?.rerank?.exactMatchPinningApplied, false);
+    });
+});
+
+test('handleSearchCode ranks canonical owners above tool wrappers for implementation queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export async function searchCodebase(args) { return handlers.handleSearchCode(args); }',
+                relativePath: 'packages/mcp/src/tools/search_codebase.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'vector',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_tool_search_codebase',
+                symbolLabel: 'function searchCodebase(args)'
+            },
+            {
+                content: 'async handleSearchCode(input) { const results = await this.searchRuntime(input); return results; }',
+                relativePath: 'packages/mcp/src/core/handlers.ts',
+                startLine: 4000,
+                endLine: 4040,
+                language: 'typescript',
+                score: 0.80,
+                backendScore: 0.80,
+                backendScoreKind: 'vector',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_core_handle_search_code',
+                symbolLabel: 'method handleSearchCode(input)'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'search codebase implementation owner',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'packages/mcp/src/core/handlers.ts');
+        assert.equal(payload.results[0].debug?.pathCategory, 'core');
+        assert.equal(payload.results[1].debug?.pathCategory, 'adapter');
     });
 });
 
@@ -2894,6 +3076,53 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
 
         assert.equal(response.isError, true);
         assert.match(response.content[0]?.text || '', /all semantic search passes failed/i);
+    });
+});
+
+test('handleSearchCode returns structured backend diagnostics when all semantic passes fail with stopped cluster', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                throw new Error('16 UNAUTHENTICATED: The action is unavailable under current cluster status STOPPED.');
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        assert.equal(response.isError, undefined);
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'vector_backend_unavailable');
+        assert.equal(payload.code, 'ZILLIZ_CLUSTER_STOPPED');
+        assert.equal(payload.freshnessDecision, null);
+        assert.deepEqual(payload.results, []);
+        assert.match(payload.hints.backend.nextSteps.join(' '), /Resume the Zilliz Cloud cluster/);
     });
 });
 

@@ -8,7 +8,7 @@ import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope } from "./format.js";
-import { executeInstallCommand } from "./install.js";
+import { executeInstallCommand, type ManagedRuntimeCommand } from "./install.js";
 import { verifyManagedPackageInstallability } from "./package-installability.js";
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
 import { runDoctor } from "./doctor.js";
@@ -28,6 +28,7 @@ interface RunCliOptions {
     callTimeoutMs?: number;
     cwd?: string;
     installabilityVerifier?: () => string | Promise<string>;
+    installRuntimeCommand?: ManagedRuntimeCommand;
     doctorRunner?: (options: { env: NodeJS.ProcessEnv }) => DoctorResult;
     connectSession?: (options: {
         command: string;
@@ -291,11 +292,14 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
+            let packageSpecifier: string | undefined;
             if (parsed.command.kind === "install") {
-                await (options.installabilityVerifier || verifyManagedPackageInstallability)();
+                packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
             }
             const result = executeInstallCommand(parsed.command, {
                 homeDir: effectiveEnv.HOME,
+                packageSpecifier,
+                runtimeCommand: options.installRuntimeCommand,
             });
             emitJson(writers, result);
             if (parsed.globals.format === "text") {

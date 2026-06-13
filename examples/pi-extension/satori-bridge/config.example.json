@@ -3,7 +3,7 @@
   "guardRecovery": "auto",
   "forceNpx": false,
   "npmPackage": "@zokizuan/satori-cli@0.3.1",
-  "startupTimeoutMs": 180000,
+  "startupTimeoutMs": 30000,
   "callTimeoutMs": 600000,
   "debug": false
 }

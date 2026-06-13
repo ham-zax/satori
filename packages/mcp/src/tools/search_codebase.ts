@@ -1,7 +1,12 @@
 import { z } from "zod";
-import { McpTool, ToolContext, ToolResponse, formatZodError } from "./types.js";
+import { McpTool, MissingProviderConfigIssue, ToolContext, ToolResponse, formatZodError } from "./types.js";
 import { emitSearchTelemetry } from "../telemetry/search.js";
-import { formatSearchProviderConfigError, isMissingProviderConfigIssue } from "./setup-errors.js";
+import {
+    classifyVectorBackendError,
+    formatSearchProviderConfigError,
+    formatSearchVectorBackendError,
+    isMissingProviderConfigIssue
+} from "./setup-errors.js";
 
 interface SearchDiagnostics {
     resultsBeforeFilter: number;
@@ -87,10 +92,35 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
     }
 }
 
+function emitSearchBackendErrorTelemetry(args: {
+    profile: string;
+    queryLength: number;
+    limit: number;
+    startedAt: number;
+    code: string;
+}): void {
+    emitSearchTelemetry({
+        event: "search_executed",
+        tool_name: "search_codebase",
+        profile: args.profile,
+        query_length: args.queryLength,
+        limit_requested: args.limit,
+        results_before_filter: 0,
+        results_after_filter: 0,
+        results_returned: 0,
+        excluded_by_ignore: 0,
+        reranker_used: false,
+        reranker_attempted: false,
+        latency_ms: Date.now() - args.startedAt,
+        parallel_fanout: true,
+        error: args.code,
+    });
+}
+
 const buildSearchSchema = (ctx: ToolContext) => z.object({
     path: z.string().min(1).describe("ABSOLUTE path to an indexed codebase or subdirectory."),
     query: z.string().min(1).describe("Natural-language query."),
-    scope: z.enum(["runtime", "mixed", "docs"]).default("runtime").optional().describe("Search scope policy. runtime excludes docs/tests, docs returns docs/tests only, mixed includes all. Docs scope skips reranker by policy in the current tool surface."),
+    scope: z.enum(["runtime", "mixed", "docs"]).default("runtime").optional().describe("Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns docs/tests only; mixed includes all. Docs scope skips reranker by policy in the current tool surface."),
     resultMode: z.enum(["grouped", "raw"]).default("grouped").optional().describe("Output mode. grouped returns merged search groups, raw returns chunk hits."),
     groupBy: z.enum(["symbol", "file"]).default("symbol").optional().describe("Grouping strategy in grouped mode."),
     rankingMode: z.enum(["default", "auto_changed_first"]).default("auto_changed_first").optional().describe("Ranking policy. auto_changed_first boosts files changed in the current git working tree when available."),
@@ -126,9 +156,29 @@ export const searchCodebaseTool: McpTool = {
         const startedAt = Date.now();
         const limit = Math.max(1, Math.min(ctx.capabilities.getMaxSearchLimit(), input.limit ?? ctx.capabilities.getDefaultSearchLimit()));
         const profile = getProfile(ctx);
-        const executionContext = ctx.providerRuntime
-            ? await ctx.providerRuntime.requireToolContext("embedding_vector")
-            : ctx;
+        let executionContext: ToolContext | MissingProviderConfigIssue;
+        try {
+            executionContext = ctx.providerRuntime
+                ? await ctx.providerRuntime.requireToolContext("embedding_vector")
+                : ctx;
+        } catch (error) {
+            const diagnostic = classifyVectorBackendError(error);
+            if (!diagnostic) {
+                throw error;
+            }
+            const response = formatSearchVectorBackendError({
+                ...input,
+                limit,
+            }, diagnostic);
+            emitSearchBackendErrorTelemetry({
+                profile,
+                queryLength: input.query.length,
+                limit,
+                startedAt,
+                code: diagnostic.code,
+            });
+            return response;
+        }
         if (isMissingProviderConfigIssue(executionContext)) {
             const response = formatSearchProviderConfigError({
                 ...input,
@@ -153,10 +203,30 @@ export const searchCodebaseTool: McpTool = {
             return response;
         }
 
-        const response = await executionContext.toolHandlers.handleSearchCode({
-            ...input,
-            limit
-        });
+        let response: ToolResponse;
+        try {
+            response = await executionContext.toolHandlers.handleSearchCode({
+                ...input,
+                limit
+            });
+        } catch (error) {
+            const diagnostic = classifyVectorBackendError(error);
+            if (!diagnostic) {
+                throw error;
+            }
+            response = formatSearchVectorBackendError({
+                ...input,
+                limit,
+            }, diagnostic);
+            emitSearchBackendErrorTelemetry({
+                profile,
+                queryLength: input.query.length,
+                limit,
+                startedAt,
+                code: diagnostic.code,
+            });
+            return response;
+        }
 
         const diagnostics = extractDiagnostics(response);
         emitSearchTelemetry({

@@ -110,6 +110,42 @@ test('handleClearIndex returns blocked manage message with status hint and retry
     });
 });
 
+test('handleSyncCodebase returns vector backend diagnostics when freshness sync hits stopped cluster', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {} as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => ({ status: 'indexed' }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => {
+                throw new Error('16 UNAUTHENTICATED: The action is unavailable under current cluster status STOPPED.');
+            },
+            getWatchDebounceMs: () => 2000
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSyncCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.action, 'sync');
+        assert.equal(envelope.path, repoPath);
+        assert.equal(envelope.status, 'error');
+        assert.equal(envelope.reason, 'vector_backend_unavailable');
+        assert.equal(envelope.code, 'ZILLIZ_CLUSTER_STOPPED');
+        const backendHint = envelope.hints?.backend as any;
+        assert.match(backendHint.nextSteps.join(' '), /Resume the Zilliz Cloud cluster/);
+    });
+});
+
 test('handleGetIndexingStatus recovers stale indexing state to failed when completion marker is missing', async () => {
     await withTempRepo(async (repoPath) => {
         let currentInfo: any = {

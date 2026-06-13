@@ -8,6 +8,11 @@ test("parseCliArgs consumes leading --debug as a global flag", () => {
     assert.equal(parsed.command.kind, "tools-list");
 });
 
+test("parseCliArgs defaults startup timeout to normal MCP client budget", () => {
+    const parsed = parseCliArgs(["tools", "list"]);
+    assert.equal(parsed.globals.startupTimeoutMs, 30000);
+});
+
 test("parseCliArgs preserves trailing --debug as wrapper flag input", () => {
     const parsed = parseCliArgs(["search_codebase", "--path", "/repo", "--query", "auth", "--debug"]);
     assert.equal(parsed.globals.debug, false);

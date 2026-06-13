@@ -319,6 +319,74 @@ test('ensureFreshness detects ignore control signature changes and reconciles be
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
+test('ensureFreshness detects same-size ignore control content changes with unchanged mtime', async () => {
+    const codebasePath = createTempDir();
+    const ignorePath = path.join(codebasePath, '.satoriignore');
+    const fixedTime = new Date('2026-03-16T12:00:00.000Z');
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    snapshot.setCodebaseIndexManifest(codebasePath, ['src/keep.ts', 'src/b.ts']);
+
+    fs.writeFileSync(ignorePath, 'src/a.ts\n', 'utf8');
+    fs.utimesSync(ignorePath, fixedTime, fixedTime);
+
+    let activePatterns = ['src/a.ts'];
+    let trackedPaths = ['src/keep.ts', 'src/b.ts'];
+    let syncCalls = 0;
+    const deletedPaths: string[][] = [];
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return activePatterns;
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async reloadIgnoreRulesForCodebase() {
+            activePatterns = fs.readFileSync(ignorePath, 'utf8').trim().split(/\r?\n/).filter(Boolean);
+            trackedPaths = ['src/keep.ts'];
+            return activePatterns;
+        },
+        async recreateSynchronizerForCodebase() {
+            return;
+        },
+        async deleteIndexedPathsByRelativePaths(_codebasePath: string, relativePaths: string[]) {
+            deletedPaths.push(relativePaths.slice());
+            return relativePaths.length;
+        },
+        getTrackedRelativePaths() {
+            return trackedPaths.slice();
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+        }
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const baseline = await manager.ensureFreshness(codebasePath, 0);
+    assert.equal(baseline.mode, 'synced');
+    const baselineSignature = snapshot.getCodebaseIgnoreControlSignature(codebasePath);
+    assert.equal(typeof baselineSignature, 'string');
+    assert.equal(syncCalls, 1);
+
+    fs.writeFileSync(ignorePath, 'src/b.ts\n', 'utf8');
+    fs.utimesSync(ignorePath, fixedTime, fixedTime);
+
+    const decision = await manager.ensureFreshness(codebasePath, 60_000);
+    assert.equal(decision.mode, 'reconciled_ignore_change');
+    assert.equal(decision.deletedFiles, 1);
+    assert.deepEqual(deletedPaths, [['src/b.ts']]);
+    assert.equal(syncCalls, 2);
+    assert.notEqual(snapshot.getCodebaseIgnoreControlSignature(codebasePath), baselineSignature);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
 test('ensureFreshness coalesces non-watcher ignore signature reconciles while one is in flight', async () => {
     const codebasePath = createTempDir();
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);

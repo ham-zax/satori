@@ -1,18 +1,49 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Satori - Make AI Coding Agents Understand Your Repo</title>
+  <title>Satori | Repo Retrieval for MCP Coding Agents</title>
   <meta name="description"
-    content="Satori helps AI coding agents investigate real repo context before editing: search code, open exact symbols, follow callers and callees, and decide what to inspect next." />
-  <meta property="og:title" content="Satori | Your AI coding agent is flying blind" />
-  <meta property="og:description" content="Make MCP-style coding agents investigate real repo context before they edit: exact symbols, runnable next steps, callers and callees, stale-index warnings, and bounded file evidence." />
+    content="Install Satori to give MCP coding agents deterministic repo search, exact symbol reads, caller/callee context, freshness checks, and read-only evidence before edits." />
+  <meta name="keywords" content="Satori, MCP server, AI coding agents, code search, semantic code search, repo indexing, Codex, Claude Code, OpenCode, Milvus, Zilliz" />
+  <meta name="robots" content="index,follow" />
+  <link rel="canonical" href="https://hamza.my.id/satori/" />
+  <meta property="og:title" content="Satori | Repo Retrieval for MCP Coding Agents" />
+  <meta property="og:description" content="Install Satori to give MCP coding agents deterministic repo search, exact symbol reads, caller/callee context, freshness checks, and read-only evidence before edits." />
   <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://hamza.my.id/satori/" />
+  <meta property="og:site_name" content="Satori" />
+  <meta property="og:image" content="https://hamza.my.id/satori/og-image.svg" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Satori | Your AI coding agent is flying blind" />
-  <meta name="twitter:description" content="Satori helps agents search real repo code, open exact symbols, follow callers and callees, and decide what to inspect next." />
+  <meta name="twitter:title" content="Satori | Repo Retrieval for MCP Coding Agents" />
+  <meta name="twitter:description" content="Satori helps agents search real repo code, open exact symbols, follow callers and callees, and detect stale context before edits." />
+  <meta name="twitter:image" content="https://hamza.my.id/satori/og-image.svg" />
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareSourceCode",
+      "name": "Satori",
+      "description": "Read-only MCP server and CLI installer for repo-aware code retrieval, exact symbol navigation, call graph context, and index lifecycle management for AI coding agents.",
+      "codeRepository": "https://github.com/ham-zax/satori",
+      "url": "https://hamza.my.id/satori/",
+      "programmingLanguage": "TypeScript",
+      "runtimePlatform": "Node.js",
+      "license": "https://opensource.org/license/mit",
+      "applicationCategory": "DeveloperApplication",
+      "author": {
+        "@type": "Person",
+        "name": "Hamza",
+        "url": "https://hamza.my.id"
+      },
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" media="(min-width: 861px)" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin media="(min-width: 861px)" />
   <link
@@ -37,7 +68,10 @@
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      cursor: crosshair;
+    }
+
+    html {
+      scroll-behavior: smooth;
     }
 
     body {
@@ -266,6 +300,13 @@
       color: var(--accent);
     }
 
+    a:focus-visible,
+    button:focus-visible,
+    summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 4px;
+    }
+
     .hero {
       margin-top: 2rem;
       border: 1px solid rgba(255, 255, 255, 0.08);
@@ -329,6 +370,36 @@
       flex-wrap: wrap;
       gap: 1rem;
       margin-top: 2rem;
+    }
+
+    .hero-terminal {
+      width: min(100%, 760px);
+      margin-top: 2rem;
+      border: 1px solid rgba(223, 255, 0, 0.28);
+      background: rgba(0, 0, 0, 0.58);
+      text-align: left;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+
+    .terminal-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 0.75rem 1rem;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .hero-terminal pre {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
     }
 
     .btn.primary {
@@ -681,6 +752,12 @@
       gap: 1.5rem;
     }
 
+    .demo-steps,
+    .tie-break,
+    .section-followup {
+      margin-top: 1.5rem;
+    }
+
     .step {
       border-left: 2px solid var(--line);
       padding-left: 1.5rem;
@@ -777,6 +854,16 @@
       font-weight: 300;
     }
 
+    .bg-accents {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: -2;
+      pointer-events: none;
+    }
+
     @media (max-width: 860px) {
       :root {
         --serif: ui-serif, Georgia, serif;
@@ -836,6 +923,10 @@
         line-height: 1.35;
       }
 
+      .hero-terminal {
+        width: 100%;
+      }
+
       .section {
         padding: 3rem 1.5rem;
       }
@@ -893,7 +984,7 @@
 
 
   <!-- Premium Tech Grid SVG Accents -->
-  <svg style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -2; pointer-events: none;" viewBox="0 0 100 100" preserveAspectRatio="none">
+  <svg class="bg-accents" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
     <defs>
       <pattern id="grid" width="8" height="8" patternUnits="userSpaceOnUse">
         <path d="M 8 0 L 0 0 0 8" fill="none" stroke="rgba(255, 255, 255, 0.03)" stroke-width="0.1"/>
@@ -940,34 +1031,42 @@
   <div class="container">
     <nav>
       <div class="nav-brand">
-        <div class="status-dot"></div>
+        <div class="status-dot" aria-hidden="true"></div>
         <span>Satori // Repo Context for Agents</span>
       </div>
       <div class="nav-links">
-        <a href="https://github.com/ham-zax/satori" target="_blank">[ Repository ]</a>
+        <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">[ Repository ]</a>
         <a href="architecture.html">[ Architecture ]</a>
-        <a href="https://hamza.my.id" target="_blank">[ Hamza ]</a>
+        <a href="https://hamza.my.id" target="_blank" rel="noopener">[ Hamza ]</a>
         <a href="docs/index.html">[ Docs ]</a>
       </div>
     </nav>
 
-    <section class="hero">
+    <section class="hero" id="top">
       <h1>Satori</h1>
-      <h2>Your AI coding agent is flying blind.</h2>
+      <h2>Repo-aware retrieval for MCP coding agents.</h2>
       <p>
-        Satori helps AI coding agents investigate real repo context before
-        they edit. It searches code, opens exact symbols, suggests runnable
-        next steps, follows callers/callees, and warns when repo context is
-        stale.
+        Install once, index a repo, and give your agent a deterministic path
+        from intent search to exact symbol reads, caller/callee context, and
+        explicit stale-index recovery.
       </p>
+      <div class="hero-terminal" role="group" aria-labelledby="hero-install-label">
+        <div class="terminal-label">
+          <span id="hero-install-label">Install supported clients</span>
+          <span>Codex / Claude / OpenCode</span>
+        </div>
+        <pre><code>npx -y @zokizuan/satori-cli@0.4.1 install --client all
+npx -y @zokizuan/satori-cli@0.4.1 doctor</code></pre>
+      </div>
       <div class="hero-actions">
         <a class="btn primary" href="#quickstart">Install Satori</a>
-        <a class="btn secondary" href="#demo">See investigation flow</a>
+        <a class="btn secondary" href="docs/index.html">Read setup docs</a>
       </div>
-      <div class="trust-chips" aria-label="Satori trust signals">
-        <span class="trust-chip">MIT open source</span>
-        <span class="trust-chip">Works with MCP agents</span>
-        <span class="trust-chip">Free to start with supported providers</span>
+      <div class="trust-chips" role="list" aria-label="Satori trust signals">
+        <span class="trust-chip" role="listitem">MIT open source</span>
+        <span class="trust-chip" role="listitem">Six MCP tools</span>
+        <span class="trust-chip" role="listitem">Installer-owned startup</span>
+        <span class="trust-chip" role="listitem">Read-only repo context</span>
       </div>
     </section>
 
@@ -1043,7 +1142,7 @@
           </p>
         </article>
       </div>
-      <div class="steps" style="margin-top: 1.5rem;">
+      <div class="steps demo-steps">
         <div class="step">
           <strong>1. Find relevant code</strong>
           <p>
@@ -1321,10 +1420,10 @@
         <details open>
           <summary>CLI Installer</summary>
           <div class="details-body">
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.0 install --client all
-npx -y @zokizuan/satori-cli@0.4.0 install --client opencode
-npx -y @zokizuan/satori-cli@0.4.0 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.4.0 doctor</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.1 install --client all
+npx -y @zokizuan/satori-cli@0.4.1 install --client opencode
+npx -y @zokizuan/satori-cli@0.4.1 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.4.1 doctor</code></pre>
             <p>
               The installer writes managed client config and copies the
               first-party <code>satori</code> workflow skill. The doctor
@@ -1351,7 +1450,7 @@ npx -y @zokizuan/satori-cli@0.4.0 doctor</code></pre>
                   <div class="install-title">Claude</div>
                 </div>
                 <p>
-                  Config: <code>~/.claude/settings.json</code><br />
+                  Config: <code>~/.claude.json</code><br />
                   Skills: <code>~/.claude/skills</code>
                 </p>
               </div>
@@ -1370,6 +1469,12 @@ npx -y @zokizuan/satori-cli@0.4.0 doctor</code></pre>
               Node launcher at <code>~/.satori/bin/satori-mcp.js</code>.
               Resident MCP config should not use <code>npx</code> or timeout
               workarounds.
+            </p>
+            <p>
+              Runtime env names are visible in client config too: Codex gets
+              <code>env_vars</code> plus an optional env template, Claude gets
+              <code>mcpServers.satori.env</code>, and OpenCode gets
+              <code>mcp.satori.environment</code>.
             </p>
           </div>
         </details>
@@ -1442,9 +1547,9 @@ npx -y @zokizuan/satori-cli@0.4.0 doctor</code></pre>
           </p>
         </article>
       </div>
-      <pre style="margin-top: 1.5rem;"><code>Deterministic tie-break chain:
+      <pre class="tie-break"><code>Deterministic tie-break chain:
 score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc</code></pre>
-      <p class="section-intro" style="margin-top: 1.5rem">
+      <p class="section-intro section-followup">
         The architecture page keeps the deeper system view:
         <a href="architecture.html">open architecture.html</a>.
       </p>
@@ -1521,6 +1626,45 @@ score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc</c
             </p>
           </div>
         </details>
+      </div>
+    </section>
+
+    <section class="section">
+      <h3>Ready for Public Launch</h3>
+      <p class="section-intro">
+        Satori is packaged for a public Product Hunt-style launch: one-command
+        setup, current npm versions, launch metadata, and a clear read-only
+        promise for developers evaluating agent tooling.
+      </p>
+      <div class="grid">
+        <article class="card">
+          <h4>Product Hunt tagline</h4>
+          <p>Repo retrieval for MCP coding agents.</p>
+        </article>
+        <article class="card">
+          <h4>Launch promise</h4>
+          <p>
+            Help agents inspect real code before editing: semantic search,
+            exact symbols, caller/callee context, bounded reads, and lifecycle
+            guidance.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Public setup path</h4>
+          <p>
+            <code>satori-cli install --client all</code> owns supported client
+            config so users do not copy runtime cache paths or add long startup
+            timeout workarounds.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Launch checklist</h4>
+          <p>
+            See <a href="https://github.com/ham-zax/satori/blob/master/docs/LAUNCH_CHECKLIST.md" target="_blank" rel="noopener">docs/LAUNCH_CHECKLIST.md</a>
+            for Product Hunt copy, preflight commands, website checks, and
+            launch-day monitoring.
+          </p>
+        </article>
       </div>
     </section>
 

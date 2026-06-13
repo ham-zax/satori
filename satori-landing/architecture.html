@@ -1,13 +1,45 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Satori | Architecture</title>
+    <title>Satori Architecture | Deterministic MCP Code Retrieval System</title>
     <meta
       name="description"
-      content="How Satori works under the hood - from file change to agent result: packages/core trust layer, packages/mcp runtime, vector store, call-graph sidecar, and deterministic six-tool MCP surface."
+      content="How Satori works under the hood: installer-owned MCP startup, six deterministic tools, freshness gates, vector search, call graph sidecars, snapshots, and sync safety."
     />
+    <meta name="keywords" content="Satori architecture, MCP server architecture, semantic code search architecture, call graph sidecar, repo indexing, vector search, Milvus, Zilliz" />
+    <meta name="robots" content="index,follow" />
+    <link rel="canonical" href="https://hamza.my.id/satori/architecture.html" />
+    <meta property="og:title" content="Satori Architecture | Deterministic MCP Code Retrieval" />
+    <meta property="og:description" content="Understand Satori's six-tool MCP runtime, installer-owned startup, freshness gates, vector search, call graph sidecars, snapshots, and sync safety." />
+    <meta property="og:type" content="article" />
+    <meta property="og:url" content="https://hamza.my.id/satori/architecture.html" />
+    <meta property="og:site_name" content="Satori" />
+    <meta property="og:image" content="https://hamza.my.id/satori/og-image.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Satori Architecture | Deterministic MCP Code Retrieval" />
+    <meta name="twitter:description" content="Installer-owned MCP startup, six deterministic tools, freshness gates, vector search, call graph sidecars, snapshots, and sync safety." />
+    <meta name="twitter:image" content="https://hamza.my.id/satori/og-image.svg" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "Satori Architecture",
+        "description": "Architecture notes for Satori's installer-owned MCP startup, fixed six-tool surface, freshness gates, vector retrieval, call graph sidecars, snapshot state, and sync safety.",
+        "url": "https://hamza.my.id/satori/architecture.html",
+        "author": {
+          "@type": "Person",
+          "name": "Hamza",
+          "url": "https://hamza.my.id"
+        },
+        "about": {
+          "@type": "SoftwareSourceCode",
+          "name": "Satori",
+          "codeRepository": "https://github.com/ham-zax/satori"
+        }
+      }
+    </script>
     <link
       rel="preconnect"
       href="https://fonts.googleapis.com"
@@ -42,7 +74,6 @@
         box-sizing: border-box;
         margin: 0;
         padding: 0;
-        cursor: crosshair;
       }
 
       body {
@@ -210,6 +241,12 @@
 
       a:hover {
         color: var(--accent);
+      }
+
+      a:focus-visible,
+      summary:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 4px;
       }
 
       .hero {
@@ -859,15 +896,15 @@
     <div class="container">
       <nav>
         <div class="nav-brand">
-          <div class="status-dot"></div>
+          <div class="status-dot" aria-hidden="true"></div>
           <span>Satori // Architecture // System View</span>
         </div>
         <div class="nav-links">
           <a href="index.html">[ Landing ]</a>
-          <a href="https://github.com/ham-zax/satori" target="_blank"
+          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener"
             >[ Repository ]</a
           >
-          <a href="https://hamza.my.id" target="_blank">[ Hamza ]</a>
+          <a href="https://hamza.my.id" target="_blank" rel="noopener">[ Hamza ]</a>
           <a href="docs/">[ Docs ]</a>
         </div>
       </nav>
@@ -879,11 +916,11 @@
           reads, call-graph context, and freshness checks without hiding state
           or failures.
         </p>
-        <div class="trust-chips" aria-label="Satori architecture layers">
-          <span class="trust-chip">MCP runtime</span>
-          <span class="trust-chip">Vector search</span>
-          <span class="trust-chip">Call-graph sidecar</span>
-          <span class="trust-chip">Snapshot state</span>
+        <div class="trust-chips" role="list" aria-label="Satori architecture layers">
+          <span class="trust-chip" role="listitem">MCP runtime</span>
+          <span class="trust-chip" role="listitem">Vector search</span>
+          <span class="trust-chip" role="listitem">Call-graph sidecar</span>
+          <span class="trust-chip" role="listitem">Snapshot state</span>
         </div>
       </section>
 
@@ -1037,6 +1074,40 @@
               <li>AST-aware chunking, metadata, and ignore filtering.</li>
               <li>Low-level indexing/search primitives behind MCP orchestration.</li>
             </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Installer Boundary</h2>
+        <p class="intro">
+          Public setup is installer-owned. Supported clients should not pay
+          package-manager resolution cost during every MCP startup, and users
+          should not have to copy cache paths into each harness by hand.
+        </p>
+        <div class="grid-3">
+          <article class="card">
+            <h3>One public command</h3>
+            <p>
+              <code>satori-cli install --client all</code> resolves the MCP
+              runtime once, writes managed client config, and copies the
+              first-party workflow skill.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Stable resident startup</h3>
+            <p>
+              Client config launches the installer-owned Node launcher at
+              <code>~/.satori/bin/satori-mcp.js</code>. Resident startup does
+              not call <code>npx</code>, <code>npm</code>, or a package manager.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Harness formats stay behind CLI</h3>
+            <p>
+              Codex, Claude, and OpenCode config differences live in the
+              installer and its tests, not in user-maintained snippets.
+            </p>
           </article>
         </div>
       </section>
@@ -1352,7 +1423,7 @@
       <footer class="footer">
         <span
           >Landing: <a href="index.html">index.html</a> · Source:
-          <a href="https://github.com/ham-zax/satori" target="_blank"
+          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener"
             >github.com/ham-zax/satori</a
           >
           · Docs:

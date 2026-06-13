@@ -1,13 +1,45 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Satori | Docs</title>
+    <title>Satori Docs | MCP Repo Retrieval Setup</title>
     <meta
       name="description"
-      content="Detailed Satori documentation for install, indexing, search, symbol navigation, call-graph context, debug output, warnings, and troubleshooting."
+      content="Satori documentation for installer-first MCP setup, provider configuration, repo indexing, semantic code search, symbol navigation, call graph context, warnings, and troubleshooting."
     />
+    <meta name="keywords" content="Satori docs, MCP install, AI coding agent documentation, semantic code search docs, repo indexing, call graph, code navigation" />
+    <meta name="robots" content="index,follow" />
+    <link rel="canonical" href="https://hamza.my.id/satori/docs/" />
+    <meta property="og:title" content="Satori Docs | MCP Install and Repo Search Workflow" />
+    <meta property="og:description" content="Install Satori, configure providers, index a repo, search code, open exact symbols, follow call graph context, and troubleshoot lifecycle states." />
+    <meta property="og:type" content="article" />
+    <meta property="og:url" content="https://hamza.my.id/satori/docs/" />
+    <meta property="og:site_name" content="Satori" />
+    <meta property="og:image" content="https://hamza.my.id/satori/og-image.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Satori Docs | MCP Install and Repo Search Workflow" />
+    <meta name="twitter:description" content="Installer-first setup, provider config, repo indexing, exact symbol navigation, call graph context, and troubleshooting for Satori." />
+    <meta name="twitter:image" content="https://hamza.my.id/satori/og-image.svg" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "Satori Docs",
+        "description": "Installer-first documentation for Satori MCP setup, provider configuration, repo indexing, semantic search, symbol navigation, call graph context, warnings, and troubleshooting.",
+        "url": "https://hamza.my.id/satori/docs/",
+        "author": {
+          "@type": "Person",
+          "name": "Hamza",
+          "url": "https://hamza.my.id"
+        },
+        "about": {
+          "@type": "SoftwareSourceCode",
+          "name": "Satori",
+          "codeRepository": "https://github.com/ham-zax/satori"
+        }
+      }
+    </script>
     <link
       rel="preconnect"
       href="https://fonts.googleapis.com"
@@ -45,7 +77,6 @@
         box-sizing: border-box;
         margin: 0;
         padding: 0;
-        cursor: crosshair;
       }
 
       html {
@@ -149,6 +180,12 @@
 
       a:hover {
         color: var(--accent);
+      }
+
+      a:focus-visible,
+      summary:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 4px;
       }
 
       .hero {
@@ -398,14 +435,14 @@
     <div class="container">
       <nav>
         <div class="nav-brand">
-          <div class="status-dot"></div>
+          <div class="status-dot" aria-hidden="true"></div>
           <span>Satori // Docs</span>
         </div>
         <div class="nav-links">
           <a href="../index.html">[ Landing ]</a>
           <a href="../architecture.html">[ Architecture ]</a>
-          <a href="https://github.com/ham-zax/satori" target="_blank">[ Repository ]</a>
-          <a href="https://hamza.my.id" target="_blank">[ Hamza ]</a>
+          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">[ Repository ]</a>
+          <a href="https://hamza.my.id" target="_blank" rel="noopener">[ Hamza ]</a>
         </div>
       </nav>
 
@@ -417,14 +454,16 @@
           six-tool MCP surface: index lifecycle, semantic search, symbol
           outlines, exact reads, and bounded call-graph context.
         </p>
-        <div class="quick-links" aria-label="Docs sections">
+        <nav class="quick-links" aria-label="Docs sections">
           <a href="#install">Install</a>
           <a href="#setup">Setup</a>
           <a href="#first-index">First Index</a>
+          <a href="#tools">Tools</a>
           <a href="#lifecycle">Lifecycle</a>
           <a href="#warnings">Warnings</a>
           <a href="#troubleshooting">Troubleshooting</a>
-        </div>
+          <a href="#launch">Launch</a>
+        </nav>
       </section>
 
       <section class="section" id="install">
@@ -432,12 +471,21 @@
         <p class="lede">
           Satori runs as an MCP server. The easiest path is the CLI installer:
           it writes managed client config and copies the first-party workflow
-          workflow guidance without adding new MCP tools.
+          guidance without adding new MCP tools.
         </p>
+        <div class="callout">
+          <p>
+            Recommended public setup:
+            <code>npx -y @zokizuan/satori-cli@0.4.1 install --client all</code>,
+            then
+            <code>npx -y @zokizuan/satori-cli@0.4.1 doctor</code>.
+            Restart the MCP client after install.
+          </p>
+        </div>
         <div class="grid">
           <div class="panel">
             <h3>Codex</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.0 install --client codex</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.1 install --client codex</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
               and installs the Satori skill in <code>~/.codex/skills</code>.
@@ -445,16 +493,16 @@
           </div>
           <div class="panel">
             <h3>Claude</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.0 install --client claude</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.1 install --client claude</code></pre>
             <p>
               Writes the Satori MCP entry to
-              <code>~/.claude/settings.json</code> and installs the Satori skill
+              <code>~/.claude.json</code> and installs the Satori skill
               in <code>~/.claude/skills</code>.
             </p>
           </div>
           <div class="panel">
             <h3>OpenCode</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.0 install --client opencode</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.1 install --client opencode</code></pre>
             <p>
               Writes the Satori MCP entry to
               <code>~/.config/opencode/opencode.json</code> and installs the
@@ -468,9 +516,39 @@
             Use <code>--client all</code> to install every supported client, and
             <code>uninstall</code> with the same selector to remove only
             Satori-managed config and skills. Run
-            <code>npx -y @zokizuan/satori-cli@0.4.0 doctor</code> to check
+            <code>npx -y @zokizuan/satori-cli@0.4.1 doctor</code> to check
             provider and Milvus setup without starting an MCP client.
           </p>
+        </div>
+        <div class="grid">
+          <div class="panel">
+            <h3>Codex Runtime Env</h3>
+            <p>
+              The generated <code>~/.codex/config.toml</code> entry includes
+              active <code>env_vars</code> forwarding and an optional commented
+              <code>[mcp_servers.satori.env]</code> template. Put literal values
+              outside the managed launcher block if you want reinstall-safe
+              direct config.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Claude Runtime Env</h3>
+            <p>
+              The generated <code>~/.claude.json</code> entry writes
+              <code>mcpServers.satori.env</code> with <code>${VAR:-}</code>
+              pass-through values. Replace any value with a literal if you want
+              Claude to own that setting.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>OpenCode Runtime Env</h3>
+            <p>
+              The generated OpenCode entry writes
+              <code>mcp.satori.environment</code> with <code>{env:VAR}</code>
+              pass-through values. Replace any value with a literal to store it
+              directly in OpenCode.
+            </p>
+          </div>
         </div>
         <div class="grid">
           <div class="panel">
@@ -492,7 +570,7 @@
             <ul>
               <li>Codex config: <code>~/.codex/config.toml</code>.</li>
               <li>Codex skills: <code>~/.codex/skills</code>.</li>
-              <li>Claude config: <code>~/.claude/settings.json</code>.</li>
+              <li>Claude config: <code>~/.claude.json</code>.</li>
               <li>Claude skills: <code>~/.claude/skills</code>.</li>
               <li>OpenCode config: <code>~/.config/opencode/opencode.json</code>.</li>
               <li>OpenCode instructions: <code>~/.config/opencode/AGENTS.md</code>.</li>
@@ -851,7 +929,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               If indexing or search returns
               <code>MISSING_PROVIDER_CONFIG</code>, run
-              <code>npx -y @zokizuan/satori-cli@0.4.0 doctor</code>, set the
+              <code>npx -y @zokizuan/satori-cli@0.4.1 doctor</code>, set the
               missing provider or Milvus values, then retry the same tool call.
               It is an active setup failure only when it appears as the tool
               response <code>code</code> or <code>reason</code>; inside
@@ -869,11 +947,49 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
         </div>
       </section>
 
+      <section class="section" id="launch">
+        <h2>Public Launch Notes</h2>
+        <p class="lede">
+          For Product Hunt or another public launch, keep the message narrow:
+          Satori is read-only repo retrieval for MCP coding agents. It helps
+          agents inspect evidence before edits; it does not replace tests or
+          code review.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Tagline</h3>
+            <p>Repo retrieval for MCP coding agents.</p>
+          </div>
+          <div class="panel">
+            <h3>Primary CTA</h3>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.1 install --client all
+npx -y @zokizuan/satori-cli@0.4.1 doctor</code></pre>
+          </div>
+          <div class="panel">
+            <h3>Launch Checklist</h3>
+            <p>
+              Product Hunt copy, preflight commands, website checks, and
+              launch-day monitoring live in
+              <a href="https://github.com/ham-zax/satori/blob/master/docs/LAUNCH_CHECKLIST.md" target="_blank" rel="noopener">docs/LAUNCH_CHECKLIST.md</a>.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Honest Claims</h3>
+            <ul>
+              <li>No source-code write tools.</li>
+              <li>No fake static-test coverage claims.</li>
+              <li>No promise that provider free tiers are permanent.</li>
+              <li>No manual resident <code>npx</code> setup for supported clients.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <footer class="footer">
         <span>
           Landing: <a href="../index.html">index.html</a> · Architecture:
           <a href="../architecture.html">architecture.html</a> · Source:
-          <a href="https://github.com/ham-zax/satori" target="_blank">GitHub</a>
+          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">GitHub</a>
         </span>
         <span>Fixed six-tool surface. Diagnostics through existing tools.</span>
       </footer>

@@ -20,7 +20,7 @@ function fakeRuntimeCommand(homeDir: string) {
                 homeDir,
                 ".satori",
                 "mcp-runtime",
-                "@zokizuan-satori-mcp-4.11.0",
+                "@zokizuan-satori-mcp-4.11.1",
                 "node_modules",
                 "@zokizuan",
                 "satori-mcp",
@@ -101,6 +101,13 @@ test("install writes managed Codex config block and copies packaged skill", () =
         assert.equal(content.includes("[mcp_servers.satori]"), true);
         assert.equal(content.includes(`command = "${process.execPath.replace(/\\/g, "\\\\")}"`), true);
         assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), true);
+        assert.equal(content.includes("env_vars = ["), true);
+        assert.equal(content.includes("\"VOYAGEAI_API_KEY\""), true);
+        assert.equal(content.includes("\"EMBEDDING_OUTPUT_DIMENSION\""), true);
+        assert.equal(content.includes("\"MILVUS_ADDRESS\""), true);
+        assert.equal(content.includes("# [mcp_servers.satori.env]"), true);
+        assert.equal(content.includes("# EMBEDDING_MODEL = \"voyage-4-large\""), true);
+        assert.equal(content.indexOf("# [mcp_servers.satori.env]") > content.indexOf("# <<< satori-cli managed satori end <<<"), true);
         assert.equal(content.includes("node_modules"), false);
         assert.equal(content.includes("dist/index.js"), false);
         assert.equal(content.includes('command = "npx"'), false);
@@ -198,9 +205,48 @@ test("install replaces an existing managed Codex block", () => {
         const content = readFile(codexConfigPath);
         assert.equal(content.includes(`command = "${process.execPath.replace(/\\/g, "\\\\")}"`), true);
         assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), true);
+        assert.equal(content.includes("env_vars = ["), true);
+        assert.equal(content.includes("\"VOYAGEAI_API_KEY\""), true);
+        assert.equal(content.includes("\"MILVUS_ADDRESS\""), true);
+        assert.equal(content.includes("# [mcp_servers.satori.env]"), true);
+        assert.equal(content.indexOf("# [mcp_servers.satori.env]") > content.indexOf("# <<< satori-cli managed satori end <<<"), true);
         assert.equal(content.includes("node_modules"), false);
         assert.equal(content.includes("old-managed-satori"), false);
         assert.equal(content.includes("startup_timeout_ms"), false);
+    });
+});
+
+test("install preserves user-owned Codex env values outside the managed block", () => {
+    withTempHome((homeDir) => {
+        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+        fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
+        fs.writeFileSync(
+            codexConfigPath,
+            [
+                "# >>> satori-cli managed satori start >>>",
+                "[mcp_servers.satori]",
+                'command = "old-managed-satori"',
+                'args = ["old"]',
+                "# <<< satori-cli managed satori end <<<",
+                "",
+                "[mcp_servers.satori.env]",
+                'VOYAGEAI_API_KEY = "direct-key"',
+                'MILVUS_TOKEN = "direct-token"',
+                "",
+            ].join("\n"),
+            "utf8"
+        );
+
+        executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        const content = readFile(codexConfigPath);
+        assert.equal(content.includes('VOYAGEAI_API_KEY = "direct-key"'), true);
+        assert.equal(content.includes('MILVUS_TOKEN = "direct-token"'), true);
+        assert.equal(content.includes("# >>> satori-cli optional satori env template >>>"), false);
     });
 });
 
@@ -265,13 +311,17 @@ test("install refuses to overwrite unmanaged Codex Satori sections", () => {
 
 test("install merges Claude JSON config and uninstall removes only Satori-owned entry and skills", () => {
     withTempHome((homeDir) => {
-        const settingsPath = path.join(homeDir, ".claude", "settings.json");
+        const configPath = path.join(homeDir, ".claude.json");
         const skillsDir = path.join(homeDir, ".claude", "skills");
-        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.mkdirSync(path.join(skillsDir, "custom-skill"), { recursive: true });
         fs.writeFileSync(path.join(skillsDir, "custom-skill", "SKILL.md"), "# custom\n", "utf8");
-        fs.writeFileSync(settingsPath, JSON.stringify({
-            env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" },
+        fs.writeFileSync(configPath, JSON.stringify({
+            projects: {
+                "/tmp/example": {
+                    allowedTools: ["Read"],
+                },
+            },
             mcpServers: {
                 existing: {
                     command: "npx",
@@ -286,11 +336,15 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
             dryRun: false,
         }, installOptions(homeDir));
 
-        const installed = JSON.parse(readFile(settingsPath));
-        assert.equal(installed.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, "1");
+        const installed = JSON.parse(readFile(configPath));
+        assert.deepEqual(installed.projects["/tmp/example"].allowedTools, ["Read"]);
         assert.equal(installed.mcpServers.existing.command, "npx");
+        assert.equal(installed.mcpServers.satori.type, "stdio");
         assert.equal(installed.mcpServers.satori.command, process.execPath);
         assert.deepEqual(installed.mcpServers.satori.args, fakeClientCommand(homeDir).args);
+        assert.equal(installed.mcpServers.satori.env.VOYAGEAI_API_KEY, "${VOYAGEAI_API_KEY:-}");
+        assert.equal(installed.mcpServers.satori.env.EMBEDDING_OUTPUT_DIMENSION, "${EMBEDDING_OUTPUT_DIMENSION:-}");
+        assert.equal(installed.mcpServers.satori.env.MILVUS_ADDRESS, "${MILVUS_ADDRESS:-}");
         assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori, "timeout"), false);
         assert.equal(fs.existsSync(path.join(skillsDir, "satori", "SKILL.md")), true);
 
@@ -301,7 +355,7 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
         }, { homeDir });
 
         assert.equal(uninstall.results[0]?.status, "updated");
-        const removed = JSON.parse(readFile(settingsPath));
+        const removed = JSON.parse(readFile(configPath));
         assert.equal(Boolean(removed.mcpServers.satori), false);
         assert.equal(removed.mcpServers.existing.command, "npx");
         assert.equal(fs.existsSync(path.join(skillsDir, "custom-skill", "SKILL.md")), true);
@@ -309,11 +363,43 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
     });
 });
 
+test("install preserves direct Claude Satori env values on reinstall", () => {
+    withTempHome((homeDir) => {
+        const configPath = path.join(homeDir, ".claude.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify({
+            mcpServers: {
+                satori: {
+                    command: process.execPath,
+                    args: [launcherPath(homeDir)],
+                    timeout: 120000,
+                    env: {
+                        VOYAGEAI_API_KEY: "direct-key",
+                        MILVUS_TOKEN: "direct-token",
+                    },
+                },
+            },
+        }, null, 2), "utf8");
+
+        executeInstallCommand({
+            kind: "install",
+            client: "claude",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        const installed = JSON.parse(readFile(configPath));
+        assert.equal(installed.mcpServers.satori.env.VOYAGEAI_API_KEY, "direct-key");
+        assert.equal(installed.mcpServers.satori.env.MILVUS_TOKEN, "direct-token");
+        assert.equal(installed.mcpServers.satori.env.EMBEDDING_OUTPUT_DIMENSION, "${EMBEDDING_OUTPUT_DIMENSION:-}");
+        assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori, "timeout"), false);
+    });
+});
+
 test("install refuses to overwrite unmanaged Claude Satori entries", () => {
     withTempHome((homeDir) => {
-        const settingsPath = path.join(homeDir, ".claude", "settings.json");
-        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-        fs.writeFileSync(settingsPath, JSON.stringify({
+        const configPath = path.join(homeDir, ".claude.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify({
             mcpServers: {
                 satori: {
                     command: "node",
@@ -336,8 +422,8 @@ test("install refuses to overwrite unmanaged Claude Satori entries", () => {
 
 test("uninstall refuses to remove unmanaged Claude Satori entries", () => {
     withTempHome((homeDir) => {
-        const settingsPath = path.join(homeDir, ".claude", "settings.json");
-        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+        const configPath = path.join(homeDir, ".claude.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
         const original = JSON.stringify({
             mcpServers: {
                 satori: {
@@ -347,7 +433,7 @@ test("uninstall refuses to remove unmanaged Claude Satori entries", () => {
                 }
             }
         }, null, 2);
-        fs.writeFileSync(settingsPath, original, "utf8");
+        fs.writeFileSync(configPath, original, "utf8");
 
         assert.throws(
             () => executeInstallCommand({
@@ -358,7 +444,7 @@ test("uninstall refuses to remove unmanaged Claude Satori entries", () => {
             /Refusing to remove unmanaged Satori config/
         );
 
-        assert.equal(readFile(settingsPath).trim(), original.trim());
+        assert.equal(readFile(configPath).trim(), original.trim());
     });
 });
 
@@ -396,6 +482,10 @@ test("install writes OpenCode JSONC config and AGENTS instructions", () => {
         assert.equal(content.includes("\"existing\""), true);
         assert.equal(content.includes("\"satori\""), true);
         assert.equal(content.includes(launcherPath(homeDir)), true);
+        assert.equal(content.includes("\"environment\""), true);
+        assert.equal(content.includes("\"VOYAGEAI_API_KEY\": \"{env:VOYAGEAI_API_KEY}\""), true);
+        assert.equal(content.includes("\"EMBEDDING_OUTPUT_DIMENSION\": \"{env:EMBEDDING_OUTPUT_DIMENSION}\""), true);
+        assert.equal(content.includes("\"MILVUS_ADDRESS\": \"{env:MILVUS_ADDRESS}\""), true);
         assert.equal(content.includes("node_modules"), false);
 
         const instructions = readFile(path.join(homeDir, ".config", "opencode", "AGENTS.md"));
@@ -423,15 +513,24 @@ test("install all smoke writes launcher-backed config for every supported client
         const codexConfig = readFile(path.join(homeDir, ".codex", "config.toml"));
         assert.equal(codexConfig.includes(`command = "${process.execPath.replace(/\\/g, "\\\\")}"`), true);
         assert.equal(codexConfig.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), true);
+        assert.equal(codexConfig.includes("env_vars = ["), true);
+        assert.equal(codexConfig.includes("\"VOYAGEAI_API_KEY\""), true);
+        assert.equal(codexConfig.includes("\"EMBEDDING_OUTPUT_DIMENSION\""), true);
+        assert.equal(codexConfig.includes("\"MILVUS_ADDRESS\""), true);
+        assert.equal(codexConfig.includes("# [mcp_servers.satori.env]"), true);
         assert.equal(codexConfig.includes('command = "npx"'), false);
         assert.equal(codexConfig.includes("startup_timeout_ms"), false);
         assert.equal(codexConfig.includes("node_modules"), false);
         assert.equal(codexConfig.includes("dist/index.js"), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md")), true);
 
-        const claudeConfig = JSON.parse(readFile(path.join(homeDir, ".claude", "settings.json")));
+        const claudeConfig = JSON.parse(readFile(path.join(homeDir, ".claude.json")));
+        assert.equal(claudeConfig.mcpServers.satori.type, "stdio");
         assert.equal(claudeConfig.mcpServers.satori.command, process.execPath);
         assert.deepEqual(claudeConfig.mcpServers.satori.args, fakeClientCommand(homeDir).args);
+        assert.equal(claudeConfig.mcpServers.satori.env.VOYAGEAI_API_KEY, "${VOYAGEAI_API_KEY:-}");
+        assert.equal(claudeConfig.mcpServers.satori.env.EMBEDDING_OUTPUT_DIMENSION, "${EMBEDDING_OUTPUT_DIMENSION:-}");
+        assert.equal(claudeConfig.mcpServers.satori.env.MILVUS_ADDRESS, "${MILVUS_ADDRESS:-}");
         assert.equal(Object.prototype.hasOwnProperty.call(claudeConfig.mcpServers.satori, "timeout"), false);
         assert.equal(JSON.stringify(claudeConfig.mcpServers.satori).includes("node_modules"), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".claude", "skills", "satori", "SKILL.md")), true);
@@ -440,6 +539,9 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(opencodeConfig.mcp.satori.enabled, true);
         assert.equal(opencodeConfig.mcp.satori.type, "local");
         assert.deepEqual(opencodeConfig.mcp.satori.command, [process.execPath, launcherPath(homeDir)]);
+        assert.equal(opencodeConfig.mcp.satori.environment.VOYAGEAI_API_KEY, "{env:VOYAGEAI_API_KEY}");
+        assert.equal(opencodeConfig.mcp.satori.environment.EMBEDDING_OUTPUT_DIMENSION, "{env:EMBEDDING_OUTPUT_DIMENSION}");
+        assert.equal(opencodeConfig.mcp.satori.environment.MILVUS_ADDRESS, "{env:MILVUS_ADDRESS}");
         assert.equal(JSON.stringify(opencodeConfig.mcp.satori).includes("node_modules"), false);
         const opencodeInstructions = readFile(path.join(homeDir, ".config", "opencode", "AGENTS.md"));
         assert.equal(opencodeInstructions.includes("<!-- satori-mcp:start -->"), true);
@@ -474,6 +576,37 @@ test("uninstall removes managed OpenCode config and instruction block only", () 
     });
 });
 
+test("install preserves direct OpenCode Satori environment values on reinstall", () => {
+    withTempHome((homeDir) => {
+        const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify({
+            mcp: {
+                satori: {
+                    enabled: true,
+                    type: "local",
+                    command: [process.execPath, launcherPath(homeDir)],
+                    environment: {
+                        VOYAGEAI_API_KEY: "direct-key",
+                        MILVUS_TOKEN: "direct-token",
+                    },
+                },
+            },
+        }, null, 2), "utf8");
+
+        executeInstallCommand({
+            kind: "install",
+            client: "opencode",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        const installed = JSON.parse(readFile(configPath));
+        assert.equal(installed.mcp.satori.environment.VOYAGEAI_API_KEY, "direct-key");
+        assert.equal(installed.mcp.satori.environment.MILVUS_TOKEN, "direct-token");
+        assert.equal(installed.mcp.satori.environment.EMBEDDING_OUTPUT_DIMENSION, "{env:EMBEDDING_OUTPUT_DIMENSION}");
+    });
+});
+
 test("install refuses to overwrite unmanaged OpenCode Satori entries", () => {
     withTempHome((homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
@@ -501,9 +634,9 @@ test("install refuses to overwrite unmanaged OpenCode Satori entries", () => {
 
 test("install all preflights every target before mutating any config", () => {
     withTempHome((homeDir) => {
-        const claudeSettingsPath = path.join(homeDir, ".claude", "settings.json");
-        fs.mkdirSync(path.dirname(claudeSettingsPath), { recursive: true });
-        fs.writeFileSync(claudeSettingsPath, "{ not valid json", "utf8");
+        const claudeConfigPath = path.join(homeDir, ".claude.json");
+        fs.mkdirSync(path.dirname(claudeConfigPath), { recursive: true });
+        fs.writeFileSync(claudeConfigPath, "{ not valid json", "utf8");
 
         assert.throws(
             () => executeInstallCommand({
@@ -530,7 +663,7 @@ test("dry-run reports install actions without writing files", () => {
         assert.equal(result.results.length, 3);
         assert.equal(result.results.every((entry) => entry.dryRun), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
-        assert.equal(fs.existsSync(path.join(homeDir, ".claude", "settings.json")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".claude.json")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".config", "opencode", "opencode.json")), false);
         assert.equal(fs.existsSync(launcherPath(homeDir)), false);
     });

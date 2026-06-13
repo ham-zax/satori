@@ -2106,6 +2106,59 @@ test('handleSearchCode reranker can change grouped representative chunk selectio
     });
 });
 
+test('handleSearchCode leaves reranker applied false when no returned indexes are usable', async () => {
+    await withTempRepo(async (repoPath) => {
+        const reranker = {
+            rerank: async () => [
+                { index: 99, relevanceScore: 0.9 },
+                { index: -1, relevanceScore: 0.8 },
+                { index: 1.5, relevanceScore: 0.7 }
+            ]
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'primary runtime path',
+                relativePath: 'src/one.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_one',
+                symbolLabel: 'function one()'
+            },
+            {
+                content: 'secondary runtime path',
+                relativePath: 'src/two.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_two',
+                symbolLabel: 'function two()'
+            }
+        ], reranker);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime path',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results[0].preview.includes('primary runtime path'), true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.enabled, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.attempted, true);
+        assert.equal(payload.hints?.debugSearch?.rerank?.applied, false);
+    });
+});
+
 test('handleSearchCode emits deterministic noiseMitigation hint when top grouped results are noise-dominant', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [

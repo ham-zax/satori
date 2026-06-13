@@ -243,7 +243,7 @@ test("runCli uninstall supports dry-run without writing files", async () => {
         assert.equal(parsed.action, "uninstall");
         assert.equal(parsed.client, "claude");
         assert.equal(parsed.dryRun, true);
-        assert.equal(fs.existsSync(path.join(homeDir, ".claude", "settings.json")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".claude.json")), false);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }

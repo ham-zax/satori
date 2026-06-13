@@ -27,7 +27,7 @@ function buildManifest(pkg: PackageJsonShape, cliPkg: PackageJsonShape) {
                 configFormat: "toml",
             },
             claude: {
-                configPath: "~/.claude/settings.json",
+                configPath: "~/.claude.json",
                 configFormat: "json",
             },
             opencode: {

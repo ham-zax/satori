@@ -7,8 +7,8 @@ Read-only MCP server for Satori. It gives coding agents six deterministic tools 
 Use the CLI installer for normal setup:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.0 install --client all
-npx -y @zokizuan/satori-cli@0.4.0 doctor
+npx -y @zokizuan/satori-cli@0.4.1 install --client all
+npx -y @zokizuan/satori-cli@0.4.1 doctor
 ```
 
 The CLI installer supports `codex`, `claude`, `opencode`, and `all`. It creates the runtime cache, writes the stable launcher, and writes client config for you. Avoid using `npx` as the resident MCP server command; first-run package resolution can exceed normal MCP startup timeouts.
@@ -16,8 +16,10 @@ The CLI installer supports `codex`, `claude`, `opencode`, and `all`. It creates 
 Advanced direct execution is available through the package bin:
 
 ```bash
-npx -y @zokizuan/satori-mcp@4.11.0 --help
+npx -y @zokizuan/satori-mcp@4.11.1 --help
 ```
+
+Use direct package execution for inspection, smoke tests, or unsupported harnesses. For supported clients, prefer `satori-cli install` so startup does not depend on package-manager resolution.
 
 ## Agent Workflow
 
@@ -41,6 +43,27 @@ Important defaults:
 ## Runtime Requirements
 
 Configure an embedding provider and Milvus-compatible backend before indexing. Supported embedding providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model, dimension, vector store, or schema requires a reindex because those values are part of the index fingerprint.
+
+MCP startup, `tools/list`, and installer operations are lazy with respect to provider credentials. Missing provider values become `MISSING_PROVIDER_CONFIG` only when a provider-backed tool call needs them.
+
+Installer-managed client config starts the resident launcher. Runtime provider settings come from the MCP client's environment and are exposed in native client config:
+
+- Codex writes active `env_vars` forwarding plus an optional commented `[mcp_servers.satori.env]` template in `~/.codex/config.toml`.
+- Claude Code writes `mcpServers.satori.env` in `~/.claude.json` with `${VAR:-}` pass-through values.
+- OpenCode writes `mcp.satori.environment` in `~/.config/opencode/opencode.json` with `{env:VAR}` pass-through values.
+
+Users who want literal values in a client config can replace the generated pass-through value for that client. In Codex, uncomment or add this table outside the installer-managed launcher block so reinstalls keep edits:
+
+```toml
+[mcp_servers.satori.env]
+EMBEDDING_PROVIDER = "VoyageAI"
+EMBEDDING_MODEL = "voyage-4-large"
+EMBEDDING_OUTPUT_DIMENSION = "1024"
+VOYAGEAI_API_KEY = "pa-..."
+VOYAGEAI_RERANKER_MODEL = "rerank-2.5"
+MILVUS_ADDRESS = "https://your-zilliz-endpoint"
+MILVUS_TOKEN = "your-zilliz-token"
+```
 
 Cloud-quality setup:
 

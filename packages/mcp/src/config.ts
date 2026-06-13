@@ -360,7 +360,7 @@ Environment Variables:
 
 Examples:
   # Install resident MCP config without package-manager startup on every client launch
-  npx -y @zokizuan/satori-cli@0.4.0 install --client all
+  npx -y @zokizuan/satori-cli@0.4.1 install --client all
 
   # Start MCP server with OpenAI and explicit Milvus address
   OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 satori

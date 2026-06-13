@@ -1516,7 +1516,7 @@ export class Context {
             return AstCodeSplitter.isLanguageSupported(language);
         }
 
-        // LangChain splitter supports most languages
+        // The legacy fallback splitter is language-agnostic.
         return true;
     }
 
@@ -1534,12 +1534,12 @@ export class Context {
                 strategy: isSupported ? 'ast' : 'langchain',
                 reason: isSupported
                     ? 'Language supported by AST parser'
-                    : 'Language not supported by AST, will fallback to LangChain'
+                    : 'Language not supported by AST, will use recursive fallback splitter'
             };
         } else {
             return {
                 strategy: 'langchain',
-                reason: 'Using LangChain splitter directly'
+                reason: 'Using recursive fallback splitter directly'
             };
         }
     }

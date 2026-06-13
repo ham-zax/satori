@@ -9,12 +9,47 @@ import type { InstallClient } from "./args.js";
 
 const MANAGED_BLOCK_START = "# >>> satori-cli managed satori start >>>";
 const MANAGED_BLOCK_END = "# <<< satori-cli managed satori end <<<";
+const CODEX_ENV_TEMPLATE_START = "# >>> satori-cli optional satori env template >>>";
+const CODEX_ENV_TEMPLATE_END = "# <<< satori-cli optional satori env template <<<";
 const INSTRUCTIONS_BLOCK_START = "<!-- satori-mcp:start -->";
 const INSTRUCTIONS_BLOCK_END = "<!-- satori-mcp:end -->";
 const OWNED_SKILL_DIRS = ["satori"] as const;
 const MANAGED_RUNTIME_DIR = "mcp-runtime";
 const MANAGED_BIN_DIR = "bin";
 const MANAGED_LAUNCHER_FILE = "satori-mcp.js";
+const SATORI_RUNTIME_ENV_VARS = [
+    "EMBEDDING_PROVIDER",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_OUTPUT_DIMENSION",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "VOYAGEAI_API_KEY",
+    "VOYAGEAI_RERANKER_MODEL",
+    "GEMINI_API_KEY",
+    "GEMINI_BASE_URL",
+    "OLLAMA_HOST",
+    "OLLAMA_MODEL",
+    "MILVUS_ADDRESS",
+    "MILVUS_TOKEN",
+    "READ_FILE_MAX_LINES",
+    "MCP_ENABLE_WATCHER",
+    "MCP_WATCH_DEBOUNCE_MS",
+] as const;
+const CODEX_ENV_TEMPLATE_LINES = [
+    CODEX_ENV_TEMPLATE_START,
+    "# Optional direct Codex env values. Uncomment/fill these if you prefer",
+    "# ~/.codex/config.toml to store Satori runtime settings directly.",
+    "# This template is outside the launcher block so reinstall keeps edits.",
+    "# [mcp_servers.satori.env]",
+    "# EMBEDDING_PROVIDER = \"VoyageAI\"",
+    "# EMBEDDING_MODEL = \"voyage-4-large\"",
+    "# EMBEDDING_OUTPUT_DIMENSION = \"1024\"",
+    "# VOYAGEAI_API_KEY = \"pa-...\"",
+    "# VOYAGEAI_RERANKER_MODEL = \"rerank-2.5\"",
+    "# MILVUS_ADDRESS = \"https://your-zilliz-endpoint\"",
+    "# MILVUS_TOKEN = \"your-zilliz-token\"",
+    CODEX_ENV_TEMPLATE_END,
+] as const;
 const OPENCODE_INSTRUCTIONS = `# Satori MCP
 
 This project uses Satori MCP for semantic code search, deterministic navigation, and index lifecycle management.
@@ -133,7 +168,7 @@ function resolveClientTargets(homeDir: string): ClientTarget[] {
         },
         {
             client: "claude",
-            configPath: path.join(homeDir, ".claude", "settings.json"),
+            configPath: path.join(homeDir, ".claude.json"),
             companion: {
                 kind: "skills",
                 path: path.join(homeDir, ".claude", "skills"),
@@ -187,6 +222,24 @@ function toTomlString(value: string): string {
 
 function buildTomlArray(values: string[]): string {
     return `[${values.map(toTomlString).join(", ")}]`;
+}
+
+function runtimeEnvMap(valueForName: (name: string) => string): Record<string, string> {
+    return Object.fromEntries(SATORI_RUNTIME_ENV_VARS.map((name) => [name, valueForName(name)]));
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return undefined;
+    }
+    return value as Record<string, unknown>;
+}
+
+function mergeRuntimeEnv(existing: unknown, defaults: Record<string, string>): Record<string, unknown> {
+    return {
+        ...defaults,
+        ...(objectValue(existing) ?? {}),
+    };
 }
 
 function packageNameFromSpecifier(packageSpecifier: string): string {
@@ -363,9 +416,27 @@ function buildCodexManagedBlock(runtimeCommand: ManagedRuntimeCommand): string {
         "[mcp_servers.satori]",
         `command = ${toTomlString(runtimeCommand.command)}`,
         `args = ${buildTomlArray(runtimeCommand.args)}`,
+        "# Satori reads provider/vector settings from environment at MCP startup.",
+        "# env_vars forwards these names from Codex's parent environment when set.",
+        `env_vars = ${buildTomlArray([...SATORI_RUNTIME_ENV_VARS])}`,
         MANAGED_BLOCK_END,
         "",
     ].join("\n");
+}
+
+function buildCodexEnvTemplateBlock(): string {
+    return `${CODEX_ENV_TEMPLATE_LINES.join("\n")}\n`;
+}
+
+function codexHasSatoriEnvTable(content: string): boolean {
+    return /^\s*\[mcp_servers\.satori\.env\]\s*$/m.test(content);
+}
+
+function ensureCodexEnvTemplate(content: string): string {
+    if (content.includes(CODEX_ENV_TEMPLATE_START) || codexHasSatoriEnvTable(content)) {
+        return content;
+    }
+    return `${normalizeTrailingNewline(content)}\n${buildCodexEnvTemplateBlock()}`;
 }
 
 function codexHasUnmanagedSatoriSection(content: string): boolean {
@@ -397,6 +468,8 @@ function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCom
     } else {
         next = `${normalizeTrailingNewline(current)}\n${managedBlock}`;
     }
+
+    next = ensureCodexEnvTemplate(next);
 
     return {
         changed: next !== current,
@@ -459,10 +532,12 @@ function parseJsonObject(filePath: string): Record<string, unknown> {
     return parsed as Record<string, unknown>;
 }
 
-function buildClaudeServerConfig(runtimeCommand: ManagedRuntimeCommand): Record<string, unknown> {
+function buildClaudeServerConfig(runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>): Record<string, unknown> {
     return {
+        type: "stdio",
         command: runtimeCommand.command,
         args: runtimeCommand.args,
+        env: mergeRuntimeEnv(existing?.env, runtimeEnvMap((name) => `\${${name}:-}`)),
     };
 }
 
@@ -493,7 +568,8 @@ function isManagedClaudeEntry(value: unknown): value is Record<string, unknown> 
 function prepareClaudeInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
     const currentObject = parseJsonObject(filePath);
     const currentSerialized = JSON.stringify(currentObject);
-    const desiredServer = buildClaudeServerConfig(runtimeCommand);
+    const existingSatori = objectValue((currentObject.mcpServers as Record<string, unknown> | undefined)?.satori);
+    const desiredServer = buildClaudeServerConfig(runtimeCommand, existingSatori);
 
     const mcpServersValue = currentObject.mcpServers;
     let mcpServers: Record<string, unknown>;
@@ -505,8 +581,7 @@ function prepareClaudeInstall(filePath: string, runtimeCommand: ManagedRuntimeCo
         throw new CliError("E_USAGE", `Expected mcpServers to be an object in ${filePath}.`, 2);
     }
 
-    const existingSatori = mcpServers.satori;
-    if (existingSatori !== undefined && !isManagedClaudeEntry(existingSatori)) {
+    if (mcpServers.satori !== undefined && !isManagedClaudeEntry(mcpServers.satori)) {
         throw new CliError(
             "E_USAGE",
             `Refusing to overwrite unmanaged Satori config in ${filePath}. Remove mcpServers.satori manually or align it to the managed Satori form first.`,
@@ -515,7 +590,7 @@ function prepareClaudeInstall(filePath: string, runtimeCommand: ManagedRuntimeCo
     }
 
     mcpServers.satori = {
-        ...(existingSatori as Record<string, unknown> | undefined),
+        ...existingSatori,
         ...desiredServer,
     };
     delete (mcpServers.satori as Record<string, unknown>).timeout;
@@ -581,11 +656,12 @@ function parseJsoncObject(filePath: string, content: string): Record<string, unk
     return parsed as Record<string, unknown>;
 }
 
-function buildOpenCodeServerConfig(runtimeCommand: ManagedRuntimeCommand): Record<string, unknown> {
+function buildOpenCodeServerConfig(runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>): Record<string, unknown> {
     return {
         enabled: true,
         type: "local",
         command: [runtimeCommand.command, ...runtimeCommand.args],
+        environment: mergeRuntimeEnv(existing?.environment, runtimeEnvMap((name) => `{env:${name}}`)),
     };
 }
 
@@ -637,7 +713,7 @@ function prepareOpenCodeInstall(filePath: string, runtimeCommand: ManagedRuntime
             2
         );
     }
-    return mutateJsonc(filePath, current, ["mcp", "satori"], buildOpenCodeServerConfig(runtimeCommand));
+    return mutateJsonc(filePath, current, ["mcp", "satori"], buildOpenCodeServerConfig(runtimeCommand, objectValue(existingSatori)));
 }
 
 function prepareOpenCodeUninstall(filePath: string): FileMutation {

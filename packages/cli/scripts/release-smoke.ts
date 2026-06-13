@@ -31,8 +31,20 @@ function packPackage(packageRoot: string, smokePackDir: string): string {
     return path.join(smokePackDir, tarballName);
 }
 
-function runCliSmoke(commandArgs: string[], cliTarballPath: string, mcpTarballPath: string, smokeExecDir: string): void {
-    execFileSync("npm", ["exec", "--yes", "--package", cliTarballPath, "--package", mcpTarballPath, "--", "satori-cli", ...commandArgs], {
+function runCliSmoke(commandArgs: string[], coreTarballPath: string, mcpTarballPath: string, cliTarballPath: string, smokeExecDir: string): void {
+    execFileSync("npm", [
+        "exec",
+        "--yes",
+        "--package",
+        coreTarballPath,
+        "--package",
+        mcpTarballPath,
+        "--package",
+        cliTarballPath,
+        "--",
+        "satori-cli",
+        ...commandArgs,
+    ], {
         cwd: smokeExecDir,
         encoding: "utf8",
         env: {
@@ -48,15 +60,17 @@ function runCliSmoke(commandArgs: string[], cliTarballPath: string, mcpTarballPa
 function main(): void {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
+    const corePackageRoot = path.resolve(packageRoot, "..", "core");
     const mcpPackageRoot = path.resolve(packageRoot, "..", "mcp");
     const smokePackDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-smoke-"));
     const smokeExecDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-exec-"));
 
     try {
-        const cliTarballPath = packPackage(packageRoot, smokePackDir);
+        const coreTarballPath = packPackage(corePackageRoot, smokePackDir);
         const mcpTarballPath = packPackage(mcpPackageRoot, smokePackDir);
-        runCliSmoke(["--help"], cliTarballPath, mcpTarballPath, smokeExecDir);
-        runCliSmoke(["doctor"], cliTarballPath, mcpTarballPath, smokeExecDir);
+        const cliTarballPath = packPackage(packageRoot, smokePackDir);
+        runCliSmoke(["--help"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir);
+        runCliSmoke(["doctor"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir);
         console.log("[release:smoke] CLI tarball starts and runs doctor via npm exec.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

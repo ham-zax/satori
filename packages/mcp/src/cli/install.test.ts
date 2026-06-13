@@ -20,7 +20,7 @@ function fakeRuntimeCommand(homeDir: string) {
                 homeDir,
                 ".satori",
                 "mcp-runtime",
-                "@zokizuan-satori-mcp-4.10.1",
+                "@zokizuan-satori-mcp-4.11.0",
                 "node_modules",
                 "@zokizuan",
                 "satori-mcp",

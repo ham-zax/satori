@@ -19,6 +19,8 @@ Use this package when you want the lower-level engine directly. Most agent workf
 npm install @zokizuan/satori-core
 ```
 
+Runtime requirements depend on the embedding/vector-store implementation you choose. The MCP distribution defaults to embeddings plus a Milvus-compatible backend; direct users can wire the same components explicitly.
+
 ## Minimal Use
 
 ```ts

@@ -17,6 +17,20 @@ function npmOutput(error: unknown): string {
     return `${stdout}\n${stderr}\n${error.message}`.trim();
 }
 
+function packPackage(packageRoot: string, smokePackDir: string): string {
+    const beforeFiles = new Set(fs.readdirSync(smokePackDir));
+    execFileSync("pnpm", ["pack", "--pack-destination", smokePackDir], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    const tarballName = fs.readdirSync(smokePackDir).find((entry) => entry.endsWith(".tgz") && !beforeFiles.has(entry));
+    if (!tarballName) {
+        throw new Error(`pnpm pack did not produce a tarball for ${packageRoot}.`);
+    }
+    return path.join(smokePackDir, tarballName);
+}
+
 function runInitializeSmoke(
     command: string,
     args: string[],
@@ -130,11 +144,11 @@ function runInitializeSmoke(
     });
 }
 
-async function runNpmExecInitializeSmoke(tarballPath: string, smokeExecDir: string): Promise<void> {
-    await runInitializeSmoke("npm", ["exec", "--yes", "--package", tarballPath, "--", "satori"], smokeExecDir, 60000);
+async function runNpmExecInitializeSmoke(coreTarballPath: string, tarballPath: string, smokeExecDir: string): Promise<void> {
+    await runInitializeSmoke("npm", ["exec", "--yes", "--package", coreTarballPath, "--package", tarballPath, "--", "satori"], smokeExecDir, 60000);
 }
 
-async function runDirectRuntimeInitializeSmoke(tarballPath: string, smokeExecDir: string): Promise<void> {
+async function runDirectRuntimeInitializeSmoke(coreTarballPath: string, tarballPath: string, smokeExecDir: string): Promise<void> {
     const runtimeRoot = path.join(smokeExecDir, ".satori", "mcp-runtime", "release-smoke");
     execFileSync("npm", [
         "install",
@@ -145,6 +159,7 @@ async function runDirectRuntimeInitializeSmoke(tarballPath: string, smokeExecDir
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
+        coreTarballPath,
         tarballPath,
     ], {
         cwd: smokeExecDir,
@@ -166,23 +181,14 @@ async function runDirectRuntimeInitializeSmoke(tarballPath: string, smokeExecDir
 async function main(): Promise<void> {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
+    const corePackageRoot = path.resolve(packageRoot, "..", "core");
     const smokePackDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-mcp-release-smoke-"));
     const smokeExecDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-mcp-release-exec-"));
 
     try {
-        const beforeFiles = new Set(fs.readdirSync(smokePackDir));
-        execFileSync("pnpm", ["pack", "--pack-destination", smokePackDir], {
-            cwd: packageRoot,
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-        const tarballName = fs.readdirSync(smokePackDir).find((entry) => entry.endsWith(".tgz") && !beforeFiles.has(entry));
-        if (!tarballName) {
-            throw new Error("pnpm pack did not produce a tarball.");
-        }
-
-        const tarballPath = path.join(smokePackDir, tarballName);
-        execFileSync("npm", ["exec", "--yes", "--package", tarballPath, "--", "satori", "--help"], {
+        const coreTarballPath = packPackage(corePackageRoot, smokePackDir);
+        const tarballPath = packPackage(packageRoot, smokePackDir);
+        execFileSync("npm", ["exec", "--yes", "--package", coreTarballPath, "--package", tarballPath, "--", "satori", "--help"], {
             cwd: smokeExecDir,
             encoding: "utf8",
             env: {
@@ -191,8 +197,8 @@ async function main(): Promise<void> {
             },
             stdio: ["ignore", "pipe", "pipe"],
         });
-        await runNpmExecInitializeSmoke(tarballPath, smokeExecDir);
-        await runDirectRuntimeInitializeSmoke(tarballPath, smokeExecDir);
+        await runNpmExecInitializeSmoke(coreTarballPath, tarballPath, smokeExecDir);
+        await runDirectRuntimeInitializeSmoke(coreTarballPath, tarballPath, smokeExecDir);
         console.log("[release:smoke] MCP tarball starts via npm exec and direct runtime node entry with empty provider env.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

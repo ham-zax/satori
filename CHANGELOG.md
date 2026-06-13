@@ -2,6 +2,23 @@
 
 All notable changes to this repository are documented in this file.
 
+## [2026-06-13] Release Dependency Hardening
+
+### Release Versions
+- Repository version: `0.5.0`
+- `@zokizuan/satori-core`: `1.6.0`
+- `@zokizuan/satori-mcp`: `4.11.0`
+- `@zokizuan/satori-cli`: `0.4.0`
+
+### Security
+- Removed the runtime `langchain` dependency from `@zokizuan/satori-core` and replaced the narrow fallback splitter use with an in-package deterministic recursive splitter.
+- Updated MCP SDK, embedding/vector clients, OpenAI/VoyageAI clients, and release tooling dependencies to current compatible versions.
+- Added package-manager overrides for vulnerable transitive dependencies where the override stays within the parent package's declared range.
+
+### Tests
+- Added focused fallback splitter coverage for deterministic chunk metadata, overlap behavior, and invalid sizing inputs.
+- Verified high/critical dependency audit gates for both production and full dependency trees.
+
 ## [2026-05-05] Search Workflow Diagnostics
 
 ### Release Versions

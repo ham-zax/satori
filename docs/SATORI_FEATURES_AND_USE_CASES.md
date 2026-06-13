@@ -1474,6 +1474,9 @@ Why Satori is better:
 
 - Version freshness is checked before release.
 - Generated tool docs and server manifest reduce drift.
+- Installer smoke tests prove `install --client all` writes launcher-backed config for Codex, Claude, and OpenCode.
+- Release smoke tests prove packed MCP and CLI tarballs start before publish.
+- npm provenance links published packages back to the GitHub Actions release run.
 - Publish order follows dependency graph.
 
 ### Use Case: Backend Timeout Recovery

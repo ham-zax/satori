@@ -404,6 +404,49 @@ test("install writes OpenCode JSONC config and AGENTS instructions", () => {
     });
 });
 
+test("install all smoke writes launcher-backed config for every supported client", () => {
+    withTempHome((homeDir) => {
+        const result = executeInstallCommand({
+            kind: "install",
+            client: "all",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        assert.deepEqual(result.results.map((entry) => entry.client), ["codex", "claude", "opencode"]);
+        assert.equal(result.results.every((entry) => entry.status === "updated"), true);
+
+        const launcher = readFile(launcherPath(homeDir));
+        assert.equal(launcher.includes('require("node:child_process")'), true);
+        assert.equal(launcher.includes("node_modules"), true);
+        assert.equal(launcher.includes("dist/index.js"), true);
+
+        const codexConfig = readFile(path.join(homeDir, ".codex", "config.toml"));
+        assert.equal(codexConfig.includes(`command = "${process.execPath.replace(/\\/g, "\\\\")}"`), true);
+        assert.equal(codexConfig.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), true);
+        assert.equal(codexConfig.includes('command = "npx"'), false);
+        assert.equal(codexConfig.includes("startup_timeout_ms"), false);
+        assert.equal(codexConfig.includes("node_modules"), false);
+        assert.equal(codexConfig.includes("dist/index.js"), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md")), true);
+
+        const claudeConfig = JSON.parse(readFile(path.join(homeDir, ".claude", "settings.json")));
+        assert.equal(claudeConfig.mcpServers.satori.command, process.execPath);
+        assert.deepEqual(claudeConfig.mcpServers.satori.args, fakeClientCommand(homeDir).args);
+        assert.equal(Object.prototype.hasOwnProperty.call(claudeConfig.mcpServers.satori, "timeout"), false);
+        assert.equal(JSON.stringify(claudeConfig.mcpServers.satori).includes("node_modules"), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".claude", "skills", "satori", "SKILL.md")), true);
+
+        const opencodeConfig = JSON.parse(readFile(path.join(homeDir, ".config", "opencode", "opencode.json")));
+        assert.equal(opencodeConfig.mcp.satori.enabled, true);
+        assert.equal(opencodeConfig.mcp.satori.type, "local");
+        assert.deepEqual(opencodeConfig.mcp.satori.command, [process.execPath, launcherPath(homeDir)]);
+        assert.equal(JSON.stringify(opencodeConfig.mcp.satori).includes("node_modules"), false);
+        const opencodeInstructions = readFile(path.join(homeDir, ".config", "opencode", "AGENTS.md"));
+        assert.equal(opencodeInstructions.includes("<!-- satori-mcp:start -->"), true);
+        assert.equal(opencodeInstructions.includes("search_codebase"), true);
+    });
+});
+
 test("uninstall removes managed OpenCode config and instruction block only", () => {
     withTempHome((homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");

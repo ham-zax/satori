@@ -228,6 +228,31 @@ test('list_codebases annotates ready entries when completion proof probe fails',
     assert.match(sections.get('Ready')?.[0] || '', /manage_index action='status'/i);
 });
 
+test('list_codebases uses provider vector context for completion proof when available', async () => {
+    let requestedOperation: string | null = null;
+    const ctx = buildContext([
+        { path: '/repo/a', info: { status: 'indexed' } }
+    ], {}, { throwOnProbe: true });
+    (ctx as any).providerRuntime = {
+        requireToolContext: async (operation: string) => {
+            requestedOperation = operation;
+            return buildContext([
+                { path: '/repo/a', info: { status: 'indexed' } }
+            ], {
+                '/repo/a': createMarker('/repo/a')
+            });
+        }
+    };
+
+    const response = await listCodebasesTool.execute({}, ctx);
+    const text = response.content[0]?.text || '';
+    const sections = parseSectionLines(text);
+
+    assert.equal(requestedOperation, 'vector_only');
+    assert.deepEqual(extractPaths(sections.get('Ready') || []), ['/repo/a']);
+    assert.doesNotMatch(sections.get('Ready')?.[0] || '', /completion proof probe failed/i);
+});
+
 test('list_codebases preserves getIndexCompletionMarker receiver binding', async () => {
     const markerContext = {
         marker: createMarker('/repo/a'),

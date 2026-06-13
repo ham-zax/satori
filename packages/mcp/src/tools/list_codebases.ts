@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
+import { classifyVectorBackendError, isMissingProviderConfigIssue } from "./setup-errors.js";
 import { validateCompletionProof } from "../core/completion-proof.js";
 
 const listCodebasesInputSchema = z.object({}).strict();
@@ -37,15 +38,31 @@ export const listCodebasesTool: McpTool = {
         lines.push('## Codebases');
         lines.push('');
 
+        let proofContext = ctx;
+        if (ctx.providerRuntime) {
+            try {
+                const providerContext = await ctx.providerRuntime.requireToolContext("vector_only");
+                if (!isMissingProviderConfigIssue(providerContext)) {
+                    proofContext = providerContext;
+                }
+            } catch (error) {
+                if (classifyVectorBackendError(error)) {
+                    proofContext = ctx;
+                } else {
+                    throw error;
+                }
+            }
+        }
+
         const readyCandidates = all
             .filter((e) => e.info.status === "indexed" || e.info.status === "sync_completed");
         const completionProofChecks = await Promise.all(readyCandidates.map(async (entry) => ({
             entry,
             proof: await validateCompletionProof({
                 codebasePath: entry.path,
-                runtimeFingerprint: ctx.runtimeFingerprint,
-                getIndexCompletionMarker: typeof (ctx.context as any)?.getIndexCompletionMarker === "function"
-                    ? (markerPath) => (ctx.context as any).getIndexCompletionMarker(markerPath)
+                runtimeFingerprint: proofContext.runtimeFingerprint,
+                getIndexCompletionMarker: typeof (proofContext.context as any)?.getIndexCompletionMarker === "function"
+                    ? (markerPath) => (proofContext.context as any).getIndexCompletionMarker(markerPath)
                     : undefined
             })
         })));

@@ -198,12 +198,20 @@ pnpm --filter @zokizuan/satori-cli test
 pnpm test:integration
 ```
 
+To test the current checkout in your local MCP clients before publishing, rewrite the existing stable Satori launcher to point at this repo's built MCP runtime:
+
+```bash
+pnpm run dev:install-local-mcp
+```
+
+Use `pnpm run dev:install-local-mcp:no-build` after a previous build when you only need to rewrite the launcher. Restart the MCP client after either command.
+
 ## Release Commands
 
 Current release versions:
 
 - `@zokizuan/satori-core@1.6.2`
-- `@zokizuan/satori-mcp@4.11.2`
+- `@zokizuan/satori-mcp@4.11.3`
 - `@zokizuan/satori-cli@0.4.2`
 
 Preflight before publishing:

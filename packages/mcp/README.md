@@ -16,7 +16,7 @@ The CLI installer supports `codex`, `claude`, `opencode`, and `all`. It creates 
 Advanced direct execution is available through the package bin:
 
 ```bash
-npx -y @zokizuan/satori-mcp@4.11.2 --help
+npx -y @zokizuan/satori-mcp@4.11.3 --help
 ```
 
 Use direct package execution for inspection, smoke tests, or unsupported harnesses. For supported clients, prefer `satori-cli install` so startup does not depend on package-manager resolution.

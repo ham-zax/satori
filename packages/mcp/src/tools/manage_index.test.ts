@@ -53,6 +53,40 @@ test("manage_index returns structured backend diagnostics when provider runtime 
     assert.doesNotMatch(payload.message, /Connection closed/);
 });
 
+test("manage_index status uses provider vector context when available", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    let requestedOperation: string | null = null;
+    const providerContext = {
+        toolHandlers: {
+            handleGetIndexingStatus: async () => ({
+                content: [{ type: "text", text: "provider-backed status" }]
+            })
+        }
+    } as unknown as ToolContext;
+    const ctx = {
+        capabilities,
+        providerRuntime: {
+            requireToolContext: async (operation: string) => {
+                requestedOperation = operation;
+                return providerContext;
+            }
+        },
+        toolHandlers: {
+            handleGetIndexingStatus: async () => {
+                throw new Error("startup context should not handle status when provider context is available");
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({
+        action: "status",
+        path: "/repo",
+    }, ctx);
+
+    assert.equal(requestedOperation, "vector_only");
+    assert.equal(response.content[0].text, "provider-backed status");
+});
+
 test("manage_index returns structured backend diagnostics when handler backend call fails", async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const ctx = {

@@ -37,7 +37,7 @@ export const manageIndexTool: McpTool = {
         }
 
         const input = parsed.data;
-        const providerOperation = input.action === "clear"
+        const providerOperation = input.action === "clear" || input.action === "status"
             ? "vector_only"
             : (input.action === "create" || input.action === "reindex" || input.action === "sync")
                 ? "embedding_vector"
@@ -49,13 +49,21 @@ export const manageIndexTool: McpTool = {
                 : ctx;
         } catch (error) {
             const diagnostic = classifyVectorBackendError(error);
-            if (!diagnostic) {
-                throw error;
+            if (input.action === "status" && diagnostic) {
+                executionContext = ctx;
+            } else {
+                if (!diagnostic) {
+                    throw error;
+                }
+                return formatManageVectorBackendError(input.action, input.path, diagnostic);
             }
-            return formatManageVectorBackendError(input.action, input.path, diagnostic);
         }
         if (isMissingProviderConfigIssue(executionContext)) {
-            return formatManageProviderConfigError(input.action, input.path, executionContext);
+            if (input.action === "status") {
+                executionContext = ctx;
+            } else {
+                return formatManageProviderConfigError(input.action, input.path, executionContext);
+            }
         }
 
         try {

@@ -144,7 +144,7 @@ test('stopWatcherMode closes active watchers and clears timers', async () => {
     assert.equal((manager as any).debounceTimers.size, 0);
 });
 
-test('watch filter allowlists .satoriignore', async () => {
+test('watch filter allowlists root ignore controls and hidden supported files', async () => {
     const codebasePath = createTempDir();
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
     const context = createContext();
@@ -166,17 +166,21 @@ test('watch filter allowlists .satoriignore', async () => {
     );
     assert.equal(shouldIgnoreRootGitIgnore, false);
 
-    const shouldIgnoreNestedGitIgnore = (manager as any).shouldIgnoreWatchPath(
+    const shouldIgnoreHiddenSupportedFile = (manager as any).shouldIgnoreWatchPath(
         codebasePath,
-        path.join(codebasePath, 'nested/.gitignore')
+        path.join(codebasePath, '.hidden/runtime.ts')
     );
-    assert.equal(shouldIgnoreNestedGitIgnore, true);
+    assert.equal(shouldIgnoreHiddenSupportedFile, false);
+
+    assert.equal((manager as any).isIgnoreRuleControlFile('.gitignore'), true);
+    assert.equal((manager as any).isIgnoreRuleControlFile('.satoriignore'), true);
+    assert.equal((manager as any).isIgnoreRuleControlFile('nested/.gitignore'), false);
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
-test('ensureFreshness baselines ignore control signature without forcing reconcile on first run', async () => {
+test('ensureFreshness baselines missing ignore signature only when no manifest or synchronizer exists', async () => {
     const codebasePath = createTempDir();
     fs.writeFileSync(path.join(codebasePath, '.satoriignore'), 'dist/**\n', 'utf8');
 
@@ -211,6 +215,87 @@ test('ensureFreshness baselines ignore control signature without forcing reconci
     assert.equal(syncCalls, 1);
     assert.equal(reloadCalls, 0);
     assert.equal(typeof snapshot.getCodebaseIgnoreControlSignature(codebasePath), 'string');
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness reconciles missing ignore signature when an indexed manifest exists', async () => {
+    const codebasePath = createTempDir();
+    fs.writeFileSync(path.join(codebasePath, '.satoriignore'), 'src/ignored.ts\n', 'utf8');
+
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    snapshot.setCodebaseIndexManifest(codebasePath, ['src/keep.ts', 'src/ignored.ts']);
+
+    let activePatterns: string[] = [];
+    let trackedPaths = ['src/keep.ts', 'src/ignored.ts'];
+    let reloadCalls = 0;
+    let syncCalls = 0;
+    const deletedPaths: string[][] = [];
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return activePatterns;
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async reloadIgnoreRulesForCodebase() {
+            reloadCalls += 1;
+            activePatterns = ['src/ignored.ts'];
+            trackedPaths = ['src/keep.ts'];
+            return activePatterns;
+        },
+        async recreateSynchronizerForCodebase() {
+            return;
+        },
+        async deleteIndexedPathsByRelativePaths(_codebasePath: string, relativePaths: string[]) {
+            deletedPaths.push(relativePaths.slice());
+            return relativePaths.length;
+        },
+        getTrackedRelativePaths() {
+            return trackedPaths.slice();
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+        }
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 60_000);
+    assert.equal(decision.mode, 'reconciled_ignore_change');
+    assert.equal(decision.deletedFiles, 1);
+    assert.equal(reloadCalls, 1);
+    assert.equal(syncCalls, 1);
+    assert.deepEqual(deletedPaths, [['src/ignored.ts']]);
+    assert.equal(typeof snapshot.getCodebaseIgnoreControlSignature(codebasePath), 'string');
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('recordCurrentIgnoreControlSignature persists the current root ignore signature', async () => {
+    const codebasePath = createTempDir();
+    fs.writeFileSync(path.join(codebasePath, '.gitignore'), 'dist/**\n', 'utf8');
+
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    const context = createContext();
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    await manager.recordCurrentIgnoreControlSignature(codebasePath);
+
+    const signature = snapshot.getCodebaseIgnoreControlSignature(codebasePath);
+    assert.equal(typeof signature, 'string');
+    assert.match(signature || '', /^v1:/);
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });
@@ -297,6 +382,7 @@ test('ensureFreshness detects ignore control signature changes and reconciles be
         watchEnabled: false,
     });
 
+    await manager.recordCurrentIgnoreControlSignature(codebasePath);
     const baseline = await manager.ensureFreshness(codebasePath, 0);
     assert.equal(baseline.mode, 'synced');
     const baselineSignature = snapshot.getCodebaseIgnoreControlSignature(codebasePath);
@@ -367,6 +453,7 @@ test('ensureFreshness detects same-size ignore control content changes with unch
         watchEnabled: false,
     });
 
+    await manager.recordCurrentIgnoreControlSignature(codebasePath);
     const baseline = await manager.ensureFreshness(codebasePath, 0);
     assert.equal(baseline.mode, 'synced');
     const baselineSignature = snapshot.getCodebaseIgnoreControlSignature(codebasePath);
@@ -433,6 +520,7 @@ test('ensureFreshness coalesces non-watcher ignore signature reconciles while on
         watchEnabled: false,
     });
 
+    await manager.recordCurrentIgnoreControlSignature(codebasePath);
     const baseline = await manager.ensureFreshness(codebasePath, 0);
     assert.equal(baseline.mode, 'synced');
     assert.equal(syncCalls, 1);
@@ -621,6 +709,7 @@ test('ignore-change reconciliation runs after in-flight sync and is not skipped 
         watchDebounceMs: 20,
     });
 
+    await manager.recordCurrentIgnoreControlSignature(codebasePath);
     const inFlightSync = manager.ensureFreshness(codebasePath, 0);
     await wait(20);
 

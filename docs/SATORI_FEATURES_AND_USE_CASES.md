@@ -528,8 +528,10 @@ Ignore rules are additive across multiple layers:
 - constructor overrides,
 - environment custom values,
 - repo-root `.gitignore`,
-- repo-root `.satoriignore`,
-- global `~/.satori/.satoriignore`.
+- repo-root `.satoriignore`.
+
+v1 intentionally loads root ignore files only. Nested `.gitignore` files and global
+`~/.satori/.satoriignore` files are not part of the ignore-control contract.
 
 Default ignored areas include:
 

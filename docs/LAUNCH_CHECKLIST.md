@@ -31,8 +31,8 @@ Satori is a read-only MCP server and installer that helps AI coding agents inves
 - Tagline: `Repo retrieval for MCP coding agents.`
 - Thumbnail/social image: `satori-landing/og-image.svg`
 - Demo flow to show:
-  1. Run `npx -y @zokizuan/satori-cli@0.4.1 install --client all`
-  2. Run `npx -y @zokizuan/satori-cli@0.4.1 doctor`
+  1. Run `npx -y @zokizuan/satori-cli@0.4.2 install --client all`
+  2. Run `npx -y @zokizuan/satori-cli@0.4.2 doctor`
   3. Index one repo with `manage_index action="create"`
   4. Search with `search_codebase`
   5. Open exact context with `file_outline`, `call_graph`, and `read_file`

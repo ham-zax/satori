@@ -5,8 +5,8 @@ Installer and shell client for Satori MCP. Use this package to configure support
 ## Quick Start
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.1 install --client all
-npx -y @zokizuan/satori-cli@0.4.1 doctor
+npx -y @zokizuan/satori-cli@0.4.2 install --client all
+npx -y @zokizuan/satori-cli@0.4.2 doctor
 ```
 
 Supported clients are `codex`, `claude`, `opencode`, and `all`.
@@ -22,11 +22,11 @@ The installer only manages Satori-owned config and the first-party workflow skil
 ## Commands
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.1 install --client codex
-npx -y @zokizuan/satori-cli@0.4.1 install --client claude
-npx -y @zokizuan/satori-cli@0.4.1 install --client opencode
-npx -y @zokizuan/satori-cli@0.4.1 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.4.1 uninstall --client codex
+npx -y @zokizuan/satori-cli@0.4.2 install --client codex
+npx -y @zokizuan/satori-cli@0.4.2 install --client claude
+npx -y @zokizuan/satori-cli@0.4.2 install --client opencode
+npx -y @zokizuan/satori-cli@0.4.2 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.4.2 uninstall --client codex
 ```
 
 `doctor` checks Node, package visibility, provider env, and Milvus env without starting an MCP client.
@@ -34,8 +34,8 @@ npx -y @zokizuan/satori-cli@0.4.1 uninstall --client codex
 Typical first run:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.1 install --client all
-npx -y @zokizuan/satori-cli@0.4.1 doctor
+npx -y @zokizuan/satori-cli@0.4.2 install --client all
+npx -y @zokizuan/satori-cli@0.4.2 doctor
 # restart your MCP client
 ```
 

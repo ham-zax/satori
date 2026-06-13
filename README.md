@@ -31,8 +31,8 @@ Satori indexes a repository, keeps the index fresh, and gives agents a fixed six
 Install managed MCP config for every supported local client:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.1 install --client all
-npx -y @zokizuan/satori-cli@0.4.1 doctor
+npx -y @zokizuan/satori-cli@0.4.2 install --client all
+npx -y @zokizuan/satori-cli@0.4.2 doctor
 ```
 
 Supported installers: `codex`, `claude`, `opencode`, and `all`.
@@ -68,7 +68,7 @@ If any tool returns `requires_reindex`, run the hinted `manage_index action="rei
 
 Satori needs an embedding provider and a Milvus-compatible vector store before indexing. MCP startup, `tools list`, and `doctor` do not require provider credentials; provider-backed tool calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 
-Run `npx -y @zokizuan/satori-cli@0.4.1 doctor` after setting env values to check the local setup before indexing.
+Run `npx -y @zokizuan/satori-cli@0.4.2 doctor` after setting env values to check the local setup before indexing.
 
 Installer config and runtime config are intentionally separate:
 
@@ -202,9 +202,9 @@ pnpm test:integration
 
 Current release versions:
 
-- `@zokizuan/satori-core@1.6.1`
-- `@zokizuan/satori-mcp@4.11.1`
-- `@zokizuan/satori-cli@0.4.1`
+- `@zokizuan/satori-core@1.6.2`
+- `@zokizuan/satori-mcp@4.11.2`
+- `@zokizuan/satori-cli@0.4.2`
 
 Preflight before publishing:
 

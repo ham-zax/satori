@@ -450,7 +450,7 @@ Recent vs legacy:
 1) `manage_index` action semantics
 - Trigger: action dispatch.
 - Effect: create/reindex start background indexing, sync runs incremental `reindexByChange`, status reports current state, clear removes index+snapshot state.
-- Observability: action-specific textual responses and logs.
+- Observability: action-specific textual responses and logs; indexing-blocked responses include `retryAfterMs=2000`, independent of watcher debounce.
 - Determinism: absolute-path enforcement and status/fingerprint gates.
 - Performance: create/reindex heavy background operation, sync incremental.
 
@@ -466,7 +466,7 @@ Recent vs legacy:
 - Trigger: control-file signature mismatch or watcher control-file event.
 - Effect: ignore-rule reconcile path reloads matcher, deletes newly ignored indexed paths from manifest/vector index, then forced incremental sync for newly unignored content.
 - Observability: reconcile decision modes and counts (`deletedFiles`, `newlyIgnoredFiles`, `addedFiles`, `ignoreRulesVersion`).
-- Determinism: signature is control-file `(mtime,size)` tuple string; manifest snapshot captured before synchronizer recreation.
+- Determinism: signature is a content hash of root ignore control files; manifest snapshot captured before synchronizer recreation.
 - Performance: no full reindex; targeted delete + incremental sync.
 
 4) Watcher vs non-watcher behavior
@@ -643,6 +643,7 @@ Recent vs legacy:
 Core MCP runtime:
 - `MCP_ENABLE_WATCHER` default `true`.
 - `MCP_WATCH_DEBOUNCE_MS` default `5000` (fallback to default on invalid value).
+- Indexing-blocked manage responses use fixed `retryAfterMs=2000`; this is a polling hint, not a watcher debounce.
 - `READ_FILE_MAX_LINES` default `1000`.
 - `VOYAGEAI_RERANKER_MODEL` default `rerank-2.5`.
 - `EMBEDDING_PROVIDER` default `VoyageAI`.

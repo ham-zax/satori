@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { createHash } from "crypto";
 import chokidar, { FSWatcher } from "chokidar";
 import ignore from "ignore";
 import { Context } from "@zokizuan/satori-core";
@@ -487,8 +488,9 @@ export class SyncManager {
                     continue;
                 }
 
-                // Round to keep the signature deterministic across fs precision differences.
-                signatureParts.push(`${controlFile}:${Math.round(stat.mtimeMs)}:${stat.size}`);
+                const content = await fs.promises.readFile(controlPath);
+                const digest = createHash('sha256').update(content).digest('hex');
+                signatureParts.push(`${controlFile}:sha256:${digest}:${content.length}`);
             } catch {
                 signatureParts.push(`${controlFile}:missing`);
             }

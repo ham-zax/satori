@@ -17,7 +17,7 @@ import { CapabilityResolver } from "./capabilities.js";
 import { SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
 import { SyncManager } from "./sync.js";
-import { DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint } from "../config.js";
+import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint } from "../config.js";
 import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
@@ -586,9 +586,7 @@ export class ToolHandlers {
 
     private buildManageActionBlockedMessage(codebasePath: string, action: 'create' | 'reindex' | 'sync' | 'clear'): string {
         const indexing = this.buildIndexingMetadata(codebasePath);
-        const retryAfterMs = typeof (this.syncManager as any)?.getWatchDebounceMs === 'function'
-            ? this.syncManager.getWatchDebounceMs()
-            : DEFAULT_WATCH_DEBOUNCE_MS;
+        const retryAfterMs = this.getManageRetryAfterMs();
 
         const lines = [
             `Codebase '${codebasePath}' is currently indexing. manage_index action='${action}' is blocked until indexing completes.`,
@@ -608,6 +606,10 @@ export class ToolHandlers {
         }
 
         return lines.join('\n');
+    }
+
+    private getManageRetryAfterMs(): number {
+        return DEFAULT_MANAGE_RETRY_AFTER_MS;
     }
 
     private buildStaleLocalHint(codebasePath: string, reason: CompletionProofReason): Record<string, unknown> {
@@ -3454,7 +3456,7 @@ Agent instructions:
                         reason: "indexing",
                         hints: {
                             status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            retryAfterMs: this.getManageRetryAfterMs(),
                             indexing: this.buildIndexingMetadata(absolutePath),
                         }
                     }
@@ -5392,7 +5394,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         reason: "indexing",
                         hints: {
                             status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            retryAfterMs: this.getManageRetryAfterMs(),
                             indexing: this.buildIndexingMetadata(absolutePath),
                         }
                     }
@@ -5555,7 +5557,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         envelopeReason = "indexing";
                         envelopeHints = {
                             status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            retryAfterMs: this.getManageRetryAfterMs(),
                             indexing: this.buildIndexingMetadata(absolutePath),
                         };
                         if (info && 'indexingPercentage' in info) {
@@ -5704,7 +5706,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         reason: "indexing",
                         hints: {
                             status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            retryAfterMs: this.getManageRetryAfterMs(),
                             indexing: this.buildIndexingMetadata(absolutePath),
                         }
                     }
@@ -5753,7 +5755,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         reason: "indexing",
                         hints: {
                             status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.syncManager.getWatchDebounceMs(),
+                            retryAfterMs: this.getManageRetryAfterMs(),
                             indexing: this.buildIndexingMetadata(absolutePath),
                         }
                     }

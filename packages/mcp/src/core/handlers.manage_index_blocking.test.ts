@@ -53,7 +53,7 @@ function createHandlers(repoPath: string): ToolHandlers {
     } as any;
 
     const syncManager = {
-        getWatchDebounceMs: () => 2000
+        getWatchDebounceMs: () => 120000
     } as any;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);

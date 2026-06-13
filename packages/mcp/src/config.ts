@@ -4,6 +4,7 @@ export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama';
 export type VectorStoreProvider = 'Milvus';
 export type FingerprintSource = 'verified' | 'assumed_v2';
 export const DEFAULT_WATCH_DEBOUNCE_MS = 5000;
+export const DEFAULT_MANAGE_RETRY_AFTER_MS = 2000;
 
 export interface IndexFingerprint {
     embeddingProvider: EmbeddingProvider;

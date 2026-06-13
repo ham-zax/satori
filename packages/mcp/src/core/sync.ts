@@ -93,6 +93,16 @@ export class SyncManager {
         this.onSyncCompleted = options.onSyncCompleted;
     }
 
+    public async recordCurrentIgnoreControlSignature(codebasePath: string): Promise<void> {
+        if (typeof this.snapshotManager.setCodebaseIgnoreControlSignature !== 'function') {
+            return;
+        }
+
+        const currentIgnoreControlSignature = await this.computeIgnoreControlSignature(codebasePath);
+        this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
+        this.snapshotManager.saveCodebaseSnapshot();
+    }
+
     /**
      * Ensures the codebase is fresh before use.
      * Unified entry point for ALL sync operations (manual, periodic, and on-read).
@@ -122,6 +132,17 @@ export class SyncManager {
                     || this.snapshotManager.getCodebaseStatus(codebasePath) === 'sync_completed')
                 && typeof this.snapshotManager.setCodebaseIgnoreControlSignature === 'function'
             ) {
+                const indexedPaths = typeof this.snapshotManager.getCodebaseIndexedPaths === 'function'
+                    ? this.snapshotManager.getCodebaseIndexedPaths(codebasePath)
+                    : [];
+                const hasSynchronizer = typeof this.context.hasSynchronizerForCodebase === 'function'
+                    ? this.context.hasSynchronizerForCodebase(codebasePath)
+                    : false;
+
+                if (indexedPaths.length > 0 || hasSynchronizer) {
+                    return this.runIgnoreReconcile(codebasePath, 1, currentIgnoreControlSignature);
+                }
+
                 this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
                 this.snapshotManager.saveCodebaseSnapshot();
             }
@@ -496,7 +517,7 @@ export class SyncManager {
             }
         }
 
-        return signatureParts.join('|');
+        return `v1:${signatureParts.join('|')}`;
     }
 
     private normalizeReconcileKey(codebasePath: string): string {
@@ -560,12 +581,6 @@ export class SyncManager {
 
         if (this.isIgnoreRuleControlFile(relativePath)) {
             return false;
-        }
-
-        // Hidden files/directories are intentionally excluded from sync.
-        const pathParts = relativePath.split('/');
-        if (pathParts.some((part) => part.startsWith('.'))) {
-            return true;
         }
 
         const matcher = this.getIgnoreMatcherForCodebase(codebasePath);

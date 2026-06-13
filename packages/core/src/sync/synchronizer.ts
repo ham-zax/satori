@@ -6,6 +6,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import ignore from 'ignore';
 import { computeMerkleRoot } from './merkle';
+import { DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
 
 interface FileStatSignature {
     size: number;
@@ -68,8 +69,13 @@ export class FileSynchronizer {
     private partialScan: boolean;
     private unscannedDirPrefixes: string[];
     private fullHashCounter: number;
+    private supportedExtensions: Set<string>;
 
-    constructor(rootDir: string, ignorePatterns: string[] = []) {
+    constructor(
+        rootDir: string,
+        ignorePatterns: string[] = [],
+        supportedExtensions: string[] = DEFAULT_SUPPORTED_EXTENSIONS
+    ) {
         this.rootDir = FileSynchronizer.canonicalizeSnapshotIdentityPath(rootDir);
         this.snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(this.rootDir);
         this.fileHashes = new Map();
@@ -78,6 +84,10 @@ export class FileSynchronizer {
         this.ignorePatterns = ignorePatterns;
         this.ignoreMatcher = ignore();
         this.ignoreMatcher.add(this.ignorePatterns);
+        this.supportedExtensions = new Set(
+            (supportedExtensions.length > 0 ? supportedExtensions : DEFAULT_SUPPORTED_EXTENSIONS)
+                .map((extension) => extension.startsWith('.') ? extension.toLowerCase() : `.${extension.toLowerCase()}`)
+        );
         this.partialScan = false;
         this.unscannedDirPrefixes = [];
         this.fullHashCounter = 0;
@@ -181,11 +191,6 @@ export class FileSynchronizer {
             return false;
         }
 
-        const pathParts = normalizedPath.split('/');
-        if (pathParts.some(part => part.startsWith('.'))) {
-            return true;
-        }
-
         if (this.ignorePatterns.length === 0) {
             return false;
         }
@@ -196,6 +201,11 @@ export class FileSynchronizer {
         }
 
         return this.ignoreMatcher.ignores(normalizedPath);
+    }
+
+    private isSupportedFile(relativePath: string): boolean {
+        const extension = path.extname(relativePath).toLowerCase();
+        return this.supportedExtensions.has(extension);
     }
 
     private parsePositiveInt(rawValue: string | undefined, fallback: number, min: number, max: number): number {
@@ -312,6 +322,10 @@ export class FileSynchronizer {
             }
 
             if (this.shouldIgnore(relativePath, false)) {
+                continue;
+            }
+
+            if (!this.isSupportedFile(relativePath)) {
                 continue;
             }
 

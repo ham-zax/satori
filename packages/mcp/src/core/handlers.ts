@@ -3789,14 +3789,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const contextForThisTask = this.context;
 
-            // Load ignore patterns from files first (including .ignore, .gitignore, etc.)
+            // Load supported root ignore files before synchronizer and index setup.
             await this.context.loadResolvedIgnorePatterns(absolutePath);
 
             // Initialize file synchronizer with proper ignore patterns (including project-specific patterns)
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
             const ignorePatterns = this.context.getActiveIgnorePatterns(absolutePath) || [];
+            const supportedExtensions = this.context.getIndexedExtensions();
             console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(', ')}`);
-            const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns);
+            const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns, supportedExtensions);
             await synchronizer.initialize();
 
             // Store synchronizer in the context (let context manage collection names)
@@ -3851,6 +3852,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
             }
             this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks };
+            await this.syncManager.recordCurrentIgnoreControlSignature(absolutePath);
 
             // Save snapshot after updating codebase lists
             this.snapshotManager.saveCodebaseSnapshot();

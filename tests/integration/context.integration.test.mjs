@@ -597,3 +597,68 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }
 });
+
+test('integration: reindex_by_change ignores unsupported file changes', async () => {
+  const { context } = createContext();
+  const codebasePath = createTempCodebase({
+    'src/service.ts': 'export const service = "ready";',
+    'notes.txt': 'initial note',
+  });
+
+  try {
+    await context.indexCodebase(codebasePath);
+
+    const baseline = await context.reindexByChange(codebasePath);
+    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+
+    fs.writeFileSync(path.join(codebasePath, 'notes.txt'), 'updated note', 'utf8');
+    fs.writeFileSync(path.join(codebasePath, 'data.json'), '{"ok":true}', 'utf8');
+
+    const delta = await context.reindexByChange(codebasePath);
+    assert.deepEqual(delta, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+
+    const results = await context.semanticSearch({
+      codebasePath,
+      query: 'updated note ok',
+      topK: 10,
+      scorePolicy: { kind: 'topk_only' },
+    });
+    assert.ok(!results.some((r) => r.relativePath === 'notes.txt' || r.relativePath === 'data.json'));
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});
+
+test('integration: hidden supported files stay synchronized when not ignored', async () => {
+  const { context } = createContext();
+  const codebasePath = createTempCodebase({
+    '.hidden/runtime.ts': 'export const hiddenRuntime = "first";',
+  });
+
+  try {
+    const stats = await context.indexCodebase(codebasePath);
+    assert.equal(stats.indexedFiles, 1);
+
+    const firstResults = await context.semanticSearch({
+      codebasePath,
+      query: 'hiddenRuntime first',
+      topK: 10,
+      scorePolicy: { kind: 'topk_only' },
+    });
+    assert.ok(firstResults.some((r) => r.relativePath === '.hidden/runtime.ts'));
+
+    const baseline = await context.reindexByChange(codebasePath);
+    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+
+    fs.writeFileSync(
+      path.join(codebasePath, '.hidden/runtime.ts'),
+      'export const hiddenRuntime = "second";',
+      'utf8',
+    );
+
+    const delta = await context.reindexByChange(codebasePath);
+    assert.deepEqual(delta, { added: 0, removed: 0, modified: 1, changedFiles: ['.hidden/runtime.ts'] });
+  } finally {
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+  }
+});

@@ -462,7 +462,7 @@ Recent vs legacy:
 - Performance: avoids repeated sync with throttling/coalescing.
   Implementation nuance: only `search_codebase` calls `ensureFreshness`; `file_outline` and `call_graph` do not run sync-on-read freshness and do not run cloud-state snapshot reconciliation in foreground.
 
-3) Ignore controls (`.satoriignore`, `.gitignore`)
+3) Ignore controls (repo-root `.satoriignore`, repo-root `.gitignore`)
 - Trigger: control-file signature mismatch or watcher control-file event.
 - Effect: ignore-rule reconcile path reloads matcher, deletes newly ignored indexed paths from manifest/vector index, then forced incremental sync for newly unignored content.
 - Observability: reconcile decision modes and counts (`deletedFiles`, `newlyIgnoredFiles`, `addedFiles`, `ignoreRulesVersion`).

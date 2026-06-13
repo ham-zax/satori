@@ -216,7 +216,7 @@ test('integration: binary files are hashed as bytes and modifications are detect
   try {
     await FileSynchronizer.deleteSnapshot(codebasePath);
 
-    const synchronizer = new FileSynchronizer(codebasePath, []);
+    const synchronizer = new FileSynchronizer(codebasePath, [], ['.bin']);
     await synchronizer.initialize();
 
     const first = await synchronizer.checkForChanges();

@@ -194,7 +194,11 @@ export class Context {
      */
     async recreateSynchronizerForCodebase(codebasePath: string): Promise<void> {
         const collectionName = this.resolveCollectionName(codebasePath);
-        const synchronizer = new FileSynchronizer(codebasePath, this.getActiveIgnorePatterns(codebasePath));
+        const synchronizer = new FileSynchronizer(
+            codebasePath,
+            this.getActiveIgnorePatterns(codebasePath),
+            this.supportedExtensions
+        );
         await synchronizer.initialize();
         this.synchronizers.set(collectionName, synchronizer);
     }
@@ -337,7 +341,11 @@ export class Context {
             await this.loadIgnorePatterns(codebasePath);
 
             // To be safe, let's initialize if it's not there.
-            const newSynchronizer = new FileSynchronizer(codebasePath, this.getActiveIgnorePatterns(codebasePath));
+            const newSynchronizer = new FileSynchronizer(
+                codebasePath,
+                this.getActiveIgnorePatterns(codebasePath),
+                this.supportedExtensions
+            );
             await newSynchronizer.initialize();
             this.synchronizers.set(collectionName, newSynchronizer);
         }
@@ -1292,8 +1300,8 @@ export class Context {
             const content = await fs.promises.readFile(filePath, 'utf-8');
             return content
                 .split('\n')
-                .map(line => line.trim())
-                .filter(line => line && !line.startsWith('#')); // Filter out empty lines and comments
+                .map(line => line.endsWith('\r') ? line.slice(0, -1) : line)
+                .filter(line => line.length > 0 && !line.startsWith('#'));
         } catch (error) {
             console.warn(`[Context] ⚠️  Could not read ignore file ${filePath}: ${error}`);
             return [];

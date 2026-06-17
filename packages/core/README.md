@@ -15,7 +15,11 @@ Use this package when you want the lower-level engine directly. Most agent workf
 - Repo-local `satori.toml` index profiles: `default`, `minimal`, and `all-text`.
 - Derived symbol registry and relationship sidecars for symbol-owned navigation.
 
-Files remain the source of truth. The symbol registry is a deterministic navigation view for a compatible indexed snapshot; grouped search can use owner symbols while chunks remain supporting evidence. Relationship sidecars currently store conservative `CALLS v0` plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges for readiness and evidence.
+Files remain the source of truth. The symbol registry is a deterministic navigation view for a compatible indexed snapshot; grouped search can use owner symbols while chunks remain supporting evidence. Exact navigation uses `symbolInstanceId`, while `symbolKey` stays stable-ish candidate lookup only. Relationship sidecars store conservative `CALLS v0` plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges that now back symbol-owned `call_graph` traversal.
+
+Completed full indexes write canonical JSON navigation sidecars and then import an additive `navigation.sqlite` cache. JSON remains the canonical navigation source; SQLite is optional for parity checks or explicit experimental reads.
+
+Incremental sync now reuses changed-file symbol output, preserves unchanged registry state, and recomputes relationships against the merged registry without re-splitting unchanged files. If changed-file indexing stops early, core clears navigation state instead of publishing a mixed generation.
 
 Repo config is intentionally small:
 

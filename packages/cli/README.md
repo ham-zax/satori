@@ -19,7 +19,7 @@ The installer only manages Satori-owned config and the first-party workflow skil
 
 - `satori`
 
-After a repo is indexed, Satori keeps the public MCP surface fixed while building derived navigation data behind it: grouped search is symbol-owned, chunks are supporting evidence, and completed full indexes write symbol registry plus relationship sidecars. The installer wires clients; it does not run indexing or provider-backed work during setup.
+After a repo is indexed, Satori keeps the public MCP surface fixed while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer wires clients; it does not run indexing or provider-backed work during setup.
 
 ## Commands
 

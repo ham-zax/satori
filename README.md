@@ -14,7 +14,7 @@ Satori indexes a repository, keeps the index fresh, and gives agents a fixed six
 - Keep search focused on runtime code before pulling in docs or tests.
 - Group search around owner symbols; chunks are supporting evidence, not the final unit of navigation.
 - Open exact files, line ranges, and symbols instead of dumping broad context.
-- Trace nearby callers/callees when sidecar data is ready.
+- Trace nearby callers/callees from relationship-backed navigation when compatible sidecars are ready.
 - Build derived symbol registry and relationship sidecars during completed full indexes.
 - Get explicit `requires_reindex`, stale-state, and noise guidance instead of silent bad context.
 - Install the MCP server and first-party workflow skill with one command.
@@ -190,13 +190,16 @@ Satori's grouped search is symbol-owned: retrieval finds candidate chunks, owner
 
 Completed full indexes write navigation sidecars:
 
-- Symbol registry sidecar with stable-ish `symbolKey`, exact `symbolInstanceId`, file-owner fallback symbols, and outline data for exact navigation.
-- Relationship sidecar with conservative `CALLS v0` edges plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges.
+- Symbol registry sidecar with candidate-lookup `symbolKey`, exact `symbolInstanceId`, file-owner fallback symbols, and outline data for exact navigation.
+- Relationship sidecar with conservative `CALLS v0` edges plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges used by `call_graph`.
 - Compatibility manifests so stale, missing, or incompatible sidecars degrade explicitly instead of being silently trusted.
+- Canonical JSON navigation state plus an additive `navigation.sqlite` cache. JSON remains the source that runtime navigation serves by default; SQLite is optional for parity checks or explicit experimental reads.
 
 Current relationship limits are intentional. `CALLS v0` is heuristic/name-based: unique same-file targets can be high confidence, unique cross-file name-only targets are low confidence, and ambiguous same-name targets are skipped. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
 
-`call_graph` still traverses the prebuilt call-graph sidecar after readiness and compatibility gates. Relationship records are currently navigation evidence and readiness data, not the direct traversal engine.
+Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish across small edits, but it is candidate lookup only and is not exact identity.
+
+`call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and recompute relationships against the merged registry without re-splitting unchanged files. If changed-file indexing stops early, Satori clears navigation state instead of publishing a mixed generation.
 
 ## Six MCP Tools
 
@@ -206,7 +209,7 @@ Current relationship limits are intentional. `CALLS v0` is heuristic/name-based:
 | `manage_index` | Create, sync, reindex, inspect status, or explicitly clear indexes |
 | `search_codebase` | Runtime-first semantic search with operators, grouping, freshness, and navigation hints |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing |
-| `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` when graph support is ready |
+| `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` when relationship-backed navigation is ready |
 | `read_file` | Read bounded files, ranges, annotations, or exact symbol spans |
 
 ## What Satori Is Not

@@ -598,7 +598,7 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
   }
 });
 
-test('integration: reindex_by_change ignores unsupported file changes', async () => {
+test('integration: reindex_by_change tracks safe-broad text and config file changes', async () => {
   const { context } = createContext();
   const codebasePath = createTempCodebase({
     'src/service.ts': 'export const service = "ready";',
@@ -615,7 +615,12 @@ test('integration: reindex_by_change ignores unsupported file changes', async ()
     fs.writeFileSync(path.join(codebasePath, 'data.json'), '{"ok":true}', 'utf8');
 
     const delta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(delta, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+    assert.deepEqual(delta, {
+      added: 1,
+      removed: 0,
+      modified: 1,
+      changedFiles: ['data.json', 'notes.txt'],
+    });
 
     const results = await context.semanticSearch({
       codebasePath,
@@ -623,7 +628,8 @@ test('integration: reindex_by_change ignores unsupported file changes', async ()
       topK: 10,
       scorePolicy: { kind: 'topk_only' },
     });
-    assert.ok(!results.some((r) => r.relativePath === 'notes.txt' || r.relativePath === 'data.json'));
+    assert.ok(results.some((r) => r.relativePath === 'notes.txt'));
+    assert.ok(results.some((r) => r.relativePath === 'data.json'));
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }

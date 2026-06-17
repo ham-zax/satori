@@ -37,16 +37,22 @@ import {
 import { loadSatoriRepoConfig, SatoriRepoConfig } from '../config/repo-config';
 import { getLanguageIdFromFilename } from '../language';
 import {
+    importNavigationToSqlite,
+    resolveNavigationSqlitePath,
+} from '../navigation';
+import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRecordsForFile,
     buildSymbolRegistry,
     clearSymbolRegistrySidecar,
+    readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
 } from '../symbols';
 import type {
     SymbolRecord,
+    SymbolRegistry,
     SymbolRegistryManifestFile,
 } from '../symbols';
 import { buildRelationshipsForRegistry } from '../relationships';
@@ -437,7 +443,11 @@ export class Context {
         }
 
         console.log(`[Context] 🔄 Found changes: ${added.length} added, ${removed.length} removed, ${modified.length} modified.`);
-        await this.clearSymbolRegistryForCodebase(codebasePath);
+        const navigationStateBeforeSync = await readSymbolRegistrySidecar({
+            stateRoot: this.symbolRegistryStateRoot,
+            normalizedRootPath: this.canonicalizeCodebasePath(codebasePath),
+        });
+        const canRebuildNavigationArtifacts = navigationStateBeforeSync.status === 'ok';
 
         let processedChanges = 0;
         const updateProgress = (phase: string) => {
@@ -446,29 +456,72 @@ export class Context {
             progressCallback?.({ phase, current: processedChanges, total: totalChanges, percentage });
         };
 
-        // Handle removed files
-        for (const file of removed) {
-            await this.deleteFileChunks(collectionName, file);
-            updateProgress(`Removed ${file}`);
-        }
+        try {
+            // Handle removed files
+            for (const file of removed) {
+                await this.deleteFileChunks(collectionName, file);
+                updateProgress(`Removed ${file}`);
+            }
 
-        // Handle modified files
-        for (const file of modified) {
-            await this.deleteFileChunks(collectionName, file);
-            updateProgress(`Deleted old chunks for ${file}`);
-        }
+            // Handle modified files
+            for (const file of modified) {
+                await this.deleteFileChunks(collectionName, file);
+                updateProgress(`Deleted old chunks for ${file}`);
+            }
 
-        // Handle added and modified files
-        const filesToIndex = [...added, ...modified].map(f => path.join(codebasePath, f));
+            // Handle added and modified files
+            const filesToIndex = [...added, ...modified].map(f => path.join(codebasePath, f));
 
-        if (filesToIndex.length > 0) {
-            await this.processFileList(
-                filesToIndex,
-                codebasePath,
-                (filePath, fileIndex, totalFiles) => {
-                    updateProgress(`Indexed ${filePath} (${fileIndex}/${totalFiles})`);
+            let indexedDelta: {
+                processedFiles: number;
+                totalChunks: number;
+                status: 'completed' | 'limit_reached';
+                symbolRecords: SymbolRecord[];
+                symbolManifestFiles: SymbolRegistryManifestFile[];
+            } = {
+                processedFiles: 0,
+                totalChunks: 0,
+                status: 'completed',
+                symbolRecords: [],
+                symbolManifestFiles: [],
+            };
+
+            if (filesToIndex.length > 0) {
+                indexedDelta = await this.processFileList(
+                    filesToIndex,
+                    codebasePath,
+                    (filePath, fileIndex, totalFiles) => {
+                        updateProgress(`Indexed ${filePath} (${fileIndex}/${totalFiles})`);
+                    }
+                );
+            }
+
+            const canPublishNavigationDelta = canRebuildNavigationArtifacts && indexedDelta.status === 'completed';
+            if (canPublishNavigationDelta) {
+                progressCallback?.({
+                    phase: 'Rebuilding navigation metadata...',
+                    current: totalChanges,
+                    total: totalChanges,
+                    percentage: 100,
+                });
+                await this.rebuildNavigationArtifactsForSyncDelta(
+                    codebasePath,
+                    navigationStateBeforeSync.registry,
+                    Array.from(new Set([...added, ...modified, ...removed])),
+                    indexedDelta.symbolRecords,
+                    indexedDelta.symbolManifestFiles,
+                );
+            } else {
+                await this.clearSymbolRegistryForCodebase(codebasePath);
+                if (!canRebuildNavigationArtifacts) {
+                    console.log('[Context] ⏭️ Skipping navigation rebuild because no compatible symbol registry existed before incremental sync.');
+                } else {
+                    console.warn('[Context] ⚠️  Clearing navigation sidecars because incremental sync stopped before all changed files finished indexing.');
                 }
-            );
+            }
+        } catch (error) {
+            await this.clearSymbolRegistryForCodebase(codebasePath);
+            throw error;
         }
 
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
@@ -1303,6 +1356,99 @@ export class Context {
         return crypto.createHash('md5').update(canonicalRoot, 'utf8').digest('hex');
     }
 
+    private async buildNavigationArtifactsForFiles(
+        filePaths: string[],
+        codebasePath: string
+    ): Promise<{
+        symbolRecords: SymbolRecord[];
+        symbolManifestFiles: SymbolRegistryManifestFile[];
+    }> {
+        const symbolRecords: SymbolRecord[] = [];
+        const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
+
+        for (const filePath of [...filePaths].sort((a, b) => a.localeCompare(b))) {
+            const content = await fs.promises.readFile(filePath, 'utf-8');
+            const language = this.getLanguageFromFilePath(filePath);
+            const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
+            if (!relativePath) {
+                throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
+            }
+
+            const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+            const chunks = await this.codeSplitter.split(content, language, filePath);
+            const fileSymbols = buildSymbolRecordsForFile({
+                relativePath,
+                language,
+                content,
+                fileHash,
+                extractorVersion: this.getSymbolExtractorVersion(),
+                chunks,
+            });
+
+            symbolRecords.push(...fileSymbols);
+            symbolManifestFiles.push({
+                path: relativePath,
+                hash: fileHash,
+                language,
+                symbolCount: fileSymbols.length,
+            });
+        }
+
+        return {
+            symbolRecords,
+            symbolManifestFiles,
+        };
+    }
+
+    private async rebuildNavigationArtifacts(codebasePath: string): Promise<void> {
+        const codeFiles = await this.getCodeFiles(codebasePath);
+        if (codeFiles.length === 0) {
+            await this.clearSymbolRegistryForCodebase(codebasePath);
+            return;
+        }
+
+        const navigationArtifacts = await this.buildNavigationArtifactsForFiles(codeFiles, codebasePath);
+        await this.writeSymbolRegistryForCompletedIndex(
+            codebasePath,
+            navigationArtifacts.symbolRecords,
+            navigationArtifacts.symbolManifestFiles,
+        );
+    }
+
+    private async rebuildNavigationArtifactsForSyncDelta(
+        codebasePath: string,
+        existingRegistry: SymbolRegistry,
+        changedRelativePaths: string[],
+        rebuiltSymbolRecords: SymbolRecord[],
+        rebuiltManifestFiles: SymbolRegistryManifestFile[],
+    ): Promise<void> {
+        const replacedPaths = new Set<string>([
+            ...changedRelativePaths.map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, '')),
+            ...rebuiltManifestFiles.map((file) => file.path),
+        ]);
+
+        const mergedManifestFiles = [
+            ...existingRegistry.manifest.files.filter((file) => !replacedPaths.has(file.path)),
+            ...rebuiltManifestFiles,
+        ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+        if (mergedManifestFiles.length === 0) {
+            await this.clearSymbolRegistryForCodebase(codebasePath);
+            return;
+        }
+
+        const mergedSymbolRecords = [
+            ...existingRegistry.symbols.filter((symbol) => !replacedPaths.has(symbol.file)),
+            ...rebuiltSymbolRecords,
+        ];
+
+        await this.writeSymbolRegistryForCompletedIndex(
+            codebasePath,
+            mergedSymbolRecords,
+            mergedManifestFiles,
+        );
+    }
+
     private async writeSymbolRegistryForCompletedIndex(
         codebasePath: string,
         symbolRecords: SymbolRecord[],
@@ -1349,6 +1495,21 @@ export class Context {
         });
         console.log(`[Context] 🧭 Wrote symbol registry sidecar with ${result.symbolCount} symbols across ${result.fileShardCount} file shards`);
         console.log(`[Context] 🧭 Wrote relationship sidecar with ${relationshipResult.relationshipCount} relationships across ${relationshipResult.fileShardCount} file shards`);
+        try {
+            const sqliteResult = await importNavigationToSqlite({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: canonicalRoot,
+            });
+            console.log(`[Context] 🧭 Imported navigation sqlite cache at ${resolveNavigationSqlitePath(this.symbolRegistryStateRoot, canonicalRoot)} with ${sqliteResult.symbolCount} symbols and ${sqliteResult.relationshipCount} relationships`);
+        } catch (error) {
+            const sqlitePath = resolveNavigationSqlitePath(this.symbolRegistryStateRoot, canonicalRoot);
+            try {
+                await fs.promises.rm(sqlitePath, { recursive: true, force: true });
+            } catch (removeError) {
+                console.warn(`[Context] ⚠️  Failed to remove stale navigation sqlite cache at ${sqlitePath}: ${removeError instanceof Error ? removeError.message : String(removeError)}`);
+            }
+            console.warn(`[Context] ⚠️  Failed to import navigation sqlite cache for ${canonicalRoot}: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 
     private async clearSymbolRegistryForCodebase(codebasePath: string): Promise<void> {

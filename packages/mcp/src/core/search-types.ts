@@ -33,8 +33,8 @@ export interface SearchNextActionReadSymbol {
         open_symbol: {
             symbolId: string;
             symbolLabel?: string;
-            start_line: number;
-            end_line: number;
+            start_line?: number;
+            end_line?: number;
         };
     };
 }
@@ -103,7 +103,7 @@ export interface SearchGroupResult {
     file: string;
     span: SearchSpan;
     language: string;
-    symbolId: string | null;
+    symbolId?: string;
     symbolLabel: string | null;
     symbolKey?: string;
     symbolInstanceId?: string;
@@ -129,7 +129,7 @@ export interface SearchGroupResult {
         matchesMust?: boolean;
         exactLexicalMatch: boolean;
         symbolAggregation?: {
-            ownerSource: "owner_metadata" | "registry_repair" | "legacy_symbol_id" | "fallback";
+            ownerSource: "owner_metadata" | "registry_repair" | "fallback";
             evidenceChunkCount: number;
             supportBoost: number;
         };

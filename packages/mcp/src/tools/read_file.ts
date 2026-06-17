@@ -11,11 +11,11 @@ const readFileInputSchema = z.object({
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive)."),
     mode: z.enum(["plain", "annotated"]).default("plain").optional().describe("Output mode. plain returns text only; annotated returns content plus sidecar-backed outline metadata."),
     open_symbol: z.object({
-        symbolId: z.string().min(1).optional().describe("Deterministic symbol identifier to open in the target file."),
+        symbolId: z.string().min(1).optional().describe("Deterministic symbol identifier to open in the target file. On symbol-owned flows, this should carry the symbolInstanceId."),
         symbolLabel: z.string().min(1).optional().describe("Exact symbol label to open in the target file."),
         start_line: z.number().int().positive().optional().describe("Optional direct symbol span start line (1-based, inclusive)."),
         end_line: z.number().int().positive().optional().describe("Optional direct symbol span end line (1-based, inclusive).")
-    }).optional().describe("Optional deterministic symbol jump request for this file path. Uses exact symbol resolution within `path` when symbolId/symbolLabel is provided.")
+    }).optional().describe("Optional deterministic symbol jump request for this file path. Uses exact symbol resolution within `path` when symbolId/symbolLabel is provided, and only uses direct span opens when no symbol identity fields are supplied. On symbol-owned flows, symbolId should carry the symbolInstanceId.")
 }).superRefine((input, ctx) => {
     if (!input.open_symbol) {
         return;
@@ -302,15 +302,10 @@ export const readFileTool: McpTool = {
 
             if (input.open_symbol && totalLines > 0) {
                 const openSymbol = input.open_symbol;
+                const hasExactIdentity = Boolean(openSymbol.symbolId || openSymbol.symbolLabel);
                 const spanStart = Number.isFinite(openSymbol.start_line) ? Number(openSymbol.start_line) : undefined;
                 const spanEnd = Number.isFinite(openSymbol.end_line) ? Number(openSymbol.end_line) : undefined;
-                if (spanStart !== undefined) {
-                    startLine = clamp(spanStart, 1, totalLines);
-                    endLine = spanEnd !== undefined
-                        ? clamp(spanEnd, startLine, totalLines)
-                        : startLine;
-                    addContinuationHint = false;
-                } else {
+                if (hasExactIdentity) {
                     if (!isOutlineSupportedFile(absolutePath)) {
                         return {
                             content: [{ type: "text", text: `Error opening symbol: file '${absolutePath}' is not outline-capable.` }],
@@ -374,6 +369,12 @@ export const readFileTool: McpTool = {
                     }
                     startLine = clamp(Number(resolvedSymbol.span.startLine), 1, totalLines);
                     endLine = clamp(Number(resolvedSymbol.span.endLine), startLine, totalLines);
+                    addContinuationHint = false;
+                } else if (spanStart !== undefined) {
+                    startLine = clamp(spanStart, 1, totalLines);
+                    endLine = spanEnd !== undefined
+                        ? clamp(spanEnd, startLine, totalLines)
+                        : startLine;
                     addContinuationHint = false;
                 }
             }

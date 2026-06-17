@@ -4,11 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+    importNavigationToSqlite,
+    RuntimeNavigationStore,
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRegistry,
     createSymbolInstanceId,
     createSymbolKey,
+    resetSharedRuntimeNavigationStoreForTests,
     resolveNavigationSidecarRoot,
+    writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
 } from '@zokizuan/satori-core';
 import type { SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
@@ -56,6 +60,40 @@ async function withTempStateRoot<T>(fn: (stateRoot: string) => Promise<T>): Prom
             process.env.SATORI_STATE_ROOT = previousStateRoot;
         }
         fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+}
+
+async function withNavigationEnv<T>(
+    env: Partial<Record<'SATORI_NAVIGATION_BACKEND' | 'SATORI_NAVIGATION_DUAL_READ', string | undefined>>,
+    fn: () => Promise<T>,
+): Promise<T> {
+    const previousBackend = process.env.SATORI_NAVIGATION_BACKEND;
+    const previousDualRead = process.env.SATORI_NAVIGATION_DUAL_READ;
+    resetSharedRuntimeNavigationStoreForTests();
+    if (env.SATORI_NAVIGATION_BACKEND === undefined) {
+        delete process.env.SATORI_NAVIGATION_BACKEND;
+    } else {
+        process.env.SATORI_NAVIGATION_BACKEND = env.SATORI_NAVIGATION_BACKEND;
+    }
+    if (env.SATORI_NAVIGATION_DUAL_READ === undefined) {
+        delete process.env.SATORI_NAVIGATION_DUAL_READ;
+    } else {
+        process.env.SATORI_NAVIGATION_DUAL_READ = env.SATORI_NAVIGATION_DUAL_READ;
+    }
+    try {
+        return await fn();
+    } finally {
+        resetSharedRuntimeNavigationStoreForTests();
+        if (previousBackend === undefined) {
+            delete process.env.SATORI_NAVIGATION_BACKEND;
+        } else {
+            process.env.SATORI_NAVIGATION_BACKEND = previousBackend;
+        }
+        if (previousDualRead === undefined) {
+            delete process.env.SATORI_NAVIGATION_DUAL_READ;
+        } else {
+            process.env.SATORI_NAVIGATION_DUAL_READ = previousDualRead;
+        }
     }
 }
 
@@ -141,9 +179,9 @@ async function writeTestSymbolRegistry(repoPath: string, symbols: SymbolRecord[]
         })),
     };
 
-    await writeSymbolRegistrySidecar({
-        registry: buildSymbolRegistry({ manifest, symbols }),
-    });
+    const registry = buildSymbolRegistry({ manifest, symbols });
+    const result = await writeSymbolRegistrySidecar({ registry });
+    return { registry, result };
 }
 
 function baseSnapshotManager(repoPath: string) {
@@ -325,10 +363,406 @@ test('handleFileOutline returns registry-backed outline when call graph sidecar 
         assert.equal(payload.outline.symbols.length, 2);
         assert.equal(payload.outline.symbols[0].symbolId, alpha.symbolInstanceId);
         assert.equal(payload.outline.symbols[1].symbolId, beta.symbolInstanceId);
+        assert.equal(payload.outline.symbols[0].callGraphHint.supported, true);
+        assert.equal(payload.outline.symbols[0].callGraphHint.symbolRef.symbolId, alpha.symbolInstanceId);
+        assert.equal(payload.warnings, undefined);
+    }));
+});
+
+test('handleFileOutline returns relationship-backed call graph hints when legacy sidecar is absent but navigation sidecars are compatible', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const alpha = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function alpha()',
+            name: 'alpha',
+            qualifiedName: 'alpha',
+            startLine: 4,
+            endLine: 7,
+        });
+        const { registry, result } = await writeTestSymbolRegistry(repoPath, [alpha]);
+        await writeRelationshipSidecar({
+            normalizedRootPath: repoPath,
+            symbolRegistryManifestHash: result.manifestHash,
+            relationshipVersion: 'test-relationships-v1',
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: registry.manifest.files,
+            records: [],
+        });
+
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.outline.symbols[0].callGraphHint.supported, true);
+        assert.equal(payload.outline.symbols[0].callGraphHint.symbolRef.symbolId, alpha.symbolInstanceId);
+        assert.equal(payload.outline.symbols[0].callGraphHint.sidecarBuiltAt, '2026-01-01T00:00:00.000Z');
+        assert.equal(payload.warnings, undefined);
+    }));
+});
+
+test('handleFileOutline relationship-backed callGraphHint works end to end with call_graph without a legacy sidecar', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const alpha = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function alpha()',
+            name: 'alpha',
+            qualifiedName: 'alpha',
+            startLine: 4,
+            endLine: 7,
+        });
+        const beta = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function beta()',
+            name: 'beta',
+            qualifiedName: 'beta',
+            startLine: 10,
+            endLine: 13,
+        });
+        const { registry, result } = await writeTestSymbolRegistry(repoPath, [alpha, beta]);
+        await writeRelationshipSidecar({
+            normalizedRootPath: repoPath,
+            symbolRegistryManifestHash: result.manifestHash,
+            relationshipVersion: 'test-relationships-v1',
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: registry.manifest.files,
+            records: [{
+                sourceKey: alpha.symbolKey,
+                sourceInstanceId: alpha.symbolInstanceId,
+                targetKey: beta.symbolKey,
+                targetInstanceId: beta.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/runtime.ts',
+                span: { startLine: 5, endLine: 5 },
+                confidence: 'high',
+            }],
+        });
+
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const outlineResponse = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts'
+        });
+
+        const outlinePayload = JSON.parse(outlineResponse.content[0]?.text || '{}');
+        assert.equal(outlinePayload.status, 'ok', JSON.stringify(outlinePayload));
+        const symbolRef = outlinePayload.outline.symbols[0].callGraphHint.symbolRef;
+        assert.equal(outlinePayload.outline.symbols[0].callGraphHint.supported, true);
+        assert.equal(symbolRef.symbolId, alpha.symbolInstanceId);
+
+        const callGraphResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef,
+            direction: 'callees',
+            depth: 2,
+            limit: 20,
+        });
+
+        const graphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
+        assert.equal(graphPayload.status, 'ok');
+        assert.equal(graphPayload.supported, true);
+        assert.deepEqual(graphPayload.nodes.map((node: { symbolId: string }) => node.symbolId), [
+            alpha.symbolInstanceId,
+            beta.symbolInstanceId,
+        ]);
+        assert.equal(graphPayload.edges.length, 1);
+        assert.equal(graphPayload.edges[0].srcSymbolId, alpha.symbolInstanceId);
+        assert.equal(graphPayload.edges[0].dstSymbolId, beta.symbolInstanceId);
+    }));
+});
+
+test('handleFileOutline relationship-backed callGraphHint works end to end with call_graph through explicit sqlite backend after JSON sidecars are removed', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const alpha = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function alpha()',
+            name: 'alpha',
+            qualifiedName: 'alpha',
+            startLine: 4,
+            endLine: 7,
+        });
+        const beta = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function beta()',
+            name: 'beta',
+            qualifiedName: 'beta',
+            startLine: 10,
+            endLine: 13,
+        });
+        const { registry, result } = await writeTestSymbolRegistry(repoPath, [alpha, beta]);
+        await writeRelationshipSidecar({
+            normalizedRootPath: repoPath,
+            symbolRegistryManifestHash: result.manifestHash,
+            relationshipVersion: 'test-relationships-v1',
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: registry.manifest.files,
+            records: [{
+                sourceKey: alpha.symbolKey,
+                sourceInstanceId: alpha.symbolInstanceId,
+                targetKey: beta.symbolKey,
+                targetInstanceId: beta.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/runtime.ts',
+                span: { startLine: 5, endLine: 5 },
+                confidence: 'high',
+            }],
+        });
+        await importNavigationToSqlite({
+            stateRoot,
+            normalizedRootPath: repoPath,
+        });
+
+        const navigationRoot = resolveNavigationSidecarRoot(stateRoot, repoPath);
+        await fs.promises.rm(path.join(navigationRoot, 'manifest.json'), { force: true });
+        await fs.promises.rm(path.join(navigationRoot, 'symbols'), { recursive: true, force: true });
+        await fs.promises.rm(path.join(navigationRoot, 'relationships'), { recursive: true, force: true });
+
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(
+            baseContext(),
+            snapshotManager,
+            {} as any,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            new RuntimeNavigationStore({ servingBackend: 'sqlite' })
+        );
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const outlineResponse = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts'
+        });
+
+        const outlinePayload = JSON.parse(outlineResponse.content[0]?.text || '{}');
+        const symbolRef = outlinePayload.outline.symbols[0].callGraphHint.symbolRef;
+        assert.equal(outlinePayload.outline.symbols[0].callGraphHint.supported, true);
+        assert.equal(symbolRef.symbolId, alpha.symbolInstanceId);
+
+        const callGraphResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef,
+            direction: 'callees',
+            depth: 2,
+            limit: 20,
+        });
+
+        const callGraphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
+        assert.equal(callGraphPayload.status, 'ok');
+        assert.equal(callGraphPayload.supported, true);
+        assert.deepEqual(callGraphPayload.nodes.map((node: { symbolId: string }) => node.symbolId), [
+            alpha.symbolInstanceId,
+            beta.symbolInstanceId,
+        ]);
+        assert.equal(callGraphPayload.edges.length, 1);
+        assert.equal(callGraphPayload.edges[0].srcSymbolId, alpha.symbolInstanceId);
+        assert.equal(callGraphPayload.edges[0].dstSymbolId, beta.symbolInstanceId);
+    }));
+});
+
+test('handleFileOutline relationship-backed callGraphHint works through the env-selected shared sqlite runtime store after JSON sidecars are removed', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const alpha = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function alpha()',
+            name: 'alpha',
+            qualifiedName: 'alpha',
+            startLine: 4,
+            endLine: 7,
+        });
+        const beta = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function beta()',
+            name: 'beta',
+            qualifiedName: 'beta',
+            startLine: 10,
+            endLine: 13,
+        });
+        const { registry, result } = await writeTestSymbolRegistry(repoPath, [alpha, beta]);
+        await writeRelationshipSidecar({
+            normalizedRootPath: repoPath,
+            symbolRegistryManifestHash: result.manifestHash,
+            relationshipVersion: 'test-relationships-v1',
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: registry.manifest.files,
+            records: [{
+                sourceKey: alpha.symbolKey,
+                sourceInstanceId: alpha.symbolInstanceId,
+                targetKey: beta.symbolKey,
+                targetInstanceId: beta.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/runtime.ts',
+                span: { startLine: 5, endLine: 5 },
+                confidence: 'high',
+            }],
+        });
+        await importNavigationToSqlite({
+            stateRoot,
+            normalizedRootPath: repoPath,
+        });
+
+        const navigationRoot = resolveNavigationSidecarRoot(stateRoot, repoPath);
+        await fs.promises.rm(path.join(navigationRoot, 'manifest.json'), { force: true });
+        await fs.promises.rm(path.join(navigationRoot, 'symbols'), { recursive: true, force: true });
+        await fs.promises.rm(path.join(navigationRoot, 'relationships'), { recursive: true, force: true });
+
+        await withNavigationEnv({
+            SATORI_NAVIGATION_BACKEND: 'sqlite',
+        }, async () => {
+            const snapshotManager = {
+                ...baseSnapshotManager(repoPath),
+                getCodebaseCallGraphSidecar: () => undefined,
+            } as any;
+            const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+            (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+            const outlineResponse = await handlers.handleFileOutline({
+                path: repoPath,
+                file: 'src/runtime.ts'
+            });
+
+            const outlinePayload = JSON.parse(outlineResponse.content[0]?.text || '{}');
+            const symbolRef = outlinePayload.outline.symbols[0].callGraphHint.symbolRef;
+            assert.equal(outlinePayload.outline.symbols[0].callGraphHint.supported, true);
+            assert.equal(symbolRef.symbolId, alpha.symbolInstanceId);
+
+            const callGraphResponse = await handlers.handleCallGraph({
+                path: repoPath,
+                symbolRef,
+                direction: 'callees',
+                depth: 2,
+                limit: 20,
+            });
+
+            const callGraphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
+            assert.equal(callGraphPayload.status, 'ok');
+            assert.equal(callGraphPayload.supported, true);
+            assert.deepEqual(callGraphPayload.nodes.map((node: { symbolId: string }) => node.symbolId), [
+                alpha.symbolInstanceId,
+                beta.symbolInstanceId,
+            ]);
+            assert.equal(callGraphPayload.edges.length, 1);
+            assert.equal(callGraphPayload.edges[0].srcSymbolId, alpha.symbolInstanceId);
+            assert.equal(callGraphPayload.edges[0].dstSymbolId, beta.symbolInstanceId);
+        });
+    }));
+});
+
+test('handleFileOutline can read registry-backed outline from an injected navigation store', async () => {
+    await withTempRepo(async (repoPath) => {
+        const alpha = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function alpha()',
+            name: 'alpha',
+            qualifiedName: 'alpha',
+            startLine: 4,
+            endLine: 7,
+        });
+        const registry = buildSymbolRegistry({
+            manifest: {
+                schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+                normalizedRootPath: repoPath,
+                rootFingerprint: 'test-root-fingerprint',
+                indexPolicyHash: 'test-policy',
+                languageRouterVersion: 'test-router-v1',
+                extractorVersion: 'test-extractor-v1',
+                relationshipVersion: 'test-relationships-v1',
+                builtAt: '2026-01-01T00:00:00.000Z',
+                files: [{
+                    path: 'src/runtime.ts',
+                    hash: alpha.fileHash,
+                    language: alpha.language,
+                    symbolCount: 1,
+                }],
+            },
+            symbols: [alpha],
+        });
+        const fakeNavigationStore = {
+            getManifest: async () => ({
+                status: 'ok',
+                rootPath: '/virtual/navigation',
+                manifestHash: 'symmanifest_test',
+                registryManifestHash: 'symmanifest_test',
+                registry,
+                warnings: [],
+            }),
+            getSymbolsByFile: async () => ({
+                status: 'ok',
+                rootPath: '/virtual/navigation',
+                manifestHash: 'symmanifest_test',
+                registryManifestHash: 'symmanifest_test',
+                registry,
+                warnings: [],
+                symbols: [alpha],
+            }),
+            getCompatibilityState: async () => ({
+                rootPath: '/virtual/navigation',
+                registry: {
+                    status: 'ok',
+                    rootPath: '/virtual/navigation',
+                    manifestHash: 'symmanifest_test',
+                    registryManifestHash: 'symmanifest_test',
+                    registry,
+                    warnings: [],
+                },
+                relationships: {
+                    status: 'missing',
+                    rootPath: '/virtual/navigation',
+                    reason: 'relationship manifest is missing',
+                },
+            }),
+        };
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(
+            baseContext(),
+            snapshotManager,
+            {} as any,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeNavigationStore as any
+        );
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.outline.symbols.length, 1);
+        assert.equal(payload.outline.symbols[0].symbolId, alpha.symbolInstanceId);
         assert.equal(payload.outline.symbols[0].callGraphHint.supported, false);
         assert.equal(payload.outline.symbols[0].callGraphHint.reason, 'missing_sidecar');
-        assert.deepEqual(payload.warnings, ['OUTLINE_CALL_GRAPH_UNAVAILABLE:missing_sidecar']);
-    }));
+    });
 });
 
 test('handleFileOutline registry exact mode resolves a unique symbolInstanceId', async () => {
@@ -415,7 +849,7 @@ test('handleFileOutline registry exact mode returns ambiguous for duplicate exac
     }));
 });
 
-test('handleFileOutline registry-backed outline preserves legacy call graph jump handles when available', async () => {
+test('handleFileOutline registry-backed outline emits symbolInstanceId call graph handles even when a legacy sidecar exists', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const alpha = createTestSymbol({
             file: 'src/runtime.ts',
@@ -473,12 +907,12 @@ test('handleFileOutline registry-backed outline preserves legacy call graph jump
         assert.equal(payload.status, 'ok');
         assert.equal(payload.outline.symbols[0].symbolId, alpha.symbolInstanceId);
         assert.equal(payload.outline.symbols[0].callGraphHint.supported, true);
-        assert.equal(payload.outline.symbols[0].callGraphHint.symbolRef.symbolId, 'legacy_sym_alpha');
+        assert.equal(payload.outline.symbols[0].callGraphHint.symbolRef.symbolId, alpha.symbolInstanceId);
         assert.equal(payload.outline.symbols[0].callGraphHint.validatedAt, '2026-01-01T01:00:00.000Z');
     }));
 });
 
-test('handleFileOutline registry exact mode resolves a legacy call graph symbol id', async () => {
+test('handleFileOutline registry exact mode does not resolve legacy call graph symbol ids', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const alpha = createTestSymbol({
             file: 'src/runtime.ts',
@@ -535,14 +969,44 @@ test('handleFileOutline registry exact mode resolves a legacy call graph symbol 
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.status, 'ok');
-        assert.equal(payload.outline.symbols.length, 1);
-        assert.equal(payload.outline.symbols[0].symbolId, alpha.symbolInstanceId);
-        assert.equal(payload.outline.symbols[0].symbolLabel, 'function alpha()');
+        assert.equal(payload.status, 'not_found');
+        assert.equal(payload.outline, null);
     }));
 });
 
-test('handleFileOutline downgrades registry graph hints when relationship sidecar is incompatible', async () => {
+test('handleFileOutline registry exact mode does not treat symbolKey as an exact identifier', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const alpha = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function alpha()',
+            name: 'alpha',
+            qualifiedName: 'alpha',
+            startLine: 4,
+            endLine: 7,
+        });
+        await writeTestSymbolRegistry(repoPath, [alpha]);
+
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolIdExact: alpha.symbolKey
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_found');
+        assert.equal(payload.outline, null);
+    }));
+});
+
+test('handleFileOutline returns unsupported graph hints when relationship sidecar is incompatible', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const alpha = createTestSymbol({
             file: 'src/runtime.ts',
@@ -613,208 +1077,6 @@ test('handleFileOutline downgrades registry graph hints when relationship sideca
         assert.equal(payload.outline.symbols[0].callGraphHint.reason, 'missing_sidecar');
         assert.ok(payload.warnings.includes('OUTLINE_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
     }));
-});
-
-test('handleFileOutline returns deterministic symbols with hasMore and warning codes', async () => {
-    await withTempRepo(async (repoPath) => {
-        const snapshotManager = {
-            ...baseSnapshotManager(repoPath),
-            getCodebaseCallGraphSidecar: () => ({
-                version: 'v3',
-                sidecarPath: '/tmp/sidecar.json',
-                builtAt: '2026-01-01T00:00:00.000Z',
-                nodeCount: 3,
-                edgeCount: 0,
-                noteCount: 1,
-                fingerprint: RUNTIME_FINGERPRINT
-            }),
-        } as any;
-        const callGraphManager = {
-            loadSidecar: () => ({
-                formatVersion: 'v3',
-                codebasePath: repoPath,
-                builtAt: '2026-01-01T00:00:00.000Z',
-                fingerprint: RUNTIME_FINGERPRINT,
-                nodes: [
-                    { symbolId: 'sym_b', symbolLabel: 'function zebra()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 10, endLine: 12 } },
-                    { symbolId: 'sym_c', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 20, endLine: 21 } },
-                    { symbolId: 'sym_a', symbolLabel: 'function alpha()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 10, endLine: 11 } },
-                ],
-                edges: [],
-                notes: [
-                    { type: 'missing_symbol_metadata', file: 'src/runtime.ts', startLine: 30, detail: 'missing metadata' }
-                ]
-            })
-        } as any;
-
-        const handlers = new ToolHandlers(
-            baseContext(),
-            snapshotManager,
-            {} as any,
-            RUNTIME_FINGERPRINT,
-            CAPABILITIES,
-            () => Date.parse('2026-01-01T01:00:00.000Z'),
-            callGraphManager
-        );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
-
-        const response = await handlers.handleFileOutline({
-            path: repoPath,
-            file: 'src/runtime.ts',
-            limitSymbols: 2
-        });
-
-        const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.status, 'ok');
-        assert.equal(payload.hasMore, true);
-        assert.equal(payload.outline.symbols.length, 2);
-        assert.equal(payload.outline.symbols[0].symbolId, 'sym_a');
-        assert.equal(payload.outline.symbols[1].symbolId, 'sym_b');
-        assert.equal(payload.outline.symbols[0].callGraphHint.supported, true);
-        assert.equal(payload.outline.symbols[0].callGraphHint.validated, true);
-        assert.equal(payload.outline.symbols[0].callGraphHint.validatedAt, '2026-01-01T01:00:00.000Z');
-        assert.equal(payload.outline.symbols[0].callGraphHint.sidecarBuiltAt, '2026-01-01T00:00:00.000Z');
-        assert.equal(payload.warnings[0], 'OUTLINE_MISSING_SYMBOL_METADATA:1');
-    });
-});
-
-test('handleFileOutline exact mode resolves a unique symbol deterministically', async () => {
-    await withTempRepo(async (repoPath) => {
-        const snapshotManager = {
-            ...baseSnapshotManager(repoPath),
-            getCodebaseCallGraphSidecar: () => ({
-                version: 'v3',
-                sidecarPath: '/tmp/sidecar.json',
-                builtAt: '2026-01-01T00:00:00.000Z',
-                nodeCount: 2,
-                edgeCount: 0,
-                noteCount: 0,
-                fingerprint: RUNTIME_FINGERPRINT
-            }),
-        } as any;
-        const callGraphManager = {
-            loadSidecar: () => ({
-                formatVersion: 'v3',
-                codebasePath: repoPath,
-                builtAt: '2026-01-01T00:00:00.000Z',
-                fingerprint: RUNTIME_FINGERPRINT,
-                nodes: [
-                    { symbolId: 'sym_alpha', symbolLabel: 'function alpha()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 4, endLine: 7 } },
-                    { symbolId: 'sym_beta', symbolLabel: 'function beta()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 10, endLine: 13 } },
-                ],
-                edges: [],
-                notes: []
-            })
-        } as any;
-
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
-
-        const response = await handlers.handleFileOutline({
-            path: repoPath,
-            file: 'src/runtime.ts',
-            resolveMode: 'exact',
-            symbolLabelExact: 'function beta()'
-        });
-
-        const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.status, 'ok');
-        assert.equal(payload.outline.symbols.length, 1);
-        assert.equal(payload.outline.symbols[0].symbolId, 'sym_beta');
-    });
-});
-
-test('handleFileOutline exact mode returns ambiguous with deterministic candidates', async () => {
-    await withTempRepo(async (repoPath) => {
-        const snapshotManager = {
-            ...baseSnapshotManager(repoPath),
-            getCodebaseCallGraphSidecar: () => ({
-                version: 'v3',
-                sidecarPath: '/tmp/sidecar.json',
-                builtAt: '2026-01-01T00:00:00.000Z',
-                nodeCount: 2,
-                edgeCount: 0,
-                noteCount: 0,
-                fingerprint: RUNTIME_FINGERPRINT
-            }),
-        } as any;
-        const callGraphManager = {
-            loadSidecar: () => ({
-                formatVersion: 'v3',
-                codebasePath: repoPath,
-                builtAt: '2026-01-01T00:00:00.000Z',
-                fingerprint: RUNTIME_FINGERPRINT,
-                nodes: [
-                    { symbolId: 'sym_b', symbolLabel: 'function same()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 20, endLine: 21 } },
-                    { symbolId: 'sym_a', symbolLabel: 'function same()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 2, endLine: 3 } },
-                ],
-                edges: [],
-                notes: []
-            })
-        } as any;
-
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
-
-        const response = await handlers.handleFileOutline({
-            path: repoPath,
-            file: 'src/runtime.ts',
-            resolveMode: 'exact',
-            symbolLabelExact: 'function same()'
-        });
-
-        const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.status, 'ambiguous');
-        assert.equal(payload.outline.symbols.length, 2);
-        assert.equal(payload.outline.symbols[0].symbolId, 'sym_a');
-        assert.equal(payload.outline.symbols[1].symbolId, 'sym_b');
-    });
-});
-
-test('handleFileOutline exact mode returns not_found when no exact symbol matches exist in file', async () => {
-    await withTempRepo(async (repoPath) => {
-        const snapshotManager = {
-            ...baseSnapshotManager(repoPath),
-            getCodebaseCallGraphSidecar: () => ({
-                version: 'v3',
-                sidecarPath: '/tmp/sidecar.json',
-                builtAt: '2026-01-01T00:00:00.000Z',
-                nodeCount: 2,
-                edgeCount: 0,
-                noteCount: 0,
-                fingerprint: RUNTIME_FINGERPRINT
-            }),
-        } as any;
-        const callGraphManager = {
-            loadSidecar: () => ({
-                formatVersion: 'v3',
-                codebasePath: repoPath,
-                builtAt: '2026-01-01T00:00:00.000Z',
-                fingerprint: RUNTIME_FINGERPRINT,
-                nodes: [
-                    { symbolId: 'sym_alpha', symbolLabel: 'function alpha()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 4, endLine: 7 } },
-                    { symbolId: 'sym_beta', symbolLabel: 'function beta()', file: 'src/runtime.ts', language: 'typescript', span: { startLine: 10, endLine: 13 } },
-                ],
-                edges: [],
-                notes: []
-            })
-        } as any;
-
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
-
-        const response = await handlers.handleFileOutline({
-            path: repoPath,
-            file: 'src/runtime.ts',
-            resolveMode: 'exact',
-            symbolLabelExact: 'function gamma()'
-        });
-
-        const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.status, 'not_found');
-        assert.equal(payload.outline, null);
-        assert.equal(payload.hasMore, false);
-    });
 });
 
 test('handleFileOutline returns not_found for missing files under root', async () => {

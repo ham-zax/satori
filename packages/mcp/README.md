@@ -64,6 +64,7 @@ Important defaults:
 - `search_codebase` starts with runtime code, grouped by symbol.
 - `search_codebase` runs freshness checks before returning results.
 - Grouped search is symbol-owned: chunks are supporting evidence for an owner symbol, not the final navigation unit.
+- Exact symbol navigation uses `symbolInstanceId`. `symbolKey` is stable-ish candidate lookup only, not exact identity.
 - Index profiles still honor `.satoriignore`, `.gitignore`, `satori.toml`, and the hard denylist for secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, and database dumps.
 - `read_file` is bounded and can return continuation hints.
 - `requires_reindex` means reindex first, then retry the original call.
@@ -73,11 +74,13 @@ Important defaults:
 
 Completed full indexes write a derived symbol registry and relationship sidecar. Files remain the source of truth; the registry is the deterministic navigation view for the indexed snapshot.
 
-- The symbol registry stores owner keys, exact symbol instances, file-owner fallback symbols, and outline records used by grouped search, `file_outline`, and exact reads.
+- The symbol registry stores candidate owner keys, exact symbol instances, file-owner fallback symbols, and outline records used by grouped search, `file_outline`, and exact reads.
 - The relationship sidecar stores conservative `CALLS v0` edges plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges with manifest compatibility gates.
-- `CALLS v0` is heuristic/name-based. Same-file unique targets can be high confidence, cross-file name-only targets are low confidence, and ambiguous same-name targets are skipped.
+- Runtime navigation still serves canonical JSON sidecars by default. When the default shared runtime store is created at process startup, `SATORI_NAVIGATION_BACKEND=sqlite` can opt that shared store into SQLite-backed reads; if selected, runtime reads prefer SQLite but fall back to JSON with a warning if SQLite is missing, incompatible, or unavailable. When the default shared runtime store is created with `SATORI_NAVIGATION_DUAL_READ=1`, JSON remains the serving backend and the runtime emits once-per-root parity mismatch warnings without changing the served result.
+- `CALLS v0` is heuristic/name-based. Same-file unique targets can be high confidence, cross-file name-only targets start low confidence, and ambiguous same-name targets are skipped.
 - `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations. Package imports, unresolved paths, ambiguous exports, and multiline module syntax are skipped.
-- `call_graph` still traverses the prebuilt call-graph sidecar after readiness checks. Relationship records are readiness/evidence data until traversal migrates to the relationship engine.
+- `call_graph` uses compatible relationship sidecars as the canonical source for symbol-owned traversal.
+- Successful incremental sync reuses changed-file symbol output, preserves unchanged registry state, and recomputes relationships against the merged registry without re-splitting unchanged files. If changed-file indexing stops early, navigation state is cleared instead of publishing a mixed generation.
 
 ## Runtime Requirements
 
@@ -153,7 +156,7 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 
 ### `call_graph`
 
-Traverse the prebuilt call graph sidecar for callers/callees/bidirectional symbol relationships (language support follows the core callGraphQuery capability set; currently TS/JS/Python). When present, testReferences are static call-graph references from test-like files to returned symbols; they are investigation hints and do not prove runtime coverage, assertion coverage, or that a test executed a path.
+Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. On symbol-owned indexes, call_graph uses compatible relationship sidecars for conservative CALLS v0 traversal and upgrades low-confidence cross-file calls only when current IMPORTS/EXPORTS evidence deterministically supports the target symbol.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -175,7 +178,7 @@ Return a sidecar-backed symbol outline for one file, including call_graph jump h
 | `end_line` | integer | no |  | Optional end line filter (1-based, inclusive). |
 | `limitSymbols` | integer | no | `500` | Maximum number of returned symbols after line filtering. |
 | `resolveMode` | enum("outline", "exact") | no | `"outline"` | Outline mode returns all symbols (windowed/limited). Exact mode resolves deterministic symbol matches in this file. |
-| `symbolIdExact` | string | no |  | Used with resolveMode="exact": exact symbolId match in the target file. |
+| `symbolIdExact` | string | no |  | Used with resolveMode="exact": exact symbol identifier match in the target file. On symbol-owned flows, pass the symbol's symbolInstanceId. |
 | `symbolLabelExact` | string | no |  | Used with resolveMode="exact": exact symbol label match in the target file. |
 
 ### `read_file`
@@ -188,7 +191,7 @@ Read file content from the local filesystem, with optional 1-based inclusive lin
 | `start_line` | integer | no |  | Optional start line (1-based, inclusive). |
 | `end_line` | integer | no |  | Optional end line (1-based, inclusive). |
 | `mode` | enum("plain", "annotated") | no | `"plain"` | Output mode. plain returns text only; annotated returns content plus sidecar-backed outline metadata. |
-| `open_symbol` | object | no |  | Optional deterministic symbol jump request for this file path. Uses exact symbol resolution within `path` when symbolId/symbolLabel is provided. |
+| `open_symbol` | object | no |  | Optional deterministic symbol jump request for this file path. Uses exact symbol resolution within `path` when symbolId/symbolLabel is provided, and only uses direct span opens when no symbol identity fields are supplied. On symbol-owned flows, symbolId should carry the symbolInstanceId. |
 
 ### `list_codebases`
 
@@ -201,7 +204,7 @@ No parameters.
 
 ## Notes
 
-- `open_symbol` resolves exact symbols inside the same file passed to `read_file.path`.
+- `open_symbol` resolves exact symbols inside the same file passed to `read_file.path`. On symbol-owned flows, `symbolId`/`symbolIdExact` should carry `symbolInstanceId`.
 - `MILVUS_TOKEN` is optional auth; local unauthenticated Milvus only needs `MILVUS_ADDRESS`.
 - MCP startup does not require provider credentials or a live Milvus backend. Provider-backed calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 - `MISSING_PROVIDER_CONFIG` is an active setup failure only when it appears as a tool response `code` or `reason`.

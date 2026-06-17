@@ -8,7 +8,7 @@
       name="description"
       content="How Satori works under the hood: installer-owned MCP startup, six deterministic tools, freshness gates, vector search, symbol registry and relationship sidecars, snapshots, and sync safety."
     />
-    <meta name="keywords" content="Satori architecture, MCP server architecture, semantic code search architecture, symbol registry, relationship sidecar, call graph sidecar, repo indexing, vector search, Milvus, Zilliz" />
+    <meta name="keywords" content="Satori architecture, MCP server architecture, semantic code search architecture, symbol registry, relationship sidecar, relationship-backed call graph, repo indexing, vector search, Milvus, Zilliz" />
     <meta name="robots" content="index,follow" />
     <link rel="canonical" href="https://hamza.my.id/satori/architecture.html" />
     <meta property="og:title" content="Satori Architecture | Deterministic MCP Code Retrieval" />
@@ -1206,9 +1206,9 @@
           <article class="card">
             <h3>Graph Boundary</h3>
             <p>
-              <code>call_graph</code> still traverses the prebuilt call-graph
-              sidecar after compatibility gates. Relationship records are
-              readiness and evidence data until traversal migrates.
+              <code>call_graph</code> now traverses compatible relationship
+              sidecars directly. JSON sidecars remain canonical; SQLite is an
+              additive cache for parity checks or explicit experimental reads.
             </p>
           </article>
         </div>
@@ -1405,7 +1405,9 @@
             <h3>Incremental Sync</h3>
             <p>
               Stat-first scan, hash-on-change, deterministic Merkle root, and
-              vector updates only for added, removed, or modified files.
+              changed-file chunk updates. Navigation reuses changed-file symbol
+              output, preserves unchanged registry state, and recomputes
+              relationships globally without re-splitting unchanged files.
             </p>
           </article>
           <article class="card">
@@ -1456,11 +1458,11 @@
           </div>
           <div class="flow-step">
             <strong>Agent opens the exact symbol</strong>
-            <p><code>file_outline</code> and <code>read_file.open_symbol</code> resolve the implementation span without guessing.</p>
+            <p><code>file_outline</code> and <code>read_file.open_symbol</code> resolve the implementation span from <code>symbolInstanceId</code> without guessing.</p>
           </div>
           <div class="flow-step">
             <strong>Agent checks callers and callees</strong>
-            <p><code>call_graph</code> provides nearby dependency context when the sidecar is ready.</p>
+            <p><code>call_graph</code> provides nearby dependency context from compatible relationship sidecars.</p>
           </div>
           <div class="flow-step">
             <strong>Agent handles unsafe state explicitly</strong>

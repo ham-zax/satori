@@ -3,7 +3,7 @@ import { McpTool, ToolContext, formatZodError } from './types.js';
 
 const symbolRefSchema = z.object({
     file: z.string().min(1).describe('Relative file path from the codebase root.'),
-    symbolId: z.string().min(1).describe('Stable symbol identifier from search_codebase.callGraphHint.'),
+    symbolId: z.string().min(1).describe('Symbol identifier from search_codebase.callGraphHint. On symbol-owned flows, this should carry the symbolInstanceId.'),
     symbolLabel: z.string().optional().describe('Optional symbol display label.'),
     span: z.object({
         startLine: z.number().int().positive(),
@@ -21,7 +21,7 @@ const callGraphInputSchema = z.object({
 
 export const callGraphTool: McpTool = {
     name: 'call_graph',
-    description: () => 'Traverse the prebuilt call graph sidecar for callers/callees/bidirectional symbol relationships (language support follows the core callGraphQuery capability set; currently TS/JS/Python). When present, testReferences are static call-graph references from test-like files to returned symbols; they are investigation hints and do not prove runtime coverage, assertion coverage, or that a test executed a path.',
+    description: () => 'Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. On symbol-owned indexes, call_graph uses compatible relationship sidecars for conservative CALLS v0 traversal and upgrades low-confidence cross-file calls only when current IMPORTS/EXPORTS evidence deterministically supports the target symbol.',
     inputSchemaZod: () => callGraphInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const normalizedArgs = (args && typeof args === 'object')

@@ -330,7 +330,7 @@ test('read_file annotated mode treats JavaScript files as outline-capable', asyn
     });
 });
 
-test('read_file open_symbol resolves exact symbol span via file_outline and returns deterministic window', async () => {
+test('read_file open_symbol treats symbolId as canonical symbolInstanceId on exact opens', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
         const srcPath = path.join(repoPath, 'src');
@@ -341,7 +341,7 @@ test('read_file open_symbol resolves exact symbol span via file_outline and retu
         const response = await runReadFile({
             path: filePath,
             open_symbol: {
-                symbolId: 'sym_runtime'
+                symbolId: 'sym_runtime_instance'
             }
         }, 1000, {
             snapshotManager: {
@@ -350,7 +350,7 @@ test('read_file open_symbol resolves exact symbol span via file_outline and retu
             toolHandlers: {
                 handleFileOutline: async (args: any) => {
                     assert.equal(args.resolveMode, 'exact');
-                    assert.equal(args.symbolIdExact, 'sym_runtime');
+                    assert.equal(args.symbolIdExact, 'sym_runtime_instance');
                     return {
                         content: [{
                             type: 'text',
@@ -360,12 +360,12 @@ test('read_file open_symbol resolves exact symbol span via file_outline and retu
                                 file: 'src/runtime.ts',
                                 outline: {
                                     symbols: [{
-                                        symbolId: 'sym_runtime',
+                                        symbolId: 'sym_runtime_instance',
                                         symbolLabel: 'function run()',
                                         span: { startLine: 2, endLine: 3 },
                                         callGraphHint: {
                                             supported: true,
-                                            symbolRef: { file: 'src/runtime.ts', symbolId: 'sym_runtime' }
+                                            symbolRef: { file: 'src/runtime.ts', symbolId: 'sym_runtime_instance' }
                                         }
                                     }]
                                 },
@@ -379,6 +379,165 @@ test('read_file open_symbol resolves exact symbol span via file_outline and retu
 
         assert.equal(response.isError, undefined);
         assert.equal(response.content[0].text, 'line2\nline3');
+    });
+});
+
+test('read_file open_symbol returns not_found for a stale symbolInstanceId without span fallback', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance_stale'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as any,
+            toolHandlers: {
+                handleFileOutline: async (args: any) => {
+                    assert.equal(args.resolveMode, 'exact');
+                    assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'not_found',
+                                path: repoPath,
+                                file: 'src/runtime.ts',
+                                message: 'Exact symbol not found for symbolInstanceId.',
+                                hasMore: false
+                            })
+                        }]
+                    };
+                }
+            } as any
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'not_found');
+        assert.match(payload.message, /Exact symbol not found/);
+    });
+});
+
+test('read_file open_symbol does not bypass exact resolution when stale symbolInstanceId also includes a span', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance_stale',
+                start_line: 4,
+                end_line: 4,
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as any,
+            toolHandlers: {
+                handleFileOutline: async (args: any) => {
+                    assert.equal(args.resolveMode, 'exact');
+                    assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'not_found',
+                                path: repoPath,
+                                file: 'src/runtime.ts',
+                                message: 'Exact symbol not found for symbolInstanceId.',
+                                hasMore: false
+                            })
+                        }]
+                    };
+                }
+            } as any
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'not_found');
+        assert.match(payload.message, /Exact symbol not found/);
+    });
+});
+
+test('read_file open_symbol returns requires_reindex for stale symbolInstanceId when exact navigation is incompatible', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance_stale'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as any,
+            toolHandlers: {
+                handleFileOutline: async (args: any) => {
+                    assert.equal(args.resolveMode, 'exact');
+                    assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'requires_reindex',
+                                path: repoPath,
+                                file: 'src/runtime.ts',
+                                message: 'Symbol registry is incompatible with the current file state.',
+                                hints: {
+                                    reindex: {
+                                        tool: 'manage_index',
+                                        args: { action: 'reindex', path: repoPath }
+                                    }
+                                },
+                                hasMore: false
+                            })
+                        }]
+                    };
+                }
+            } as any
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'requires_reindex');
+        assert.equal(payload.hints.reindex.tool, 'manage_index');
+        assert.deepEqual(payload.hints.reindex.args, { action: 'reindex', path: repoPath });
+    });
+});
+
+test('read_file open_symbol still supports direct span opens when no symbol identity is supplied', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                start_line: 3,
+                end_line: 4,
+            }
+        });
+
+        assert.equal(response.isError, undefined);
+        assert.equal(response.content[0].text, 'line3\nline4');
     });
 });
 
@@ -434,7 +593,7 @@ test('read_file open_symbol unresolved root returns structured runnable nextStep
         const response = await runReadFile({
             path: filePath,
             open_symbol: {
-                symbolId: 'sym_runtime'
+                symbolId: 'sym_runtime_instance'
             }
         }, 1000, {
             snapshotManager: {
@@ -489,7 +648,7 @@ test('read_file open_symbol request is blocked with not_ready when parent codeba
         const response = await runReadFile({
             path: filePath,
             open_symbol: {
-                symbolId: 'sym_runtime'
+                symbolId: 'sym_runtime_instance'
             }
         }, 1000, {
             snapshotManager: {

@@ -12,6 +12,7 @@ import {
     buildSymbolRecordsForFile,
     buildSymbolRegistry,
     resolveNavigationSidecarRoot,
+    writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
 } from '@zokizuan/satori-core';
 import type { SymbolRegistryManifest } from '@zokizuan/satori-core';
@@ -139,6 +140,92 @@ async function writeSearchSymbolRegistry(input: {
     });
 
     return symbols;
+}
+
+async function writeSearchRelationshipSidecar(input: {
+    repoPath: string;
+    relativePath: string;
+    fileHash: string;
+    language: string;
+    symbolCount: number;
+    symbolRegistryManifestHash: string;
+    records: Parameters<typeof writeRelationshipSidecar>[0]['records'];
+}) {
+    await writeRelationshipSidecar({
+        normalizedRootPath: input.repoPath,
+        symbolRegistryManifestHash: input.symbolRegistryManifestHash,
+        relationshipVersion: 'test-relationships-v1',
+        builtAt: '2026-01-01T00:00:00.000Z',
+        files: [{
+            path: input.relativePath,
+            hash: input.fileHash,
+            language: input.language,
+            symbolCount: input.symbolCount,
+        }],
+        records: input.records,
+    });
+}
+
+async function writeSearchNavigationSidecars(input: {
+    repoPath: string;
+    relativePath: string;
+    content: string;
+    chunks: Array<{
+        content: string;
+        startLine: number;
+        endLine: number;
+        symbolLabel?: string;
+        breadcrumbs?: string[];
+    }>;
+}) {
+    const fileHash = 'test-search-file-hash';
+    const language = 'typescript';
+    const symbols = buildSymbolRecordsForFile({
+        relativePath: input.relativePath,
+        language,
+        content: input.content,
+        fileHash,
+        extractorVersion: 'test-extractor-v1',
+        chunks: input.chunks.map((chunk) => ({
+            content: chunk.content,
+            metadata: {
+                startLine: chunk.startLine,
+                endLine: chunk.endLine,
+                language,
+                filePath: input.relativePath,
+                ...(chunk.symbolLabel ? { symbolLabel: chunk.symbolLabel } : {}),
+                ...(chunk.breadcrumbs ? { breadcrumbs: chunk.breadcrumbs } : {}),
+            },
+        })),
+    });
+    const manifest: SymbolRegistryManifest = {
+        schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+        normalizedRootPath: input.repoPath,
+        rootFingerprint: 'test-root-fingerprint',
+        indexPolicyHash: 'test-policy',
+        languageRouterVersion: 'test-router-v1',
+        extractorVersion: 'test-extractor-v1',
+        relationshipVersion: 'test-relationships-v1',
+        builtAt: '2026-01-01T00:00:00.000Z',
+        files: [{
+            path: input.relativePath,
+            hash: fileHash,
+            language,
+            symbolCount: symbols.length,
+        }],
+    };
+    const registry = buildSymbolRegistry({ manifest, symbols });
+    const result = await writeSymbolRegistrySidecar({ registry });
+    await writeSearchRelationshipSidecar({
+        repoPath: input.repoPath,
+        relativePath: input.relativePath,
+        fileHash,
+        language,
+        symbolCount: symbols.length,
+        symbolRegistryManifestHash: result.manifestHash,
+        records: [],
+    });
+    return { symbols, manifestHash: result.manifestHash };
 }
 
 function createHandlers(
@@ -269,16 +356,233 @@ test('handleSearchCode grouped output includes symbol metadata and callGraphHint
         assert.equal(payload.status, 'ok');
         assert.equal(payload.resultMode, 'grouped');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].symbolId, 'sym_auth_validate');
-        assert.equal(payload.results[0].callGraphHint.supported, true);
-        assert.equal(payload.results[0].callGraphHint.validated, true);
-        assert.equal(payload.results[0].callGraphHint.validatedAt, '2026-01-01T01:00:00.000Z');
-        assert.equal(payload.results[0].callGraphHint.sidecarBuiltAt, '2026-01-01T00:45:00.000Z');
-        assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, 'sym_auth_validate');
+        assert.equal(payload.results[0].symbolId, undefined);
+        assert.equal(payload.results[0].callGraphHint.supported, false);
+        assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol');
     });
 });
 
-test('handleSearchCode grouped symbol mode collapses chunks by owner symbol key without replacing call graph symbol id', async () => {
+test('handleSearchCode grouped symbol mode emits relationship-backed callGraphHint without a legacy sidecar', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const fileContent = [
+            'class SessionManager {',
+            '  validateSession(token: string) {',
+            '    return token.trim().length > 0;',
+            '  }',
+            '}',
+            '',
+        ].join('\n');
+        const { symbols } = await writeSearchNavigationSidecars({
+            repoPath,
+            relativePath: 'src/auth.ts',
+            content: fileContent,
+            chunks: [{
+                content: 'return token.trim().length > 0;',
+                startLine: 2,
+                endLine: 4,
+                symbolLabel: 'method validateSession(token: string)',
+                breadcrumbs: ['class SessionManager', 'method validateSession(token: string)'],
+            }],
+        });
+        const validateSymbol = symbols.find((symbol) => symbol.kind !== 'file');
+        assert.ok(validateSymbol);
+
+        const handlers = createHandlers(repoPath, [{
+            content: 'return token.trim().length > 0;',
+            relativePath: 'src/auth.ts',
+            startLine: 2,
+            endLine: 4,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: validateSymbol!.label,
+            ownerSymbolKey: validateSymbol!.symbolKey,
+            ownerSymbolInstanceId: validateSymbol!.symbolInstanceId,
+            symbolKind: validateSymbol!.kind,
+        }], undefined, { sidecarReady: false });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const result = payload.results[0];
+        assert.equal(result.callGraphHint.supported, true);
+        assert.equal(result.callGraphHint.symbolRef.symbolId, validateSymbol!.symbolInstanceId);
+        assert.equal(result.callGraphHint.sidecarBuiltAt, '2026-01-01T00:00:00.000Z');
+        assert.deepEqual(result.nextActions.callGraph.args.symbolRef, result.callGraphHint.symbolRef);
+    }));
+});
+
+test('handleSearchCode does not emit supported callGraphHint from stale ownerSymbolInstanceId metadata when the current registry has no matching symbol', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const fileContent = [
+            'function currentSession(token: string) {',
+            '  return token.trim().length > 0;',
+            '}',
+            '',
+        ].join('\n');
+        await writeSearchNavigationSidecars({
+            repoPath,
+            relativePath: 'src/current.ts',
+            content: fileContent,
+            chunks: [{
+                content: 'return token.trim().length > 0;',
+                startLine: 1,
+                endLine: 3,
+                symbolLabel: 'function currentSession(token: string)',
+            }],
+        });
+
+        const handlers = createHandlers(repoPath, [{
+            content: 'return staleToken.trim().length > 0;',
+            relativePath: 'src/stale.ts',
+            startLine: 1,
+            endLine: 3,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: 'function staleSession(token: string)',
+            ownerSymbolKey: 'sym_key_stale_session',
+            ownerSymbolInstanceId: 'sym_instance_stale_session',
+            symbolKind: 'function',
+        }], undefined, { sidecarReady: false });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'stale session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const result = payload.results[0];
+        assert.equal(result.callGraphHint.supported, false);
+        assert.equal(result.callGraphHint.reason, 'stale_symbol_ref');
+        assert.equal(result.nextActions, undefined);
+        assert.deepEqual(result.navigationFallback.readSpan, {
+            tool: 'read_file',
+            args: {
+                path: path.resolve(repoPath, 'src/stale.ts'),
+                start_line: 1,
+                end_line: 3
+            }
+        });
+    }));
+});
+
+test('handleSearchCode relationship-backed callGraphHint works end to end with call_graph without a legacy sidecar', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const fileContent = [
+            'function normalizeToken(token: string) {',
+            '  return token.trim();',
+            '}',
+            '',
+            'function validateSession(token: string) {',
+            '  return normalizeToken(token).length > 0;',
+            '}',
+            '',
+        ].join('\n');
+        const { symbols, manifestHash } = await writeSearchNavigationSidecars({
+            repoPath,
+            relativePath: 'src/auth.ts',
+            content: fileContent,
+            chunks: [
+                {
+                    content: 'function normalizeToken(token: string) {\n  return token.trim();\n}',
+                    startLine: 1,
+                    endLine: 3,
+                    symbolLabel: 'function normalizeToken(token: string)',
+                },
+                {
+                    content: 'function validateSession(token: string) {\n  return normalizeToken(token).length > 0;\n}',
+                    startLine: 5,
+                    endLine: 7,
+                    symbolLabel: 'function validateSession(token: string)',
+                },
+            ],
+        });
+        const normalizeSymbol = symbols.find((symbol) => symbol.kind !== 'file' && symbol.name === 'normalizeToken');
+        const validateSymbol = symbols.find((symbol) => symbol.kind !== 'file' && symbol.name === 'validateSession');
+        assert.ok(normalizeSymbol);
+        assert.ok(validateSymbol);
+
+        await writeSearchRelationshipSidecar({
+            repoPath,
+            relativePath: 'src/auth.ts',
+            fileHash: 'test-search-file-hash',
+            language: 'typescript',
+            symbolCount: symbols.length,
+            symbolRegistryManifestHash: manifestHash,
+            records: [{
+                sourceKey: validateSymbol!.symbolKey,
+                sourceInstanceId: validateSymbol!.symbolInstanceId,
+                targetKey: normalizeSymbol!.symbolKey,
+                targetInstanceId: normalizeSymbol!.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/auth.ts',
+                span: { startLine: 6, endLine: 6 },
+                confidence: 'high',
+            }],
+        });
+
+        const handlers = createHandlers(repoPath, [{
+            content: 'return normalizeToken(token).length > 0;',
+            relativePath: 'src/auth.ts',
+            startLine: 5,
+            endLine: 7,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: validateSymbol!.label,
+            ownerSymbolKey: validateSymbol!.symbolKey,
+            ownerSymbolInstanceId: validateSymbol!.symbolInstanceId,
+            symbolKind: validateSymbol!.kind,
+        }], undefined, { sidecarReady: false });
+
+        const searchResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+
+        const searchPayload = JSON.parse(searchResponse.content[0]?.text || '{}');
+        const result = searchPayload.results[0];
+        assert.equal(result.callGraphHint.supported, true);
+        assert.deepEqual(result.nextActions.callGraph.args.symbolRef, result.callGraphHint.symbolRef);
+
+        const callGraphResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            ...result.nextActions.callGraph.args,
+        });
+
+        const graphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
+        assert.equal(graphPayload.status, 'ok');
+        assert.equal(graphPayload.supported, true);
+        assert.deepEqual(
+            graphPayload.nodes.map((node: { symbolId: string }) => node.symbolId).sort(),
+            [
+                validateSymbol!.symbolInstanceId,
+                normalizeSymbol!.symbolInstanceId,
+            ].sort(),
+        );
+        assert.equal(graphPayload.edges.length, 1);
+        assert.equal(graphPayload.edges[0].srcSymbolId, validateSymbol!.symbolInstanceId);
+        assert.equal(graphPayload.edges[0].dstSymbolId, normalizeSymbol!.symbolInstanceId);
+    }));
+});
+
+test('handleSearchCode grouped symbol mode collapses chunks by owner symbol identity and emits owner-backed navigation ids', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [
             {
@@ -327,8 +631,9 @@ test('handleSearchCode grouped symbol mode collapses chunks by owner symbol key 
         assert.equal(payload.results[0].collapsedChunkCount, 2);
         assert.equal(payload.results[0].symbolKey, 'owner_auth_login_key');
         assert.equal(payload.results[0].symbolInstanceId, 'owner_auth_login_instance');
-        assert.equal(payload.results[0].symbolId, 'legacy_chunk_symbol_a');
-        assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, 'legacy_chunk_symbol_a');
+        assert.equal(payload.results[0].symbolId, 'owner_auth_login_instance');
+        assert.equal(payload.results[0].callGraphHint.supported, false);
+        assert.equal(payload.results[0].callGraphHint.reason, 'missing_sidecar');
         assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'owner_metadata');
     });
 });
@@ -405,14 +710,15 @@ test('handleSearchCode grouped symbol mode repairs legacy chunks from compatible
             assert.equal(payload.results[0].symbolKey, owner.symbolKey);
             assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
             assert.equal(payload.results[0].symbolKind, 'method');
-            assert.equal(payload.results[0].symbolId, 'legacy_chunk_symbol_a');
-            assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, 'legacy_chunk_symbol_a');
+            assert.equal(payload.results[0].symbolId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].callGraphHint.supported, true);
+            assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, owner.symbolInstanceId);
             assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'registry_repair');
         });
     });
 });
 
-test('handleSearchCode grouped symbol mode downgrades graph hints when relationship sidecar is incompatible', async () => {
+test('handleSearchCode grouped symbol mode disables call graph hints when relationship sidecar is incompatible', async () => {
     await withTempStateRoot(async (stateRoot) => {
         await withTempRepo(async (repoPath) => {
             const relativePath = 'src/auth.ts';
@@ -426,7 +732,7 @@ test('handleSearchCode grouped symbol mode downgrades graph hints when relations
             ].join('\n');
             fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
             fs.writeFileSync(path.join(repoPath, relativePath), content);
-            await writeSearchSymbolRegistry({
+            const symbols = await writeSearchSymbolRegistry({
                 repoPath,
                 relativePath,
                 content,
@@ -438,6 +744,8 @@ test('handleSearchCode grouped symbol mode downgrades graph hints when relations
                     breadcrumbs: ['class AuthService', 'method login(token: string)'],
                 }],
             });
+            const owner = symbols.find((symbol) => symbol.kind === 'method');
+            assert.ok(owner);
 
             const navigationRoot = resolveNavigationSidecarRoot(stateRoot, repoPath);
             fs.writeFileSync(
@@ -474,6 +782,8 @@ test('handleSearchCode grouped symbol mode downgrades graph hints when relations
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].symbolId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
             assert.equal(payload.results[0].callGraphHint.supported, false);
             assert.equal(payload.results[0].callGraphHint.reason, 'missing_sidecar');
             assert.ok(payload.warnings.includes('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
@@ -656,32 +966,17 @@ test('handleSearchCode grouped output includes compact nextActions for supported
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const result = payload.results[0];
 
-        assert.equal(result.callGraphHint.supported, true);
-        assert.deepEqual(result.nextActions.openSymbol, {
+        assert.equal(result.callGraphHint.supported, false);
+        assert.equal(result.callGraphHint.reason, 'missing_symbol');
+        assert.equal(result.nextActions, undefined);
+        assert.deepEqual(result.navigationFallback.readSpan, {
             tool: 'read_file',
             args: {
                 path: path.resolve(repoPath, 'src/auth.ts'),
-                open_symbol: {
-                    symbolId: 'sym_auth_validate',
-                    symbolLabel: 'method validateSession(token: string)',
-                    start_line: 3,
-                    end_line: 6
-                }
+                start_line: 3,
+                end_line: 6
             }
         });
-        assert.deepEqual(result.nextActions.callGraph, {
-            tool: 'call_graph',
-            args: {
-                path: repoPath,
-                symbolRef: result.callGraphHint.symbolRef,
-                depth: 1,
-                limit: 20
-            },
-            directions: ['callers', 'callees']
-        });
-        assert.equal(result.nextActions.traceCallers, undefined);
-        assert.equal(result.nextActions.traceCallees, undefined);
-        assert.equal(result.navigationFallback, undefined);
         assert.equal(payload.hints?.navigation?.nextStep, 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.');
     });
 });
@@ -751,7 +1046,7 @@ test('handleSearchCode downgrades stale search symbol refs to navigation fallbac
         const result = payload.results[0];
 
         assert.equal(result.callGraphHint.supported, false);
-        assert.equal(result.callGraphHint.reason, 'stale_symbol_ref');
+        assert.equal(result.callGraphHint.reason, 'missing_symbol');
         assert.equal(result.nextActions, undefined);
         assert.deepEqual(result.navigationFallback.readSpan, {
             tool: 'read_file',
@@ -761,16 +1056,7 @@ test('handleSearchCode downgrades stale search symbol refs to navigation fallbac
                 end_line: 6
             }
         });
-        assert.deepEqual(result.navigationFallback.fileOutlineWindow, {
-            tool: 'file_outline',
-            args: {
-                path: repoPath,
-                file: 'src/auth.ts',
-                start_line: 3,
-                end_line: 6,
-                resolveMode: 'outline'
-            }
-        });
+        assert.equal(result.navigationFallback.fileOutlineWindow, undefined);
     });
 });
 
@@ -3831,16 +4117,7 @@ test('handleSearchCode emits fileOutlineWindow navigation fallback when sidecar 
         assert.equal(payload.results.length, 1);
         assert.equal(payload.results[0].callGraphHint.supported, false);
         assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol');
-        assert.deepEqual(payload.results[0].navigationFallback.fileOutlineWindow, {
-            tool: 'file_outline',
-            args: {
-                path: repoPath,
-                file: 'src/runtime.ts',
-                start_line: 10,
-                end_line: 14,
-                resolveMode: 'outline'
-            }
-        });
+        assert.equal(payload.results[0].navigationFallback.fileOutlineWindow, undefined);
     });
 });
 
@@ -3910,16 +4187,7 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
         assert.equal(payload.results[0].navigationFallback.context.relativeFile, 'src/runtime.ts');
         assert.equal(payload.results[0].navigationFallback.context.absolutePath, undefined);
         assert.equal(payload.results[0].navigationFallback.readSpan.args.path, path.resolve(repoPath, 'src/runtime.ts'));
-        assert.deepEqual(payload.results[0].navigationFallback.fileOutlineWindow, {
-            tool: 'file_outline',
-            args: {
-                path: repoPath,
-                file: 'src/runtime.ts',
-                start_line: 10,
-                end_line: 14,
-                resolveMode: 'outline'
-            }
-        });
+        assert.equal(payload.results[0].navigationFallback.fileOutlineWindow, undefined);
     });
 });
 
@@ -3934,8 +4202,11 @@ test('handleSearchCode grouped sorting places null symbolLabel last for determin
                 language: 'typescript',
                 score: 0.91,
                 indexedAt: '2026-01-01T00:30:00.000Z',
-                symbolId: 'sym_with_label',
-                symbolLabel: 'function withLabel(token: string)'
+                symbolId: 'legacy_sym_with_label',
+                symbolLabel: 'function withLabel(token: string)',
+                ownerSymbolKey: 'owner_with_label_key',
+                ownerSymbolInstanceId: 'owner_with_label_instance',
+                symbolKind: 'function',
             },
             {
                 content: 'return verifyToken(token);',
@@ -3945,7 +4216,10 @@ test('handleSearchCode grouped sorting places null symbolLabel last for determin
                 language: 'typescript',
                 score: 0.91,
                 indexedAt: '2026-01-01T00:30:00.000Z',
-                symbolId: 'sym_without_label'
+                symbolId: 'legacy_sym_without_label',
+                ownerSymbolKey: 'owner_without_label_key',
+                ownerSymbolInstanceId: 'owner_without_label_instance',
+                symbolKind: 'function',
             }
         ]);
 
@@ -3960,8 +4234,8 @@ test('handleSearchCode grouped sorting places null symbolLabel last for determin
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results.length, 2);
-        assert.equal(payload.results[0].symbolId, 'sym_with_label');
-        assert.equal(payload.results[1].symbolId, 'sym_without_label');
+        assert.equal(payload.results[0].symbolId, 'owner_with_label_instance');
+        assert.equal(payload.results[1].symbolId, 'owner_without_label_instance');
     });
 });
 
@@ -4299,7 +4573,8 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
             assert.equal(payload.results.length, 1);
-            assert.equal(payload.results[0].symbolId, 'sym_primary');
+            assert.equal(payload.results[0].symbolId, undefined);
+            assert.equal(payload.results[0].file, 'src/primary.ts');
             assert.deepEqual(payload.warnings, [
                 'SEARCH_PASS_FAILED:expanded - expanded semantic search pass failed; results may be degraded.'
             ]);

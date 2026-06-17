@@ -1,5 +1,6 @@
 import type { RelationshipRecord, SymbolRecord } from '../symbols';
 import type { SymbolRegistry } from '../symbols';
+import { isLanguageCapabilitySupportedForLanguage } from '../language';
 
 export interface BuildCallRelationshipsForRegistryInput {
     registry: SymbolRegistry;
@@ -197,6 +198,9 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
     const recordsByKey = new Map<string, RelationshipRecord>();
 
     for (const source of input.registry.symbols.filter(isSourceOwner)) {
+        if (!isLanguageCapabilitySupportedForLanguage(source.language, 'callGraphBuild')) {
+            continue;
+        }
         const content = getContent(input.contentByFile, source.file);
         if (content === undefined) {
             continue;

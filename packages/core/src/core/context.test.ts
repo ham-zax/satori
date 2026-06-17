@@ -294,6 +294,102 @@ test('Context.processFileList returns symbol records, manifest files, and comple
     }
 });
 
+test('Context.indexCodebase attaches Go extractor owner metadata in production indexing', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-go-symbols-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'svc.go');
+
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, [
+            'package svc',
+            '',
+            'func add(a, b int) int {',
+            '  return a + b',
+            '}',
+            '',
+        ].join('\n'), 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        const result = await context.indexCodebase(codebasePath);
+        const sidecar = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+
+        assert.equal(result.status, 'completed');
+        assert.equal(sidecar.status, 'ok');
+        if (sidecar.status !== 'ok') {
+            return;
+        }
+
+        const add = sidecar.registry.symbolsByFile
+            .get('svc.go')
+            ?.find((symbol) => symbol.kind === 'function' && symbol.name === 'add');
+        assert.ok(add);
+        assert.equal(add?.language, 'go');
+        assert.equal(add?.label, 'function add');
+
+        const documents = Array.from(vectorDatabase.collections.values())
+            .flatMap((collection) => Array.from(collection.values()))
+            .filter((document) => document.fileExtension !== COMPLETION_MARKER_EXTENSION)
+            .filter((document) => document.relativePath === 'svc.go');
+        assert.ok(documents.length > 0);
+        assert.ok(documents.some((document) => document.metadata.ownerSymbolInstanceId === add?.symbolInstanceId));
+        assert.ok(documents.every((document) => typeof document.metadata.ownerSymbolKey === 'string'));
+        assert.ok(documents.every((document) => typeof document.metadata.ownerSymbolInstanceId === 'string'));
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.indexCodebase degrades malformed Go source to synthesized file-owner metadata', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-go-malformed-symbols-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'broken.go');
+
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'package svc\nfunc broken( {\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        const result = await context.indexCodebase(codebasePath);
+        const sidecar = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+
+        assert.equal(result.status, 'completed');
+        assert.equal(sidecar.status, 'ok');
+        if (sidecar.status !== 'ok') {
+            return;
+        }
+
+        const fileSymbols = sidecar.registry.symbolsByFile.get('broken.go') || [];
+        assert.deepEqual(fileSymbols.map((symbol) => symbol.kind), ['file']);
+        const fileOwner = fileSymbols[0];
+        assert.ok(fileOwner);
+
+        const documents = Array.from(vectorDatabase.collections.values())
+            .flatMap((collection) => Array.from(collection.values()))
+            .filter((document) => document.fileExtension !== COMPLETION_MARKER_EXTENSION)
+            .filter((document) => document.relativePath === 'broken.go');
+        assert.ok(documents.length > 0);
+        assert.ok(documents.every((document) => document.metadata.ownerSymbolInstanceId === fileOwner?.symbolInstanceId));
+        assert.ok(documents.every((document) => document.metadata.symbolKind === 'file'));
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context.indexCodebase uses filename-aware language routing for symbol registry files', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-filenames-'));
     const stateRoot = path.join(tempRoot, 'state');

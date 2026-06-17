@@ -28,7 +28,8 @@ test('language registry is backed by canonical capability declarations', () => {
     const go = getLanguageCapabilityDeclaration('go');
     assert.equal(go?.searchEligibility, 'production_ready');
     assert.equal(go?.parserCapability, 'production_ready');
-    assert.notEqual(go?.symbolExtractionCapability, 'production_ready');
+    assert.equal(go?.symbolExtractionCapability, 'production_ready');
+    assert.equal(go?.ownerExtractionCapability, 'production_ready');
     assert.notEqual(go?.callsCapability, 'production_ready');
 });
 
@@ -58,6 +59,16 @@ test('L1 candidate languages do not claim graph capabilities by routing alone', 
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphQuery'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'testLinks'), false, language);
     }
+    for (const language of ['go', 'rust']) {
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), true, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), true, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), true, language);
+    }
+    for (const language of ['java', 'csharp', 'php', 'ruby', 'kotlin', 'swift']) {
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), false, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), false, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), false, language);
+    }
 });
 
 test('language registry exposes search-only frontend/style containers until extractors exist', () => {
@@ -69,6 +80,18 @@ test('language registry exposes search-only frontend/style containers until extr
         assert.equal(isLanguageCapabilitySupportedForExtension(extension, 'callGraph'), false, extension);
         assert.equal(isLanguageCapabilitySupportedForExtension(extension, 'fileOutline'), false, extension);
     }
+});
+
+test('declared parser catalog entries do not claim executable AST splitter support', () => {
+    for (const language of ['zig', 'solidity', 'gleam', 'kotlin', 'ruby', 'swift']) {
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'astSplitter'), false, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), false, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), false, language);
+    }
+
+    assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'astSplitter'), true);
+    assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'astSplitter'), true);
 });
 
 test('language registry routes special filenames as search-only artifacts', () => {
@@ -114,12 +137,20 @@ test('language registry reports deterministic capability extension and filename 
     );
     assert.ok(getSupportedExtensionsForCapability('search').includes('.vue'));
     assert.ok(!getSupportedExtensionsForCapability('owner').includes('.vue'));
-    assert.deepEqual(getSupportedFilenamesForCapability('search'), [
+    const searchableFilenames = getSupportedFilenamesForCapability('search');
+    assert.deepEqual([...searchableFilenames].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), searchableFilenames);
+    for (const filename of [
         'CMakeLists.txt',
         'Dockerfile',
         'Justfile',
+        'Kconfig',
         'Makefile',
+        'go.mod',
         'justfile',
-    ]);
+        'kustomization.yaml',
+        'requirements.txt',
+    ]) {
+        assert.ok(searchableFilenames.includes(filename), filename);
+    }
     assert.deepEqual(getSupportedFilenamesForCapability('owner'), []);
 });

@@ -63,7 +63,7 @@ function toAdapterCapabilities(declaration: LanguageCapabilityDeclaration): Lang
     const callsReady = isProductionReady(declaration.callsCapability);
     return {
         search: isEnabled(declaration.searchEligibility),
-        astSplitter: isEnabled(declaration.parserCapability),
+        astSplitter: isProductionReady(declaration.parserCapability),
         symbols: symbolReady,
         symbolMetadata: symbolReady,
         owner: isProductionReady(declaration.ownerExtractionCapability),

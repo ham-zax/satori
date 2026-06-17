@@ -103,3 +103,55 @@ test('AstCodeSplitter Python text-symbol fallback preserves decorated top-level 
     assert.ok(healthCheck.content.includes('@cached'));
     assert.deepEqual(healthCheck.metadata.breadcrumbs, ['function health_check(request)']);
 });
+
+test('AstCodeSplitter legacy production parser languages have no-crash fixtures', async () => {
+    const splitter = new AstCodeSplitter();
+    const fixtures = [
+        {
+            language: 'java',
+            filePath: 'src/Main.java',
+            code: [
+                'class Main {',
+                '    Main() {}',
+                '    void run() {}',
+                '}',
+            ].join('\n'),
+        },
+        {
+            language: 'cpp',
+            filePath: 'src/main.cpp',
+            code: [
+                'class Worker {',
+                'public:',
+                '    void run() {}',
+                '};',
+                'int main() { return 0; }',
+            ].join('\n'),
+        },
+        {
+            language: 'csharp',
+            filePath: 'src/Program.cs',
+            code: [
+                'class Program {',
+                '    Program() {}',
+                '    void Run() {}',
+                '}',
+            ].join('\n'),
+        },
+        {
+            language: 'scala',
+            filePath: 'src/Main.scala',
+            code: [
+                'class Worker {',
+                '  def run(): Unit = {}',
+                '}',
+            ].join('\n'),
+        },
+    ];
+
+    for (const fixture of fixtures) {
+        const chunks = await splitter.split(fixture.code, fixture.language, fixture.filePath);
+        assert.ok(chunks.length > 0, fixture.language);
+        assert.ok(chunks.every((chunk) => chunk.metadata.language === fixture.language), fixture.language);
+    }
+});

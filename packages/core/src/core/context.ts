@@ -55,6 +55,8 @@ import type {
     SymbolRegistry,
     SymbolRegistryManifestFile,
 } from '../symbols';
+import { getSymbolExtractorForLanguage } from '../languages/extractors';
+import type { ExtractedSymbol } from '../languages';
 import { buildRelationshipsForRegistry } from '../relationships';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1236,12 +1238,14 @@ export class Context {
                     throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
                 }
                 const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+                const extractedSymbols = this.extractSymbolsForFile(language, content, relativePath);
                 const fileSymbols = buildSymbolRecordsForFile({
                     relativePath,
                     language,
                     content,
                     fileHash,
                     extractorVersion: this.getSymbolExtractorVersion(),
+                    ...(extractedSymbols !== undefined ? { extractedSymbols } : {}),
                     chunks,
                 });
                 for (const chunk of chunks) {
@@ -1332,7 +1336,20 @@ export class Context {
     }
 
     private getSymbolExtractorVersion(): string {
-        return 'splitter-symbol-builder-v1';
+        return 'splitter-symbol-builder-v1+language-extractors-v1';
+    }
+
+    private extractSymbolsForFile(language: string, content: string, relativePath: string): readonly ExtractedSymbol[] | undefined {
+        const extractor = getSymbolExtractorForLanguage(language);
+        if (!extractor) {
+            return undefined;
+        }
+        try {
+            return extractor.extract({ content, relativePath });
+        } catch (error) {
+            console.warn(`[Context] ⚠️  Symbol extractor failed for ${relativePath}: ${error instanceof Error ? error.message : String(error)}`);
+            return [];
+        }
     }
 
     private getLanguageRouterVersion(): string {
@@ -1376,12 +1393,14 @@ export class Context {
 
             const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
             const chunks = await this.codeSplitter.split(content, language, filePath);
+            const extractedSymbols = this.extractSymbolsForFile(language, content, relativePath);
             const fileSymbols = buildSymbolRecordsForFile({
                 relativePath,
                 language,
                 content,
                 fileHash,
                 extractorVersion: this.getSymbolExtractorVersion(),
+                ...(extractedSymbols !== undefined ? { extractedSymbols } : {}),
                 chunks,
             });
 

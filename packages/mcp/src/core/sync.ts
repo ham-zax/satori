@@ -376,16 +376,19 @@ export class SyncManager {
         try {
             await fs.promises.access(codebasePath);
         } catch {
-            // Path doesn't exist anymore - Clean up snapshot
-                console.log(`[SYNC] 🗑️ Codebase '${codebasePath}' no longer exists. Removing from snapshot.`);
-                try {
-                    this.snapshotManager.removeIndexedCodebase(codebasePath);
-                    this.snapshotManager.saveCodebaseSnapshot();
-                    await this.unwatchCodebase(codebasePath);
-                } catch (e) {
-                    console.error(`[SYNC] Failed to clean snapshot for '${codebasePath}':`, e);
-                }
-                return { mode: 'skipped_missing_path' };
+            // Path doesn't exist anymore; clear vector/navigation state before
+            // dropping snapshot ownership so a recreated path cannot inherit it.
+            console.log(`[SYNC] 🗑️ Codebase '${codebasePath}' no longer exists. Clearing index state and removing from snapshot.`);
+            try {
+                await this.context.clearIndex(codebasePath);
+                this.snapshotManager.removeIndexedCodebase(codebasePath);
+                this.snapshotManager.saveCodebaseSnapshot();
+                await this.unwatchCodebase(codebasePath);
+            } catch (e) {
+                console.error(`[SYNC] Failed to clean index state for missing codebase '${codebasePath}':`, e);
+                throw e;
+            }
+            return { mode: 'skipped_missing_path' };
         }
 
         try {

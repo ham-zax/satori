@@ -105,6 +105,47 @@ test('watch-triggered sync is dropped for non-searchable statuses', async () => 
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
+test('ensureFreshness clears core index artifacts when an indexed path is deleted', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    let clearCalls = 0;
+    let reindexCalls = 0;
+    const clearedPaths: string[] = [];
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return ['node_modules/**'];
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async clearIndex(pathToClear: string) {
+            clearCalls += 1;
+            clearedPaths.push(pathToClear);
+        },
+        async reindexByChange() {
+            reindexCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+        },
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+    const decision = await manager.ensureFreshness(codebasePath, 0);
+
+    assert.equal(decision.mode, 'skipped_missing_path');
+    assert.equal(clearCalls, 1);
+    assert.deepEqual(clearedPaths, [codebasePath]);
+    assert.equal(reindexCalls, 0);
+    assert.equal(statusByPath.has(codebasePath), false);
+
+    await manager.stopWatcherMode();
+});
+
 test('ensureFreshness treats satori.toml as an index-policy control file', async () => {
     const codebasePath = createTempDir();
     fs.writeFileSync(path.join(codebasePath, 'satori.toml'), '[index]\nprofile = "minimal"\n', 'utf8');

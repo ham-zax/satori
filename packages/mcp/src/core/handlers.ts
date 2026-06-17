@@ -6337,19 +6337,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         try {
             // Force absolute path resolution - warn if relative path provided
             const absolutePath = requestedPath;
+            const pathExists = fs.existsSync(absolutePath);
 
-            // Validate path exists
-            if (!fs.existsSync(absolutePath)) {
-                return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
+            if (pathExists) {
+                // Check if it's a directory
+                const stat = fs.statSync(absolutePath);
+                if (!stat.isDirectory()) {
+                    return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
+                }
+
+                await this.recoverStaleIndexingStateIfNeeded(absolutePath);
             }
-
-            // Check if it's a directory
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isDirectory()) {
-                return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
-            }
-
-            await this.recoverStaleIndexingStateIfNeeded(absolutePath);
 
             // Check if this codebase is indexed or being indexed
             const isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
@@ -6358,6 +6356,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const isRequiresReindex = status === 'requires_reindex';
 
             if (!isIndexed && !isIndexing && !isRequiresReindex) {
+                if (!pathExists) {
+                    return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
+                }
                 return this.manageResponse(
                     "clear",
                     absolutePath,

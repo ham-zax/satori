@@ -287,6 +287,33 @@ test('handleSyncCodebase touches the watch list on success and handleClearIndex 
     });
 });
 
+test('handleClearIndex clears a tracked repo after its directory was deleted', async () => {
+    await withTempRepo(async (repoPath) => {
+        const snapshot = createMutableSnapshot(repoPath, 'indexed');
+        const watch = createWatchRecorder();
+        const clearedPaths: string[] = [];
+        const context = {
+            clearIndex: async (pathToClear: string) => {
+                clearedPaths.push(pathToClear);
+            },
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        fs.rmSync(repoPath, { recursive: true, force: true });
+
+        const clearResponse = await handlers.handleClearIndex({ path: repoPath });
+        const clearPayload = parsePayload(clearResponse);
+
+        assert.equal(clearPayload.status, 'ok');
+        assert.deepEqual(clearedPaths, [repoPath]);
+        assert.equal(snapshot.removedCompletely, 1);
+        assert.equal(snapshot.saveCalls, 1);
+        assert.deepEqual(watch.unwatched, [repoPath]);
+    });
+});
+
 test('handleSearchCode touches the watch list only for successful indexed-root search responses', async () => {
     await withTempRepo(async (repoPath) => {
         const indexedSnapshot = createMutableSnapshot(repoPath, 'indexed');

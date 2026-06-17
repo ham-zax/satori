@@ -1313,10 +1313,11 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
           </p>
         </article>
         <article class="card">
-          <h4>Static test references</h4>
+          <h4>Graph confidence states</h4>
           <p>
-            Find static references from test-like files to the symbol under
-            investigation without claiming false coverage.
+            Relationship-backed navigation keeps confidence honest: ambiguous
+            same-name targets are skipped, low-confidence cross-file calls stay
+            constrained, and unsupported graph paths fail closed.
           </p>
         </article>
         <article class="card">
@@ -1362,14 +1363,16 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
           <h4>Understand a file</h4>
           <p>
             <code>file_outline</code> maps symbols and resolves exact labels or
-            IDs without guessing on ambiguity.
+            <code>symbolInstanceId</code> values without guessing on
+            ambiguity.
           </p>
         </article>
         <article class="card">
           <h4>Follow callers</h4>
           <p>
-            <code>call_graph</code> traverses callers and callees when graph
-            support is ready for the symbol.
+            <code>call_graph</code> traverses relationship-backed callers and
+            callees when compatible navigation sidecars are ready for the
+            symbol.
           </p>
         </article>
         <article class="card">
@@ -1387,10 +1390,11 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
           </p>
         </article>
         <article class="card">
-          <h4>Which tests reference this?</h4>
+          <h4>Why did graph navigation degrade?</h4>
           <p>
-            Satori can surface static references from test-like files to the
-            symbol under investigation — useful hints, not fake coverage claims.
+            Sidecar compatibility is explicit. Missing or incompatible
+            relationship navigation returns runnable reindex or fallback
+            guidance instead of guessed graph context.
           </p>
         </article>
         <article class="card">
@@ -1519,8 +1523,11 @@ profile = "minimal"</code></pre>
         <article class="card">
           <h4>Incremental sync</h4>
           <p>
-            Stat-first hash-on-change updates changed files instead of
-            re-embedding the whole repo on every sync.
+            Stat-first hash-on-change updates changed files, reuses changed-file
+            symbol output, preserves unchanged registry state, and recomputes
+            relationships without re-splitting unchanged files. If changed-file
+            indexing stops early, navigation state is cleared instead of
+            publishing a mixed generation.
           </p>
         </article>
         <article class="card">
@@ -1573,8 +1580,10 @@ profile = "minimal"</code></pre>
           <h4>Relationship v0 sidecar</h4>
           <p>
             Completed indexes store conservative calls plus TS/JS relative
-            imports and exports. Ambiguous same-name targets are skipped rather
-            than guessed.
+            imports and exports. <code>call_graph</code> uses these records
+            directly, promotes low-confidence cross-file calls only when
+            import/export-supported evidence points to the target, and skips
+            ambiguous same-name targets.
           </p>
         </article>
         <article class="card">

@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+    SYMBOL_REGISTRY_SCHEMA_VERSION,
+    buildSymbolRegistry,
+    createSymbolInstanceId,
+    createSymbolKey,
+    writeRelationshipSidecar,
+    writeSymbolRegistrySidecar,
+} from '@zokizuan/satori-core';
+import type { SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
@@ -29,6 +38,96 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     return fn(repoPath).finally(() => {
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
+}
+
+async function withTempStateRoot<T>(fn: (stateRoot: string) => Promise<T>): Promise<T> {
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-watchers-state-'));
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    try {
+        return await fn(stateRoot);
+    } finally {
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+}
+
+function createFunctionSymbol(input: {
+    file: string;
+    name: string;
+    startLine: number;
+    endLine: number;
+    fileHash: string;
+}): SymbolRecord {
+    const symbolKey = createSymbolKey({
+        relativePath: input.file,
+        language: 'typescript',
+        kind: 'function',
+        qualifiedName: input.name,
+        parentQualifiedNamePath: [],
+    });
+    const span = { startLine: input.startLine, endLine: input.endLine };
+    return {
+        symbolKey,
+        symbolInstanceId: createSymbolInstanceId({
+            symbolKey,
+            fileHash: input.fileHash,
+            span,
+            extractorVersion: 'extractor-v1',
+        }),
+        language: 'typescript',
+        kind: 'function',
+        name: input.name,
+        qualifiedName: input.name,
+        label: `function ${input.name}()`,
+        file: input.file,
+        span,
+        parentQualifiedNamePath: [],
+        fileHash: input.fileHash,
+        extractorVersion: 'extractor-v1',
+    };
+}
+
+async function writeNavigationSidecars(input: {
+    stateRoot: string;
+    repoPath: string;
+    symbols: SymbolRecord[];
+}) {
+    const manifest: SymbolRegistryManifest = {
+        schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+        normalizedRootPath: input.repoPath,
+        rootFingerprint: 'watchers-root-fingerprint',
+        indexPolicyHash: 'watchers-policy',
+        languageRouterVersion: 'router-v1',
+        extractorVersion: 'extractor-v1',
+        relationshipVersion: 'relationship-v1',
+        builtAt: '2026-06-17T00:00:00.000Z',
+        files: input.symbols.map((symbol) => ({
+            path: symbol.file,
+            hash: symbol.fileHash,
+            language: symbol.language,
+            symbolCount: 1,
+        })),
+    };
+    const registry = buildSymbolRegistry({ manifest, symbols: input.symbols });
+    const registryResult = await writeSymbolRegistrySidecar({
+        stateRoot: input.stateRoot,
+        registry,
+    });
+    await writeRelationshipSidecar({
+        stateRoot: input.stateRoot,
+        normalizedRootPath: input.repoPath,
+        symbolRegistryManifestHash: registryResult.manifestHash,
+        relationshipVersion: 'relationship-v1',
+        builtAt: '2026-06-17T00:00:00.000Z',
+        files: registry.manifest.files,
+        records: [],
+    });
+    return registry;
 }
 
 function createMutableSnapshot(repoPath: string, initialStatus: 'not_found' | 'indexed' | 'indexing' = 'indexed') {
@@ -235,41 +334,33 @@ test('handleSearchCode touches the watch list only for successful indexed-root s
 });
 
 test('handleFileOutline and handleCallGraph touch the watch list for successful navigation responses', async () => {
-    await withTempRepo(async (repoPath) => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const filePath = path.join(repoPath, 'src', 'auth.ts');
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, 'export function auth() { return true; }\n', 'utf8');
+        const authSymbol = createFunctionSymbol({
+            file: 'src/auth.ts',
+            name: 'auth',
+            startLine: 1,
+            endLine: 1,
+            fileHash: 'watchers-auth-hash',
+        });
+        await writeNavigationSidecars({
+            stateRoot,
+            repoPath,
+            symbols: [authSymbol],
+        });
 
         const snapshot = createMutableSnapshot(repoPath, 'indexed');
         const watch = createWatchRecorder();
         const context = {} as any;
-        const callGraphManager = {
-            loadSidecar: () => ({
-                nodes: [{
-                    symbolId: 'sym_auth',
-                    symbolLabel: 'function auth()',
-                    file: 'src/auth.ts',
-                    span: { startLine: 1, endLine: 1 }
-                }],
-                edges: [],
-                notes: []
-            }),
-            queryGraph: () => ({
-                supported: true,
-                nodes: [],
-                edges: [],
-                notes: []
-            })
-        } as any;
 
         const handlers = new ToolHandlers(
             context,
             snapshot,
             watch.syncManager,
             RUNTIME_FINGERPRINT,
-            CAPABILITIES,
-            undefined,
-            callGraphManager
+            CAPABILITIES
         );
         (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
@@ -280,15 +371,11 @@ test('handleFileOutline and handleCallGraph touch the watch list for successful 
         });
         const outlinePayload = parsePayload(outlineResponse);
         assert.equal(outlinePayload.status, 'ok');
+        const symbolRef = outlinePayload.outline.symbols[0].callGraphHint.symbolRef;
 
         const graphResponse = await handlers.handleCallGraph({
             path: repoPath,
-            symbolRef: {
-                file: 'src/auth.ts',
-                symbolId: 'sym_auth',
-                symbolLabel: 'function auth()',
-                span: { startLine: 1, endLine: 1 }
-            },
+            symbolRef,
             direction: 'both',
             depth: 1,
             limit: 5
@@ -297,5 +384,5 @@ test('handleFileOutline and handleCallGraph touch the watch list for successful 
         assert.equal(graphPayload.status, 'ok');
 
         assert.deepEqual(watch.touched, [repoPath, repoPath]);
-    });
+    }));
 });

@@ -738,7 +738,7 @@ Implemented:
 - Legacy chunks without owner metadata are repaired at query time from compatible registry spans before falling back to legacy `symbolId` or proximity grouping.
 - Search groups expose additive `symbolKey`, `symbolInstanceId`, `symbolKind`, `confidence`, and debug `symbolAggregation`.
 - Symbol scoring uses best representative score plus a capped logarithmic support boost.
-- Reranker remains evidence-only; call graph hints still validate against legacy graph `symbolId`.
+- Reranker remains evidence-only; call graph hints now validate against registry-backed `symbolInstanceId` navigation state.
 - Same-label declaration groups with distinct owner identities remain separate.
 
 Remaining:
@@ -783,7 +783,7 @@ Tasks:
 - Treat the current call graph as one filtered relationship view.
 - Preserve public `call_graph` tool contract.
 - Store calls/imports/test refs as typed relationship records without adding new MCP tools.
-- Make MCP load and filter relationship sidecars; do not compute relationships at query time except compatibility fallback.
+- Make MCP load and filter relationship sidecars; do not compute relationships at query time.
 - Ensure `callGraphHint` is built from relationship capability, not language name alone.
 
 Current partial implementation:
@@ -793,8 +793,8 @@ Current partial implementation:
 - Core writes deterministic per-file relationship shards with conservative function/method-owned `CALLS v0` records and TS/JS file-owner `IMPORTS`/`EXPORTS v0` records during completed full indexes.
 - Symbol and relationship sidecar subtree rewrites use rollback-aware temp-directory swaps. Symbol registry writes keep the previous symbol subtree until the root manifest commit succeeds; if subtree or manifest commit fails, the previous readable registry or relationship sidecar remains intact. Empty relationship placeholders are created only after the symbol registry commit succeeds.
 - Relationship `CALLS v0` extraction intentionally excludes class container spans, skips ambiguous same-name targets, and downgrades unique cross-file name-only matches to `low` confidence until import/receiver-aware resolution exists. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
-- Registry-backed `search_codebase` and `file_outline` downgrade graph hints to `missing_sidecar` when the relationship sidecar is missing or incompatible, with deterministic warnings.
-- Supported graph hints still bridge to the existing legacy call-graph sidecar after relationship compatibility passes; `call_graph` traversal is not yet served directly from relationship records.
+- Registry-backed `search_codebase` and `file_outline` now keep graph hints supported only through a compatible relationship sidecar, and supported `symbolRef.symbolId` carries the registry `symbolInstanceId`. Missing or incompatible relationship state emits deterministic warnings or reindex guidance instead of reviving legacy graph handles.
+- `call_graph` now serves traversal directly from relationship records when compatible navigation sidecars exist. Missing or incompatible relationship state returns deterministic `not_ready`, `missing_sidecar`, `not_found`, or `requires_reindex` behavior rather than falling back to legacy v3 runtime traversal.
 
 Acceptance:
 
@@ -898,9 +898,9 @@ Acceptance:
 
 1. What is the first non-TS/JS/Python language target: Go for backend coverage or Rust/C++ for systems coverage?
 2. What exact root fingerprint strategy should handle moved repos, symlinks, and CI path differences?
-3. Should relationship extraction v1 add test-reference edges next, or first migrate MCP `call_graph` traversal from legacy graph sidecars to relationship records?
+3. Should relationship extraction v1 add test-reference edges next, or first strengthen receiver-aware and alias-aware relationship resolution now that MCP `call_graph` already traverses relationship records?
 4. What confidence thresholds should downgrade a symbol group from high to medium or low?
-5. How long should legacy `metadata.symbolId` compatibility remain before requiring reindex?
+5. Which remaining legacy `metadata.symbolId` cleanup can be deleted immediately now that runtime navigation treats `symbolInstanceId` as the exact steady-state identity?
 
 ## Recommended First Patch
 

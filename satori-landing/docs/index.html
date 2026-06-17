@@ -761,15 +761,18 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <strong>2 Outline</strong>
             <p>
               Use <code>file_outline</code> to lock symbol spans before reading
-              or editing. Exact mode reports ambiguity instead of guessing.
+              or editing. Exact mode resolves <code>symbolInstanceId</code>
+              deterministically and reports ambiguity instead of guessing.
             </p>
           </div>
           <div class="step">
             <strong>3 Graph</strong>
             <p>
               Use <code>call_graph</code> with the returned
-              <code>callGraphHint.symbolRef</code>. Treat the output as graph
-              context, not a complete impact guarantee.
+              <code>callGraphHint.symbolRef</code>. On symbol-owned flows,
+              <code>symbolRef.symbolId</code> carries the exact
+              <code>symbolInstanceId</code>. Treat the output as graph context,
+              not a complete impact guarantee.
             </p>
           </div>
           <div class="step">
@@ -804,7 +807,9 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               Grouped search returns owner symbols, not loose chunks. Matching
               chunks remain supporting evidence for the selected symbol, and
               synthesized file symbols provide a safe fallback for files without
-              extracted source symbols.
+              extracted source symbols. Exact navigation uses
+              <code>symbolInstanceId</code>; <code>symbolKey</code> is
+              stable-ish candidate lookup only.
             </p>
           </div>
           <div class="panel">
@@ -827,12 +832,12 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             </p>
           </div>
           <div class="panel">
-            <h3>Graph Traversal</h3>
+            <h3>Runtime Navigation</h3>
             <p>
-              <code>call_graph</code> still traverses the prebuilt call-graph
-              sidecar after readiness checks. Relationship records are
-              readiness and evidence data until traversal migrates to that
-              engine.
+              <code>call_graph</code> now traverses compatible relationship
+              sidecars directly. Canonical JSON sidecars remain the serving
+              source by default, while <code>navigation.sqlite</code> is an
+              additive cache for parity checks or explicit experimental reads.
             </p>
           </div>
         </div>
@@ -905,6 +910,9 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               <code>manage_index action="sync"</code> is the immediate
               convergence lever after normal file edits or ignore-rule changes.
               Search also runs freshness checks before returning results.
+              Successful sync reuses changed-file symbol output, preserves
+              unchanged registry state, and recomputes relationships globally
+              without re-splitting unchanged files.
             </p>
           </div>
           <div class="panel">
@@ -914,6 +922,11 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               Use it when a tool returns <code>requires_reindex</code> or a
               reindex hint. Do not substitute sync for fingerprint
               incompatibility.
+            </p>
+            <p>
+              If changed-file indexing stops early, navigation state is cleared
+              instead of publishing a mixed generation. That fail-closed path is
+              also a reindex signal.
             </p>
           </div>
           <div class="panel">

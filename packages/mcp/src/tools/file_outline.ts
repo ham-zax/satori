@@ -8,7 +8,7 @@ const fileOutlineInputSchema = z.object({
     end_line: z.number().int().positive().optional().describe('Optional end line filter (1-based, inclusive).'),
     limitSymbols: z.number().int().positive().default(500).optional().describe('Maximum number of returned symbols after line filtering.'),
     resolveMode: z.enum(['outline', 'exact']).default('outline').optional().describe('Outline mode returns all symbols (windowed/limited). Exact mode resolves deterministic symbol matches in this file.'),
-    symbolIdExact: z.string().min(1).optional().describe('Used with resolveMode=\"exact\": exact symbolId match in the target file.'),
+    symbolIdExact: z.string().min(1).optional().describe('Used with resolveMode=\"exact\": exact symbol identifier match in the target file. On symbol-owned flows, pass the symbol\'s symbolInstanceId.'),
     symbolLabelExact: z.string().min(1).optional().describe('Used with resolveMode=\"exact\": exact symbol label match in the target file.'),
 }).superRefine((input, ctx) => {
     if (input.resolveMode === 'exact') {

@@ -6,14 +6,15 @@ import ignore from "ignore";
 import {
     Context,
     COLLECTION_LIMIT_MESSAGE,
+    createRuntimeNavigationStore,
+    type NavigationStore,
     VoyageAIReranker,
     RemoteCollectionDeletePendingError,
     deleteCollectionWithVerification,
+    getGraphNeighbors,
     getSupportedExtensionsForCapability,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForLanguage,
-    readRelationshipSidecar,
-    readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
 } from "@zokizuan/satori-core";
 import type { CodeChunk, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
@@ -80,7 +81,15 @@ import {
     ManageReindexPreflightOutcome,
 } from "./manage-types.js";
 import { WARNING_CODES, WarningCode } from "./warnings.js";
-import { CallGraphDirection, CallGraphNode, CallGraphSidecarManager, CallGraphSymbolRef } from "./call-graph.js";
+import {
+    CallGraphDirection,
+    CallGraphEdge,
+    CallGraphNode,
+    CallGraphNote,
+    CallGraphSidecarManager,
+    CallGraphSymbolRef,
+    CallGraphTestReference,
+} from "./call-graph.js";
 import { decideInterruptedIndexingRecovery } from "./indexing-recovery.js";
 import type {
     CompletionProofReason,
@@ -160,7 +169,7 @@ type SearchCandidate = {
     exactLexicalMatch: boolean;
 };
 
-type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'legacy_symbol_id' | 'fallback';
+type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'fallback';
 
 type SearchOwnerResolution = {
     ownerSymbolKey?: string;
@@ -369,6 +378,7 @@ export class ToolHandlers {
     private readonly now: () => number;
     private readonly callGraphManager: CallGraphSidecarManager;
     private readonly reranker: VoyageAIReranker | null;
+    private readonly navigationStore: NavigationStore;
     private readonly changedFilesCache = new Map<string, {
         expiresAtMs: number;
         available: boolean;
@@ -386,7 +396,8 @@ export class ToolHandlers {
         now: () => number = () => Date.now(),
         callGraphManager?: CallGraphSidecarManager,
         reranker?: VoyageAIReranker | null,
-        gitignoreForceReloadEveryN: number = SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N
+        gitignoreForceReloadEveryN: number = SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N,
+        navigationStore: NavigationStore = createRuntimeNavigationStore()
     ) {
         this.context = context;
         this.snapshotManager = snapshotManager;
@@ -398,6 +409,7 @@ export class ToolHandlers {
         this.callGraphManager = callGraphManager || new CallGraphSidecarManager(runtimeFingerprint, { now });
         this.reranker = reranker || null;
         this.gitignoreForceReloadEveryN = Math.max(1, Math.trunc(gitignoreForceReloadEveryN));
+        this.navigationStore = navigationStore;
         console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`);
     }
 
@@ -2686,100 +2698,72 @@ export class ToolHandlers {
         return false;
     }
 
-    private loadCallGraphSidecarForSearch(codebaseRoot: string): { builtAt?: string; nodes: CallGraphNode[] } | null {
-        const loadSidecar = (this.callGraphManager as any)?.loadSidecar;
-        if (typeof loadSidecar !== 'function') {
-            return null;
-        }
-
-        const sidecar = loadSidecar.call(this.callGraphManager, codebaseRoot);
-        if (!sidecar || !Array.isArray(sidecar.nodes)) {
-            return null;
-        }
-
-        return {
-            builtAt: typeof sidecar.builtAt === 'string' ? sidecar.builtAt : undefined,
-            nodes: sidecar.nodes,
-        };
-    }
-
     private async loadRegistryValidatedCallGraphSidecar(input: {
         codebaseRoot: string;
-        registryManifestHash: string;
-        sidecarReady: boolean;
-    }): Promise<{ sidecar: { builtAt?: string; nodes: CallGraphNode[] } | null; warning?: string }> {
-        if (!input.sidecarReady) {
-            return { sidecar: null };
+        registryManifestHash?: string;
+    }): Promise<{
+        relationshipReady: boolean;
+        relationshipBuiltAt?: string;
+        warning?: string;
+    }> {
+        if (!input.registryManifestHash) {
+            return {
+                relationshipReady: false,
+            };
         }
 
-        const relationshipSidecar = await readRelationshipSidecar({
+        const compatibility = await this.navigationStore.getCompatibilityState({
             normalizedRootPath: input.codebaseRoot,
             expectedSymbolRegistryManifestHash: input.registryManifestHash,
         });
-        if (relationshipSidecar.status !== 'ok') {
+        if (compatibility.relationships.status !== 'ok') {
             return {
-                sidecar: null,
-                warning: `RELATIONSHIP_SIDECAR_UNAVAILABLE:${relationshipSidecar.status}`,
+                relationshipReady: false,
+                warning: `RELATIONSHIP_SIDECAR_UNAVAILABLE:${compatibility.relationships.status}`,
             };
         }
 
         return {
-            sidecar: this.loadCallGraphSidecarForSearch(input.codebaseRoot),
+            relationshipReady: true,
+            relationshipBuiltAt: compatibility.relationships.manifest.builtAt,
         };
     }
 
-    private buildCallGraphHint(
-        file: string,
-        language: string,
-        sidecar: { builtAt?: string; nodes: CallGraphNode[] } | null,
-        symbolId?: string,
-        symbolLabel?: string
-    ): CallGraphHint {
-        if (!symbolId) {
-            return { supported: false, reason: 'missing_symbol' };
-        }
-        if (!this.isCallGraphLanguageSupported(language, file)) {
+    private buildRelationshipCallGraphHint(input: {
+        file: string;
+        language: string;
+        symbolId: string;
+        symbolLabel?: string;
+        span: { startLine: number; endLine: number };
+        sidecarBuiltAt?: string;
+    }): CallGraphHint {
+        if (!this.isCallGraphLanguageSupported(input.language, input.file)) {
             return { supported: false, reason: 'unsupported_language' };
         }
-        if (!sidecar) {
-            return { supported: false, reason: 'missing_sidecar' };
-        }
 
-        const normalizedFile = this.sanitizeIndexedRelativeFilePath(file);
+        const normalizedFile = this.sanitizeIndexedRelativeFilePath(input.file);
         if (!normalizedFile) {
             return { supported: false, reason: 'stale_symbol_ref' };
         }
 
-        const sidecarNode = sidecar.nodes.find((node) => node.symbolId === symbolId);
-        const normalizedSidecarFile = sidecarNode ? this.sanitizeIndexedRelativeFilePath(sidecarNode.file) : undefined;
-        const sidecarSpan = sidecarNode?.span;
-        if (
-            !sidecarNode ||
-            normalizedSidecarFile !== normalizedFile ||
-            !sidecarSpan ||
-            !Number.isFinite(sidecarSpan.startLine) ||
-            !Number.isFinite(sidecarSpan.endLine)
-        ) {
-            return { supported: false, reason: 'stale_symbol_ref' };
-        }
-
-        const safeStartLine = Math.max(1, Number(sidecarSpan.startLine));
-        const safeEndLine = Math.max(safeStartLine, Number(sidecarSpan.endLine));
         const validatedAt = new Date(this.now()).toISOString();
+        const safeStartLine = Math.max(1, Number(input.span.startLine));
+        const safeEndLine = Math.max(safeStartLine, Number(input.span.endLine));
+
         return {
             supported: true,
             validated: true,
             validatedAt,
-            sidecarBuiltAt: sidecar.builtAt || validatedAt,
+            sidecarBuiltAt: input.sidecarBuiltAt || validatedAt,
             symbolRef: {
-                file: normalizedSidecarFile,
-                symbolId,
-                symbolLabel: sidecarNode.symbolLabel || symbolLabel || undefined,
+                file: normalizedFile,
+                symbolId: input.symbolId,
+                ...(input.symbolLabel ? { symbolLabel: input.symbolLabel } : {}),
                 span: {
                     startLine: safeStartLine,
-                    endLine: safeEndLine
-                }
-            }
+                    endLine: safeEndLine,
+                },
+            },
         };
     }
 
@@ -2992,7 +2976,7 @@ export class ToolHandlers {
             }
         };
 
-        const nextActions: SearchGroupResult['nextActions'] = {
+        const nextActions: NonNullable<SearchGroupResult['nextActions']> = {
             openSymbol: {
                 tool: 'read_file',
                 args: {
@@ -3000,8 +2984,6 @@ export class ToolHandlers {
                     open_symbol: {
                         symbolId: symbolRef.symbolId,
                         ...(symbolRef.symbolLabel ? { symbolLabel: symbolRef.symbolLabel } : {}),
-                        start_line: safeStartLine,
-                        end_line: safeEndLine,
                     }
                 }
             },
@@ -3199,7 +3181,7 @@ export class ToolHandlers {
             file: input.file,
             outline: null,
             hasMore: false,
-            message: `${detailLine}Call graph sidecar is missing or incompatible. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
+            message: `${detailLine}Relationship-backed navigation sidecars are missing or incompatible. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
             hints: {
                 reindex: this.buildReindexHint(codebasePath)
             }
@@ -3225,58 +3207,26 @@ export class ToolHandlers {
         });
     }
 
-    private findCallGraphNodeForRegistrySymbol(
-        symbol: SymbolRecord,
-        sidecar: { nodes: CallGraphNode[] } | null
-    ): CallGraphNode | undefined {
-        if (!sidecar) {
-            return undefined;
-        }
-
-        const normalizedFile = this.normalizeRelativeFilePath(symbol.file);
-        return sidecar.nodes
-            .filter((node) => (
-                this.normalizeRelativeFilePath(node.file) === normalizedFile
-                && node.symbolLabel === symbol.label
-                && node.span?.startLine === symbol.span.startLine
-                && node.span?.endLine === symbol.span.endLine
-            ))
-            .sort((a, b) => this.compareNullableStringsAsc(a.symbolId, b.symbolId))[0];
+    private sortRegistrySymbols(symbols: SymbolRecord[]): SymbolRecord[] {
+        return [...symbols].sort((a, b) => {
+            const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+            if (startCmp !== 0) return startCmp;
+            const endCmp = this.compareNullableNumbersAsc(a.span?.endLine, b.span?.endLine);
+            if (endCmp !== 0) return endCmp;
+            const labelCmp = this.compareNullableStringsAsc(a.label, b.label);
+            if (labelCmp !== 0) return labelCmp;
+            return this.compareNullableStringsAsc(a.symbolInstanceId, b.symbolInstanceId);
+        });
     }
 
-    private buildRegistrySymbolCallGraphHint(
-        symbol: SymbolRecord,
-        file: string,
-        sidecar: { builtAt?: string; nodes: CallGraphNode[] } | null
-    ): CallGraphHint {
-        if (!this.isCallGraphLanguageSupported(symbol.language, file)) {
-            return { supported: false, reason: 'unsupported_language' };
-        }
-        if (!sidecar) {
-            return { supported: false, reason: 'missing_sidecar' };
-        }
-
-        const graphNode = this.findCallGraphNodeForRegistrySymbol(symbol, sidecar);
-        if (!graphNode) {
-            return { supported: false, reason: 'stale_symbol_ref' };
-        }
-
-        return this.buildCallGraphHint(file, symbol.language, sidecar, graphNode.symbolId, graphNode.symbolLabel || symbol.label);
-    }
-
-    private buildRegistryFileOutlinePayload(input: {
-        codebaseRoot: string;
-        file: string;
+    private buildVisibleRegistrySymbolState(input: {
         symbols: SymbolRecord[];
-        limitSymbols: number;
-        resolveMode: 'outline' | 'exact';
-        symbolIdExact?: string;
-        symbolLabelExact?: string;
         windowStart?: number;
         windowEnd?: number;
-        callGraphSidecar?: { builtAt?: string; nodes: CallGraphNode[] } | null;
-        warnings?: string[];
-    }): FileOutlineResponseEnvelope {
+    }): {
+        hasExtractedSymbols: boolean;
+        visibleSymbols: SymbolRecord[];
+    } {
         const hasExtractedSymbols = input.symbols.some((symbol) => symbol.kind !== 'file');
         const visibleSymbols = input.symbols.filter((symbol) => {
             if (hasExtractedSymbols && symbol.kind === 'file') {
@@ -3289,19 +3239,87 @@ export class ToolHandlers {
             const endsAfterWindowStart = input.windowStart === undefined || symbol.span.endLine >= input.windowStart;
             return startsBeforeWindowEnd && endsAfterWindowStart;
         });
-        const visibleSymbolsByInstanceId = new Map(visibleSymbols.map((symbol) => [symbol.symbolInstanceId, symbol]));
-        const legacyCallGraphSymbolIdsByInstanceId = new Map<string, Set<string>>();
-        if (input.callGraphSidecar) {
-            for (const symbol of visibleSymbols) {
-                const graphNode = this.findCallGraphNodeForRegistrySymbol(symbol, input.callGraphSidecar);
-                if (!graphNode?.symbolId) {
-                    continue;
+
+        return {
+            hasExtractedSymbols,
+            visibleSymbols,
+        };
+    }
+
+    private findExactRegistrySymbols(input: {
+        symbols: SymbolRecord[];
+        symbolIdExact?: string;
+        symbolLabelExact?: string;
+        windowStart?: number;
+        windowEnd?: number;
+    }): SymbolRecord[] {
+        const visibleState = this.buildVisibleRegistrySymbolState(input);
+        const exactMatches = visibleState.visibleSymbols.filter((symbol) => {
+            if (input.symbolIdExact) {
+                const matchesExactSymbolId = symbol.symbolInstanceId === input.symbolIdExact;
+                if (!matchesExactSymbolId) {
+                    return false;
                 }
-                const legacyIds = legacyCallGraphSymbolIdsByInstanceId.get(symbol.symbolInstanceId) || new Set<string>();
-                legacyIds.add(graphNode.symbolId);
-                legacyCallGraphSymbolIdsByInstanceId.set(symbol.symbolInstanceId, legacyIds);
             }
+            if (input.symbolLabelExact && symbol.label !== input.symbolLabelExact) {
+                return false;
+            }
+            return true;
+        });
+        return this.sortRegistrySymbols(exactMatches);
+    }
+
+    private buildRegistrySymbolCallGraphHint(
+        symbol: SymbolRecord,
+        file: string,
+        navigationState: {
+            relationshipReady: boolean;
+            relationshipBuiltAt?: string;
         }
+    ): CallGraphHint {
+        if (!this.isCallGraphLanguageSupported(symbol.language, file)) {
+            return { supported: false, reason: 'unsupported_language' };
+        }
+
+        if (navigationState.relationshipReady) {
+            return this.buildRelationshipCallGraphHint({
+                file,
+                language: symbol.language,
+                symbolId: symbol.symbolInstanceId,
+                symbolLabel: symbol.label,
+                span: {
+                    startLine: symbol.span.startLine,
+                    endLine: symbol.span.endLine,
+                },
+                sidecarBuiltAt: navigationState.relationshipBuiltAt,
+            });
+        }
+
+        return { supported: false, reason: 'missing_sidecar' };
+    }
+
+    private buildRegistryFileOutlinePayload(input: {
+        codebaseRoot: string;
+        file: string;
+        symbols: SymbolRecord[];
+        limitSymbols: number;
+        resolveMode: 'outline' | 'exact';
+        symbolIdExact?: string;
+        symbolLabelExact?: string;
+        windowStart?: number;
+        windowEnd?: number;
+        callGraphNavigationState: {
+            relationshipReady: boolean;
+            relationshipBuiltAt?: string;
+        };
+        warnings?: string[];
+    }): FileOutlineResponseEnvelope {
+        const visibleState = this.buildVisibleRegistrySymbolState({
+            symbols: input.symbols,
+            windowStart: input.windowStart,
+            windowEnd: input.windowEnd,
+        });
+        const visibleSymbols = visibleState.visibleSymbols;
 
         const mappedSymbols = this.sortFileOutlineSymbols(visibleSymbols.map((symbol) => ({
             symbolId: symbol.symbolInstanceId,
@@ -3310,7 +3328,7 @@ export class ToolHandlers {
                 startLine: symbol.span.startLine,
                 endLine: symbol.span.endLine,
             },
-            callGraphHint: this.buildRegistrySymbolCallGraphHint(symbol, input.file, input.callGraphSidecar || null),
+            callGraphHint: this.buildRegistrySymbolCallGraphHint(symbol, input.file, input.callGraphNavigationState),
         } as FileOutlineSymbolResult)));
 
         const warningSet = new Set(input.warnings || []);
@@ -3320,31 +3338,23 @@ export class ToolHandlers {
                 warningSet.add(`OUTLINE_CALL_GRAPH_UNAVAILABLE:${firstUnsupported.reason}`);
             }
         }
-        if (!hasExtractedSymbols && mappedSymbols.length > 0) {
+        if (!visibleState.hasExtractedSymbols && mappedSymbols.length > 0) {
             warningSet.add('OUTLINE_SYNTHESIZED_FILE_SYMBOL');
         }
 
         const warnings = [...warningSet].sort((a, b) => a.localeCompare(b));
 
         if (input.resolveMode === 'exact') {
-            const exactMatches = this.sortFileOutlineSymbols(mappedSymbols.filter((symbol) => {
-                if (input.symbolIdExact) {
-                    const original = visibleSymbolsByInstanceId.get(symbol.symbolId);
-                    const legacyIds = original
-                        ? legacyCallGraphSymbolIdsByInstanceId.get(original.symbolInstanceId)
-                        : undefined;
-                    const matchesExactSymbolId = symbol.symbolId === input.symbolIdExact;
-                    const matchesStableSymbolKey = original?.symbolKey === input.symbolIdExact;
-                    const matchesLegacyCallGraphSymbolId = legacyIds?.has(input.symbolIdExact) === true;
-                    if (!matchesExactSymbolId && !matchesStableSymbolKey && !matchesLegacyCallGraphSymbolId) {
-                        return false;
-                    }
-                }
-                if (input.symbolLabelExact && symbol.symbolLabel !== input.symbolLabelExact) {
-                    return false;
-                }
-                return true;
-            }));
+            const exactMatchIds = new Set(this.findExactRegistrySymbols({
+                symbols: input.symbols,
+                symbolIdExact: input.symbolIdExact,
+                symbolLabelExact: input.symbolLabelExact,
+                windowStart: input.windowStart,
+                windowEnd: input.windowEnd,
+            }).map((symbol) => symbol.symbolInstanceId));
+            const exactMatches = this.sortFileOutlineSymbols(
+                mappedSymbols.filter((symbol) => exactMatchIds.has(symbol.symbolId))
+            );
 
             if (exactMatches.length === 0) {
                 return {
@@ -3387,6 +3397,49 @@ export class ToolHandlers {
         };
     }
 
+    private buildSearchGroupCallGraphHint(input: {
+        file: string;
+        language: string;
+        span: SearchSpan;
+        symbolLabel?: string;
+        ownerSymbolInstanceId?: string;
+        registrySymbol?: SymbolRecord;
+        registryLoaded?: boolean;
+        navigationState: {
+            relationshipReady: boolean;
+            relationshipBuiltAt?: string;
+        };
+    }): CallGraphHint {
+        if (input.registrySymbol) {
+            return this.buildRegistrySymbolCallGraphHint(
+                input.registrySymbol,
+                input.registrySymbol.file,
+                input.navigationState
+            );
+        }
+
+        if (!input.ownerSymbolInstanceId) {
+            return { supported: false, reason: 'missing_symbol' };
+        }
+
+        if (input.registryLoaded) {
+            return { supported: false, reason: 'stale_symbol_ref' };
+        }
+
+        if (input.navigationState.relationshipReady) {
+            return this.buildRelationshipCallGraphHint({
+                file: input.file,
+                language: input.language,
+                symbolId: input.ownerSymbolInstanceId,
+                symbolLabel: input.symbolLabel,
+                span: input.span,
+                sidecarBuiltAt: input.navigationState.relationshipBuiltAt,
+            });
+        }
+
+        return { supported: false, reason: 'missing_sidecar' };
+    }
+
     private buildSearchPassWarning(passId: string): string {
         return `SEARCH_PASS_FAILED:${passId} - ${passId} semantic search pass failed; results may be degraded.`;
     }
@@ -3417,20 +3470,145 @@ export class ToolHandlers {
         return forced === 'both' || forced === passId;
     }
 
-    private mapCallGraphStatus(graph: { supported: boolean; reason?: string }): 'ok' | 'not_found' | 'unsupported' | 'not_ready' {
-        if (graph.supported) {
-            return 'ok';
+    private sortRelationshipBackedCallGraphNodes(nodes: CallGraphNode[]): CallGraphNode[] {
+        return [...nodes].sort((a, b) => {
+            const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
+            if (fileCmp !== 0) return fileCmp;
+            const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+            if (startCmp !== 0) return startCmp;
+            const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+            if (labelCmp !== 0) return labelCmp;
+            return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+        });
+    }
+
+    private sortRelationshipBackedCallGraphEdges(edges: CallGraphEdge[]): CallGraphEdge[] {
+        return [...edges].sort((a, b) => {
+            const srcCmp = this.compareNullableStringsAsc(a.srcSymbolId, b.srcSymbolId);
+            if (srcCmp !== 0) return srcCmp;
+            const dstCmp = this.compareNullableStringsAsc(a.dstSymbolId, b.dstSymbolId);
+            if (dstCmp !== 0) return dstCmp;
+            const kindCmp = this.compareNullableStringsAsc(a.kind, b.kind);
+            if (kindCmp !== 0) return kindCmp;
+            return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
+        });
+    }
+
+    private mapRelationshipConfidenceToCallGraphConfidence(confidence: 'high' | 'medium' | 'low'): number {
+        switch (confidence) {
+            case 'high':
+                return 0.95;
+            case 'medium':
+                return 0.65;
+            case 'low':
+            default:
+                return 0.35;
+        }
+    }
+
+    private createCallGraphNodeFromRegistrySymbol(symbol: SymbolRecord): CallGraphNode {
+        return {
+            symbolId: symbol.symbolInstanceId,
+            symbolLabel: symbol.label,
+            file: symbol.file,
+            language: symbol.language,
+            span: {
+                startLine: symbol.span.startLine,
+                endLine: symbol.span.endLine,
+            },
+        };
+    }
+
+    private async buildRelationshipBackedCallGraph(input: {
+        codebaseRoot: string;
+        registry: SymbolRegistry;
+        registryManifestHash: string;
+        resolvedSymbol: SymbolRecord;
+        direction: CallGraphDirection;
+        depth: number;
+        limit: number;
+    }): Promise<{
+        supported: true;
+        direction: CallGraphDirection;
+        depth: number;
+        limit: number;
+        nodes: CallGraphNode[];
+        edges: CallGraphEdge[];
+        notes: CallGraphNote[];
+        warnings?: string[];
+        testReferences?: CallGraphTestReference[];
+        notesTruncated: boolean;
+        totalNoteCount: number;
+        returnedNoteCount: number;
+        sidecar: {
+            builtAt: string;
+            nodeCount: number;
+            edgeCount: number;
+        };
+    } | null> {
+        const neighbors = await getGraphNeighbors({
+            normalizedRootPath: input.codebaseRoot,
+            expectedSymbolRegistryManifestHash: input.registryManifestHash,
+            navigationStore: this.navigationStore,
+            symbolInstanceId: input.resolvedSymbol.symbolInstanceId,
+            depth: input.depth,
+            direction: input.direction,
+            allowedTypes: ['CALLS'],
+            limit: input.limit,
+        });
+        if (neighbors.status !== 'ok') {
+            return null;
         }
 
-        if (graph.reason === 'missing_symbol') {
-            return 'not_found';
-        }
+        const nodes = this.sortRelationshipBackedCallGraphNodes(
+            neighbors.visitedSymbolInstanceIds
+                .map((symbolInstanceId) => input.registry.symbolsByInstanceId.get(symbolInstanceId))
+                .filter((symbol): symbol is SymbolRecord => Boolean(symbol))
+                .map((symbol) => this.createCallGraphNodeFromRegistrySymbol(symbol))
+        );
+        const edges = this.sortRelationshipBackedCallGraphEdges(
+            neighbors.records.flatMap((record) => {
+                if (!record.sourceInstanceId || !record.targetInstanceId) {
+                    return [];
+                }
+                const source = input.registry.symbolsByInstanceId.get(record.sourceInstanceId);
+                const target = input.registry.symbolsByInstanceId.get(record.targetInstanceId);
+                if (!source || !target) {
+                    return [];
+                }
+                return [{
+                    srcSymbolId: source.symbolInstanceId,
+                    dstSymbolId: target.symbolInstanceId,
+                    kind: 'call' as const,
+                    site: {
+                        file: record.file,
+                        startLine: record.span?.startLine || source.span.startLine,
+                        ...(record.span?.endLine ? { endLine: record.span.endLine } : {}),
+                    },
+                    confidence: this.mapRelationshipConfidenceToCallGraphConfidence(record.confidence),
+                }];
+            })
+        );
+        const warnings = [...new Set([...input.registry.warnings, ...neighbors.warnings])].sort((a, b) => a.localeCompare(b));
 
-        if (graph.reason === 'unsupported_language') {
-            return 'unsupported';
-        }
-
-        return 'not_ready';
+        return {
+            supported: true,
+            direction: input.direction,
+            depth: Math.max(1, Math.min(3, input.depth)),
+            limit: Math.max(1, input.limit),
+            nodes,
+            edges,
+            notes: [],
+            ...(warnings.length > 0 ? { warnings } : {}),
+            notesTruncated: false,
+            totalNoteCount: 0,
+            returnedNoteCount: 0,
+            sidecar: {
+                builtAt: neighbors.manifest.builtAt,
+                nodeCount: input.registry.symbols.length,
+                edgeCount: neighbors.records.length,
+            },
+        };
     }
 
     private getContextIgnorePatterns(codebasePath: string): string[] {
@@ -5174,17 +5352,19 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ownerSource: SearchOwnerSource;
             };
 
+            const needsRegistryRepair = input.groupBy === 'symbol'
+                && scored.some((candidate) => !candidate.result.ownerSymbolKey || !candidate.result.ownerSymbolInstanceId);
             let searchSymbolRegistry: SymbolRegistry | undefined;
             let searchSymbolRegistryManifestHash: string | undefined;
-            if (input.groupBy === 'symbol' && scored.some((candidate) => !candidate.result.ownerSymbolKey || !candidate.result.ownerSymbolInstanceId)) {
-                const registrySidecar = await readSymbolRegistrySidecar({ normalizedRootPath: effectiveRoot });
-                if (registrySidecar.status === 'ok') {
-                    searchSymbolRegistry = registrySidecar.registry;
-                    searchSymbolRegistryManifestHash = registrySidecar.manifestHash;
-                } else if (registrySidecar.status === 'incompatible') {
+            if (input.groupBy === 'symbol') {
+                const registryState = await this.navigationStore.getManifest({ normalizedRootPath: effectiveRoot });
+                if (registryState.status === 'ok') {
+                    searchSymbolRegistry = registryState.registry;
+                    searchSymbolRegistryManifestHash = registryState.manifestHash;
+                } else if (registryState.status === 'incompatible' && needsRegistryRepair) {
                     const payload = this.buildRequiresReindexPayload(
                         effectiveRoot,
-                        `Symbol registry is incompatible: ${registrySidecar.reason}`,
+                        `Symbol registry is incompatible: ${registryState.reason}`,
                         {
                             path: absolutePath,
                             query: input.query,
@@ -5198,6 +5378,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                         meta: { searchDiagnostics }
                     };
+                } else if (registryState.status === 'incompatible') {
+                    searchWarnings.push(`SEARCH_SYMBOL_REGISTRY_UNAVAILABLE:${registryState.status}`);
+                    finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
                 }
             }
 
@@ -5220,9 +5403,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         ? `owner:${ownerSymbolKey}:${ownerSymbolInstanceId}`
                         : `owner:${ownerSymbolKey}`;
                     ownerSource = ownerResolution.ownerSource || 'owner_metadata';
-                } else if (result.symbolId) {
-                    groupKey = `symbol:${result.symbolId}`;
-                    ownerSource = 'legacy_symbol_id';
                 } else {
                     const proximityBucket = Math.floor((Math.max(1, result.startLine || 1) - 1) / SEARCH_PROXIMITY_WINDOW);
                     groupKey = `fallback:${result.relativePath}:${proximityBucket}`;
@@ -5243,23 +5423,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
             }
 
-            const sidecarInfo = typeof (this.snapshotManager as any).getCodebaseCallGraphSidecar === 'function'
-                ? (this.snapshotManager as any).getCodebaseCallGraphSidecar(effectiveRoot)
-                : undefined;
-            const sidecarReadyForOutline = Boolean(sidecarInfo && sidecarInfo.version === 'v3');
-            let callGraphSidecar = sidecarReadyForOutline ? this.loadCallGraphSidecarForSearch(effectiveRoot) : null;
-            if (searchSymbolRegistryManifestHash) {
-                const relationshipGraph = await this.loadRegistryValidatedCallGraphSidecar({
-                    codebaseRoot: effectiveRoot,
-                    registryManifestHash: searchSymbolRegistryManifestHash,
-                    sidecarReady: sidecarReadyForOutline,
-                });
-                callGraphSidecar = relationshipGraph.sidecar;
-                if (relationshipGraph.warning) {
-                    searchWarnings.push(`SEARCH_${relationshipGraph.warning}`);
-                    finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
-                }
+            const callGraphNavigationState = await this.loadRegistryValidatedCallGraphSidecar({
+                codebaseRoot: effectiveRoot,
+                registryManifestHash: searchSymbolRegistryManifestHash,
+            });
+            if (callGraphNavigationState.warning) {
+                searchWarnings.push(`SEARCH_${callGraphNavigationState.warning}`);
+                finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
             }
+            const sidecarReadyForOutline = Boolean(searchSymbolRegistryManifestHash);
             const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
             for (const group of groups.values()) {
                 exactMatchPinningApplied = this.sortSearchCandidates(group.chunks, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
@@ -5279,7 +5451,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     }
                 }
 
-                const repSymbolId = typeof representative.result.symbolId === 'string' ? representative.result.symbolId : null;
                 const repSymbolLabel = typeof representative.result.symbolLabel === 'string' ? representative.result.symbolLabel : null;
                 const ownerSymbolKey = group.ownerSymbolKey;
                 const ownerSymbolInstanceId = group.ownerSymbolInstanceId;
@@ -5288,18 +5459,23 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const symbolScore = representative.finalScore + supportBoost;
                 const confidence = group.ownerSource === 'owner_metadata' || group.ownerSource === 'registry_repair'
                     ? (symbolKind === 'file' ? 'low' : 'medium')
-                    : (group.ownerSource === 'legacy_symbol_id' ? 'medium' : 'low');
+                    : 'low';
                 const groupId = ownerSymbolInstanceId
                     || ownerSymbolKey
-                    || repSymbolId
                     || this.buildFallbackGroupId(representative.result.relativePath, span);
-                const callGraphHint = this.buildCallGraphHint(
-                    representative.result.relativePath,
-                    representative.result.language || 'unknown',
-                    callGraphSidecar,
-                    repSymbolId || undefined,
-                    repSymbolLabel || undefined
-                );
+                const registrySymbol = ownerSymbolInstanceId
+                    ? searchSymbolRegistry?.symbolsByInstanceId.get(ownerSymbolInstanceId)
+                    : undefined;
+                const callGraphHint = this.buildSearchGroupCallGraphHint({
+                    file: representative.result.relativePath,
+                    language: representative.result.language || 'unknown',
+                    span,
+                    symbolLabel: repSymbolLabel || undefined,
+                    ownerSymbolInstanceId,
+                    registrySymbol,
+                    registryLoaded: Boolean(searchSymbolRegistry),
+                    navigationState: callGraphNavigationState,
+                });
                 const navigationFallback = this.buildNavigationFallback(
                     effectiveRoot,
                     representative.result.relativePath,
@@ -5321,7 +5497,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     file: representative.result.relativePath,
                     span,
                     language: representative.result.language || 'unknown',
-                    symbolId: repSymbolId,
+                    ...(ownerSymbolInstanceId ? { symbolId: ownerSymbolInstanceId } : {}),
                     symbolLabel: repSymbolLabel,
                     ...(ownerSymbolKey ? { symbolKey: ownerSymbolKey } : {}),
                     ...(ownerSymbolInstanceId ? { symbolInstanceId: ownerSymbolInstanceId } : {}),
@@ -5615,20 +5791,19 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? Math.max(requestedEndLine, requestedStartLine)
                 : requestedEndLine;
 
-            const sidecarInfo = this.snapshotManager.getCodebaseCallGraphSidecar(effectiveRoot);
-            const sidecarReadyForOutline = sidecarInfo?.version === 'v3';
-
-            const registrySidecar = await readSymbolRegistrySidecar({ normalizedRootPath: effectiveRoot });
-            if (registrySidecar.status === 'ok') {
-                const registrySymbols = registrySidecar.registry.symbolsByFile.get(normalizedFile) || [];
+            const registryState = await this.navigationStore.getSymbolsByFile({
+                normalizedRootPath: effectiveRoot,
+                file: normalizedFile,
+            });
+            if (registryState.status === 'ok') {
+                const registrySymbols = registryState.symbols;
                 if (registrySymbols.length > 0) {
                     const relationshipGraph = await this.loadRegistryValidatedCallGraphSidecar({
                         codebaseRoot: effectiveRoot,
-                        registryManifestHash: registrySidecar.manifestHash,
-                        sidecarReady: sidecarReadyForOutline,
+                        registryManifestHash: registryState.manifestHash,
                     });
-                    const outlineWarnings = registrySidecar.warnings.length > 0
-                        ? [`OUTLINE_SYMBOL_REGISTRY_WARNINGS:${registrySidecar.warnings.length}`]
+                    const outlineWarnings = registryState.warnings.length > 0
+                        ? [`OUTLINE_SYMBOL_REGISTRY_WARNINGS:${registryState.warnings.length}`]
                         : [];
                     if (relationshipGraph.warning) {
                         outlineWarnings.push(`OUTLINE_${relationshipGraph.warning}`);
@@ -5643,7 +5818,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         symbolLabelExact,
                         windowStart,
                         windowEnd,
-                        callGraphSidecar: relationshipGraph.sidecar,
+                        callGraphNavigationState: relationshipGraph,
                         warnings: outlineWarnings.length > 0 ? outlineWarnings : undefined,
                     });
                     await this.touchWatchedCodebase(effectiveRoot);
@@ -5651,22 +5826,41 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
                     };
                 }
-            }
+                const languageStatus = this.getOutlineStatusForLanguage(normalizedFile);
+                if (languageStatus !== 'ok') {
+                    const payload: FileOutlineResponseEnvelope = {
+                        status: 'unsupported',
+                        path: effectiveRoot,
+                        file: normalizedFile,
+                        outline: null,
+                        hasMore: false,
+                        message: `File '${normalizedFile}' is not supported for sidecar outline. Supported extensions: ${OUTLINE_SUPPORTED_EXTENSIONS.join(', ')}.`
+                    };
+                    return {
+                        content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
+                    };
+                }
 
-            if (!sidecarInfo || sidecarInfo.version !== 'v3') {
                 const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
                     ...args,
                     file: normalizedFile
-                }), proofDebugHint);
+                }, `File '${normalizedFile}' is missing from the symbol registry for this snapshot.`), proofDebugHint);
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
                 };
             }
 
-            await this.touchWatchedCodebase(effectiveRoot);
+            if (registryState.status === 'incompatible') {
+                const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
+                    ...args,
+                    file: normalizedFile
+                }, `Symbol registry is incompatible: ${registryState.reason}`), proofDebugHint);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
 
-            const languageStatus = this.getOutlineStatusForLanguage(normalizedFile);
-            if (languageStatus !== 'ok') {
+            if (this.getOutlineStatusForLanguage(normalizedFile) !== 'ok') {
                 const payload: FileOutlineResponseEnvelope = {
                     status: 'unsupported',
                     path: effectiveRoot,
@@ -5680,124 +5874,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const sidecar = this.callGraphManager.loadSidecar(effectiveRoot);
-            if (!sidecar) {
-                const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
-                    ...args,
-                    file: normalizedFile
-                }), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
-                };
-            }
-
-            const byFile = sidecar.nodes.filter((node) => this.normalizeRelativeFilePath(node.file) === normalizedFile);
-            const windowed = byFile.filter((node) => {
-                if (!windowStart && !windowEnd) {
-                    return true;
-                }
-
-                const startsBeforeWindowEnd = windowEnd === undefined || node.span.startLine <= windowEnd;
-                const endsAfterWindowStart = windowStart === undefined || node.span.endLine >= windowStart;
-                return startsBeforeWindowEnd && endsAfterWindowStart;
-            });
-
-            const outlineValidatedAt = new Date(this.now()).toISOString();
-            const symbols = this.sortFileOutlineSymbols(windowed.map((node) => {
-                const symbolLabel = (typeof node.symbolLabel === 'string' && node.symbolLabel.trim().length > 0)
-                    ? node.symbolLabel
-                    : node.symbolId;
-                return {
-                    symbolId: node.symbolId,
-                    symbolLabel,
-                    span: {
-                        startLine: node.span.startLine,
-                        endLine: node.span.endLine
-                    },
-                    callGraphHint: {
-                        supported: true,
-                        validated: true,
-                        validatedAt: outlineValidatedAt,
-                        sidecarBuiltAt: sidecar.builtAt,
-                        symbolRef: {
-                            file: normalizedFile,
-                            symbolId: node.symbolId,
-                            symbolLabel,
-                            span: {
-                                startLine: node.span.startLine,
-                                endLine: node.span.endLine
-                            }
-                        }
-                    }
-                } as FileOutlineSymbolResult;
-            }));
-
-            const missingSymbolMetadataCount = sidecar.notes.filter((note) => {
-                return note.type === 'missing_symbol_metadata' && this.normalizeRelativeFilePath(note.file) === normalizedFile;
-            }).length;
-            const warnings = missingSymbolMetadataCount > 0
-                ? [`OUTLINE_MISSING_SYMBOL_METADATA:${missingSymbolMetadataCount}`]
-                : undefined;
-
-            if (resolveMode === 'exact') {
-                const exactMatches = this.sortFileOutlineSymbols(symbols.filter((symbol) => {
-                    if (symbolIdExact && symbol.symbolId !== symbolIdExact) {
-                        return false;
-                    }
-                    if (symbolLabelExact && symbol.symbolLabel !== symbolLabelExact) {
-                        return false;
-                    }
-                    return true;
-                }));
-
-                if (exactMatches.length === 0) {
-                    const payload: FileOutlineResponseEnvelope = {
-                        status: 'not_found',
-                        path: effectiveRoot,
-                        file: normalizedFile,
-                        outline: null,
-                        hasMore: false,
-                        message: 'No exact symbol match found in file outline.',
-                        ...(warnings ? { warnings } : {})
-                    };
-                    return {
-                        content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
-                    };
-                }
-
-                const hasMoreExact = exactMatches.length > limitSymbols;
-                const exactPayload: FileOutlineResponseEnvelope = {
-                    status: exactMatches.length > 1 ? 'ambiguous' : 'ok',
-                    path: effectiveRoot,
-                    file: normalizedFile,
-                    outline: {
-                        symbols: exactMatches.slice(0, limitSymbols)
-                    },
-                    hasMore: hasMoreExact,
-                    ...(exactMatches.length > 1 ? {
-                        message: `Multiple exact symbol matches found (${exactMatches.length}). Narrow with symbolIdExact for deterministic selection.`
-                    } : {}),
-                    ...(warnings ? { warnings } : {})
-                };
-                return {
-                    content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(exactPayload, proofDebugHint), null, 2) }]
-                };
-            }
-
-            const hasMore = symbols.length > limitSymbols;
-            const payload: FileOutlineResponseEnvelope = {
-                status: 'ok',
-                path: effectiveRoot,
-                file: normalizedFile,
-                outline: {
-                    symbols: symbols.slice(0, limitSymbols)
-                },
-                hasMore,
-                ...(warnings ? { warnings } : {})
-            };
-
+            const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
+                ...args,
+                file: normalizedFile
+            }, registryState.reason), proofDebugHint);
             return {
-                content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
+                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
             };
         } catch (error: any) {
             return {
@@ -5985,11 +6067,143 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? { ok: false, reason: 'probe_failed' }
                 : undefined;
 
-            const sidecarInfo = this.snapshotManager.getCodebaseCallGraphSidecar(effectiveRoot);
-            if (!sidecarInfo || sidecarInfo.version !== 'v3') {
+            const normalizedSymbolFile = this.normalizeRelativeFilePath(symbolRef.file);
+            const registryState = await this.navigationStore.getSymbolsByFile({
+                normalizedRootPath: effectiveRoot,
+                file: normalizedSymbolFile,
+            });
+            if (registryState.status !== 'ok') {
                 const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
                     effectiveRoot,
-                    'Call graph sidecar is unavailable for this codebase. Reindex to rebuild call graph metadata.',
+                    `Symbol registry is ${registryState.status}: ${registryState.reason}`,
+                    {
+                        path: absolutePath,
+                        symbolRef,
+                        direction,
+                        depth,
+                        limit
+                    }
+                ), proofDebugHint);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(payload, null, 2)
+                    }]
+                };
+            }
+
+            const exactRegistrySymbols = this.findExactRegistrySymbols({
+                symbols: registryState.symbols,
+                symbolIdExact: symbolRef.symbolId,
+                symbolLabelExact: symbolRef.symbolLabel,
+            });
+            if (exactRegistrySymbols.length === 0) {
+                const payload = this.withProofDebugHint({
+                    status: 'not_found' as const,
+                    path: effectiveRoot,
+                    symbolRef,
+                    supported: false,
+                    reason: 'missing_symbol',
+                    message: 'No exact symbol match found in relationship-backed navigation state.',
+                    nodes: [],
+                    edges: [],
+                    notes: [],
+                    notesTruncated: false,
+                    totalNoteCount: 0,
+                    returnedNoteCount: 0,
+                }, proofDebugHint);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(payload, null, 2)
+                    }]
+                };
+            }
+
+            if (exactRegistrySymbols.length > 1) {
+                const payload = this.withProofDebugHint({
+                    status: 'not_found' as const,
+                    path: effectiveRoot,
+                    symbolRef,
+                    supported: false,
+                    reason: 'missing_symbol',
+                    message: 'Ambiguous exact symbol reference. Use symbolInstanceId for deterministic traversal.',
+                    nodes: [],
+                    edges: [],
+                    notes: [],
+                    notesTruncated: false,
+                    totalNoteCount: 0,
+                    returnedNoteCount: 0,
+                }, proofDebugHint);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(payload, null, 2)
+                    }]
+                };
+            }
+
+            const resolvedSymbol = exactRegistrySymbols[0];
+            if (!this.isCallGraphLanguageSupported(resolvedSymbol.language, resolvedSymbol.file)) {
+                const payload = this.withProofDebugHint({
+                    status: 'unsupported' as const,
+                    path: effectiveRoot,
+                    symbolRef,
+                    supported: false,
+                    reason: 'unsupported_language',
+                    message: `Language '${resolvedSymbol.language}' does not support relationship-backed call graph traversal.`,
+                    nodes: [],
+                    edges: [],
+                    notes: [],
+                    notesTruncated: false,
+                    totalNoteCount: 0,
+                    returnedNoteCount: 0,
+                }, proofDebugHint);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(payload, null, 2)
+                    }]
+                };
+            }
+
+            const compatibility = await this.navigationStore.getCompatibilityState({
+                normalizedRootPath: effectiveRoot,
+                expectedSymbolRegistryManifestHash: registryState.manifestHash,
+            });
+            if (compatibility.relationships.status !== 'ok') {
+                const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
+                    effectiveRoot,
+                    `Relationship sidecar is ${compatibility.relationships.status}: ${compatibility.relationships.reason}`,
+                    {
+                        path: absolutePath,
+                        symbolRef,
+                        direction,
+                        depth,
+                        limit
+                    }
+                ), proofDebugHint);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(payload, null, 2)
+                    }]
+                };
+            }
+
+            const relationshipBackedGraph = await this.buildRelationshipBackedCallGraph({
+                codebaseRoot: effectiveRoot,
+                registry: registryState.registry,
+                registryManifestHash: registryState.manifestHash,
+                resolvedSymbol,
+                direction,
+                depth,
+                limit,
+            });
+            if (!relationshipBackedGraph) {
+                const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
+                    effectiveRoot,
+                    'Relationship-backed call graph traversal could not load a compatible navigation snapshot.',
                     {
                         path: absolutePath,
                         symbolRef,
@@ -6007,17 +6221,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             await this.touchWatchedCodebase(effectiveRoot);
-
-            const graph = this.callGraphManager.queryGraph(effectiveRoot, symbolRef, {
-                direction,
-                depth,
-                limit
-            });
             const payload = this.withProofDebugHint({
-                status: this.mapCallGraphStatus(graph),
+                status: 'ok' as const,
                 path: effectiveRoot,
                 symbolRef,
-                ...graph
+                ...relationshipBackedGraph,
             }, proofDebugHint);
 
             return {

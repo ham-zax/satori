@@ -7,6 +7,7 @@ export * from './sync/synchronizer';
 export * from './utils';
 export * from './reranker';
 export * from './language';
+export * from './navigation';
 export * from './symbols';
 export * from './relationships';
 export * from './config/defaults';

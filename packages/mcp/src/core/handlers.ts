@@ -12,7 +12,11 @@ import {
     getSupportedExtensionsForCapability,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForLanguage,
+    readRelationshipSidecar,
+    readSymbolRegistrySidecar,
+    resolveOwnerSymbolForChunk,
 } from "@zokizuan/satori-core";
+import type { CodeChunk, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
 import { SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
@@ -154,6 +158,15 @@ type SearchCandidate = {
     agentFitReason: string;
     passesMatchedMust: boolean;
     exactLexicalMatch: boolean;
+};
+
+type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'legacy_symbol_id' | 'fallback';
+
+type SearchOwnerResolution = {
+    ownerSymbolKey?: string;
+    ownerSymbolInstanceId?: string;
+    symbolKind?: string;
+    ownerSource?: Extract<SearchOwnerSource, 'owner_metadata' | 'registry_repair'>;
 };
 
 type SearchQueryIntent = 'identifier' | 'semantic' | 'mixed' | 'uncertain';
@@ -2326,13 +2339,14 @@ export class ToolHandlers {
                     continue;
                 }
 
-                if (groupBy === "symbol" && typeof group.symbolId === "string") {
-                    const symbolCount = symbolCounts.get(group.symbolId) || 0;
+                const symbolDiversityKey = group.symbolInstanceId || group.symbolKey || group.symbolId;
+                if (groupBy === "symbol" && typeof symbolDiversityKey === "string") {
+                    const symbolCount = symbolCounts.get(symbolDiversityKey) || 0;
                     if (symbolCount >= SEARCH_DIVERSITY_MAX_PER_SYMBOL) {
                         summary.skippedBySymbolCap += 1;
                         continue;
                     }
-                    symbolCounts.set(group.symbolId, symbolCount + 1);
+                    symbolCounts.set(symbolDiversityKey, symbolCount + 1);
                 }
 
                 selected.push(group);
@@ -2578,7 +2592,10 @@ export class ToolHandlers {
             .toLowerCase()
             .replace(/\s+/g, ' ')
             .trim();
-        return `${group.file}::${normalizedLabel}`;
+        const ownerIdentity = group.symbolKey || group.symbolInstanceId;
+        return ownerIdentity
+            ? `${group.file}::${normalizedLabel}::${ownerIdentity}`
+            : `${group.file}::${normalizedLabel}`;
     }
 
     private collapseDuplicateDeclarationGroups<T extends SearchGroupResult>(groups: T[]): T[] {
@@ -2686,6 +2703,31 @@ export class ToolHandlers {
         };
     }
 
+    private async loadRegistryValidatedCallGraphSidecar(input: {
+        codebaseRoot: string;
+        registryManifestHash: string;
+        sidecarReady: boolean;
+    }): Promise<{ sidecar: { builtAt?: string; nodes: CallGraphNode[] } | null; warning?: string }> {
+        if (!input.sidecarReady) {
+            return { sidecar: null };
+        }
+
+        const relationshipSidecar = await readRelationshipSidecar({
+            normalizedRootPath: input.codebaseRoot,
+            expectedSymbolRegistryManifestHash: input.registryManifestHash,
+        });
+        if (relationshipSidecar.status !== 'ok') {
+            return {
+                sidecar: null,
+                warning: `RELATIONSHIP_SIDECAR_UNAVAILABLE:${relationshipSidecar.status}`,
+            };
+        }
+
+        return {
+            sidecar: this.loadCallGraphSidecarForSearch(input.codebaseRoot),
+        };
+    }
+
     private buildCallGraphHint(
         file: string,
         language: string,
@@ -2751,6 +2793,122 @@ export class ToolHandlers {
             return undefined;
         }
         return compact;
+    }
+
+    private buildSearchOwnerChunk(result: any): CodeChunk | null {
+        const startLine = Number(result?.startLine);
+        const endLine = Number(result?.endLine);
+        if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
+            return null;
+        }
+
+        const metadata: CodeChunk['metadata'] = {
+            startLine: Math.max(1, startLine),
+            endLine: Math.max(Math.max(1, startLine), endLine),
+            language: typeof result?.language === 'string' ? result.language : undefined,
+            filePath: typeof result?.relativePath === 'string' ? result.relativePath : undefined,
+            symbolId: typeof result?.symbolId === 'string' ? result.symbolId : undefined,
+            symbolLabel: typeof result?.symbolLabel === 'string' ? result.symbolLabel : undefined,
+            symbolKind: typeof result?.symbolKind === 'string' ? result.symbolKind : undefined,
+        };
+        if (Number.isFinite(result?.startByte)) {
+            metadata.startByte = Number(result.startByte);
+        }
+        if (Number.isFinite(result?.endByte)) {
+            metadata.endByte = Number(result.endByte);
+        }
+
+        return {
+            content: String(result?.content || ''),
+            metadata,
+        };
+    }
+
+    private resolveSearchOwnerFromRegistry(result: any, registry?: SymbolRegistry): SearchOwnerResolution {
+        const metadataOwnerKey = typeof result?.ownerSymbolKey === 'string' && result.ownerSymbolKey.length > 0
+            ? result.ownerSymbolKey
+            : undefined;
+        const metadataOwnerInstanceId = typeof result?.ownerSymbolInstanceId === 'string' && result.ownerSymbolInstanceId.length > 0
+            ? result.ownerSymbolInstanceId
+            : undefined;
+        const metadataSymbolKind = typeof result?.symbolKind === 'string' && result.symbolKind.length > 0
+            ? result.symbolKind
+            : undefined;
+
+        if (!registry) {
+            return metadataOwnerKey
+                ? {
+                    ownerSymbolKey: metadataOwnerKey,
+                    ownerSymbolInstanceId: metadataOwnerInstanceId,
+                    symbolKind: metadataSymbolKind,
+                    ownerSource: 'owner_metadata',
+                }
+                : {};
+        }
+
+        if (
+            metadataOwnerKey
+            && metadataOwnerInstanceId
+            && registry.symbolsByInstanceId.has(metadataOwnerInstanceId)
+        ) {
+            const owner = registry.symbolsByInstanceId.get(metadataOwnerInstanceId);
+            return {
+                ownerSymbolKey: metadataOwnerKey,
+                ownerSymbolInstanceId: metadataOwnerInstanceId,
+                symbolKind: owner?.kind || metadataSymbolKind,
+                ownerSource: 'owner_metadata',
+            };
+        }
+
+        const normalizedFile = typeof result?.relativePath === 'string'
+            ? this.sanitizeIndexedRelativeFilePath(result.relativePath)
+            : undefined;
+        const fileSymbols = normalizedFile ? registry.symbolsByFile.get(normalizedFile) : undefined;
+        const ownerChunk = this.buildSearchOwnerChunk(result);
+
+        if (fileSymbols && ownerChunk) {
+            try {
+                if (metadataOwnerKey) {
+                    const keyCandidates = fileSymbols.filter((symbol) => symbol.symbolKey === metadataOwnerKey);
+                    if (keyCandidates.length > 0) {
+                        const owner = resolveOwnerSymbolForChunk({
+                            chunk: ownerChunk,
+                            symbols: keyCandidates.some((symbol) => symbol.kind === 'file') ? keyCandidates : [
+                                ...fileSymbols.filter((symbol) => symbol.kind === 'file'),
+                                ...keyCandidates,
+                            ],
+                        });
+                        if (owner.symbolKey === metadataOwnerKey) {
+                            return {
+                                ownerSymbolKey: owner.symbolKey,
+                                ownerSymbolInstanceId: owner.symbolInstanceId,
+                                symbolKind: owner.kind,
+                                ownerSource: 'registry_repair',
+                            };
+                        }
+                    }
+                }
+
+                const owner = resolveOwnerSymbolForChunk({ chunk: ownerChunk, symbols: fileSymbols });
+                return {
+                    ownerSymbolKey: owner.symbolKey,
+                    ownerSymbolInstanceId: owner.symbolInstanceId,
+                    symbolKind: owner.kind,
+                    ownerSource: 'registry_repair',
+                };
+            } catch {
+                // Registry repair is a compatibility aid; fallback paths below preserve search usability.
+            }
+        }
+
+        return metadataOwnerKey
+            ? {
+                ownerSymbolKey: metadataOwnerKey,
+                ownerSymbolInstanceId: metadataOwnerInstanceId,
+                symbolKind: metadataSymbolKind,
+                ownerSource: 'owner_metadata',
+            }
+            : {};
     }
 
     private buildNavigationFallback(
@@ -3065,6 +3223,168 @@ export class ToolHandlers {
             if (labelCmp !== 0) return labelCmp;
             return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
         });
+    }
+
+    private findCallGraphNodeForRegistrySymbol(
+        symbol: SymbolRecord,
+        sidecar: { nodes: CallGraphNode[] } | null
+    ): CallGraphNode | undefined {
+        if (!sidecar) {
+            return undefined;
+        }
+
+        const normalizedFile = this.normalizeRelativeFilePath(symbol.file);
+        return sidecar.nodes
+            .filter((node) => (
+                this.normalizeRelativeFilePath(node.file) === normalizedFile
+                && node.symbolLabel === symbol.label
+                && node.span?.startLine === symbol.span.startLine
+                && node.span?.endLine === symbol.span.endLine
+            ))
+            .sort((a, b) => this.compareNullableStringsAsc(a.symbolId, b.symbolId))[0];
+    }
+
+    private buildRegistrySymbolCallGraphHint(
+        symbol: SymbolRecord,
+        file: string,
+        sidecar: { builtAt?: string; nodes: CallGraphNode[] } | null
+    ): CallGraphHint {
+        if (!this.isCallGraphLanguageSupported(symbol.language, file)) {
+            return { supported: false, reason: 'unsupported_language' };
+        }
+        if (!sidecar) {
+            return { supported: false, reason: 'missing_sidecar' };
+        }
+
+        const graphNode = this.findCallGraphNodeForRegistrySymbol(symbol, sidecar);
+        if (!graphNode) {
+            return { supported: false, reason: 'stale_symbol_ref' };
+        }
+
+        return this.buildCallGraphHint(file, symbol.language, sidecar, graphNode.symbolId, graphNode.symbolLabel || symbol.label);
+    }
+
+    private buildRegistryFileOutlinePayload(input: {
+        codebaseRoot: string;
+        file: string;
+        symbols: SymbolRecord[];
+        limitSymbols: number;
+        resolveMode: 'outline' | 'exact';
+        symbolIdExact?: string;
+        symbolLabelExact?: string;
+        windowStart?: number;
+        windowEnd?: number;
+        callGraphSidecar?: { builtAt?: string; nodes: CallGraphNode[] } | null;
+        warnings?: string[];
+    }): FileOutlineResponseEnvelope {
+        const hasExtractedSymbols = input.symbols.some((symbol) => symbol.kind !== 'file');
+        const visibleSymbols = input.symbols.filter((symbol) => {
+            if (hasExtractedSymbols && symbol.kind === 'file') {
+                return false;
+            }
+            if (!input.windowStart && !input.windowEnd) {
+                return true;
+            }
+            const startsBeforeWindowEnd = input.windowEnd === undefined || symbol.span.startLine <= input.windowEnd;
+            const endsAfterWindowStart = input.windowStart === undefined || symbol.span.endLine >= input.windowStart;
+            return startsBeforeWindowEnd && endsAfterWindowStart;
+        });
+        const visibleSymbolsByInstanceId = new Map(visibleSymbols.map((symbol) => [symbol.symbolInstanceId, symbol]));
+        const legacyCallGraphSymbolIdsByInstanceId = new Map<string, Set<string>>();
+        if (input.callGraphSidecar) {
+            for (const symbol of visibleSymbols) {
+                const graphNode = this.findCallGraphNodeForRegistrySymbol(symbol, input.callGraphSidecar);
+                if (!graphNode?.symbolId) {
+                    continue;
+                }
+                const legacyIds = legacyCallGraphSymbolIdsByInstanceId.get(symbol.symbolInstanceId) || new Set<string>();
+                legacyIds.add(graphNode.symbolId);
+                legacyCallGraphSymbolIdsByInstanceId.set(symbol.symbolInstanceId, legacyIds);
+            }
+        }
+
+        const mappedSymbols = this.sortFileOutlineSymbols(visibleSymbols.map((symbol) => ({
+            symbolId: symbol.symbolInstanceId,
+            symbolLabel: symbol.label,
+            span: {
+                startLine: symbol.span.startLine,
+                endLine: symbol.span.endLine,
+            },
+            callGraphHint: this.buildRegistrySymbolCallGraphHint(symbol, input.file, input.callGraphSidecar || null),
+        } as FileOutlineSymbolResult)));
+
+        const warningSet = new Set(input.warnings || []);
+        if (mappedSymbols.some((symbol) => !symbol.callGraphHint.supported)) {
+            const firstUnsupported = mappedSymbols.find((symbol) => !symbol.callGraphHint.supported)?.callGraphHint;
+            if (firstUnsupported && !firstUnsupported.supported) {
+                warningSet.add(`OUTLINE_CALL_GRAPH_UNAVAILABLE:${firstUnsupported.reason}`);
+            }
+        }
+        if (!hasExtractedSymbols && mappedSymbols.length > 0) {
+            warningSet.add('OUTLINE_SYNTHESIZED_FILE_SYMBOL');
+        }
+
+        const warnings = [...warningSet].sort((a, b) => a.localeCompare(b));
+
+        if (input.resolveMode === 'exact') {
+            const exactMatches = this.sortFileOutlineSymbols(mappedSymbols.filter((symbol) => {
+                if (input.symbolIdExact) {
+                    const original = visibleSymbolsByInstanceId.get(symbol.symbolId);
+                    const legacyIds = original
+                        ? legacyCallGraphSymbolIdsByInstanceId.get(original.symbolInstanceId)
+                        : undefined;
+                    const matchesExactSymbolId = symbol.symbolId === input.symbolIdExact;
+                    const matchesStableSymbolKey = original?.symbolKey === input.symbolIdExact;
+                    const matchesLegacyCallGraphSymbolId = legacyIds?.has(input.symbolIdExact) === true;
+                    if (!matchesExactSymbolId && !matchesStableSymbolKey && !matchesLegacyCallGraphSymbolId) {
+                        return false;
+                    }
+                }
+                if (input.symbolLabelExact && symbol.symbolLabel !== input.symbolLabelExact) {
+                    return false;
+                }
+                return true;
+            }));
+
+            if (exactMatches.length === 0) {
+                return {
+                    status: 'not_found',
+                    path: input.codebaseRoot,
+                    file: input.file,
+                    outline: null,
+                    hasMore: false,
+                    message: 'No exact symbol match found in file outline.',
+                    ...(warnings.length > 0 ? { warnings } : {})
+                };
+            }
+
+            const hasMoreExact = exactMatches.length > input.limitSymbols;
+            return {
+                status: exactMatches.length > 1 ? 'ambiguous' : 'ok',
+                path: input.codebaseRoot,
+                file: input.file,
+                outline: {
+                    symbols: exactMatches.slice(0, input.limitSymbols)
+                },
+                hasMore: hasMoreExact,
+                ...(exactMatches.length > 1 ? {
+                    message: `Multiple exact symbol matches found (${exactMatches.length}). Narrow with symbolIdExact for deterministic selection.`
+                } : {}),
+                ...(warnings.length > 0 ? { warnings } : {})
+            };
+        }
+
+        const hasMore = mappedSymbols.length > input.limitSymbols;
+        return {
+            status: 'ok',
+            path: input.codebaseRoot,
+            file: input.file,
+            outline: {
+                symbols: mappedSymbols.slice(0, input.limitSymbols)
+            },
+            hasMore,
+            ...(warnings.length > 0 ? { warnings } : {})
+        };
     }
 
     private buildSearchPassWarning(passId: string): string {
@@ -4702,7 +5022,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             if (mustApplied && !mustSatisfied) {
                 searchWarnings.push('FILTER_MUST_UNSATISFIED');
             }
-            const finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
+            let finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
 
             const debugHintBase: SearchDebugHint | undefined = input.debug
                 ? {
@@ -4780,6 +5100,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     stalenessBucket: this.getStalenessBucket(candidate.result.indexedAt),
                     symbolId: typeof candidate.result.symbolId === 'string' ? candidate.result.symbolId : undefined,
                     symbolLabel: typeof candidate.result.symbolLabel === 'string' ? candidate.result.symbolLabel : undefined,
+                    symbolKey: typeof candidate.result.ownerSymbolKey === 'string' ? candidate.result.ownerSymbolKey : undefined,
+                    symbolInstanceId: typeof candidate.result.ownerSymbolInstanceId === 'string' ? candidate.result.ownerSymbolInstanceId : undefined,
+                    symbolKind: typeof candidate.result.symbolKind === 'string' ? candidate.result.symbolKind : undefined,
                     ...(input.debug ? {
                         debug: {
                             baseScore: candidate.baseScore,
@@ -4845,24 +5168,76 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             type GroupAccumulator = {
                 chunks: SearchCandidate[];
+                ownerSymbolKey?: string;
+                ownerSymbolInstanceId?: string;
+                ownerSymbolKind?: string;
+                ownerSource: SearchOwnerSource;
             };
+
+            let searchSymbolRegistry: SymbolRegistry | undefined;
+            let searchSymbolRegistryManifestHash: string | undefined;
+            if (input.groupBy === 'symbol' && scored.some((candidate) => !candidate.result.ownerSymbolKey || !candidate.result.ownerSymbolInstanceId)) {
+                const registrySidecar = await readSymbolRegistrySidecar({ normalizedRootPath: effectiveRoot });
+                if (registrySidecar.status === 'ok') {
+                    searchSymbolRegistry = registrySidecar.registry;
+                    searchSymbolRegistryManifestHash = registrySidecar.manifestHash;
+                } else if (registrySidecar.status === 'incompatible') {
+                    const payload = this.buildRequiresReindexPayload(
+                        effectiveRoot,
+                        `Symbol registry is incompatible: ${registrySidecar.reason}`,
+                        {
+                            path: absolutePath,
+                            query: input.query,
+                            scope: input.scope,
+                            groupBy: input.groupBy,
+                            resultMode: input.resultMode,
+                            limit: input.limit
+                        }
+                    ) as unknown as SearchResponseEnvelope;
+                    return {
+                        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                        meta: { searchDiagnostics }
+                    };
+                }
+            }
 
             const groups = new Map<string, GroupAccumulator>();
             for (const candidate of scored) {
                 const result = candidate.result;
                 let groupKey = '';
+                const ownerResolution = input.groupBy === 'symbol'
+                    ? this.resolveSearchOwnerFromRegistry(result, searchSymbolRegistry)
+                    : {};
+                const ownerSymbolKey = ownerResolution.ownerSymbolKey;
+                const ownerSymbolInstanceId = ownerResolution.ownerSymbolInstanceId;
+                const ownerSymbolKind = ownerResolution.symbolKind;
+                let ownerSource: SearchOwnerSource = 'fallback';
                 if (input.groupBy === 'file') {
                     groupKey = `file:${result.relativePath}`;
+                    ownerSource = 'fallback';
+                } else if (ownerSymbolKey) {
+                    groupKey = ownerSymbolInstanceId
+                        ? `owner:${ownerSymbolKey}:${ownerSymbolInstanceId}`
+                        : `owner:${ownerSymbolKey}`;
+                    ownerSource = ownerResolution.ownerSource || 'owner_metadata';
                 } else if (result.symbolId) {
                     groupKey = `symbol:${result.symbolId}`;
+                    ownerSource = 'legacy_symbol_id';
                 } else {
                     const proximityBucket = Math.floor((Math.max(1, result.startLine || 1) - 1) / SEARCH_PROXIMITY_WINDOW);
                     groupKey = `fallback:${result.relativePath}:${proximityBucket}`;
+                    ownerSource = 'fallback';
                 }
 
                 const existing = groups.get(groupKey);
                 if (!existing) {
-                    groups.set(groupKey, { chunks: [candidate] });
+                    groups.set(groupKey, {
+                        chunks: [candidate],
+                        ownerSymbolKey,
+                        ownerSymbolInstanceId,
+                        ownerSymbolKind,
+                        ownerSource,
+                    });
                 } else {
                     existing.chunks.push(candidate);
                 }
@@ -4872,7 +5247,19 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? (this.snapshotManager as any).getCodebaseCallGraphSidecar(effectiveRoot)
                 : undefined;
             const sidecarReadyForOutline = Boolean(sidecarInfo && sidecarInfo.version === 'v3');
-            const callGraphSidecar = sidecarReadyForOutline ? this.loadCallGraphSidecarForSearch(effectiveRoot) : null;
+            let callGraphSidecar = sidecarReadyForOutline ? this.loadCallGraphSidecarForSearch(effectiveRoot) : null;
+            if (searchSymbolRegistryManifestHash) {
+                const relationshipGraph = await this.loadRegistryValidatedCallGraphSidecar({
+                    codebaseRoot: effectiveRoot,
+                    registryManifestHash: searchSymbolRegistryManifestHash,
+                    sidecarReady: sidecarReadyForOutline,
+                });
+                callGraphSidecar = relationshipGraph.sidecar;
+                if (relationshipGraph.warning) {
+                    searchWarnings.push(`SEARCH_${relationshipGraph.warning}`);
+                    finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
+                }
+            }
             const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
             for (const group of groups.values()) {
                 exactMatchPinningApplied = this.sortSearchCandidates(group.chunks, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
@@ -4894,7 +5281,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
                 const repSymbolId = typeof representative.result.symbolId === 'string' ? representative.result.symbolId : null;
                 const repSymbolLabel = typeof representative.result.symbolLabel === 'string' ? representative.result.symbolLabel : null;
-                const groupId = repSymbolId || this.buildFallbackGroupId(representative.result.relativePath, span);
+                const ownerSymbolKey = group.ownerSymbolKey;
+                const ownerSymbolInstanceId = group.ownerSymbolInstanceId;
+                const symbolKind = group.ownerSymbolKind || (typeof representative.result.symbolKind === 'string' ? representative.result.symbolKind : undefined);
+                const supportBoost = Math.min(Math.log1p(group.chunks.length) * 0.01, 0.03);
+                const symbolScore = representative.finalScore + supportBoost;
+                const confidence = group.ownerSource === 'owner_metadata' || group.ownerSource === 'registry_repair'
+                    ? (symbolKind === 'file' ? 'low' : 'medium')
+                    : (group.ownerSource === 'legacy_symbol_id' ? 'medium' : 'low');
+                const groupId = ownerSymbolInstanceId
+                    || ownerSymbolKey
+                    || repSymbolId
+                    || this.buildFallbackGroupId(representative.result.relativePath, span);
                 const callGraphHint = this.buildCallGraphHint(
                     representative.result.relativePath,
                     representative.result.language || 'unknown',
@@ -4925,7 +5323,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     language: representative.result.language || 'unknown',
                     symbolId: repSymbolId,
                     symbolLabel: repSymbolLabel,
-                    score: representative.finalScore,
+                    ...(ownerSymbolKey ? { symbolKey: ownerSymbolKey } : {}),
+                    ...(ownerSymbolInstanceId ? { symbolInstanceId: ownerSymbolInstanceId } : {}),
+                    ...(symbolKind ? { symbolKind } : {}),
+                    confidence,
+                    score: symbolScore,
                     indexedAt: indexedAtMax || null,
                     stalenessBucket: this.getStalenessBucket(indexedAtMax),
                     collapsedChunkCount: group.chunks.length,
@@ -4946,6 +5348,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             agentFitReason: representative.agentFitReason,
                             matchesMust: representative.passesMatchedMust,
                             exactLexicalMatch: representative.exactLexicalMatch,
+                            symbolAggregation: {
+                                ownerSource: group.ownerSource,
+                                evidenceChunkCount: group.chunks.length,
+                                supportBoost,
+                            },
                         }
                     } : {})
                 });
@@ -5174,19 +5581,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? { ok: false, reason: 'probe_failed' }
                 : undefined;
 
-            const sidecarInfo = this.snapshotManager.getCodebaseCallGraphSidecar(effectiveRoot);
-            if (!sidecarInfo || sidecarInfo.version !== 'v3') {
-                const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
-                    ...args,
-                    file: normalizedFile
-                }), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
-                };
-            }
-
-            await this.touchWatchedCodebase(effectiveRoot);
-
             if (!fs.existsSync(absoluteFile)) {
                 const payload: FileOutlineResponseEnvelope = {
                     status: 'not_found',
@@ -5216,6 +5610,61 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
+            const windowStart = requestedStartLine;
+            const windowEnd = requestedEndLine && requestedStartLine
+                ? Math.max(requestedEndLine, requestedStartLine)
+                : requestedEndLine;
+
+            const sidecarInfo = this.snapshotManager.getCodebaseCallGraphSidecar(effectiveRoot);
+            const sidecarReadyForOutline = sidecarInfo?.version === 'v3';
+
+            const registrySidecar = await readSymbolRegistrySidecar({ normalizedRootPath: effectiveRoot });
+            if (registrySidecar.status === 'ok') {
+                const registrySymbols = registrySidecar.registry.symbolsByFile.get(normalizedFile) || [];
+                if (registrySymbols.length > 0) {
+                    const relationshipGraph = await this.loadRegistryValidatedCallGraphSidecar({
+                        codebaseRoot: effectiveRoot,
+                        registryManifestHash: registrySidecar.manifestHash,
+                        sidecarReady: sidecarReadyForOutline,
+                    });
+                    const outlineWarnings = registrySidecar.warnings.length > 0
+                        ? [`OUTLINE_SYMBOL_REGISTRY_WARNINGS:${registrySidecar.warnings.length}`]
+                        : [];
+                    if (relationshipGraph.warning) {
+                        outlineWarnings.push(`OUTLINE_${relationshipGraph.warning}`);
+                    }
+                    const payload = this.buildRegistryFileOutlinePayload({
+                        codebaseRoot: effectiveRoot,
+                        file: normalizedFile,
+                        symbols: registrySymbols,
+                        limitSymbols,
+                        resolveMode,
+                        symbolIdExact,
+                        symbolLabelExact,
+                        windowStart,
+                        windowEnd,
+                        callGraphSidecar: relationshipGraph.sidecar,
+                        warnings: outlineWarnings.length > 0 ? outlineWarnings : undefined,
+                    });
+                    await this.touchWatchedCodebase(effectiveRoot);
+                    return {
+                        content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
+                    };
+                }
+            }
+
+            if (!sidecarInfo || sidecarInfo.version !== 'v3') {
+                const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
+                    ...args,
+                    file: normalizedFile
+                }), proofDebugHint);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            await this.touchWatchedCodebase(effectiveRoot);
+
             const languageStatus = this.getOutlineStatusForLanguage(normalizedFile);
             if (languageStatus !== 'ok') {
                 const payload: FileOutlineResponseEnvelope = {
@@ -5241,11 +5690,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
                 };
             }
-
-            const windowStart = requestedStartLine;
-            const windowEnd = requestedEndLine && requestedStartLine
-                ? Math.max(requestedEndLine, requestedStartLine)
-                : requestedEndLine;
 
             const byFile = sidecar.nodes.filter((node) => this.normalizeRelativeFilePath(node.file) === normalizedFile);
             const windowed = byFile.filter((node) => {

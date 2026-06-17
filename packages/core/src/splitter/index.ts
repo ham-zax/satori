@@ -4,11 +4,18 @@ export interface CodeChunk {
     metadata: {
         startLine: number;
         endLine: number;
+        startByte?: number;
+        endByte?: number;
+        startColumn?: number;
+        endColumn?: number;
         language?: string;
         filePath?: string;
         breadcrumbs?: string[];
         symbolId?: string;
         symbolLabel?: string;
+        symbolKind?: string;
+        ownerSymbolKey?: string;
+        ownerSymbolInstanceId?: string;
     };
 }
 

@@ -26,6 +26,9 @@ export interface SemanticSearchResult {
     indexedAt?: string;
     symbolId?: string;
     symbolLabel?: string;
+    symbolKind?: string;
+    ownerSymbolKey?: string;
+    ownerSymbolInstanceId?: string;
     backendScore?: number;
     backendScoreKind?: BackendScoreKind;
 }

@@ -78,6 +78,9 @@ export interface SearchChunkResult {
     stalenessBucket: StalenessBucket;
     symbolId?: string;
     symbolLabel?: string;
+    symbolKey?: string;
+    symbolInstanceId?: string;
+    symbolKind?: string;
     debug?: {
         baseScore: number;
         fusionScore: number;
@@ -102,6 +105,10 @@ export interface SearchGroupResult {
     language: string;
     symbolId: string | null;
     symbolLabel: string | null;
+    symbolKey?: string;
+    symbolInstanceId?: string;
+    symbolKind?: string;
+    confidence?: "high" | "medium" | "low";
     score: number;
     indexedAt: string | null;
     stalenessBucket: StalenessBucket;
@@ -121,6 +128,11 @@ export interface SearchGroupResult {
         agentFitReason?: string;
         matchesMust?: boolean;
         exactLexicalMatch: boolean;
+        symbolAggregation?: {
+            ownerSource: "owner_metadata" | "registry_repair" | "legacy_symbol_id" | "fallback";
+            evidenceChunkCount: number;
+            supportBoost: number;
+        };
     };
 }
 
@@ -378,7 +390,7 @@ export interface FileOutlineSymbolResult {
     symbolId: string;
     symbolLabel: string;
     span: SearchSpan;
-    callGraphHint: Extract<CallGraphHint, { supported: true }>;
+    callGraphHint: CallGraphHint;
 }
 
 export interface FileOutlineResponseEnvelope {

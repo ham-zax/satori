@@ -21,6 +21,23 @@ npx -y @zokizuan/satori-cli@0.4.4 install --client all --profile minimal
 
 Profiles control indexing breadth, not search scope. `default` is safe-broad, `minimal` indexes source plus docs/text, and `all-text` indexes additional UTF-8 text files under the size limit. `search_codebase` still defaults to `scope=runtime`.
 
+The repo-local config shape is:
+
+```toml
+[index]
+profile = "minimal"
+```
+
+`satori.toml` is repository index policy, not MCP client config and not provider config. Do not put API keys, model names, Milvus endpoints, or tokens in it. Provider settings belong in the MCP client's runtime environment.
+
+Profile behavior:
+
+- `default`: source, docs/text, config, scripts, infra/query files, and known extensionless files such as `Dockerfile`, `Makefile`, `Justfile`, `Taskfile`, `Procfile`, `Jenkinsfile`, and `.dockerignore`.
+- `minimal`: source plus docs/text only.
+- `all-text`: default plus unknown UTF-8 text files under the size limit. `SATORI_ALL_TEXT_MAX_BYTES` can override the text-file cap.
+
+All profiles still honor `.gitignore`, `.satoriignore`, and the hard denylist for secrets, lockfiles, generated output, dependency folders, binaries, bundles, logs, database dumps, source maps, and snapshots. `satori.toml` is treated as an index-policy control file; search freshness and `manage_index action="sync"` can reconcile ordinary profile/ignore changes, while incompatible fingerprints still return `requires_reindex`.
+
 For Codex, add `--install-guidance-hook` only when you want an installer-managed `SessionStart` reminder in `~/.codex/config.toml`. The hook prints guidance only; it does not run indexing, search, or provider-backed work.
 
 Advanced direct execution is available through the package bin:
@@ -46,10 +63,21 @@ Important defaults:
 
 - `search_codebase` starts with runtime code, grouped by symbol.
 - `search_codebase` runs freshness checks before returning results.
-- Index profiles still honor `.satoriignore`, `.gitignore`, and the hard denylist for secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, and database dumps.
+- Grouped search is symbol-owned: chunks are supporting evidence for an owner symbol, not the final navigation unit.
+- Index profiles still honor `.satoriignore`, `.gitignore`, `satori.toml`, and the hard denylist for secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, and database dumps.
 - `read_file` is bounded and can return continuation hints.
 - `requires_reindex` means reindex first, then retry the original call.
 - `manage_index action="clear"` is destructive and should be explicit.
+
+## Navigation Sidecars
+
+Completed full indexes write a derived symbol registry and relationship sidecar. Files remain the source of truth; the registry is the deterministic navigation view for the indexed snapshot.
+
+- The symbol registry stores owner keys, exact symbol instances, file-owner fallback symbols, and outline records used by grouped search, `file_outline`, and exact reads.
+- The relationship sidecar stores conservative `CALLS v0` edges plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges with manifest compatibility gates.
+- `CALLS v0` is heuristic/name-based. Same-file unique targets can be high confidence, cross-file name-only targets are low confidence, and ambiguous same-name targets are skipped.
+- `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations. Package imports, unresolved paths, ambiguous exports, and multiline module syntax are skipped.
+- `call_graph` still traverses the prebuilt call-graph sidecar after readiness checks. Relationship records are readiness/evidence data until traversal migrates to the relationship engine.
 
 ## Runtime Requirements
 

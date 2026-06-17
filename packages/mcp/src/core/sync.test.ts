@@ -19,6 +19,7 @@ function createSnapshot(statusByPath: Map<string, CodebaseStatus>) {
     const indexManifestByPath = new Map<string, string[]>();
     const ignoreRulesVersionByPath = new Map<string, number>();
     const ignoreControlSignatureByPath = new Map<string, string>();
+    const requiresReindexByPath = new Map<string, { reason: string; message?: string }>();
 
     return {
         getCodebaseStatus(codebasePath: string): CodebaseStatus {
@@ -48,12 +49,20 @@ function createSnapshot(statusByPath: Map<string, CodebaseStatus>) {
         getCodebaseIgnoreControlSignature(codebasePath: string): string | undefined {
             return ignoreControlSignatureByPath.get(codebasePath);
         },
+        getCodebaseRequiresReindex(codebasePath: string) {
+            return requiresReindexByPath.get(codebasePath);
+        },
+        setCodebaseRequiresReindex(codebasePath: string, reason: string, message?: string) {
+            statusByPath.set(codebasePath, 'requires_reindex');
+            requiresReindexByPath.set(codebasePath, { reason, message });
+        },
         saveCodebaseSnapshot() { },
         removeIndexedCodebase(codebasePath: string) {
             statusByPath.delete(codebasePath);
             indexManifestByPath.delete(codebasePath);
             ignoreRulesVersionByPath.delete(codebasePath);
             ignoreControlSignatureByPath.delete(codebasePath);
+            requiresReindexByPath.delete(codebasePath);
         }
     };
 }
@@ -235,6 +244,46 @@ test('ensureFreshness baselines missing ignore signature only when no manifest o
     assert.equal(syncCalls, 1);
     assert.equal(reloadCalls, 0);
     assert.equal(typeof snapshot.getCodebaseIgnoreControlSignature(codebasePath), 'string');
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness marks requires_reindex when incremental navigation recovery fails', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    let syncCalls = 0;
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return ['node_modules/**'];
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return {
+                added: 1,
+                removed: 0,
+                modified: 0,
+                changedFiles: ['src/new.go'],
+                navigationRecovery: 'failed',
+            };
+        }
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 0);
+
+    assert.equal(syncCalls, 1);
+    assert.equal(decision.mode, 'skipped_requires_reindex');
+    assert.equal(statusByPath.get(codebasePath), 'requires_reindex');
+    assert.equal(snapshot.getCodebaseRequiresReindex(codebasePath)?.reason, 'navigation_recovery_failed');
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });

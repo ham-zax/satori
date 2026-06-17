@@ -11,7 +11,7 @@ interface SyncManagerOptions {
     watchEnabled?: boolean;
     watchDebounceMs?: number;
     now?: () => number;
-    onSyncCompleted?: (codebasePath: string, stats: { added: number; removed: number; modified: number; changedFiles: string[] }) => Promise<void> | void;
+    onSyncCompleted?: (codebasePath: string, stats: SyncStats) => Promise<void> | void;
 }
 
 export type FreshnessDecisionMode =
@@ -45,7 +45,15 @@ export interface FreshnessDecision {
 
 interface SyncExecutionOutcome {
     mode: Exclude<FreshnessDecisionMode, 'coalesced' | 'skipped_recent'>;
-    stats?: { added: number; removed: number; modified: number; changedFiles: string[] };
+    stats?: SyncStats;
+}
+
+interface SyncStats {
+    added: number;
+    removed: number;
+    modified: number;
+    changedFiles: string[];
+    navigationRecovery?: 'rebuilt' | 'failed';
 }
 
 type WatchSyncReason = 'watch_event' | 'ignore_rules_changed';
@@ -82,7 +90,7 @@ export class SyncManager {
     private pendingIgnoreChangeEdits: Map<string, number> = new Map();
     private activeIgnoreReconciles: Map<string, Promise<FreshnessDecision>> = new Map();
     private readonly now: () => number;
-    private readonly onSyncCompleted?: (codebasePath: string, stats: { added: number; removed: number; modified: number; changedFiles: string[] }) => Promise<void> | void;
+    private readonly onSyncCompleted?: (codebasePath: string, stats: SyncStats) => Promise<void> | void;
 
     constructor(context: Context, snapshotManager: SnapshotManager, options: SyncManagerOptions = {}) {
         this.context = context;
@@ -380,6 +388,16 @@ export class SyncManager {
 
             // Centralized State Update
             this.lastSyncTimes.set(codebasePath, this.now());
+
+            if (stats.navigationRecovery === 'failed') {
+                this.snapshotManager.setCodebaseRequiresReindex(
+                    codebasePath,
+                    'navigation_recovery_failed',
+                    'Incremental sync completed, but navigation sidecar recovery failed. Reindex is required before navigation tools are reliable.'
+                );
+                this.snapshotManager.saveCodebaseSnapshot();
+                return { mode: 'skipped_requires_reindex', stats };
+            }
 
             // Persist Snapshot
             this.snapshotManager.setCodebaseSyncCompleted(codebasePath, stats);

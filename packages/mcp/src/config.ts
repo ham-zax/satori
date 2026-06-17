@@ -73,7 +73,7 @@ interface CodebaseInfoBase {
     lastUpdated: string;
     indexFingerprint?: IndexFingerprint;
     fingerprintSource?: FingerprintSource;
-    reindexReason?: 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint';
+    reindexReason?: 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';
     callGraphSidecar?: CallGraphSidecarInfo;
     indexManifest?: CodebaseIndexManifest;
     ignoreRulesVersion?: number;

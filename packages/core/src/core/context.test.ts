@@ -758,7 +758,7 @@ test('Context.reindexByChange removes stale registry entries for modified paths 
     }
 });
 
-test('Context.reindexByChange does not synthesize navigation sidecars when no compatible registry exists before sync', async () => {
+test('Context.reindexByChange rebuilds navigation sidecars when no compatible registry exists before sync', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-no-registry-'));
     const stateRoot = path.join(tempRoot, 'state');
     const codebasePath = path.join(tempRoot, 'repo');
@@ -785,7 +785,15 @@ test('Context.reindexByChange does not synthesize navigation sidecars when no co
         const registry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
 
         assert.equal(result.modified, 1);
-        assert.equal(registry.status, 'missing');
+        assert.equal(result.navigationRecovery, 'rebuilt');
+        assert.equal(registry.status, 'ok');
+        if (registry.status !== 'ok') {
+            return;
+        }
+
+        assert.equal(registry.registry.manifest.files.length, 1);
+        assert.equal(registry.registry.manifest.files[0]?.path, 'src/auth.ts');
+        assert.ok(registry.registry.symbolsByFile.get('src/auth.ts')?.some((symbol) => symbol.name === 'auth'));
 
         const documents = Array.from(vectorDatabase.collections.values())
             .flatMap((collection) => Array.from(collection.values()))

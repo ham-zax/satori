@@ -24,7 +24,18 @@ export type CallGraphHint =
         validatedAt: string;
         sidecarBuiltAt: string;
     }
-    | { supported: false; reason: "missing_symbol" | "unsupported_language" | "missing_sidecar" | "stale_symbol_ref" };
+    | {
+        supported: false;
+        reason:
+            | "missing_symbol"
+            | "unsupported_language"
+            | "missing_sidecar"
+            | "stale_symbol_ref"
+            | "missing_symbol_registry"
+            | "missing_relationship_sidecar"
+            | "incompatible_symbol_registry"
+            | "incompatible_relationship_sidecar";
+    };
 
 export interface SearchNextActionReadSymbol {
     tool: "read_file";
@@ -173,7 +184,7 @@ export interface FingerprintCompatibilityDiagnostics {
     runtimeFingerprint: IndexFingerprint;
     indexedFingerprint?: IndexFingerprint;
     fingerprintSource?: FingerprintSource;
-    reindexReason?: "legacy_unverified_fingerprint" | "fingerprint_mismatch" | "missing_fingerprint";
+    reindexReason?: "legacy_unverified_fingerprint" | "fingerprint_mismatch" | "missing_fingerprint" | "navigation_recovery_failed";
     statusAtCheck?: "indexed" | "indexing" | "indexfailed" | "sync_completed" | "requires_reindex" | "not_found";
 }
 

@@ -440,7 +440,7 @@ Recent vs legacy:
 - Trigger: grouped search result construction.
 - Effect: returns `{supported:true,symbolRef,validated:true,validatedAt,sidecarBuiltAt}` when graph readiness is established through a compatible relationship sidecar bound to the loaded symbol registry manifest hash. On symbol-owned flows, `symbolRef.symbolId` carries the owner `symbolInstanceId`. Otherwise returns `{supported:false,reason}`.
 - Observability: `results[].callGraphHint`.
-- Determinism: supported symbolRef uses deterministic registry file/span metadata on symbol-owned flows; unsupported reasons are limited to `missing_symbol`, `unsupported_language`, `missing_sidecar`, and `stale_symbol_ref`.
+- Determinism: supported symbolRef uses deterministic registry file/span metadata on symbol-owned flows; unsupported reasons are limited to `missing_symbol`, `unsupported_language`, `missing_sidecar`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, and `stale_symbol_ref`.
 - Performance: no graph query until explicit `call_graph` call.
 
 2) `navigationFallback`
@@ -739,7 +739,7 @@ Behavior contract:
 - Re-run original tool call after reindex.
 
 4) “call graph not ready”
-- If `call_graph` returns `not_ready` / `missing_sidecar`, reindex.
+- If `call_graph` returns `not_ready`, `missing_sidecar`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, or `incompatible_relationship_sidecar`, reindex.
 - While waiting, use `search_codebase` `navigationFallback.readSpan` and optional `fileOutlineWindow` for deterministic navigation.
 
 5) “partial scan detected” (core sync)

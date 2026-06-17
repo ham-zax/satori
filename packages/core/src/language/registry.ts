@@ -1,3 +1,20 @@
+import {
+    getLanguageCapabilityDeclaration,
+    getLanguageCapabilityDeclarations,
+    type CapabilityStatus,
+    type LanguageCapabilityDeclaration,
+} from '../languages';
+
+export {
+    getLanguageCapabilityDeclaration,
+    getLanguageCapabilityDeclarations,
+};
+
+export type {
+    CapabilityStatus,
+    LanguageCapabilityDeclaration,
+};
+
 export type LanguageCapability =
     | 'search'
     | 'astSplitter'
@@ -33,198 +50,43 @@ export interface LanguageAdapter {
     capabilities: LanguageAdapterCapabilities;
 }
 
-const CURRENT_NAVIGATION_CAPABILITIES: LanguageAdapterCapabilities = {
-    search: true,
-    astSplitter: true,
-    symbols: true,
-    symbolMetadata: true,
-    owner: true,
-    imports: false,
-    callGraph: true,
-    callGraphBuild: true,
-    callGraphQuery: true,
-    fileOutline: true,
-    testLinks: true,
-};
+function isEnabled(status: CapabilityStatus): boolean {
+    return status !== 'none';
+}
 
-const AST_SEARCH_ONLY_CAPABILITIES: LanguageAdapterCapabilities = {
-    search: true,
-    astSplitter: true,
-    symbols: false,
-    symbolMetadata: false,
-    owner: false,
-    imports: false,
-    callGraph: false,
-    callGraphBuild: false,
-    callGraphQuery: false,
-    fileOutline: false,
-    testLinks: false,
-};
+function isProductionReady(status: CapabilityStatus): boolean {
+    return status === 'production_ready';
+}
 
-const SEARCH_ONLY_CAPABILITIES: LanguageAdapterCapabilities = {
-    search: true,
-    astSplitter: false,
-    symbols: false,
-    symbolMetadata: false,
-    owner: false,
-    imports: false,
-    callGraph: false,
-    callGraphBuild: false,
-    callGraphQuery: false,
-    fileOutline: false,
-    testLinks: false,
-};
+function toAdapterCapabilities(declaration: LanguageCapabilityDeclaration): LanguageAdapterCapabilities {
+    const symbolReady = isProductionReady(declaration.symbolExtractionCapability);
+    const callsReady = isProductionReady(declaration.callsCapability);
+    return {
+        search: isEnabled(declaration.searchEligibility),
+        astSplitter: isEnabled(declaration.parserCapability),
+        symbols: symbolReady,
+        symbolMetadata: symbolReady,
+        owner: isProductionReady(declaration.ownerExtractionCapability),
+        imports: isProductionReady(declaration.importExportCapability),
+        callGraph: callsReady,
+        callGraphBuild: callsReady,
+        callGraphQuery: callsReady,
+        fileOutline: symbolReady,
+        testLinks: isProductionReady(declaration.testReferenceCapability),
+    };
+}
 
-const LANGUAGE_ADAPTERS: LanguageAdapter[] = [
-    {
-        id: 'typescript',
-        aliases: ['ts'],
-        extensions: ['.ts', '.tsx', '.mts', '.cts'],
-        capabilities: { ...CURRENT_NAVIGATION_CAPABILITIES },
-    },
-    {
-        id: 'javascript',
-        aliases: ['js'],
-        extensions: ['.js', '.jsx', '.mjs', '.cjs'],
-        capabilities: { ...CURRENT_NAVIGATION_CAPABILITIES },
-    },
-    {
-        id: 'python',
-        aliases: ['py'],
-        extensions: ['.py'],
-        capabilities: { ...CURRENT_NAVIGATION_CAPABILITIES },
-    },
-    {
-        id: 'java',
-        aliases: [],
-        extensions: ['.java'],
-        capabilities: { ...AST_SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'cpp',
-        aliases: ['c++', 'c'],
-        extensions: ['.cpp', '.c', '.h', '.hpp', '.cc', '.cxx', '.hh', '.hxx', '.ixx'],
-        capabilities: { ...AST_SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'go',
-        aliases: [],
-        extensions: ['.go'],
-        capabilities: { ...AST_SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'rust',
-        aliases: ['rs'],
-        extensions: ['.rs'],
-        capabilities: { ...AST_SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'csharp',
-        aliases: ['cs'],
-        extensions: ['.cs'],
-        capabilities: { ...AST_SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'scala',
-        aliases: [],
-        extensions: ['.scala'],
-        capabilities: { ...AST_SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'php',
-        aliases: [],
-        extensions: ['.php'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'ruby',
-        aliases: ['rb'],
-        extensions: ['.rb'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'swift',
-        aliases: [],
-        extensions: ['.swift'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'kotlin',
-        aliases: ['kt'],
-        extensions: ['.kt', '.kts'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'objective-c',
-        aliases: ['objectivec'],
-        extensions: ['.m', '.mm'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'jupyter',
-        aliases: ['ipynb'],
-        extensions: ['.ipynb'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'text',
-        aliases: ['md', 'markdown'],
-        extensions: ['.md', '.markdown'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'vue',
-        aliases: [],
-        extensions: ['.vue'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'svelte',
-        aliases: [],
-        extensions: ['.svelte'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'astro',
-        aliases: [],
-        extensions: ['.astro'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'css',
-        aliases: ['scss'],
-        extensions: ['.css', '.scss'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'dockerfile',
-        aliases: [],
-        extensions: [],
-        filenames: ['Dockerfile'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'makefile',
-        aliases: [],
-        extensions: [],
-        filenames: ['Makefile'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'cmake',
-        aliases: [],
-        extensions: [],
-        filenames: ['CMakeLists.txt'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-    {
-        id: 'justfile',
-        aliases: [],
-        extensions: [],
-        filenames: ['justfile', 'Justfile'],
-        capabilities: { ...SEARCH_ONLY_CAPABILITIES },
-    },
-];
+function toLanguageAdapter(declaration: LanguageCapabilityDeclaration): LanguageAdapter {
+    return {
+        id: declaration.languageId,
+        aliases: [...declaration.aliases],
+        extensions: [...declaration.extensions],
+        ...(declaration.filenames ? { filenames: [...declaration.filenames] } : {}),
+        capabilities: toAdapterCapabilities(declaration),
+    };
+}
+
+const LANGUAGE_ADAPTERS: LanguageAdapter[] = getLanguageCapabilityDeclarations().map(toLanguageAdapter);
 
 const LANGUAGE_BY_KEY = new Map<string, LanguageAdapter>();
 const LANGUAGE_BY_EXTENSION = new Map<string, LanguageAdapter>();

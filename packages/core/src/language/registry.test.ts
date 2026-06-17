@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+    getLanguageCapabilityDeclaration,
+    getLanguageCapabilityDeclarations,
     getLanguageAdapterByFilename,
     getLanguageIdFromExtension,
     getLanguageIdFromFilename,
@@ -10,6 +12,25 @@ import {
     isLanguageCapabilitySupportedForFilename,
     isLanguageCapabilitySupportedForLanguage,
 } from './registry';
+
+test('language registry is backed by canonical capability declarations', () => {
+    const declarations = getLanguageCapabilityDeclarations();
+    const languageIds = declarations.map((declaration) => declaration.languageId);
+
+    assert.deepEqual([...languageIds].sort((a, b) => a.localeCompare(b)), languageIds);
+    assert.equal(new Set(languageIds).size, languageIds.length);
+
+    const typescript = getLanguageCapabilityDeclaration('typescript');
+    assert.equal(typescript?.symbolExtractionCapability, 'production_ready');
+    assert.equal(typescript?.ownerExtractionCapability, 'production_ready');
+    assert.equal(typescript?.callsCapability, 'production_ready');
+
+    const go = getLanguageCapabilityDeclaration('go');
+    assert.equal(go?.searchEligibility, 'production_ready');
+    assert.equal(go?.parserCapability, 'production_ready');
+    assert.notEqual(go?.symbolExtractionCapability, 'production_ready');
+    assert.notEqual(go?.callsCapability, 'production_ready');
+});
 
 test('language registry routes modern module and systems extensions without changing capability honesty', () => {
     assert.equal(getLanguageIdFromExtension('.mts'), 'typescript');
@@ -27,6 +48,16 @@ test('language registry routes modern module and systems extensions without chan
     assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'owner'), false);
     assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'search'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'owner'), false);
+});
+
+test('L1 candidate languages do not claim graph capabilities by routing alone', () => {
+    for (const language of ['go', 'rust', 'java', 'csharp', 'php', 'ruby', 'kotlin', 'swift']) {
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), false, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphBuild'), false, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphQuery'), false, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'testLinks'), false, language);
+    }
 });
 
 test('language registry exposes search-only frontend/style containers until extractors exist', () => {

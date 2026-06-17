@@ -25,7 +25,16 @@ import {
 } from '../vectordb';
 import { SemanticSearchRequest, SemanticSearchResult } from '../types';
 import { envManager } from '../utils/env-manager';
-import { DEFAULT_IGNORE_PATTERNS, DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
+import {
+    DEFAULT_IGNORE_PATTERNS,
+    IndexProfile,
+    getSupportedExtensionsForIndexProfile,
+} from '../config/defaults';
+import {
+    isIndexableFileByPolicy,
+    normalizeSupportedExtensions,
+} from '../config/index-policy';
+import { loadSatoriRepoConfig, SatoriRepoConfig } from '../config/repo-config';
 import { getLanguageIdFromExtension } from '../language';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -54,6 +63,9 @@ export class Context {
     private vectorDatabase: VectorDatabase;
     private codeSplitter: Splitter;
     private supportedExtensions: string[];
+    private configuredExtensionOverlays: string[];
+    private runtimeCustomExtensions: string[];
+    private indexProfilesByCodebase: Map<string, IndexProfile>;
     private baseIgnorePatterns: string[];
     private runtimeCustomIgnorePatterns: string[];
     private ignoreStateByCollection: Map<string, CodebaseIgnoreState>;
@@ -77,15 +89,14 @@ export class Context {
         // Load custom extensions from environment variables
         const envCustomExtensions = this.getCustomExtensionsFromEnv();
 
-        // Combine default extensions with config extensions and env extensions
-        const allSupportedExtensions = [
-            ...DEFAULT_SUPPORTED_EXTENSIONS,
+        this.configuredExtensionOverlays = normalizeSupportedExtensions([
             ...(config.supportedExtensions || []),
             ...(config.customExtensions || []),
             ...envCustomExtensions
-        ];
-        // Remove duplicates
-        this.supportedExtensions = [...new Set(allSupportedExtensions)];
+        ]);
+        this.runtimeCustomExtensions = [];
+        this.indexProfilesByCodebase = new Map();
+        this.supportedExtensions = this.buildSupportedExtensions('default');
 
         // Load custom ignore patterns from environment variables
         const envCustomIgnorePatterns = this.getCustomIgnorePatternsFromEnv();
@@ -137,6 +148,21 @@ export class Context {
      */
     getIndexedExtensions(): string[] {
         return [...this.supportedExtensions];
+    }
+
+    getIndexedExtensionsForCodebase(codebasePath: string): string[] {
+        const profile = this.indexProfilesByCodebase.get(this.canonicalizeCodebasePath(codebasePath)) || 'default';
+        return this.buildSupportedExtensions(profile);
+    }
+
+    loadIndexProfileForCodebase(codebasePath: string): SatoriRepoConfig {
+        const config = loadSatoriRepoConfig(codebasePath);
+        this.setIndexProfileForCodebase(codebasePath, config.profile);
+        return config;
+    }
+
+    setIndexProfileForCodebase(codebasePath: string, profile: IndexProfile): void {
+        this.indexProfilesByCodebase.set(this.canonicalizeCodebasePath(codebasePath), profile);
     }
 
     /**
@@ -193,11 +219,12 @@ export class Context {
      * This is used when ignore rules change and we need deterministic reconciliation.
      */
     async recreateSynchronizerForCodebase(codebasePath: string): Promise<void> {
+        this.loadIndexProfileForCodebase(codebasePath);
         const collectionName = this.resolveCollectionName(codebasePath);
         const synchronizer = new FileSynchronizer(
             codebasePath,
             this.getActiveIgnorePatterns(codebasePath),
-            this.supportedExtensions
+            this.getIndexedExtensionsForCodebase(codebasePath)
         );
         await synchronizer.initialize();
         this.synchronizers.set(collectionName, synchronizer);
@@ -272,6 +299,8 @@ export class Context {
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
         console.log(`[Context] 🚀 Starting to index codebase with ${searchType}: ${codebasePath}`);
 
+        this.loadIndexProfileForCodebase(codebasePath);
+
         // 1. Load ignore patterns from various ignore files
         await this.loadIgnorePatterns(codebasePath);
 
@@ -333,6 +362,7 @@ export class Context {
         codebasePath: string,
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
     ): Promise<{ added: number; removed: number; modified: number; changedFiles: string[] }> {
+        this.loadIndexProfileForCodebase(codebasePath);
         const collectionName = this.resolveCollectionName(codebasePath);
         const synchronizer = this.synchronizers.get(collectionName);
 
@@ -344,7 +374,7 @@ export class Context {
             const newSynchronizer = new FileSynchronizer(
                 codebasePath,
                 this.getActiveIgnorePatterns(codebasePath),
-                this.supportedExtensions
+                this.getIndexedExtensionsForCodebase(codebasePath)
             );
             await newSynchronizer.initialize();
             this.synchronizers.set(collectionName, newSynchronizer);
@@ -799,6 +829,7 @@ export class Context {
         await FileSynchronizer.deleteSnapshot(codebasePath);
         this.synchronizers.delete(collectionName);
         this.ignoreStateByCollection.delete(collectionName);
+        this.indexProfilesByCodebase.delete(this.canonicalizeCodebasePath(codebasePath));
 
         progressCallback?.({ phase: 'Index cleared', current: 100, total: 100, percentage: 100 });
         console.log('[Context] ✅ Index data cleaned');
@@ -1039,6 +1070,7 @@ export class Context {
      */
     private async getCodeFiles(codebasePath: string): Promise<string[]> {
         const files: string[] = [];
+        const supportedExtensions = this.getIndexedExtensionsForCodebase(codebasePath);
 
         const traverseDirectory = async (currentPath: string) => {
             const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
@@ -1054,8 +1086,9 @@ export class Context {
                 if (entry.isDirectory()) {
                     await traverseDirectory(fullPath);
                 } else if (entry.isFile()) {
-                    const ext = path.extname(entry.name);
-                    if (this.supportedExtensions.includes(ext)) {
+                    const stat = await fs.promises.stat(fullPath);
+                    const relativePath = path.relative(codebasePath, fullPath).replace(/\\/g, '/');
+                    if (await isIndexableFileByPolicy(relativePath, fullPath, stat.size, supportedExtensions)) {
                         files.push(fullPath);
                     }
                 }
@@ -1064,6 +1097,14 @@ export class Context {
 
         await traverseDirectory(codebasePath);
         return files;
+    }
+
+    private buildSupportedExtensions(profile: IndexProfile): string[] {
+        return normalizeSupportedExtensions([
+            ...getSupportedExtensionsForIndexProfile(profile),
+            ...this.configuredExtensionOverlays,
+            ...this.runtimeCustomExtensions
+        ]);
     }
 
     /**
@@ -1481,16 +1522,12 @@ export class Context {
     addCustomExtensions(customExtensions: string[]): void {
         if (customExtensions.length === 0) return;
 
-        // Ensure extensions start with dot
-        const normalizedExtensions = customExtensions.map(ext =>
-            ext.startsWith('.') ? ext : `.${ext}`
-        );
-
-        // Merge current extensions with new custom extensions, avoiding duplicates
-        const mergedExtensions = [...this.supportedExtensions, ...normalizedExtensions];
-        const uniqueExtensions: string[] = [...new Set(mergedExtensions)];
-        this.supportedExtensions = uniqueExtensions;
-        console.log(`[Context] 📎 Added ${customExtensions.length} custom extensions. Total: ${this.supportedExtensions.length} extensions`);
+        this.runtimeCustomExtensions = normalizeSupportedExtensions([
+            ...this.runtimeCustomExtensions,
+            ...customExtensions
+        ]);
+        this.supportedExtensions = this.buildSupportedExtensions('default');
+        console.log(`[Context] 📎 Added ${customExtensions.length} custom extensions. Runtime total: ${this.runtimeCustomExtensions.length} extensions`);
     }
 
     /**

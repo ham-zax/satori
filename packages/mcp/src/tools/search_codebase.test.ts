@@ -38,6 +38,17 @@ function captureTelemetry(run: () => Promise<void>): Promise<string[]> {
 
 test('search_codebase emits telemetry with diagnostics from handler meta', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
+    const responseText = JSON.stringify({
+        status: 'ok',
+        path: '/repo',
+        query: 'auth',
+        scope: 'runtime',
+        groupBy: 'symbol',
+        resultMode: 'grouped',
+        limit: 10,
+        freshnessDecision: { mode: 'skipped_recent' },
+        results: [{ kind: 'group', groupId: 'sym_auth', file: 'src/auth.ts' }]
+    });
 
     const ctx = {
         capabilities,
@@ -46,17 +57,7 @@ test('search_codebase emits telemetry with diagnostics from handler meta', async
             handleSearchCode: async () => ({
                 content: [{
                     type: 'text',
-                    text: JSON.stringify({
-                        status: 'ok',
-                        path: '/repo',
-                        query: 'auth',
-                        scope: 'runtime',
-                        groupBy: 'symbol',
-                        resultMode: 'grouped',
-                        limit: 10,
-                        freshnessDecision: { mode: 'skipped_recent' },
-                        results: [{ kind: 'group', groupId: 'sym_auth', file: 'src/auth.ts' }]
-                    })
+                    text: responseText
                 }],
                 meta: {
                     searchDiagnostics: {
@@ -94,6 +95,7 @@ test('search_codebase emits telemetry with diagnostics from handler meta', async
     assert.equal(payload.results_returned, 1);
     assert.equal(payload.excluded_by_ignore, 4);
     assert.equal(payload.freshness_mode, 'skipped_recent');
+    assert.equal(payload.response_bytes, Buffer.byteLength(responseText, 'utf8'));
 });
 
 test('search_codebase telemetry reports reranker_used when handler diagnostics indicate rerank applied', async () => {

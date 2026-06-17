@@ -69,20 +69,22 @@ Why it matters:
 
 ### 2. Runtime-First Semantic Search
 
-`search_codebase` defaults to runtime source rather than docs/tests:
+`search_codebase` defaults to implementation-oriented runtime discovery:
 
 - `scope=runtime`
 - `resultMode=grouped`
 - `groupBy=symbol`
 - `rankingMode=auto_changed_first`
 
-This fits the most common agent need: find the production behavior first, then pull in tests/docs only when useful.
+This fits the most common agent need: find the production behavior first, while still allowing tests to surface when the query asks for test/spec/coverage evidence.
 
 Supported scopes:
 
-- `runtime`: excludes docs/tests.
+- `runtime`: includes source/runtime code, top-level `scripts/**`, and test evidence; tests are demoted unless test intent is explicit.
 - `docs`: includes docs/tests only.
 - `mixed`: includes everything.
+
+Index profiles are separate from search scopes. `default` indexes a safe-broad set of source, docs/text, config, scripts, infra/query files, and known extensionless files. `minimal` indexes source plus docs/text. `all-text` adds unknown UTF-8 text files under the size limit. Search still starts at `scope=runtime`, so indexing docs/config does not make docs beat implementation results by default.
 
 Use cases:
 
@@ -1434,7 +1436,8 @@ Goal: configure Satori in Codex, Claude, or OpenCode without manual config editi
 Workflow:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.2 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 install --client all --profile minimal
 ```
 
 Why Satori is better:
@@ -1442,6 +1445,7 @@ Why Satori is better:
 - Managed entries are owned and removable.
 - First-party skills are copied with the config.
 - Installed package versions are resolved once and launched through the installer-owned stable launcher.
+- Optional repo-local `satori.toml` lets users choose `default`, `minimal`, or `all-text` indexing without changing MCP tool parameters.
 
 ### Use Case: CLI Automation
 

@@ -7,6 +7,10 @@ import * as os from 'os';
 import ignore from 'ignore';
 import { computeMerkleRoot } from './merkle';
 import { DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
+import {
+    isIndexableFileByPolicy,
+    normalizeSupportedExtensions,
+} from '../config/index-policy';
 
 interface FileStatSignature {
     size: number;
@@ -84,10 +88,9 @@ export class FileSynchronizer {
         this.ignorePatterns = ignorePatterns;
         this.ignoreMatcher = ignore();
         this.ignoreMatcher.add(this.ignorePatterns);
-        this.supportedExtensions = new Set(
-            (supportedExtensions.length > 0 ? supportedExtensions : DEFAULT_SUPPORTED_EXTENSIONS)
-                .map((extension) => extension.startsWith('.') ? extension.toLowerCase() : `.${extension.toLowerCase()}`)
-        );
+        this.supportedExtensions = new Set(normalizeSupportedExtensions(
+            supportedExtensions.length > 0 ? supportedExtensions : DEFAULT_SUPPORTED_EXTENSIONS
+        ));
         this.partialScan = false;
         this.unscannedDirPrefixes = [];
         this.fullHashCounter = 0;
@@ -203,9 +206,13 @@ export class FileSynchronizer {
         return this.ignoreMatcher.ignores(normalizedPath);
     }
 
-    private isSupportedFile(relativePath: string): boolean {
-        const extension = path.extname(relativePath).toLowerCase();
-        return this.supportedExtensions.has(extension);
+    private async isSupportedFile(relativePath: string, absolutePath: string, size: number): Promise<boolean> {
+        return isIndexableFileByPolicy(
+            relativePath,
+            absolutePath,
+            size,
+            [...this.supportedExtensions]
+        );
     }
 
     private parsePositiveInt(rawValue: string | undefined, fallback: number, min: number, max: number): number {
@@ -325,7 +332,7 @@ export class FileSynchronizer {
                 continue;
             }
 
-            if (!this.isSupportedFile(relativePath)) {
+            if (!await this.isSupportedFile(relativePath, absolutePath, stat.size)) {
                 continue;
             }
 

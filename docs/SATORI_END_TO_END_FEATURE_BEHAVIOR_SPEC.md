@@ -10,11 +10,13 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - `satori-cli` is a shell client of the same six MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
 - `satori-cli` also ships CLI-only `install` and `uninstall` commands for supported clients; these commands run before MCP session startup and do not widen the six-tool surface.
 - Managed installs perform package resolution during setup, not resident MCP startup; generated client config must avoid `npx`/package-manager launch paths.
+- Installer `--profile default|minimal|all-text` writes repo-local `satori.toml`; runtime reads `[index].profile` as index policy and treats `satori.toml` as a control file with `.gitignore` and `.satoriignore`.
+- Index profile defaults are safe-broad but hard-deny secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, database dumps, and snapshots before indexing.
 - `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers and responses are structured JSON envelopes.
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
 - `path:` and `-path:` operators use gitignore-style pattern matching via `ignore` against normalized repo-relative paths.
-- Scope filtering is strict: runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures, docs includes docs/tests only, mixed includes all.
+- Scope filtering is strict: runtime includes source/runtime/script code and test evidence while excluding docs/generated/artifacts/landing/fixtures, docs includes docs/tests only, mixed includes all. Runtime ranking demotes tests unless the query explicitly asks for test/spec/coverage evidence.
 - Search filtering precedence is deterministic: scope -> lang -> path include -> path exclude -> must -> exclude.
 - Must-retry is bounded and deterministic; warning is emitted only when must constraints remain unsatisfied after retries.
 - Group diversity is default-on and deterministic with fixed caps and one deterministic relaxed pass.
@@ -24,7 +26,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Rerank is policy-controlled (capability/profile + docs-scope skip), runs post-filter and pre-group, top-K bounded, deterministic rank-only boost, stable failure degradation.
 - Candidate and group sorting both use explicit deterministic tie-break chains.
 - Grouping supports `symbol` and `file`; fallback groups use deterministic hashed IDs when symbol identity is unavailable.
-- `callGraphHint` contains supported/unsupported reasoned state; unsupported groups expose executable `navigationFallback`, and search hints always include the next navigation step.
+- `callGraphHint` contains supported/unsupported reasoned state; supported groups expose compact `nextActions.callGraph` args plus allowed directions, unsupported groups expose executable `navigationFallback`, and search hints always include the next navigation step.
 - `file_outline` supports `resolveMode=outline|exact` with exact outcomes `ok|ambiguous|not_found`.
 - `read_file` supports `plain|annotated`; annotated mode returns `outlineStatus`, `outline`, `hasMore`, warnings/hints; `open_symbol` resolves deterministically via `file_outline exact`.
 - Reindex-compatibility gates propagate `requires_reindex` envelopes with deterministic `hints.reindex` across search/navigation tools.
@@ -62,7 +64,7 @@ North-star workflow:
 Behavior contract:
 - Trigger: MCP server starts and tools are invoked.
 - Effect: Requests route through `ToolHandlers`, enforcing indexing/fingerprint/sync/sidecar gates before returning envelopes.
-- Observability: JSON envelopes (`status`, `hints`, `warnings`, `freshnessDecision`, `freshnessSummary`) and deterministic debug payload when `debug:true`.
+- Observability: JSON envelopes (`status`, `hints`, `warnings`, `freshnessDecision`, `freshnessSummary`), search telemetry `response_bytes`, and deterministic debug payload when `debug:true`.
 - Determinism: Explicit sort/tie-break chains, stable warning ordering, fixed caps/thresholds/constants.
 - Performance impact: incremental sync, coalescing, bounded retries, bounded rerank top-K, cached git-status, watcher debounce.
 
@@ -291,7 +293,7 @@ Behavior:
 
 1) Scope semantics (`runtime|mixed|docs`)
 - Trigger: `scope` input.
-- Effect: `runtime` includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures, `docs` includes docs/tests only, `mixed` includes all.
+- Effect: `runtime` includes source/runtime/script code and test evidence while excluding docs/generated/artifacts/landing/fixtures, `docs` includes docs/tests only, `mixed` includes all.
 - Observability: returned files and `hints.debugSearch.filterSummary.removedByScope`.
 - Determinism: strict category gate from `shouldIncludeCategoryInScope`.
 - Performance: early scope filtering reduces downstream scoring/grouping volume.
@@ -299,9 +301,9 @@ Behavior:
 2) Result modes and grouping
 - Trigger: `resultMode` and `groupBy`.
 - Effect: `raw` returns chunks; `grouped` returns collapsed groups by symbol/file.
-- Observability: `resultMode`, `results.kind`, `collapsedChunkCount`, `callGraphHint`.
+- Observability: `resultMode`, `results.kind`, `collapsedChunkCount`, `callGraphHint`, compact `nextActions`, capped `preview`.
 - Determinism: group key construction and sorted representative selection.
-- Performance: grouped mode reduces result payload/noise, raw mode preserves chunk detail.
+- Performance: grouped mode reduces result payload/noise with capped previews and shared call-graph action args; raw mode preserves chunk detail.
 
 3) Subdirectory `effectiveRoot` resolution
 - Trigger: `search_codebase.path` points to a subdirectory that is inside an indexed parent root.
@@ -354,12 +356,19 @@ Behavior:
 - Determinism: fixed `PathCategory` classifier and `SCOPE_PATH_MULTIPLIERS`.
 - Performance: path-only scoring adjustment; no extra backend calls.
 
+8b) Agent-fit ranking
+- Trigger: runtime or mixed search result scoring.
+- Effect: implementation-owner queries prefer implementation symbols/chunks and top-level `scripts/**` over tests, docs, interfaces/types, schema-only results, and anonymous callbacks. Test/spec/coverage queries keep tests eligible for top ranking.
+- Observability: result debug includes `agentFitMultiplier` and `agentFitReason` when `debug:true`.
+- Determinism: fixed query-intent regexes and fixed multipliers; no extra backend calls.
+- Performance: metadata/content-prefix scoring adjustment only.
+
 9) Noise mitigation hint
 - Trigger: top visible results exceed noise ratio threshold.
 - Effect: emits deterministic mitigation payload (`ratios`, `recommendedScope`, patterns, debounce, nextStep) with root `.gitignore` redundancy suppression.
 - Observability: `hints.noiseMitigation` with `version=1`.
 - Determinism:
-  - fixed category precedence `generated > fixture > landing > artifact > tests > docs > example > adapter > entrypoint > core > srcRuntime > neutral`, topK fixed cap.
+  - fixed category precedence `generated > fixture > landing > artifact > tests > docs > example > adapter > entrypoint > core > srcRuntime > neutral`, topK fixed cap; `scriptRuntime` is a runtime path category, not a noise bucket.
   - suggestion order remains stable (`SEARCH_NOISE_HINT_PATTERNS` order).
   - suppression is path-observed over top-K noisy files only.
   - fallback to baseline suggestions when root `.gitignore` matcher state is absent/error.
@@ -411,7 +420,7 @@ Recent vs legacy:
 - Trigger: `callGraphHint.supported === false`.
 - Effect: emits executable fallback plan (`readSpan` always; `fileOutlineWindow` when sidecar-ready and extension supports outline).
 - Observability: `results[].navigationFallback`.
-- Determinism: absolute path and span derived deterministically from representative chunk/effective root.
+- Determinism: executable action args and span are derived deterministically from representative chunk/effective root.
 - Performance: no extra backend calls; payload-only guidance.
 
 3) `file_outline` exact resolution
@@ -737,6 +746,9 @@ Behavior contract:
 
 | Feature | Proof Test (file + anchor) |
 |---|---|
+| Index profiles and safe-broad file policy | [synchronizer.integration.test.mjs](/home/hamza/repo/satori/tests/integration/synchronizer.integration.test.mjs) `default profile tracks safe-broad...`, `minimal profile excludes config...`, `all-text profile tracks unknown UTF-8...` |
+| Installer `--profile` repo config | [install.test.ts](/home/hamza/repo/satori/packages/cli/src/install.test.ts) `install --profile writes repo config`, [install.test.ts](/home/hamza/repo/satori/packages/mcp/src/cli/install.test.ts) `install --profile writes repo config` |
+| `satori.toml` freshness reconciliation | [sync.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/sync.test.ts) `ensureFreshness treats satori.toml as an index-policy control file` |
 | Search scope runtime/docs invariants + ordering determinism | [search.eval.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/search.eval.test.ts) `search eval matrix invariants hold...` |
 | Operator parsing + escaping | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `parses operators from query prefix...` |
 | Must warning semantics | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `emits FILTER_MUST_UNSATISFIED...`, `does not emit ... when must succeeds after retry` |
@@ -749,7 +761,7 @@ Behavior contract:
 | Rerank can alter representative chunk before grouping | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `reranker can change grouped representative chunk selection...` |
 | Noise mitigation hint deterministic payload | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `emits deterministic noiseMitigation hint...`, `omits ... runtime-dominant` |
 | Fallback groupId + navigation fallback stability | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped fallback emits stable hash groupId...` |
-| Search navigation next-step hint | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped output includes runnable nextActions...` |
+| Search navigation next-step hint | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped output includes compact nextActions...` |
 | Subdirectory query fallback context correctness | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `subdirectory query builds navigationFallback from effectiveRoot...` |
 | Backend diagnostics for stopped/unavailable vector backend | [setup-errors.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/setup-errors.test.ts), [search_codebase.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/search_codebase.test.ts), [manage_index.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/manage_index.test.ts) |
 | `file_outline` exact mode statuses | [handlers.file_outline.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.file_outline.test.ts) `exact mode resolves unique`, `returns ambiguous`, `returns not_found` |

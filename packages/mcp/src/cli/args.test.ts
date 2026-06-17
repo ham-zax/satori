@@ -40,6 +40,33 @@ test("parseCliArgs supports install with explicit client and dry-run", () => {
     assert.equal(parsed.command.dryRun, true);
 });
 
+test("parseCliArgs supports install profile selection", () => {
+    const parsed = parseCliArgs(["install", "--client", "all", "--profile", "minimal"]);
+    assert.equal(parsed.command.kind, "install");
+    if (parsed.command.kind !== "install") {
+        assert.fail("Expected install command parsing");
+    }
+    assert.equal(parsed.command.client, "all");
+    assert.equal(parsed.command.profile, "minimal");
+});
+
+test("parseCliArgs supports opt-in Codex guidance hook install flag", () => {
+    const parsed = parseCliArgs(["install", "--client", "codex", "--install-guidance-hook"]);
+    assert.equal(parsed.command.kind, "install");
+    if (parsed.command.kind !== "install") {
+        assert.fail("Expected install command parsing");
+    }
+    assert.equal(parsed.command.client, "codex");
+    assert.equal(parsed.command.installGuidanceHook, true);
+});
+
+test("parseCliArgs rejects unsupported install profiles", () => {
+    assert.throws(
+        () => parseCliArgs(["install", "--profile", "everything"]),
+        /--profile must be one of: default, minimal, all-text/
+    );
+});
+
 test("parseCliArgs supports install with OpenCode client", () => {
     const parsed = parseCliArgs(["install", "--client", "opencode"]);
     assert.equal(parsed.command.kind, "install");
@@ -67,6 +94,13 @@ test("parseCliArgs supports uninstall with explicit client", () => {
     }
     assert.equal(parsed.command.client, "claude");
     assert.equal(parsed.command.dryRun, false);
+});
+
+test("parseCliArgs rejects guidance hook flag for uninstall", () => {
+    assert.throws(
+        () => parseCliArgs(["uninstall", "--client", "codex", "--install-guidance-hook"]),
+        /Unknown arguments for uninstall/
+    );
 });
 
 test("parseCliArgs rejects unsupported install clients", () => {

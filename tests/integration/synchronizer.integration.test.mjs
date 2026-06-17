@@ -8,6 +8,10 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { FileSynchronizer } = require('../../packages/core/dist/sync/synchronizer.js');
+const {
+  DEFAULT_IGNORE_PATTERNS,
+  getSupportedExtensionsForIndexProfile
+} = require('../../packages/core/dist/config/defaults.js');
 
 function getSnapshotPath(codebasePath) {
   return FileSynchronizer.getSnapshotPathForCodebase(codebasePath);
@@ -54,6 +58,100 @@ function isNormalizedRelPath(value) {
     && !value.split('/').includes('..')
     && !value.endsWith('/');
 }
+
+test('integration: default profile tracks safe-broad source config scripts and extensionless files', async () => {
+  resetSyncEnv();
+  const codebasePath = createTempCodebase({
+    'scripts/check-version-freshness.mjs': 'export function checkVersionFreshness() { return true; }\n',
+    'scripts/release-smoke.cjs': 'module.exports = function releaseSmoke() { return true; };\n',
+    'scripts/release.sh': 'echo release\n',
+    'config/app.toml': '[app]\nname = "demo"\n',
+    'config/workflow.yaml': 'name: demo\n',
+    'Dockerfile': 'FROM node:20\n',
+    '.env': 'TOKEN=secret\n',
+    'pnpm-lock.yaml': 'lockfileVersion: 9\n',
+    'public/app.min.js': 'function minified(){}\n',
+    'assets/blob.bin': Buffer.from([0, 1, 2, 3]),
+  });
+
+  try {
+    await FileSynchronizer.deleteSnapshot(codebasePath);
+
+    const synchronizer = new FileSynchronizer(codebasePath, DEFAULT_IGNORE_PATTERNS);
+    await synchronizer.initialize();
+    const snapshot = await readSnapshot(codebasePath);
+    const persistedKeys = snapshot.fileHashes.map(([key]) => key);
+
+    assert.equal(persistedKeys.includes('scripts/check-version-freshness.mjs'), true);
+    assert.equal(persistedKeys.includes('scripts/release-smoke.cjs'), true);
+    assert.equal(persistedKeys.includes('scripts/release.sh'), true);
+    assert.equal(persistedKeys.includes('config/app.toml'), true);
+    assert.equal(persistedKeys.includes('config/workflow.yaml'), true);
+    assert.equal(persistedKeys.includes('Dockerfile'), true);
+    assert.equal(persistedKeys.includes('.env'), false);
+    assert.equal(persistedKeys.includes('pnpm-lock.yaml'), false);
+    assert.equal(persistedKeys.includes('public/app.min.js'), false);
+    assert.equal(persistedKeys.includes('assets/blob.bin'), false);
+  } finally {
+    await cleanupCodebase(codebasePath);
+  }
+});
+
+test('integration: minimal profile excludes config and scripts but keeps code and docs', async () => {
+  resetSyncEnv();
+  const codebasePath = createTempCodebase({
+    'src/app.ts': 'export const app = true;\n',
+    'README.md': '# Demo\n',
+    'config/app.toml': '[app]\nname = "demo"\n',
+    'scripts/release.sh': 'echo release\n',
+  });
+
+  try {
+    await FileSynchronizer.deleteSnapshot(codebasePath);
+
+    const synchronizer = new FileSynchronizer(
+      codebasePath,
+      [],
+      getSupportedExtensionsForIndexProfile('minimal')
+    );
+    await synchronizer.initialize();
+    const snapshot = await readSnapshot(codebasePath);
+    const persistedKeys = snapshot.fileHashes.map(([key]) => key);
+
+    assert.equal(persistedKeys.includes('src/app.ts'), true);
+    assert.equal(persistedKeys.includes('README.md'), true);
+    assert.equal(persistedKeys.includes('config/app.toml'), false);
+    assert.equal(persistedKeys.includes('scripts/release.sh'), false);
+  } finally {
+    await cleanupCodebase(codebasePath);
+  }
+});
+
+test('integration: all-text profile tracks unknown UTF-8 text and rejects binary payloads', async () => {
+  resetSyncEnv();
+  const codebasePath = createTempCodebase({
+    'notes/domain.customext': 'domain specific text\n',
+    'data/blob.custombin': Buffer.from([0, 159, 146, 150]),
+  });
+
+  try {
+    await FileSynchronizer.deleteSnapshot(codebasePath);
+
+    const synchronizer = new FileSynchronizer(
+      codebasePath,
+      [],
+      getSupportedExtensionsForIndexProfile('all-text')
+    );
+    await synchronizer.initialize();
+    const snapshot = await readSnapshot(codebasePath);
+    const persistedKeys = snapshot.fileHashes.map(([key]) => key);
+
+    assert.equal(persistedKeys.includes('notes/domain.customext'), true);
+    assert.equal(persistedKeys.includes('data/blob.custombin'), false);
+  } finally {
+    await cleanupCodebase(codebasePath);
+  }
+});
 
 test('integration: snapshot identity parity across path variants and deleteSnapshot SSOT', async () => {
   resetSyncEnv();

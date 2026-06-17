@@ -62,8 +62,8 @@ interface IgnoreReloadResult {
     version: number;
 }
 
-// v1 policy: only root-level control files trigger ignore-rule reconciliation.
-const IGNORE_RULE_CONTROL_FILES = new Set(['.satoriignore', '.gitignore']);
+// v1 policy: only root-level control files trigger index-policy reconciliation.
+const IGNORE_RULE_CONTROL_FILES = new Set(['.satoriignore', '.gitignore', 'satori.toml']);
 
 export class SyncManager {
     private context: Context;

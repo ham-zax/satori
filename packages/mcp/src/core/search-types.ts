@@ -55,17 +55,16 @@ export interface SearchNextActionCallGraph {
     args: {
         path: string;
         symbolRef: CallGraphSymbolRef;
-        direction: "callers" | "callees";
         depth: number;
         limit: number;
     };
+    directions: Array<"callers" | "callees">;
 }
 
 export interface SearchNextActions {
     openSymbol?: SearchNextActionReadSymbol;
     outlineWindow?: SearchNextActionFileOutlineWindow;
-    traceCallers?: SearchNextActionCallGraph;
-    traceCallees?: SearchNextActionCallGraph;
+    callGraph?: SearchNextActionCallGraph;
 }
 
 export interface SearchChunkResult {
@@ -86,6 +85,8 @@ export interface SearchChunkResult {
         pathMultiplier: number;
         pathCategory: string;
         changedFilesMultiplier?: number;
+        agentFitMultiplier?: number;
+        agentFitReason?: string;
         matchesMust?: boolean;
         exactLexicalMatch: boolean;
         backendScore?: number;
@@ -116,6 +117,8 @@ export interface SearchGroupResult {
         topChunkScore: number;
         lexicalScore: number;
         changedFilesMultiplier?: number;
+        agentFitMultiplier?: number;
+        agentFitReason?: string;
         matchesMust?: boolean;
         exactLexicalMatch: boolean;
     };

@@ -31,11 +31,32 @@ Satori indexes a repository, keeps the index fresh, and gives agents a fixed six
 Install managed MCP config for every supported local client:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.2 install --client all
-npx -y @zokizuan/satori-cli@0.4.2 doctor
+npx -y @zokizuan/satori-cli@0.4.4 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 doctor
 ```
 
 Supported installers: `codex`, `claude`, `opencode`, and `all`.
+
+Choose an index profile during install when the repo should not use the default safe-broad policy:
+
+```bash
+npx -y @zokizuan/satori-cli@0.4.4 install --client all --profile minimal
+```
+
+The installer writes or updates repo-local `satori.toml`:
+
+```toml
+[index]
+profile = "minimal"
+```
+
+Profiles are:
+
+- `default`: safe-broad indexing for source, docs/text, config, scripts, infra/query files, and known extensionless files such as `Dockerfile` and `Makefile`.
+- `minimal`: source plus docs/text only.
+- `all-text`: safe-broad plus UTF-8 text files under the configured size limit.
+
+All profiles still honor `.satoriignore`, `.gitignore`, and the hard denylist for secrets, generated output, dependency folders, lockfiles, binaries, logs, databases, bundles, source maps, and snapshots. Index profiles control what enters the index; `search_codebase` still defaults to `scope=runtime` for implementation-first discovery.
 
 The installer writes Satori-managed config and copies the first-party workflow skill:
 
@@ -46,6 +67,8 @@ It also installs the MCP server once under `~/.satori/mcp-runtime/`, writes a st
 Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
 
 Restart the MCP client after changing config.
+
+For Codex, `satori-cli install --client codex --install-guidance-hook` also installs a marked `SessionStart` reminder that prints the Satori tool workflow. The hook is guidance-only and does not run indexing, search, or provider-backed work.
 
 ## First Repo Workflow
 
@@ -68,7 +91,7 @@ If any tool returns `requires_reindex`, run the hinted `manage_index action="rei
 
 Satori needs an embedding provider and a Milvus-compatible vector store before indexing. MCP startup, `tools list`, and `doctor` do not require provider credentials; provider-backed tool calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 
-Run `npx -y @zokizuan/satori-cli@0.4.2 doctor` after setting env values to check the local setup before indexing.
+Run `npx -y @zokizuan/satori-cli@0.4.4 doctor` after setting env values to check the local setup before indexing.
 
 Installer config and runtime config are intentionally separate:
 
@@ -211,8 +234,8 @@ Use `pnpm run dev:install-local-mcp:no-build` after a previous build when you on
 Current release versions:
 
 - `@zokizuan/satori-core@1.6.2`
-- `@zokizuan/satori-mcp@4.11.3`
-- `@zokizuan/satori-cli@0.4.2`
+- `@zokizuan/satori-mcp@4.11.5`
+- `@zokizuan/satori-cli@0.4.4`
 
 Preflight before publishing:
 

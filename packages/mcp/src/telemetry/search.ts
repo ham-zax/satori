@@ -16,6 +16,7 @@ export interface SearchTelemetryEvent {
     search_pass_success_count?: number;
     search_pass_failure_count?: number;
     parallel_fanout?: boolean;
+    response_bytes?: number;
     error?: string;
 }
 

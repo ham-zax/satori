@@ -7,16 +7,26 @@ Read-only MCP server for Satori. It gives coding agents six deterministic tools 
 Use the CLI installer for normal setup:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.2 install --client all
-npx -y @zokizuan/satori-cli@0.4.2 doctor
+npx -y @zokizuan/satori-cli@0.4.4 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 doctor
 ```
 
 The CLI installer supports `codex`, `claude`, `opencode`, and `all`. It creates the runtime cache, writes the stable launcher, and writes client config for you. Avoid using `npx` as the resident MCP server command; first-run package resolution can exceed normal MCP startup timeouts.
 
+Use `--profile default|minimal|all-text` to write repo-local `satori.toml` during install:
+
+```bash
+npx -y @zokizuan/satori-cli@0.4.4 install --client all --profile minimal
+```
+
+Profiles control indexing breadth, not search scope. `default` is safe-broad, `minimal` indexes source plus docs/text, and `all-text` indexes additional UTF-8 text files under the size limit. `search_codebase` still defaults to `scope=runtime`.
+
+For Codex, add `--install-guidance-hook` only when you want an installer-managed `SessionStart` reminder in `~/.codex/config.toml`. The hook prints guidance only; it does not run indexing, search, or provider-backed work.
+
 Advanced direct execution is available through the package bin:
 
 ```bash
-npx -y @zokizuan/satori-mcp@4.11.3 --help
+npx -y @zokizuan/satori-mcp@4.11.5 --help
 ```
 
 Use direct package execution for inspection, smoke tests, or unsupported harnesses. For supported clients, prefer `satori-cli install` so startup does not depend on package-manager resolution.
@@ -36,6 +46,7 @@ Important defaults:
 
 - `search_codebase` starts with runtime code, grouped by symbol.
 - `search_codebase` runs freshness checks before returning results.
+- Index profiles still honor `.satoriignore`, `.gitignore`, and the hard denylist for secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, and database dumps.
 - `read_file` is bounded and can return continuation hints.
 - `requires_reindex` means reindex first, then retry the original call.
 - `manage_index action="clear"` is destructive and should be explicit.

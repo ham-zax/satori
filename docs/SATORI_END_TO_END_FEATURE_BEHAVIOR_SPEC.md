@@ -12,6 +12,8 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Managed installs perform package resolution during setup, not resident MCP startup; generated client config must avoid `npx`/package-manager launch paths.
 - Installer `--profile default|minimal|all-text` writes repo-local `satori.toml`; runtime reads `[index].profile` as index policy and treats `satori.toml` as a control file with `.gitignore` and `.satoriignore`.
 - Index profile defaults are safe-broad but hard-deny secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, database dumps, and snapshots before indexing.
+- Language capability routing is explicit: `search` means text retrieval eligibility, `symbols`/legacy `symbolMetadata` means extracted symbol metadata, `owner` means extracted source-symbol ownership beyond synthesized file fallback, and call graph remains split between legacy `callGraphBuild`/`callGraphQuery` plus aggregate `callGraph`.
+- Symbol-owned retrieval contracts now distinguish stable-ish `symbolKey` from exact snapshot `symbolInstanceId`; these are exported core types and guards only until the navigation sidecar writer lands.
 - `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers and responses are structured JSON envelopes.
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
@@ -60,6 +62,21 @@ North-star workflow:
 - `call_graph` traverses callers/callees for that symbol.
 - `read_file(open_symbol)` opens deterministic symbol span for editing context.
 - If call graph is unavailable for a group, `navigationFallback` provides executable `readSpan` and optional `fileOutlineWindow`.
+
+Language capability contract:
+- Capability names are exposed through `packages/core/src/language/registry.ts` and keep backward-compatible aliases for existing MCP callers.
+- `search` is broad retrieval eligibility and does not imply extracted symbols, owner resolution, imports, outline, or call graph support.
+- `owner` means chunks can resolve to extracted source symbols beyond the synthesized file owner. All indexed chunks may later receive a synthesized file owner when no extracted owner exists.
+- Search-only artifact/container languages such as Vue, Svelte, Astro, CSS/SCSS, Dockerfile, Makefile, CMakeLists, and Justfile must not claim `symbols`, `owner`, `imports`, `fileOutline`, or `callGraph` until deterministic extractors exist.
+- TypeScript module extensions `.mts` and `.cts` route as TypeScript; C/C++ variants `.cc`, `.cxx`, `.hh`, `.hxx`, `.ixx` route as C++; `.kts` routes as Kotlin.
+
+Symbol identity contract:
+- Files remain the source of truth. Symbol records are derived navigation contracts for compatible index snapshots.
+- `symbolKey` is stable-ish across small edits but is not exact and is not expected to survive file moves/renames in v1.
+- `symbolInstanceId` is exact snapshot identity derived from `symbolKey`, file hash, canonical span serialization, and extractor version.
+- `symbolKey` lookup is candidate lookup; exact opens must disambiguate with `symbolInstanceId`, file hash, manifest compatibility, and exact file/label constraints.
+- Relationship manifests must bind to the compatible symbol registry manifest hash before graph data can be trusted.
+- Current implementation status: core exports contract types and runtime guards; it does not yet write symbol registry or relationship sidecars.
 
 Behavior contract:
 - Trigger: MCP server starts and tools are invoked.
@@ -747,6 +764,8 @@ Behavior contract:
 | Feature | Proof Test (file + anchor) |
 |---|---|
 | Index profiles and safe-broad file policy | [synchronizer.integration.test.mjs](/home/hamza/repo/satori/tests/integration/synchronizer.integration.test.mjs) `default profile tracks safe-broad...`, `minimal profile excludes config...`, `all-text profile tracks unknown UTF-8...` |
+| Language router capability honesty | [registry.test.ts](/home/hamza/repo/satori/packages/core/src/language/registry.test.ts) extension, filename, alias, and search-only capability assertions |
+| Symbol-owned retrieval contract types | [contracts.test.ts](/home/hamza/repo/satori/packages/core/src/symbols/contracts.test.ts) schema versions, manifest guards, canonical span serialization, relationship manifest validation |
 | Installer `--profile` repo config | [install.test.ts](/home/hamza/repo/satori/packages/cli/src/install.test.ts) `install --profile writes repo config`, [install.test.ts](/home/hamza/repo/satori/packages/mcp/src/cli/install.test.ts) `install --profile writes repo config` |
 | `satori.toml` freshness reconciliation | [sync.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/sync.test.ts) `ensureFreshness treats satori.toml as an index-policy control file` |
 | Search scope runtime/docs invariants + ordering determinism | [search.eval.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/search.eval.test.ts) `search eval matrix invariants hold...` |
@@ -786,6 +805,8 @@ Behavior contract:
 
 **Evidence:**
 - [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts)
+- [registry.test.ts](/home/hamza/repo/satori/packages/core/src/language/registry.test.ts)
+- [contracts.test.ts](/home/hamza/repo/satori/packages/core/src/symbols/contracts.test.ts)
 - [handlers.file_outline.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.file_outline.test.ts)
 - [handlers.call_graph.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.call_graph.test.ts)
 - [sync.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/sync.test.ts)

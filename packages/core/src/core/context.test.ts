@@ -262,6 +262,60 @@ test('Context.indexCodebase writes a compatible symbol registry sidecar for comp
     }
 });
 
+test('Context.clearIndex removes navigation sidecars and sqlite cache', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-clear-navigation-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, [
+            'export function normalize(input: string) {',
+            '  return input.trim();',
+            '}',
+        ].join('\n'), 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        const result = await context.indexCodebase(codebasePath);
+        const registry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+
+        assert.equal(result.status, 'completed');
+        assert.equal(registry.status, 'ok');
+        assert.equal(fs.existsSync(resolveNavigationSqlitePath(stateRoot, codebasePath)), true);
+        assert.equal(await vectorDatabase.hasCollection(context.resolveCollectionName(codebasePath)), true);
+
+        const relationships = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+            expectedSymbolRegistryManifestHash: registry.manifestHash,
+        });
+        assert.equal(relationships.status, 'ok');
+
+        await context.clearIndex(codebasePath);
+
+        const clearedRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+        const clearedRelationships = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+            expectedSymbolRegistryManifestHash: registry.manifestHash,
+        });
+
+        assert.equal(await vectorDatabase.hasCollection(context.resolveCollectionName(codebasePath)), false);
+        assert.equal(clearedRegistry.status, 'missing');
+        assert.equal(clearedRelationships.status, 'missing');
+        assert.equal(fs.existsSync(resolveNavigationSqlitePath(stateRoot, codebasePath)), false);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context.processFileList returns symbol records, manifest files, and completion status in production code', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-process-file-list-'));
     const stateRoot = path.join(tempRoot, 'state');

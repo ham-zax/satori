@@ -255,6 +255,7 @@ export class SyncManager {
         const checkedAt = new Date(checkedAtMs).toISOString();
         const startedAt = checkedAtMs;
         const resolvedIgnoreControlSignature = nextIgnoreControlSignature ?? await this.computeIgnoreControlSignature(codebasePath);
+        let indexedStateMutated = false;
 
         try {
             if (this.activeSyncs.has(codebasePath)) {
@@ -288,6 +289,7 @@ export class SyncManager {
 
             if (toDelete.length > 0 && typeof this.context.deleteIndexedPathsByRelativePaths === 'function') {
                 await this.context.deleteIndexedPathsByRelativePaths(codebasePath, toDelete);
+                indexedStateMutated = true;
             }
 
             if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
@@ -326,12 +328,23 @@ export class SyncManager {
         } catch (error: any) {
             let fallbackSyncExecuted = false;
             let fallbackStats: { added: number; removed: number; modified: number } | undefined;
+            let fallbackRecovered = false;
             try {
                 const fallbackDecision = await this.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
                 fallbackSyncExecuted = true;
                 fallbackStats = fallbackDecision.stats;
+                fallbackRecovered = fallbackDecision.mode === 'synced';
             } catch {
                 // Preserve primary failure metadata even if fallback sync fails.
+            }
+
+            if (indexedStateMutated && !fallbackRecovered) {
+                this.snapshotManager.setCodebaseRequiresReindex(
+                    codebasePath,
+                    'navigation_recovery_failed',
+                    'Ignore-rule reconciliation deleted indexed paths, but sync recovery failed. Reindex is required before navigation tools are reliable.'
+                );
+                this.snapshotManager.saveCodebaseSnapshot();
             }
 
             return {

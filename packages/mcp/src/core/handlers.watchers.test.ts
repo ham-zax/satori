@@ -276,6 +276,14 @@ test('handleSyncCodebase touches the watch list on success and handleClearIndex 
         const clearPayload = parsePayload(clearResponse);
         assert.equal(clearPayload.status, 'ok');
         assert.deepEqual(watch.unwatched, [repoPath]);
+
+        const outlineResponse = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts'
+        });
+        const outlinePayload = parsePayload(outlineResponse);
+        assert.equal(outlinePayload.status, 'not_indexed');
+        assert.equal(outlinePayload.reason, 'not_indexed');
     });
 });
 

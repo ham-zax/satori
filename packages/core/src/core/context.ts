@@ -940,6 +940,8 @@ export class Context {
             await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
         }
 
+        await this.clearSymbolRegistryForCodebase(codebasePath);
+
         // Delete snapshot file
         await FileSynchronizer.deleteSnapshot(codebasePath);
         this.synchronizers.delete(collectionName);

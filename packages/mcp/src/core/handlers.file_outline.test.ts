@@ -261,6 +261,36 @@ test('handleFileOutline returns requires_reindex, not unsupported, for Go/Rust w
     }));
 });
 
+test('handleFileOutline reports partial index navigation unavailable for limit_reached indexes', async () => {
+    await withTempRepo(async (repoPath) => {
+        const info = {
+            status: 'indexed',
+            indexStatus: 'limit_reached',
+            lastUpdated: '2026-06-17T00:00:00.000Z',
+        };
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseInfo: () => info,
+            getAllCodebases: () => [{ path: repoPath, info }],
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'requires_reindex');
+        assert.equal(payload.reason, 'partial_index_navigation_unavailable');
+        assert.match(payload.message, /partial index\/search data may exist/i);
+        assert.match(payload.message, /navigation sidecars were not published/i);
+        assert.equal(payload.hints.reindex.args.path, repoPath);
+    });
+});
+
 test('handleFileOutline returns not_ready envelope when codebase is indexing', async () => {
     await withTempRepo(async (repoPath) => {
         const snapshotManager = {

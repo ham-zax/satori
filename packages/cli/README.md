@@ -19,6 +19,8 @@ The installer only manages Satori-owned config and the first-party workflow skil
 
 - `satori`
 
+After a repo is indexed, Satori keeps the public MCP surface fixed while building derived navigation data behind it: grouped search is symbol-owned, chunks are supporting evidence, and completed full indexes write symbol registry plus relationship sidecars. The installer wires clients; it does not run indexing or provider-backed work during setup.
+
 ## Commands
 
 ```bash
@@ -33,7 +35,15 @@ npx -y @zokizuan/satori-cli@0.4.4 uninstall --client codex
 
 `doctor` checks Node, package visibility, provider env, and Milvus env without starting an MCP client.
 
-`--profile default|minimal|all-text` writes or updates repo-local `satori.toml` for the current working directory. `default` is safe-broad, `minimal` indexes source plus docs/text, and `all-text` indexes additional UTF-8 text files under the size limit. All profiles still honor ignore rules and hard-deny secrets, lockfiles, binaries, generated output, bundles, logs, and database dumps.
+`--profile default|minimal|all-text` writes or updates repo-local `satori.toml` for the current working directory. It is repo index policy only; it is not MCP client config and must not contain provider credentials.
+
+Profile behavior:
+
+- `default`: safe-broad indexing for source, docs/text, config, scripts, infra/query files, and known extensionless files such as `Dockerfile`, `Makefile`, `Justfile`, `Taskfile`, `Procfile`, `Jenkinsfile`, and `.dockerignore`.
+- `minimal`: source plus docs/text only.
+- `all-text`: safe-broad plus unknown UTF-8 text files under the size limit. `SATORI_ALL_TEXT_MAX_BYTES` can override the cap.
+
+All profiles still honor ignore rules and hard-deny secrets, lockfiles, binaries, generated output, bundles, source maps, logs, snapshots, and database dumps.
 
 `--install-guidance-hook` is Codex-only. It adds a marked `SessionStart` reminder hook to `~/.codex/config.toml` that prints the Satori discovery workflow; it does not run indexing, search, or provider-backed work.
 

@@ -13,7 +13,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Installer `--profile default|minimal|all-text` writes repo-local `satori.toml`; runtime reads `[index].profile` as index policy and treats `satori.toml` as a control file with `.gitignore` and `.satoriignore`.
 - Index profile defaults are safe-broad but hard-deny secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, database dumps, and snapshots before indexing.
 - Language capability routing is explicit: `search` means text retrieval eligibility, `symbols`/legacy `symbolMetadata` means extracted symbol metadata, `owner` means extracted source-symbol ownership beyond synthesized file fallback, and call graph remains split between legacy `callGraphBuild`/`callGraphQuery` plus aggregate `callGraph`.
-- Symbol-owned retrieval contracts now distinguish stable-ish `symbolKey` from exact snapshot `symbolInstanceId`; these are exported core types and guards only until the navigation sidecar writer lands.
+- Symbol-owned retrieval contracts now distinguish stable-ish `symbolKey` from exact snapshot `symbolInstanceId`; core writes compatible symbol registry sidecars for completed full indexes, assigns `ownerSymbolKey`/`ownerSymbolInstanceId` to indexed chunks, and clears stale registry sidecars on incremental changes.
 - `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers and responses are structured JSON envelopes.
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
@@ -27,7 +27,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Noise mitigation hint is deterministic, category-based, emitted only when noise ratio threshold is crossed in visible top-K, and root `.gitignore`-aware for redundant suggestion suppression.
 - Rerank is policy-controlled (capability/profile + docs-scope skip), runs post-filter and pre-group, top-K bounded, deterministic rank-only boost, stable failure degradation.
 - Candidate and group sorting both use explicit deterministic tie-break chains.
-- Grouping supports `symbol` and `file`; fallback groups use deterministic hashed IDs when symbol identity is unavailable.
+- Grouping supports `symbol` and `file`; symbol grouping prefers owner metadata when present, repairs missing owner identity from a compatible registry, falls back to legacy `symbolId`, and fallback groups use deterministic hashed IDs when symbol identity is unavailable.
 - `callGraphHint` contains supported/unsupported reasoned state; supported groups expose compact `nextActions.callGraph` args plus allowed directions, unsupported groups expose executable `navigationFallback`, and search hints always include the next navigation step.
 - `file_outline` supports `resolveMode=outline|exact` with exact outcomes `ok|ambiguous|not_found`.
 - `read_file` supports `plain|annotated`; annotated mode returns `outlineStatus`, `outline`, `hasMore`, warnings/hints; `open_symbol` resolves deterministically via `file_outline exact`.
@@ -76,7 +76,7 @@ Symbol identity contract:
 - `symbolInstanceId` is exact snapshot identity derived from `symbolKey`, file hash, canonical span serialization, and extractor version.
 - `symbolKey` lookup is candidate lookup; exact opens must disambiguate with `symbolInstanceId`, file hash, manifest compatibility, and exact file/label constraints.
 - Relationship manifests must bind to the compatible symbol registry manifest hash before graph data can be trusted.
-- Current implementation status: core exports contract types and runtime guards; it does not yet write symbol registry or relationship sidecars.
+- Current implementation status: core exports contract types and runtime guards, writes symbol registry sidecars for completed full indexes, assigns owner metadata into retrieval documents, writes relationship manifests bound to the symbol registry manifest hash, writes conservative function/method-owned `CALLS v0` relationship edge shards plus TS/JS `IMPORTS`/`EXPORTS v0` file-owner edge shards, and reads relationship sidecars as a graph-readiness compatibility gate for registry-backed search/outline. `CALLS v0` is heuristic and name-based: unique same-file targets are high confidence, unique cross-file targets are low confidence, and ambiguous same-name targets are skipped until import/receiver-aware resolution exists. `IMPORTS`/`EXPORTS v0` only records resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped. `call_graph` traversal still bridges to the legacy call-graph sidecar after relationship compatibility passes.
 
 Behavior contract:
 - Trigger: MCP server starts and tools are invoked.
@@ -202,7 +202,7 @@ Behavior:
 - Performance: bounded candidates, TTL cache, rerank top-K, coalesced freshness.
 
 ### 4) `file_outline`
-Purpose: deterministic sidecar-backed symbol outline and exact symbol resolver.
+Purpose: deterministic symbol outline and exact symbol resolver from the compatible symbol registry, with legacy call-graph-sidecar fallback.
 
 Inputs/defaults:
 - Required: `path`, `file`.
@@ -215,6 +215,9 @@ Outputs:
 
 Warnings/hints:
 - `OUTLINE_MISSING_SYMBOL_METADATA:<count>`.
+- `OUTLINE_CALL_GRAPH_UNAVAILABLE:<reason>` when registry-backed outline succeeds but graph traversal is not available for returned symbols.
+- `OUTLINE_SYMBOL_REGISTRY_WARNINGS:<count>` when the compatible registry loaded with non-fatal duplicate/candidate warnings.
+- `OUTLINE_SYNTHESIZED_FILE_SYMBOL` when only a synthesized file owner is returned.
 - Reindex hint payload on sidecar incompatibility.
 
 Determinism:
@@ -227,7 +230,9 @@ Common recipes:
 
 Behavior:
 - Trigger: outline call.
-- Effect: validates root/file/sidecar/language, returns deterministic symbol set.
+- Effect: validates root/file/fingerprint/completion proof, loads compatible symbol registry first, returns deterministic registry symbols when present, and falls back to existing call-graph-sidecar outline behavior when the registry is missing or has no entry for the file.
+- Registry-backed outline uses `symbolInstanceId` as each outline symbol's `symbolId`; when a compatible relationship manifest exists and a matching legacy call-graph node exists, `callGraphHint.symbolRef.symbolId` remains the graph node id for `call_graph`.
+- If the relationship sidecar is missing or incompatible with the loaded symbol registry manifest, registry-backed outline remains usable but graph hints downgrade to `missing_sidecar` and emit `OUTLINE_RELATIONSHIP_SIDECAR_UNAVAILABLE:<state>`.
 - Observability: `status`, `outline`, `warnings`, `hasMore`.
 - Determinism: explicit sort and exact-mode status semantics.
 - Performance: sidecar lookup only; no sync-on-read.
@@ -317,9 +322,9 @@ Behavior:
 
 2) Result modes and grouping
 - Trigger: `resultMode` and `groupBy`.
-- Effect: `raw` returns chunks; `grouped` returns collapsed groups by symbol/file.
-- Observability: `resultMode`, `results.kind`, `collapsedChunkCount`, `callGraphHint`, compact `nextActions`, capped `preview`.
-- Determinism: group key construction and sorted representative selection.
+- Effect: `raw` returns chunks; `grouped` returns collapsed groups by symbol/file. For `groupBy=symbol`, grouping prefers `ownerSymbolKey` plus `ownerSymbolInstanceId` when present, repairs missing owner identity from a compatible symbol registry by file/span containment, then falls back to legacy `symbolId`, then proximity fallback.
+- Observability: `resultMode`, `results.kind`, additive `symbolKey`, `symbolInstanceId`, `symbolKind`, `confidence`, `collapsedChunkCount`, `callGraphHint`, compact `nextActions`, capped `preview`, and `debug.symbolAggregation.ownerSource` (`owner_metadata|registry_repair|legacy_symbol_id|fallback`) when `debug:true`.
+- Determinism: group key construction, saturated support boost, and sorted representative selection.
 - Performance: grouped mode reduces result payload/noise with capped previews and shared call-graph action args; raw mode preserves chunk detail.
 
 3) Subdirectory `effectiveRoot` resolution
@@ -428,7 +433,7 @@ Recent vs legacy:
 
 1) `callGraphHint` semantics
 - Trigger: grouped search result construction.
-- Effect: returns `{supported:true,symbolRef,validated:true,validatedAt,sidecarBuiltAt}` only when the symbol id is present in the loaded v3 sidecar for the same file; otherwise returns `{supported:false,reason}`.
+- Effect: returns `{supported:true,symbolRef,validated:true,validatedAt,sidecarBuiltAt}` only when graph readiness is established and the legacy graph `symbolId` is present in the loaded v3 sidecar for the same file; owner `symbolKey`/`symbolInstanceId` never substitutes for a graph node id. Registry-backed search/outline first validates the relationship sidecar against the loaded symbol registry manifest hash. Otherwise returns `{supported:false,reason}`.
 - Observability: `results[].callGraphHint`.
 - Determinism: supported symbolRef uses sidecar file/span metadata; unsupported reasons are limited to `missing_symbol`, `unsupported_language`, `missing_sidecar`, and `stale_symbol_ref`.
 - Performance: no graph query until explicit `call_graph` call.
@@ -766,6 +771,8 @@ Behavior contract:
 | Index profiles and safe-broad file policy | [synchronizer.integration.test.mjs](/home/hamza/repo/satori/tests/integration/synchronizer.integration.test.mjs) `default profile tracks safe-broad...`, `minimal profile excludes config...`, `all-text profile tracks unknown UTF-8...` |
 | Language router capability honesty | [registry.test.ts](/home/hamza/repo/satori/packages/core/src/language/registry.test.ts) extension, filename, alias, and search-only capability assertions |
 | Symbol-owned retrieval contract types | [contracts.test.ts](/home/hamza/repo/satori/packages/core/src/symbols/contracts.test.ts) schema versions, manifest guards, canonical span serialization, relationship manifest validation |
+| Owner metadata assignment and persistence | [registry.test.ts](/home/hamza/repo/satori/packages/core/src/symbols/registry.test.ts) owner resolver tightest span/fallback/tie-break tests; [context.test.ts](/home/hamza/repo/satori/packages/core/src/core/context.test.ts) vector document owner metadata assertions |
+| Symbol-owned grouped search aggregation | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped symbol mode collapses chunks by owner symbol key...`, `grouped symbol mode repairs legacy chunks from compatible symbol registry ownership`, `keeps same-label declaration groups separate...` |
 | Installer `--profile` repo config | [install.test.ts](/home/hamza/repo/satori/packages/cli/src/install.test.ts) `install --profile writes repo config`, [install.test.ts](/home/hamza/repo/satori/packages/mcp/src/cli/install.test.ts) `install --profile writes repo config` |
 | `satori.toml` freshness reconciliation | [sync.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/sync.test.ts) `ensureFreshness treats satori.toml as an index-policy control file` |
 | Search scope runtime/docs invariants + ordering determinism | [search.eval.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/search.eval.test.ts) `search eval matrix invariants hold...` |

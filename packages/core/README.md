@@ -12,6 +12,25 @@ Use this package when you want the lower-level engine directly. Most agent workf
 - Milvus/Zilliz vector persistence and search.
 - Dense/BM25 hybrid retrieval and optional reranking.
 - Incremental sync with stat-first, hash-on-change file tracking.
+- Repo-local `satori.toml` index profiles: `default`, `minimal`, and `all-text`.
+- Derived symbol registry and relationship sidecars for symbol-owned navigation.
+
+Files remain the source of truth. The symbol registry is a deterministic navigation view for a compatible indexed snapshot; grouped search can use owner symbols while chunks remain supporting evidence. Relationship sidecars currently store conservative `CALLS v0` plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges for readiness and evidence.
+
+Repo config is intentionally small:
+
+```toml
+[index]
+profile = "minimal"
+```
+
+`satori.toml` is index policy only. Provider credentials, model names, and Milvus/Zilliz endpoints belong in runtime configuration, not in repo config.
+
+Profiles:
+
+- `default`: source, docs/text, config, scripts, infra/query files, and known extensionless files.
+- `minimal`: source plus docs/text only.
+- `all-text`: default plus unknown UTF-8 text files under the configured size cap.
 
 ## Install
 

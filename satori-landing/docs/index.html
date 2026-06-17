@@ -456,6 +456,7 @@
         </p>
         <nav class="quick-links" aria-label="Docs sections">
           <a href="#install">Install</a>
+          <a href="#repo-config">Repo Config</a>
           <a href="#setup">Setup</a>
           <a href="#first-index">First Index</a>
           <a href="#tools">Tools</a>
@@ -476,16 +477,16 @@
         <div class="callout">
           <p>
             Recommended public setup:
-            <code>npx -y @zokizuan/satori-cli@0.4.2 install --client all</code>,
+            <code>npx -y @zokizuan/satori-cli@0.4.4 install --client all</code>,
             then
-            <code>npx -y @zokizuan/satori-cli@0.4.2 doctor</code>.
+            <code>npx -y @zokizuan/satori-cli@0.4.4 doctor</code>.
             Restart the MCP client after install.
           </p>
         </div>
         <div class="grid">
           <div class="panel">
             <h3>Codex</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.2 install --client codex</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.4 install --client codex</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
               and installs the Satori skill in <code>~/.codex/skills</code>.
@@ -493,7 +494,7 @@
           </div>
           <div class="panel">
             <h3>Claude</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.2 install --client claude</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.4 install --client claude</code></pre>
             <p>
               Writes the Satori MCP entry to
               <code>~/.claude.json</code> and installs the Satori skill
@@ -502,7 +503,7 @@
           </div>
           <div class="panel">
             <h3>OpenCode</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.2 install --client opencode</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.4 install --client opencode</code></pre>
             <p>
               Writes the Satori MCP entry to
               <code>~/.config/opencode/opencode.json</code> and installs the
@@ -516,8 +517,17 @@
             Use <code>--client all</code> to install every supported client, and
             <code>uninstall</code> with the same selector to remove only
             Satori-managed config and skills. Run
-            <code>npx -y @zokizuan/satori-cli@0.4.2 doctor</code> to check
+            <code>npx -y @zokizuan/satori-cli@0.4.4 doctor</code> to check
             provider and Milvus setup without starting an MCP client.
+          </p>
+        </div>
+        <div class="callout">
+          <p>
+            Use <code>--profile default|minimal|all-text</code> when the current
+            repository should write or update repo-local
+            <code>satori.toml</code>. This file controls index policy only; it
+            is not a place for API keys, model names, Milvus endpoints, or
+            tokens.
           </p>
         </div>
         <div class="grid">
@@ -580,6 +590,71 @@
               you already have one, remove or align it before rerunning install.
             </p>
           </div>
+        </div>
+      </section>
+
+      <section class="section" id="repo-config">
+        <h2>Repo Config and Profiles</h2>
+        <p class="lede">
+          <code>satori.toml</code> is a repository-local index policy file.
+          It is separate from installer-managed client config and from provider
+          runtime environment variables.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Config Shape</h3>
+            <pre><code>[index]
+profile = "minimal"</code></pre>
+            <p>
+              Missing config defaults to <code>default</code>. Invalid
+              <code>index.profile</code> values fail closed with an explicit
+              profile error.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>default</h3>
+            <p>
+              Safe-broad indexing for source, docs/text, config, scripts,
+              infra/query files, and known extensionless files such as
+              <code>Dockerfile</code>, <code>Makefile</code>,
+              <code>Justfile</code>, <code>Taskfile</code>,
+              <code>Procfile</code>, <code>Jenkinsfile</code>, and
+              <code>.dockerignore</code>.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>minimal</h3>
+            <p>
+              Source plus docs/text only. Use it when you want lower indexing
+              cost and do not need config, scripts, or infra files in the
+              index.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>all-text</h3>
+            <p>
+              Safe-broad plus unknown UTF-8 text files under the size cap.
+              <code>SATORI_ALL_TEXT_MAX_BYTES</code> can override that cap.
+              The hard denylist still applies first.
+            </p>
+          </div>
+        </div>
+        <div class="callout">
+          <p>
+            Index profiles decide what enters the index. Search scope decides
+            what gets queried. <code>search_codebase</code> still defaults to
+            <code>scope=runtime</code>, so indexing docs/config does not make
+            documentation beat implementation code by default.
+          </p>
+        </div>
+        <div class="callout">
+          <p>
+            <code>satori.toml</code>, <code>.gitignore</code>, and
+            <code>.satoriignore</code> are index-policy control files. Ordinary
+            changes can converge through search freshness or
+            <code>manage_index action="sync"</code>; incompatible fingerprints
+            still return <code>requires_reindex</code>.
+          </p>
         </div>
       </section>
 
@@ -668,9 +743,10 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
       <section class="section" id="workflow">
         <h2>Search Workflow</h2>
         <p class="lede">
-          The default agent path is intentionally narrow. Search finds candidate
-          symbols, outline locks deterministic spans, call graph adds nearby
-          relationships, and exact reads provide edit context.
+          The default agent path is intentionally narrow. Search groups
+          evidence by owner symbols, outline locks deterministic spans, call
+          graph adds nearby context when supported, and exact reads provide edit
+          context.
         </p>
         <div class="workflow">
           <div class="step">
@@ -714,6 +790,54 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
         </div>
       </section>
 
+      <section class="section" id="navigation-sidecars">
+        <h2>Symbol-Owned Navigation</h2>
+        <p class="lede">
+          Completed full indexes write derived navigation sidecars. Files stay
+          the source of truth; sidecars are deterministic views over the indexed
+          snapshot.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Symbol Registry</h3>
+            <p>
+              Grouped search returns owner symbols, not loose chunks. Matching
+              chunks remain supporting evidence for the selected symbol, and
+              synthesized file symbols provide a safe fallback for files without
+              extracted source symbols.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Relationship Sidecar</h3>
+            <p>
+              The current relationship sidecar stores conservative
+              <code>CALLS v0</code> edges plus TS/JS <code>IMPORTS</code> and
+              <code>EXPORTS v0</code> edges. Same-file unique calls can be high
+              confidence; cross-file name-only calls are low confidence; ambiguous
+              same-name targets are skipped.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Current Limits</h3>
+            <p>
+              TS/JS import/export edges cover resolvable relative modules and
+              unambiguous local export declarations only. Package imports,
+              unresolved paths, ambiguous local exports, and multiline module
+              syntax are intentionally skipped.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Graph Traversal</h3>
+            <p>
+              <code>call_graph</code> still traverses the prebuilt call-graph
+              sidecar after readiness checks. Relationship records are
+              readiness and evidence data until traversal migrates to that
+              engine.
+            </p>
+          </div>
+        </div>
+      </section>
+
       <section class="section" id="tools">
         <h2>Six Tools</h2>
         <p class="lede">
@@ -753,7 +877,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <h3>call_graph</h3>
             <p>
               Traverses sidecar caller/callee relationships with deterministic
-              depth, limits, and transparency metadata.
+              depth, limits, and transparency metadata when graph support is
+              ready for the returned symbol reference.
             </p>
           </div>
           <div class="panel">
@@ -929,7 +1054,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               If indexing or search returns
               <code>MISSING_PROVIDER_CONFIG</code>, run
-              <code>npx -y @zokizuan/satori-cli@0.4.2 doctor</code>, set the
+              <code>npx -y @zokizuan/satori-cli@0.4.4 doctor</code>, set the
               missing provider or Milvus values, then retry the same tool call.
               It is an active setup failure only when it appears as the tool
               response <code>code</code> or <code>reason</code>; inside
@@ -962,8 +1087,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
           </div>
           <div class="panel">
             <h3>Primary CTA</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.2 install --client all
-npx -y @zokizuan/satori-cli@0.4.2 doctor</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.4 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
           </div>
           <div class="panel">
             <h3>Launch Checklist</h3>

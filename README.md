@@ -12,8 +12,10 @@ Satori indexes a repository, keeps the index fresh, and gives agents a fixed six
 
 - Find behavior by intent, not just filenames or exact tokens.
 - Keep search focused on runtime code before pulling in docs or tests.
+- Group search around owner symbols; chunks are supporting evidence, not the final unit of navigation.
 - Open exact files, line ranges, and symbols instead of dumping broad context.
 - Trace nearby callers/callees when sidecar data is ready.
+- Build derived symbol registry and relationship sidecars during completed full indexes.
 - Get explicit `requires_reindex`, stale-state, and noise guidance instead of silent bad context.
 - Install the MCP server and first-party workflow skill with one command.
 - Avoid resident MCP startup through `npx`; clients launch an installer-owned Node launcher.
@@ -43,20 +45,24 @@ Choose an index profile during install when the repo should not use the default 
 npx -y @zokizuan/satori-cli@0.4.4 install --client all --profile minimal
 ```
 
-The installer writes or updates repo-local `satori.toml`:
+The installer writes or updates repo-local `satori.toml` in the current working directory:
 
 ```toml
 [index]
 profile = "minimal"
 ```
 
+`satori.toml` is repository policy, not MCP client config and not provider config. Keep API keys, tokens, model names, and vector-store endpoints in the MCP client's runtime environment instead.
+
 Profiles are:
 
-- `default`: safe-broad indexing for source, docs/text, config, scripts, infra/query files, and known extensionless files such as `Dockerfile` and `Makefile`.
-- `minimal`: source plus docs/text only.
-- `all-text`: safe-broad plus UTF-8 text files under the configured size limit.
+- `default`: safe-broad indexing for source, docs/text, config, scripts, infra/query files, and known extensionless files such as `Dockerfile`, `Makefile`, `Justfile`, `Taskfile`, `Procfile`, `Jenkinsfile`, and `.dockerignore`.
+- `minimal`: source plus docs/text only; useful when you want lower index cost and do not need config/script/infra files in the index.
+- `all-text`: safe-broad plus unknown UTF-8 text files under the configured size limit; useful for uncommon text extensions after the denylist has removed unsafe paths.
 
-All profiles still honor `.satoriignore`, `.gitignore`, and the hard denylist for secrets, generated output, dependency folders, lockfiles, binaries, logs, databases, bundles, source maps, and snapshots. Index profiles control what enters the index; `search_codebase` still defaults to `scope=runtime` for implementation-first discovery.
+All profiles still honor `.satoriignore`, `.gitignore`, and the hard denylist for secrets, generated output, dependency folders, lockfiles, binaries, logs, databases, bundles, source maps, and snapshots. `all-text` also probes files as UTF-8 and uses `SATORI_ALL_TEXT_MAX_BYTES` as the size cap override.
+
+Index profiles control what enters the index; `search_codebase` scope controls what gets searched. Search still defaults to `scope=runtime` for implementation-first discovery, so indexing docs/config does not make documentation outrank runtime code by default. `satori.toml` is treated as an index-policy control file with `.gitignore` and `.satoriignore`: ordinary changes can reconcile through search freshness or `manage_index action="sync"`, while incompatible fingerprints still return `requires_reindex`.
 
 The installer writes Satori-managed config and copies the first-party workflow skill:
 
@@ -178,6 +184,20 @@ Default search behavior is developer-oriented:
 - `rankingMode="auto_changed_first"` to prefer active work when safe.
 - `debug=false` unless you are inspecting ranking/filter behavior.
 
+## Symbol-Owned Navigation
+
+Satori's grouped search is symbol-owned: retrieval finds candidate chunks, ownership maps those chunks to a derived symbol registry, and `search_codebase` returns symbol groups with supporting evidence. Files remain the source of truth; the symbol registry is a deterministic navigation view for the indexed snapshot.
+
+Completed full indexes write navigation sidecars:
+
+- Symbol registry sidecar with stable-ish `symbolKey`, exact `symbolInstanceId`, file-owner fallback symbols, and outline data for exact navigation.
+- Relationship sidecar with conservative `CALLS v0` edges plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges.
+- Compatibility manifests so stale, missing, or incompatible sidecars degrade explicitly instead of being silently trusted.
+
+Current relationship limits are intentional. `CALLS v0` is heuristic/name-based: unique same-file targets can be high confidence, unique cross-file name-only targets are low confidence, and ambiguous same-name targets are skipped. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
+
+`call_graph` still traverses the prebuilt call-graph sidecar after readiness and compatibility gates. Relationship records are currently navigation evidence and readiness data, not the direct traversal engine.
+
 ## Six MCP Tools
 
 | Tool | Use it for |
@@ -186,7 +206,7 @@ Default search behavior is developer-oriented:
 | `manage_index` | Create, sync, reindex, inspect status, or explicitly clear indexes |
 | `search_codebase` | Runtime-first semantic search with operators, grouping, freshness, and navigation hints |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing |
-| `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` |
+| `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` when graph support is ready |
 | `read_file` | Read bounded files, ranges, annotations, or exact symbol spans |
 
 ## What Satori Is Not

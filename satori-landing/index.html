@@ -1047,16 +1047,16 @@
       <h2>Repo-aware retrieval for MCP coding agents.</h2>
       <p>
         Install once, index a repo, and give your agent a deterministic path
-        from intent search to exact symbol reads, caller/callee context, and
-        explicit stale-index recovery.
+        from intent search to symbol-owned results, exact reads,
+        caller/callee context, and explicit stale-index recovery.
       </p>
       <div class="hero-terminal" role="group" aria-labelledby="hero-install-label">
         <div class="terminal-label">
           <span id="hero-install-label">Install supported clients</span>
           <span>Codex / Claude / OpenCode</span>
         </div>
-        <pre><code>npx -y @zokizuan/satori-cli@0.4.2 install --client all
-npx -y @zokizuan/satori-cli@0.4.2 doctor</code></pre>
+        <pre><code>npx -y @zokizuan/satori-cli@0.4.4 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
       </div>
       <div class="hero-actions">
         <a class="btn primary" href="#quickstart">Install Satori</a>
@@ -1244,8 +1244,9 @@ npx -y @zokizuan/satori-cli@0.4.2 doctor</code></pre>
           <span class="flow-index">01</span>
           <strong>Index repo</strong>
           <p>
-            Satori chunks code, stores embeddings, builds sidecar metadata, and
-            tracks fingerprints so incompatible indexes do not look ready.
+            Satori chunks code, stores embeddings, builds a symbol registry and
+            relationship sidecars, and tracks fingerprints so incompatible
+            indexes do not look ready.
           </p>
         </div>
         <div class="flow-item">
@@ -1420,15 +1421,41 @@ npx -y @zokizuan/satori-cli@0.4.2 doctor</code></pre>
         <details open>
           <summary>CLI Installer</summary>
           <div class="details-body">
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.2 install --client all
-npx -y @zokizuan/satori-cli@0.4.2 install --client opencode
-npx -y @zokizuan/satori-cli@0.4.2 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.4.2 doctor</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.4 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 install --client opencode
+npx -y @zokizuan/satori-cli@0.4.4 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
             <p>
               The installer writes managed client config and copies the
               first-party <code>satori</code> workflow skill. The doctor
               command checks provider and Milvus setup without starting an MCP
               client.
+            </p>
+          </div>
+        </details>
+        <details>
+          <summary>Repo Index Profiles</summary>
+          <div class="details-body">
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.4 install --client all --profile minimal</code></pre>
+            <pre><code>[index]
+profile = "minimal"</code></pre>
+            <p>
+              The installer writes repo-local <code>satori.toml</code> in the
+              current working directory. It is index policy only, not MCP
+              client config and not provider config.
+            </p>
+            <p>
+              <code>default</code> is safe-broad for source, docs/text, config,
+              scripts, infra/query files, and known extensionless files.
+              <code>minimal</code> indexes source plus docs/text.
+              <code>all-text</code> adds unknown UTF-8 text files under the size
+              cap.
+            </p>
+            <p>
+              Every profile still honors <code>.gitignore</code>,
+              <code>.satoriignore</code>, and the hard denylist for secrets,
+              lockfiles, generated output, dependency folders, bundles, logs,
+              database dumps, and snapshots.
             </p>
           </div>
         </details>
@@ -1504,6 +1531,14 @@ npx -y @zokizuan/satori-cli@0.4.2 doctor</code></pre>
           </p>
         </article>
         <article class="card">
+          <h4>Symbol-owned results</h4>
+          <p>
+            Grouped search returns owner symbols first. Matching chunks stay as
+            evidence so agents navigate by implementation units instead of raw
+            fragments.
+          </p>
+        </article>
+        <article class="card">
           <h4>AST-aware chunks</h4>
           <p>
             Supported languages are split around real code structure, so search
@@ -1518,11 +1553,28 @@ npx -y @zokizuan/satori-cli@0.4.2 doctor</code></pre>
           </p>
         </article>
         <article class="card">
+          <h4>Index profiles</h4>
+          <p>
+            Repo-local <code>satori.toml</code> chooses
+            <code>default</code>, <code>minimal</code>, or
+            <code>all-text</code>. It controls what enters the index, while
+            search scope controls what results are queried.
+          </p>
+        </article>
+        <article class="card">
           <h4>Honest capability states</h4>
           <p>
             TypeScript, JavaScript, and Python get the strongest graph/outline
             support. Other languages still search, but unsupported graph states
             return explicit fallback guidance.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Relationship v0 sidecar</h4>
+          <p>
+            Completed indexes store conservative calls plus TS/JS relative
+            imports and exports. Ambiguous same-name targets are skipped rather
+            than guessed.
           </p>
         </article>
         <article class="card">

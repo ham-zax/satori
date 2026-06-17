@@ -35,7 +35,21 @@ import {
     normalizeSupportedExtensions,
 } from '../config/index-policy';
 import { loadSatoriRepoConfig, SatoriRepoConfig } from '../config/repo-config';
-import { getLanguageIdFromExtension } from '../language';
+import { getLanguageIdFromFilename } from '../language';
+import {
+    SYMBOL_REGISTRY_SCHEMA_VERSION,
+    buildSymbolRecordsForFile,
+    buildSymbolRegistry,
+    clearSymbolRegistrySidecar,
+    resolveOwnerSymbolForChunk,
+    writeRelationshipSidecar,
+    writeSymbolRegistrySidecar,
+} from '../symbols';
+import type {
+    SymbolRecord,
+    SymbolRegistryManifestFile,
+} from '../symbols';
+import { buildRelationshipsForRegistry } from '../relationships';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -50,6 +64,7 @@ export interface ContextConfig {
     ignorePatterns?: string[];
     customExtensions?: string[]; // New: custom extensions from MCP
     customIgnorePatterns?: string[]; // New: custom ignore patterns from MCP
+    symbolRegistryStateRoot?: string;
 }
 
 interface CodebaseIgnoreState {
@@ -70,6 +85,7 @@ export class Context {
     private runtimeCustomIgnorePatterns: string[];
     private ignoreStateByCollection: Map<string, CodebaseIgnoreState>;
     private synchronizers = new Map<string, FileSynchronizer>();
+    private symbolRegistryStateRoot?: string;
 
     constructor(config: ContextConfig = {}) {
         // Initialize services
@@ -112,6 +128,7 @@ export class Context {
         this.baseIgnorePatterns = [...new Set(allIgnorePatterns)];
         this.runtimeCustomIgnorePatterns = [];
         this.ignoreStateByCollection = new Map();
+        this.symbolRegistryStateRoot = config.symbolRegistryStateRoot;
 
         console.log(`[Context] 🔧 Initialized with ${this.supportedExtensions.length} supported extensions and ${this.baseIgnorePatterns.length + this.runtimeCustomIgnorePatterns.length} base/runtime ignore patterns`);
         if (envCustomExtensions.length > 0) {
@@ -315,9 +332,12 @@ export class Context {
         console.log(`[Context] 📁 Found ${codeFiles.length} code files`);
 
         if (codeFiles.length === 0) {
+            await this.clearSymbolRegistryForCodebase(codebasePath);
             progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
             return { indexedFiles: 0, totalChunks: 0, status: 'completed' };
         }
+
+        await this.clearSymbolRegistryForCodebase(codebasePath);
 
         // 3. Process each file with streaming chunk processing
         // Reserve 10% for preparation, 90% for actual indexing
@@ -343,6 +363,12 @@ export class Context {
         );
 
         console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
+
+        if (result.status === 'completed') {
+            await this.writeSymbolRegistryForCompletedIndex(codebasePath, result.symbolRecords, result.symbolManifestFiles);
+        } else {
+            console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
+        }
 
         progressCallback?.({
             phase: 'Indexing complete!',
@@ -411,6 +437,7 @@ export class Context {
         }
 
         console.log(`[Context] 🔄 Found changes: ${added.length} added, ${removed.length} removed, ${modified.length} modified.`);
+        await this.clearSymbolRegistryForCodebase(codebasePath);
 
         let processedChanges = 0;
         const updateProgress = (phase: string) => {
@@ -584,6 +611,9 @@ export class Context {
                 indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
                 symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
                 symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined,
+                symbolKind: typeof result.document.metadata.symbolKind === 'string' ? result.document.metadata.symbolKind : undefined,
+                ownerSymbolKey: typeof result.document.metadata.ownerSymbolKey === 'string' ? result.document.metadata.ownerSymbolKey : undefined,
+                ownerSymbolInstanceId: typeof result.document.metadata.ownerSymbolInstanceId === 'string' ? result.document.metadata.ownerSymbolInstanceId : undefined,
                 backendScore: result.score,
                 backendScoreKind: 'rrf_fusion'
             }));
@@ -621,6 +651,9 @@ export class Context {
                 indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
                 symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
                 symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined,
+                symbolKind: typeof result.document.metadata.symbolKind === 'string' ? result.document.metadata.symbolKind : undefined,
+                ownerSymbolKey: typeof result.document.metadata.ownerSymbolKey === 'string' ? result.document.metadata.ownerSymbolKey : undefined,
+                ownerSymbolInstanceId: typeof result.document.metadata.ownerSymbolInstanceId === 'string' ? result.document.metadata.ownerSymbolInstanceId : undefined,
                 backendScore: result.score,
                 backendScoreKind: 'dense_similarity'
             }));
@@ -1118,7 +1151,13 @@ export class Context {
         filePaths: string[],
         codebasePath: string,
         onFileProcessed?: (filePath: string, fileIndex: number, totalFiles: number) => void
-    ): Promise<{ processedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' }> {
+    ): Promise<{
+        processedFiles: number;
+        totalChunks: number;
+        status: 'completed' | 'limit_reached';
+        symbolRecords: SymbolRecord[];
+        symbolManifestFiles: SymbolRegistryManifestFile[];
+    }> {
         const isHybrid = this.getIsHybrid();
         const EMBEDDING_BATCH_SIZE = Math.max(1, parseInt(envManager.get('EMBEDDING_BATCH_SIZE') || '100', 10));
         const CHUNK_LIMIT = 450000;
@@ -1128,6 +1167,8 @@ export class Context {
         let processedFiles = 0;
         let totalChunks = 0;
         let limitReached = false;
+        const symbolRecords: SymbolRecord[] = [];
+        const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
         const describeError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
         for (let i = 0; i < filePaths.length; i++) {
@@ -1135,8 +1176,34 @@ export class Context {
 
             try {
                 const content = await fs.promises.readFile(filePath, 'utf-8');
-                const language = this.getLanguageFromExtension(path.extname(filePath));
+                const language = this.getLanguageFromFilePath(filePath);
                 const chunks = await this.codeSplitter.split(content, language, filePath);
+                const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
+                if (!relativePath) {
+                    throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
+                }
+                const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+                const fileSymbols = buildSymbolRecordsForFile({
+                    relativePath,
+                    language,
+                    content,
+                    fileHash,
+                    extractorVersion: this.getSymbolExtractorVersion(),
+                    chunks,
+                });
+                for (const chunk of chunks) {
+                    const owner = resolveOwnerSymbolForChunk({ chunk, symbols: fileSymbols });
+                    chunk.metadata.ownerSymbolKey = owner.symbolKey;
+                    chunk.metadata.ownerSymbolInstanceId = owner.symbolInstanceId;
+                    chunk.metadata.symbolKind = owner.kind;
+                }
+                symbolRecords.push(...fileSymbols);
+                symbolManifestFiles.push({
+                    path: relativePath,
+                    hash: fileHash,
+                    language,
+                    symbolCount: fileSymbols.length,
+                });
 
                 // Log files with many chunks or large content
                 if (chunks.length > 50) {
@@ -1205,8 +1272,90 @@ export class Context {
         return {
             processedFiles,
             totalChunks,
-            status: limitReached ? 'limit_reached' : 'completed'
+            status: limitReached ? 'limit_reached' : 'completed',
+            symbolRecords,
+            symbolManifestFiles
         };
+    }
+
+    private getSymbolExtractorVersion(): string {
+        return 'splitter-symbol-builder-v1';
+    }
+
+    private getLanguageRouterVersion(): string {
+        return 'language-router-v1';
+    }
+
+    private getRelationshipVersion(): string {
+        return 'relationship-v1';
+    }
+
+    private buildIndexPolicyHash(codebasePath: string): string {
+        const payload = JSON.stringify({
+            profile: this.indexProfilesByCodebase.get(this.canonicalizeCodebasePath(codebasePath)) || 'default',
+            extensions: this.getIndexedExtensionsForCodebase(codebasePath),
+            ignorePatterns: this.getActiveIgnorePatterns(codebasePath),
+        });
+        return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
+    }
+
+    private buildRootFingerprint(canonicalRoot: string): string {
+        return crypto.createHash('md5').update(canonicalRoot, 'utf8').digest('hex');
+    }
+
+    private async writeSymbolRegistryForCompletedIndex(
+        codebasePath: string,
+        symbolRecords: SymbolRecord[],
+        symbolManifestFiles: SymbolRegistryManifestFile[]
+    ): Promise<void> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const manifestFiles = [...symbolManifestFiles].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+        const registry = buildSymbolRegistry({
+            manifest: {
+                schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+                normalizedRootPath: canonicalRoot,
+                rootFingerprint: this.buildRootFingerprint(canonicalRoot),
+                indexPolicyHash: this.buildIndexPolicyHash(codebasePath),
+                languageRouterVersion: this.getLanguageRouterVersion(),
+                extractorVersion: this.getSymbolExtractorVersion(),
+                relationshipVersion: this.getRelationshipVersion(),
+                builtAt: new Date().toISOString(),
+                files: manifestFiles,
+            },
+            symbols: symbolRecords,
+        });
+
+        const result = await writeSymbolRegistrySidecar({
+            stateRoot: this.symbolRegistryStateRoot,
+            registry,
+        });
+        const contentByFile = new Map<string, string>();
+        for (const file of manifestFiles) {
+            try {
+                contentByFile.set(file.path, await fs.promises.readFile(path.join(canonicalRoot, file.path), 'utf8'));
+            } catch (error) {
+                console.warn(`[Context] ⚠️  Skipping relationship extraction for ${file.path}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+        const relationshipRecords = buildRelationshipsForRegistry({ registry, contentByFile });
+        const relationshipResult = await writeRelationshipSidecar({
+            stateRoot: this.symbolRegistryStateRoot,
+            normalizedRootPath: canonicalRoot,
+            symbolRegistryManifestHash: result.manifestHash,
+            relationshipVersion: registry.manifest.relationshipVersion,
+            builtAt: registry.manifest.builtAt,
+            files: manifestFiles,
+            records: relationshipRecords,
+        });
+        console.log(`[Context] 🧭 Wrote symbol registry sidecar with ${result.symbolCount} symbols across ${result.fileShardCount} file shards`);
+        console.log(`[Context] 🧭 Wrote relationship sidecar with ${relationshipResult.relationshipCount} relationships across ${relationshipResult.fileShardCount} file shards`);
+    }
+
+    private async clearSymbolRegistryForCodebase(codebasePath: string): Promise<void> {
+        await clearSymbolRegistrySidecar({
+            stateRoot: this.symbolRegistryStateRoot,
+            normalizedRootPath: this.canonicalizeCodebasePath(codebasePath),
+        });
     }
 
     /**
@@ -1313,8 +1462,8 @@ export class Context {
     /**
      * Get programming language based on file extension
      */
-    private getLanguageFromExtension(ext: string): string {
-        return getLanguageIdFromExtension(ext, 'text');
+    private getLanguageFromFilePath(filePath: string): string {
+        return getLanguageIdFromFilename(filePath, 'text');
     }
 
     /**

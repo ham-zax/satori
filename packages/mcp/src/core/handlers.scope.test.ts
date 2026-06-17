@@ -7,6 +7,14 @@ import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 import { SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES } from './search-constants.js';
+import {
+    SYMBOL_REGISTRY_SCHEMA_VERSION,
+    buildSymbolRecordsForFile,
+    buildSymbolRegistry,
+    resolveNavigationSidecarRoot,
+    writeSymbolRegistrySidecar,
+} from '@zokizuan/satori-core';
+import type { SymbolRegistryManifest } from '@zokizuan/satori-core';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -59,6 +67,78 @@ async function withEnv(vars: Record<string, string | undefined>, fn: () => Promi
             }
         }
     }
+}
+
+async function withTempStateRoot<T>(fn: (stateRoot: string) => Promise<T>): Promise<T> {
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-state-'));
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    try {
+        return await fn(stateRoot);
+    } finally {
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+}
+
+async function writeSearchSymbolRegistry(input: {
+    repoPath: string;
+    relativePath: string;
+    content: string;
+    chunks: Array<{
+        content: string;
+        startLine: number;
+        endLine: number;
+        symbolLabel?: string;
+        breadcrumbs?: string[];
+    }>;
+}) {
+    const fileHash = 'test-search-file-hash';
+    const language = 'typescript';
+    const symbols = buildSymbolRecordsForFile({
+        relativePath: input.relativePath,
+        language,
+        content: input.content,
+        fileHash,
+        extractorVersion: 'test-extractor-v1',
+        chunks: input.chunks.map((chunk) => ({
+            content: chunk.content,
+            metadata: {
+                startLine: chunk.startLine,
+                endLine: chunk.endLine,
+                language,
+                filePath: input.relativePath,
+                ...(chunk.symbolLabel ? { symbolLabel: chunk.symbolLabel } : {}),
+                ...(chunk.breadcrumbs ? { breadcrumbs: chunk.breadcrumbs } : {}),
+            },
+        })),
+    });
+    const manifest: SymbolRegistryManifest = {
+        schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+        normalizedRootPath: input.repoPath,
+        rootFingerprint: 'test-root-fingerprint',
+        indexPolicyHash: 'test-policy',
+        languageRouterVersion: 'test-router-v1',
+        extractorVersion: 'test-extractor-v1',
+        relationshipVersion: 'test-relationships-v1',
+        builtAt: '2026-01-01T00:00:00.000Z',
+        files: [{
+            path: input.relativePath,
+            hash: fileHash,
+            language,
+            symbolCount: symbols.length,
+        }],
+    };
+
+    await writeSymbolRegistrySidecar({
+        registry: buildSymbolRegistry({ manifest, symbols }),
+    });
+
+    return symbols;
 }
 
 function createHandlers(
@@ -195,6 +275,358 @@ test('handleSearchCode grouped output includes symbol metadata and callGraphHint
         assert.equal(payload.results[0].callGraphHint.validatedAt, '2026-01-01T01:00:00.000Z');
         assert.equal(payload.results[0].callGraphHint.sidecarBuiltAt, '2026-01-01T00:45:00.000Z');
         assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, 'sym_auth_validate');
+    });
+});
+
+test('handleSearchCode grouped symbol mode collapses chunks by owner symbol key without replacing call graph symbol id', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'return token.trim();',
+                relativePath: 'src/auth.ts',
+                startLine: 10,
+                endLine: 12,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'legacy_chunk_symbol_a',
+                symbolLabel: 'method login(token: string)',
+                ownerSymbolKey: 'owner_auth_login_key',
+                ownerSymbolInstanceId: 'owner_auth_login_instance',
+                symbolKind: 'method',
+            },
+            {
+                content: 'return session.issue(token);',
+                relativePath: 'src/auth.ts',
+                startLine: 13,
+                endLine: 16,
+                language: 'typescript',
+                score: 0.97,
+                indexedAt: '2026-01-01T00:31:00.000Z',
+                symbolId: 'legacy_chunk_symbol_b',
+                symbolLabel: 'method login(token: string)',
+                ownerSymbolKey: 'owner_auth_login_key',
+                ownerSymbolInstanceId: 'owner_auth_login_instance',
+                symbolKind: 'method',
+            },
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'login token',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].collapsedChunkCount, 2);
+        assert.equal(payload.results[0].symbolKey, 'owner_auth_login_key');
+        assert.equal(payload.results[0].symbolInstanceId, 'owner_auth_login_instance');
+        assert.equal(payload.results[0].symbolId, 'legacy_chunk_symbol_a');
+        assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, 'legacy_chunk_symbol_a');
+        assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'owner_metadata');
+    });
+});
+
+test('handleSearchCode grouped symbol mode repairs legacy chunks from compatible symbol registry ownership', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/auth.ts';
+            const content = [
+                'export class AuthService {',
+                '  login(token: string) {',
+                '    const normalized = token.trim();',
+                '    return this.issue(normalized);',
+                '  }',
+                '}',
+                '',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content);
+            const symbols = await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{
+                    content: 'login(token: string) { const normalized = token.trim(); return this.issue(normalized); }',
+                    startLine: 2,
+                    endLine: 5,
+                    symbolLabel: 'method login(token: string)',
+                    breadcrumbs: ['class AuthService', 'method login(token: string)'],
+                }],
+            });
+            const owner = symbols.find((symbol) => symbol.kind === 'method');
+            assert.ok(owner);
+
+            const handlers = createHandlers(repoPath, [
+                {
+                    content: 'const normalized = token.trim();',
+                    relativePath,
+                    startLine: 3,
+                    endLine: 3,
+                    language: 'typescript',
+                    score: 0.99,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'legacy_chunk_symbol_a',
+                    symbolLabel: 'method login(token: string)',
+                },
+                {
+                    content: 'return this.issue(normalized);',
+                    relativePath,
+                    startLine: 4,
+                    endLine: 4,
+                    language: 'typescript',
+                    score: 0.97,
+                    indexedAt: '2026-01-01T00:31:00.000Z',
+                    symbolId: 'legacy_chunk_symbol_b',
+                    symbolLabel: 'method login(token: string)',
+                },
+            ]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'login token',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results.length, 1);
+            assert.equal(payload.results[0].collapsedChunkCount, 2);
+            assert.equal(payload.results[0].symbolKey, owner.symbolKey);
+            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].symbolKind, 'method');
+            assert.equal(payload.results[0].symbolId, 'legacy_chunk_symbol_a');
+            assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, 'legacy_chunk_symbol_a');
+            assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'registry_repair');
+        });
+    });
+});
+
+test('handleSearchCode grouped symbol mode downgrades graph hints when relationship sidecar is incompatible', async () => {
+    await withTempStateRoot(async (stateRoot) => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/auth.ts';
+            const content = [
+                'export class AuthService {',
+                '  login(token: string) {',
+                '    return token.trim();',
+                '  }',
+                '}',
+                '',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content);
+            await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{
+                    content: 'login(token: string) { return token.trim(); }',
+                    startLine: 2,
+                    endLine: 4,
+                    symbolLabel: 'method login(token: string)',
+                    breadcrumbs: ['class AuthService', 'method login(token: string)'],
+                }],
+            });
+
+            const navigationRoot = resolveNavigationSidecarRoot(stateRoot, repoPath);
+            fs.writeFileSync(
+                path.join(navigationRoot, 'relationships', 'manifest.json'),
+                JSON.stringify({
+                    schemaVersion: 'relationship_v1',
+                    symbolRegistryManifestHash: 'wrong-manifest-hash',
+                    relationshipVersion: 'test-relationships-v1',
+                    builtAt: '2026-01-01T00:00:00.000Z',
+                }),
+                'utf8'
+            );
+
+            const handlers = createHandlers(repoPath, [{
+                content: 'return token.trim();',
+                relativePath,
+                startLine: 3,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'legacy_chunk_symbol_a',
+                symbolLabel: 'method login(token: string)',
+            }]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'login token',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].callGraphHint.supported, false);
+            assert.equal(payload.results[0].callGraphHint.reason, 'missing_sidecar');
+            assert.ok(payload.warnings.includes('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
+        });
+    });
+});
+
+test('handleSearchCode grouped symbol mode does not require registry when owner metadata is complete', async () => {
+    await withTempStateRoot(async (stateRoot) => {
+        await withTempRepo(async (repoPath) => {
+            const rootPath = resolveNavigationSidecarRoot(stateRoot, repoPath);
+            fs.mkdirSync(rootPath, { recursive: true });
+            fs.writeFileSync(path.join(rootPath, 'manifest.json'), '{"schemaVersion":"wrong"}\n');
+
+            const handlers = createHandlers(repoPath, [
+                {
+                    content: 'return token.trim();',
+                    relativePath: 'src/auth.ts',
+                    startLine: 10,
+                    endLine: 12,
+                    language: 'typescript',
+                    score: 0.99,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'legacy_chunk_symbol_a',
+                    symbolLabel: 'method login(token: string)',
+                    ownerSymbolKey: 'owner_auth_login_key',
+                    ownerSymbolInstanceId: 'owner_auth_login_instance',
+                    symbolKind: 'method',
+                },
+                {
+                    content: 'return session.issue(token);',
+                    relativePath: 'src/auth.ts',
+                    startLine: 13,
+                    endLine: 16,
+                    language: 'typescript',
+                    score: 0.97,
+                    indexedAt: '2026-01-01T00:31:00.000Z',
+                    symbolId: 'legacy_chunk_symbol_b',
+                    symbolLabel: 'method login(token: string)',
+                    ownerSymbolKey: 'owner_auth_login_key',
+                    ownerSymbolInstanceId: 'owner_auth_login_instance',
+                    symbolKind: 'method',
+                },
+            ]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'login token',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results.length, 1);
+            assert.equal(payload.results[0].collapsedChunkCount, 2);
+            assert.equal(payload.results[0].symbolKey, 'owner_auth_login_key');
+            assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'owner_metadata');
+        });
+    });
+});
+
+test('handleSearchCode grouped symbol mode requires reindex for incompatible symbol registry repair state', async () => {
+    await withTempStateRoot(async (stateRoot) => {
+        await withTempRepo(async (repoPath) => {
+            const rootPath = resolveNavigationSidecarRoot(stateRoot, repoPath);
+            fs.mkdirSync(rootPath, { recursive: true });
+            fs.writeFileSync(path.join(rootPath, 'manifest.json'), '{"schemaVersion":"wrong"}\n');
+
+            const handlers = createHandlers(repoPath, [{
+                content: 'const normalized = token.trim();',
+                relativePath: 'src/auth.ts',
+                startLine: 3,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'legacy_chunk_symbol_a',
+                symbolLabel: 'method login(token: string)',
+            }]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'login token',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'requires_reindex');
+            assert.equal(payload.reason, 'requires_reindex');
+            assert.equal(payload.results.length, 0);
+            assert.match(payload.message, /Symbol registry is incompatible/);
+            assert.deepEqual(payload.hints.reindex.args, { action: 'reindex', path: repoPath });
+        });
+    });
+});
+
+test('handleSearchCode keeps same-label declaration groups separate when owner symbols differ', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export function helper() { return "source"; }',
+                relativePath: 'src/helpers.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'legacy_helper_source',
+                symbolLabel: 'function helper()',
+                ownerSymbolKey: 'owner_helper_source_key',
+                ownerSymbolInstanceId: 'owner_helper_source_instance',
+                symbolKind: 'function',
+            },
+            {
+                content: 'export function helper() { return "test"; }',
+                relativePath: 'src/helpers.ts',
+                startLine: 20,
+                endLine: 22,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:31:00.000Z',
+                symbolId: 'legacy_helper_test',
+                symbolLabel: 'function helper()',
+                ownerSymbolKey: 'owner_helper_test_key',
+                ownerSymbolInstanceId: 'owner_helper_test_instance',
+                symbolKind: 'function',
+            },
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'helper',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 2);
+        const results = payload.results as Array<{ symbolKey?: string }>;
+        assert.deepEqual(
+            results.map((result) => result.symbolKey).sort(),
+            ['owner_helper_source_key', 'owner_helper_test_key']
+        );
     });
 });
 
@@ -777,6 +1209,59 @@ test('handleSearchCode grouped diversity keeps multi-file coverage by default', 
         assert.equal(files.includes('src/two.ts'), true);
         assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerFile, 2);
         assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerSymbol, 1);
+    });
+});
+
+test('handleSearchCode grouped diversity keeps distinct symbol instances that share a symbol key', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export function login(token: string) { return token.trim(); }',
+                relativePath: 'src/auth.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'legacy_login_overload_a',
+                symbolLabel: 'function login(token: string)',
+                ownerSymbolKey: 'owner_login_key',
+                ownerSymbolInstanceId: 'owner_login_instance_a',
+                symbolKind: 'function',
+            },
+            {
+                content: 'export function login(token: Buffer) { return token.toString(); }',
+                relativePath: 'src/auth.ts',
+                startLine: 5,
+                endLine: 7,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:31:00.000Z',
+                symbolId: 'legacy_login_overload_b',
+                symbolLabel: 'function login(token: Buffer)',
+                ownerSymbolKey: 'owner_login_key',
+                ownerSymbolInstanceId: 'owner_login_instance_b',
+                symbolKind: 'function',
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'login',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 2);
+        assert.deepEqual(
+            payload.results.map((result: any) => result.symbolInstanceId),
+            ['owner_login_instance_a', 'owner_login_instance_b']
+        );
     });
 });
 

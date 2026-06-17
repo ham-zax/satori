@@ -380,7 +380,7 @@ Migration rule:
 
 - Old indexes without `ownerSymbolKey` continue to work through query-time repair if a compatible symbol registry exists.
 - When a chunk's `ownerSymbolInstanceId` is absent from a compatible registry, MCP may repair ownership by `ownerSymbolKey` plus file/span containment.
-- If repair is ambiguous or impossible, downgrade to the synthesized file owner with a warning.
+- If repair is ambiguous or no tighter extracted owner exists, downgrade to the synthesized file owner with low confidence and `debug.symbolAggregation.ownerSource="registry_repair"`.
 - If index and registry manifests are incompatible, return `requires_reindex` instead of repairing.
 - If no compatible registry exists, search degrades to current chunk/file grouping behavior.
 
@@ -451,6 +451,15 @@ Initial scope:
 - Add import/export edges where extractors already provide enough data.
 - Add test references using filename and static reference heuristics.
 - Make `call_graph` a filtered relationship view, not a separate graph product.
+
+Relationship trust boundary:
+
+- `CALLS v0` records are heuristic relationship evidence, not graph-grade import/receiver-resolved facts.
+- v0 extraction may emit only function/method-owned records.
+- Unique same-file name targets may be `high` confidence.
+- Unique cross-file name targets must be `low` confidence unless import/export evidence exists.
+- Ambiguous same-name targets must be skipped rather than guessed.
+- Class/container-owned duplicate call edges must not be emitted when method/function owners exist.
 
 Non-initial scope:
 
@@ -556,7 +565,7 @@ Evidence rule:
 | --- | --- | --- | --- | --- |
 | Registry missing but retrieval index ready | chunk/file fallback with navigation warning, or `requires_reindex` when request options require symbol-owned grouped results, exact symbol reads, call graph hints, or `open_symbol`-style next actions | `requires_reindex` | cannot open symbol; return exact-open unsupported/reindex guidance | unsupported with fallback |
 | Registry version incompatible | `requires_reindex` | `requires_reindex` | `requires_reindex` | `requires_reindex` |
-| Language has `SEARCH` only | normal retrieval with synthesized file owner and low/medium confidence | unsupported outline | file/range only | unsupported with fallback |
+| Language has `SEARCH` only | normal retrieval with synthesized file owner and low/medium confidence | synthesized file-symbol outline when a compatible registry entry exists, otherwise unsupported | file/range only | unsupported with fallback |
 | File extractor failed | chunk/file fallback with partial warning and synthesized file owner | partial outline warning or unsupported for that file | file/range only unless exact symbol exists | unsupported with fallback for affected file |
 | Relationship sidecar missing | search works with no supported graph hint | outline works | symbol open works | unsupported with fallback |
 | Relationship sidecar incompatible | search works but graph hint downgraded unless relationship incompatibility implies full navigation mismatch | outline works if registry compatible | symbol open works if registry compatible | `requires_reindex` |
@@ -656,6 +665,8 @@ Acceptance:
 
 ### Phase 2.5: Symbol-Backed `file_outline`
 
+Status: implemented for registry-backed outline/exact resolution with legacy call-graph-sidecar fallback.
+
 Files:
 
 - MCP registry loader in `packages/mcp/src/core/*`
@@ -673,11 +684,26 @@ Tasks:
 Acceptance:
 
 - Existing TS/JS/Python outline tests still pass.
-- Exact mode rejects stale `symbolInstanceId` / file hash mismatches.
+- Exact mode resolves current `symbolInstanceId` values and returns `not_found` for stale ids absent from the compatible registry.
 - Same-label symbols in one file produce `ambiguous`, not guessed output.
-- Missing/incompatible registry returns existing `requires_reindex` or unsupported envelopes.
+- Missing/incompatible registry falls through to existing call-graph-sidecar `requires_reindex` or unsupported envelopes.
 
 ### Phase 3: Tightest Owner Resolution
+
+Status: partially implemented.
+
+Implemented:
+
+- `packages/core` assigns `ownerSymbolKey` and `ownerSymbolInstanceId` to indexed chunks at index time.
+- Owner resolution chooses the tightest extracted owner by byte containment when available, otherwise line containment.
+- Synthesized `file` symbols remain the fallback owner.
+- Retrieval documents preserve owner metadata through `Context.semanticSearch`.
+- Grouped search prefers owner metadata when present while preserving raw mode and file grouping.
+- Grouped search repairs legacy chunks without owner metadata from a compatible symbol registry using file/span containment.
+
+Remaining:
+
+- Exact same-line/decorator byte fixtures once extractors expose byte spans for those cases.
 
 Files:
 
@@ -703,6 +729,22 @@ Acceptance:
 - No response schema break.
 
 ### Phase 4: Symbol-Centric Ranking
+
+Status: partially implemented.
+
+Implemented:
+
+- Grouped `search_codebase` aggregates candidate chunks by owner identity when owner metadata exists.
+- Legacy chunks without owner metadata are repaired at query time from compatible registry spans before falling back to legacy `symbolId` or proximity grouping.
+- Search groups expose additive `symbolKey`, `symbolInstanceId`, `symbolKind`, `confidence`, and debug `symbolAggregation`.
+- Symbol scoring uses best representative score plus a capped logarithmic support boost.
+- Reranker remains evidence-only; call graph hints still validate against legacy graph `symbolId`.
+- Same-label declaration groups with distinct owner identities remain separate.
+
+Remaining:
+
+- Relationship edge records as the source of graph hints/call graph traversal.
+- Broader ambiguity fixtures for overloads, generated/source duplicates, and test-helper collisions.
 
 Files:
 
@@ -743,6 +785,16 @@ Tasks:
 - Store calls/imports/test refs as typed relationship records without adding new MCP tools.
 - Make MCP load and filter relationship sidecars; do not compute relationships at query time except compatibility fallback.
 - Ensure `callGraphHint` is built from relationship capability, not language name alone.
+
+Current partial implementation:
+
+- Core writes and reads relationship manifests under the navigation sidecar root.
+- Relationship manifests are validated against the loaded symbol registry manifest hash.
+- Core writes deterministic per-file relationship shards with conservative function/method-owned `CALLS v0` records and TS/JS file-owner `IMPORTS`/`EXPORTS v0` records during completed full indexes.
+- Symbol and relationship sidecar subtree rewrites use rollback-aware temp-directory swaps. Symbol registry writes keep the previous symbol subtree until the root manifest commit succeeds; if subtree or manifest commit fails, the previous readable registry or relationship sidecar remains intact. Empty relationship placeholders are created only after the symbol registry commit succeeds.
+- Relationship `CALLS v0` extraction intentionally excludes class container spans, skips ambiguous same-name targets, and downgrades unique cross-file name-only matches to `low` confidence until import/receiver-aware resolution exists. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
+- Registry-backed `search_codebase` and `file_outline` downgrade graph hints to `missing_sidecar` when the relationship sidecar is missing or incompatible, with deterministic warnings.
+- Supported graph hints still bridge to the existing legacy call-graph sidecar after relationship compatibility passes; `call_graph` traversal is not yet served directly from relationship records.
 
 Acceptance:
 
@@ -846,7 +898,7 @@ Acceptance:
 
 1. What is the first non-TS/JS/Python language target: Go for backend coverage or Rust/C++ for systems coverage?
 2. What exact root fingerprint strategy should handle moved repos, symlinks, and CI path differences?
-3. Should relationship extraction v1 include import/export edges for TS/JS/Python in the same patch as calls, or land calls first?
+3. Should relationship extraction v1 add test-reference edges next, or first migrate MCP `call_graph` traversal from legacy graph sidecars to relationship records?
 4. What confidence thresholds should downgrade a symbol group from high to medium or low?
 5. How long should legacy `metadata.symbolId` compatibility remain before requiring reindex?
 

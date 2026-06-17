@@ -36,6 +36,7 @@ test('language registry is backed by canonical capability declarations', () => {
 test('language registry routes modern module and systems extensions without changing capability honesty', () => {
     assert.equal(getLanguageIdFromExtension('.mts'), 'typescript');
     assert.equal(getLanguageIdFromExtension('cts'), 'typescript');
+    assert.equal(getLanguageIdFromExtension('.c'), 'cpp');
     assert.equal(getLanguageIdFromExtension('.cc'), 'cpp');
     assert.equal(getLanguageIdFromExtension('.cxx'), 'cpp');
     assert.equal(getLanguageIdFromExtension('.hh'), 'cpp');
@@ -45,6 +46,9 @@ test('language registry routes modern module and systems extensions without chan
 
     assert.equal(isLanguageCapabilitySupportedForExtension('.mts', 'search'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.mts', 'owner'), true);
+    assert.equal(isLanguageCapabilitySupportedForExtension('.c', 'search'), true);
+    assert.equal(isLanguageCapabilitySupportedForExtension('.c', 'astSplitter'), true);
+    assert.equal(isLanguageCapabilitySupportedForExtension('.c', 'owner'), false);
     assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'search'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'owner'), false);
     assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'search'), true);

@@ -347,6 +347,69 @@ test('Context.indexCodebase attaches Go extractor owner metadata in production i
     }
 });
 
+test('Context.indexCodebase attaches Rust extractor owner metadata in production indexing', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-rust-symbols-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'stack.rs');
+
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, [
+            'pub struct Stack { value: i32 }',
+            '',
+            'impl Stack {',
+            '  pub fn push(&mut self, value: i32) {',
+            '    self.value = value;',
+            '  }',
+            '}',
+            '',
+        ].join('\n'), 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        const result = await context.indexCodebase(codebasePath);
+        const sidecar = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+
+        assert.equal(result.status, 'completed');
+        assert.equal(sidecar.status, 'ok');
+        if (sidecar.status !== 'ok') {
+            return;
+        }
+
+        const rustSymbols = sidecar.registry.symbolsByFile.get('stack.rs') || [];
+        const stack = rustSymbols.find((symbol) => symbol.kind === 'type' && symbol.name === 'Stack');
+        const push = rustSymbols.find((symbol) => symbol.kind === 'method' && symbol.name === 'push');
+        assert.ok(stack);
+        assert.ok(push);
+        assert.equal(stack?.language, 'rust');
+        assert.equal(push?.language, 'rust');
+        assert.equal(stack?.label, 'type Stack');
+        assert.equal(push?.label, 'method push');
+        const rustSymbolInstanceIds = new Set(rustSymbols.map((symbol) => symbol.symbolInstanceId));
+
+        const documents = Array.from(vectorDatabase.collections.values())
+            .flatMap((collection) => Array.from(collection.values()))
+            .filter((document) => document.fileExtension !== COMPLETION_MARKER_EXTENSION)
+            .filter((document) => document.relativePath === 'stack.rs');
+        assert.ok(documents.length > 0);
+        assert.ok(documents.some((document) =>
+            document.metadata.ownerSymbolInstanceId === stack?.symbolInstanceId ||
+            document.metadata.ownerSymbolInstanceId === push?.symbolInstanceId
+        ));
+        assert.ok(documents.every((document) => rustSymbolInstanceIds.has(String(document.metadata.ownerSymbolInstanceId))));
+        assert.ok(documents.every((document) => typeof document.metadata.ownerSymbolKey === 'string'));
+        assert.ok(documents.every((document) => typeof document.metadata.ownerSymbolInstanceId === 'string'));
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context.indexCodebase degrades malformed Go source to synthesized file-owner metadata', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-go-malformed-symbols-'));
     const stateRoot = path.join(tempRoot, 'state');

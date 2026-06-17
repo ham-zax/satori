@@ -9,6 +9,10 @@ import {
 } from './index';
 import type { SymbolExtractor } from '../types';
 
+test.afterEach(() => {
+    clearSymbolExtractorRegistryForTests();
+});
+
 function extractor(languageId: string, extractorVersion: string): SymbolExtractor {
     return {
         languageId,

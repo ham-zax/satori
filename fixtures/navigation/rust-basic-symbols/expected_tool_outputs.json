@@ -1,0 +1,22 @@
+{
+    "language": "rust",
+    "tier": "symbol_only",
+    "fileOutline": {
+        "status": "ok"
+    },
+    "readFileOpenSymbol": {
+        "targetQualifiedName": "Stack.new",
+        "status": "ok",
+        "span": {
+            "startLine": 4,
+            "endLine": 4
+        }
+    },
+    "searchCodebase": {
+        "nextActionsCallGraph": false
+    },
+    "callGraph": {
+        "supported": false,
+        "reason": "unsupported_language"
+    }
+}

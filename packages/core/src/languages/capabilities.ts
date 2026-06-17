@@ -81,7 +81,7 @@ function symbolOnlyLanguage(input: {
     readonly languageId: string;
     readonly aliases: readonly string[];
     readonly extensions: readonly string[];
-    readonly fixtures: Required<Pick<LanguageCapabilityDeclaration['fixtures'], 'symbols' | 'ownerMetadata' | 'fileOutline' | 'readFileOpenSymbol'>>;
+    readonly fixtures: Required<Pick<LanguageCapabilityDeclaration['fixtures'], 'navigation' | 'symbols' | 'ownerMetadata' | 'fileOutline' | 'readFileOpenSymbol'>>;
 }): LanguageCapabilityDeclaration {
     return declaration({
         ...input,
@@ -129,7 +129,8 @@ const CMM_DERIVED_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclarati
     parserDeclaredSearchOnlyLanguage({ languageId: 'bibtex', extensions: ['.bib'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'bicep', extensions: ['.bicep'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'bitbake', extensions: ['.bb', '.bbappend', '.bbclass', '.inc'] }),
-    parserDeclaredSearchOnlyLanguage({ languageId: 'c', extensions: ['.c'] }),
+    // Keep `.c` routed through the existing C/C++ AST splitter until C has Satori-native parser proof.
+    parserDeclaredSearchOnlyLanguage({ languageId: 'c', extensions: [] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'cairo', extensions: ['.cairo'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'capnp', extensions: ['.capnp'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'cfml', extensions: ['.cfm'] }),
@@ -265,7 +266,7 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     astSearchOnlyLanguage({
         languageId: 'cpp',
         aliases: ['c++'],
-        extensions: ['.cpp', '.h', '.hpp', '.cc', '.ccm', '.cppm', '.cxx', '.hh', '.hxx', '.ixx'],
+        extensions: ['.cpp', '.c', '.h', '.hpp', '.cc', '.ccm', '.cppm', '.cxx', '.hh', '.hxx', '.ixx'],
         fixtures: {
             parser: ['packages/core/src/splitter/ast-splitter.test.ts'],
         },
@@ -283,6 +284,10 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
         aliases: [],
         extensions: ['.go'],
         fixtures: {
+            navigation: [
+                'fixtures/navigation/go-basic-symbols/expected_symbols.json',
+                'fixtures/navigation/go-basic-symbols/expected_tool_outputs.json',
+            ],
             symbols: ['packages/core/src/languages/extractors/go-rust.test.ts'],
             ownerMetadata: ['packages/core/src/languages/extractors/go-rust.test.ts', 'packages/core/src/core/context.test.ts'],
             fileOutline: ['packages/mcp/src/core/handlers.file_outline.test.ts'],
@@ -328,6 +333,10 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
         aliases: ['rs'],
         extensions: ['.rs'],
         fixtures: {
+            navigation: [
+                'fixtures/navigation/rust-basic-symbols/expected_symbols.json',
+                'fixtures/navigation/rust-basic-symbols/expected_tool_outputs.json',
+            ],
             symbols: ['packages/core/src/languages/extractors/go-rust.test.ts'],
             ownerMetadata: ['packages/core/src/languages/extractors/go-rust.test.ts', 'packages/core/src/core/context.test.ts'],
             fileOutline: ['packages/mcp/src/core/handlers.file_outline.test.ts'],
@@ -378,4 +387,24 @@ export function getLanguageCapabilityDeclaration(language: string): LanguageCapa
         return undefined;
     }
     return DECLARATION_BY_KEY.get(key);
+}
+
+export interface LanguageCapabilityTierCounts {
+    readonly totalDeclarations: number;
+    readonly recognizedRoutedLanguages: number;
+    readonly parserCoveredLanguages: number;
+    readonly symbolOnlyLanguages: number;
+    readonly callGraphLanguages: number;
+}
+
+export function getLanguageCapabilityTierCounts(): LanguageCapabilityTierCounts {
+    return {
+        totalDeclarations: DECLARATIONS.length,
+        recognizedRoutedLanguages: DECLARATIONS.filter((declaration) =>
+            declaration.extensions.length > 0 || (declaration.filenames?.length || 0) > 0
+        ).length,
+        parserCoveredLanguages: DECLARATIONS.filter((declaration) => declaration.parserCapability !== NONE).length,
+        symbolOnlyLanguages: DECLARATIONS.filter((declaration) => declaration.publicClaim === 'symbol_only').length,
+        callGraphLanguages: DECLARATIONS.filter((declaration) => declaration.callsCapability === PRODUCTION_READY).length,
+    };
 }

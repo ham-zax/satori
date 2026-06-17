@@ -1,0 +1,55 @@
+[
+    {
+        "kind": "type",
+        "name": "User",
+        "label": "type User",
+        "qualifiedName": "User",
+        "span": {
+            "startLine": 3,
+            "endLine": 5
+        }
+    },
+    {
+        "kind": "interface",
+        "name": "Runner",
+        "label": "interface Runner",
+        "qualifiedName": "Runner",
+        "span": {
+            "startLine": 7,
+            "endLine": 9
+        }
+    },
+    {
+        "kind": "function",
+        "name": "add",
+        "label": "function add",
+        "qualifiedName": "add",
+        "span": {
+            "startLine": 11,
+            "endLine": 13
+        }
+    },
+    {
+        "kind": "type",
+        "name": "Service",
+        "label": "type Service",
+        "qualifiedName": "Service",
+        "span": {
+            "startLine": 15,
+            "endLine": 15
+        }
+    },
+    {
+        "kind": "method",
+        "name": "Start",
+        "label": "method Start",
+        "qualifiedName": "Service.Start",
+        "parentQualifiedNamePath": [
+            "type Service"
+        ],
+        "span": {
+            "startLine": 17,
+            "endLine": 19
+        }
+    }
+]

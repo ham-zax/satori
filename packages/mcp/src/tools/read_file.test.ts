@@ -458,6 +458,66 @@ test('read_file open_symbol opens a Go symbol by symbolInstanceId through exact 
     });
 });
 
+test('read_file open_symbol opens a Rust symbol by symbolInstanceId through exact outline resolution', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const filePath = path.join(repoPath, 'stack.rs');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, [
+            'pub struct Stack { value: i32 }',
+            '',
+            'impl Stack {',
+            '  pub fn push(&mut self, value: i32) {',
+            '    self.value = value;',
+            '  }',
+            '}',
+            '',
+        ].join('\n'), 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'rust_push_instance'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as any,
+            toolHandlers: {
+                handleFileOutline: async (args: any) => {
+                    assert.equal(args.resolveMode, 'exact');
+                    assert.equal(args.symbolIdExact, 'rust_push_instance');
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'ok',
+                                path: repoPath,
+                                file: 'stack.rs',
+                                outline: {
+                                    symbols: [{
+                                        symbolId: 'rust_push_instance',
+                                        symbolLabel: 'method push',
+                                        span: { startLine: 4, endLine: 6 },
+                                        callGraphHint: {
+                                            supported: false,
+                                            reason: 'unsupported_language'
+                                        }
+                                    }]
+                                },
+                                hasMore: false
+                            })
+                        }]
+                    };
+                }
+            } as any
+        });
+
+        assert.equal(response.isError, undefined);
+        assert.equal(response.content[0].text, '  pub fn push(&mut self, value: i32) {\n    self.value = value;\n  }');
+    });
+});
+
 test('read_file open_symbol returns not_found for a stale symbolInstanceId without span fallback', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');

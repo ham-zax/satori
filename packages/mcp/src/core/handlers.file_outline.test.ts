@@ -481,6 +481,75 @@ test('handleFileOutline returns Go symbols without enabling call_graph even when
     }));
 });
 
+test('handleFileOutline returns Rust symbols without enabling call_graph even when relationship sidecars exist', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, 'src', 'stack.rs'), [
+            'pub struct Stack { value: i32 }',
+            '',
+            'impl Stack {',
+            '  pub fn push(&mut self, value: i32) {',
+            '    self.value = value;',
+            '  }',
+            '}',
+            '',
+        ].join('\n'));
+        const push = createTestSymbol({
+            file: 'src/stack.rs',
+            label: 'method push',
+            name: 'push',
+            qualifiedName: 'Stack.push',
+            startLine: 4,
+            endLine: 6,
+            language: 'rust',
+            kind: 'method',
+        });
+        const { registry, result } = await writeTestSymbolRegistry(repoPath, [push]);
+        await writeRelationshipSidecar({
+            normalizedRootPath: repoPath,
+            symbolRegistryManifestHash: result.manifestHash,
+            relationshipVersion: 'test-relationships-v1',
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: registry.manifest.files,
+            records: [],
+        });
+
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const outlineResponse = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/stack.rs'
+        });
+
+        const outlinePayload = JSON.parse(outlineResponse.content[0]?.text || '{}');
+        assert.equal(outlinePayload.status, 'ok');
+        assert.equal(outlinePayload.outline.symbols.length, 1);
+        assert.equal(outlinePayload.outline.symbols[0].symbolId, push.symbolInstanceId);
+        assert.equal(outlinePayload.outline.symbols[0].callGraphHint.supported, false);
+        assert.equal(outlinePayload.outline.symbols[0].callGraphHint.reason, 'unsupported_language');
+        assert.ok(outlinePayload.warnings.includes('OUTLINE_CALL_GRAPH_UNAVAILABLE:unsupported_language'));
+
+        const callGraphResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/stack.rs',
+                symbolId: push.symbolInstanceId,
+            },
+            direction: 'callees',
+            depth: 1,
+            limit: 20,
+        });
+        const callGraphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
+        assert.equal(callGraphPayload.status, 'unsupported');
+        assert.equal(callGraphPayload.supported, false);
+        assert.equal(callGraphPayload.reason, 'unsupported_language');
+    }));
+});
+
 test('handleFileOutline relationship-backed callGraphHint works end to end with call_graph without a legacy sidecar', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const alpha = createTestSymbol({

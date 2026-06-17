@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
     getSymbolExtractorForLanguage,
 } from './index';
+import { getLanguageCapabilityDeclaration } from '../capabilities';
 import {
     buildSymbolRecordsForFile,
     buildSymbolRegistry,
@@ -14,76 +17,186 @@ import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
 } from '../../symbols';
 import type { SymbolRegistryManifest } from '../../symbols';
+import type { ExtractedSymbol } from '../types';
+
+interface ExpectedFixtureSymbol {
+    readonly kind: string;
+    readonly name: string;
+    readonly label: string;
+    readonly qualifiedName: string;
+    readonly parentQualifiedNamePath?: readonly string[];
+    readonly span: {
+        readonly startLine: number;
+        readonly endLine: number;
+    };
+}
+
+interface ExpectedFixtureEdges {
+    readonly calls: readonly unknown[];
+}
+
+interface ExpectedFixtureToolOutputs {
+    readonly language: string;
+    readonly tier: string;
+    readonly searchCodebase: {
+        readonly nextActionsCallGraph: boolean;
+    };
+    readonly callGraph: {
+        readonly supported: boolean;
+        readonly reason: string;
+    };
+}
 
 function hash(content: string): string {
     return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
-test('Go symbol extractor returns top-level declarations without call graph claims', () => {
-    const extractor = getSymbolExtractorForLanguage('go');
+function fixturePath(fixtureName: string, fileName: string): string {
+    const relativePath = path.join('fixtures', 'navigation', fixtureName, fileName);
+    const candidates = [
+        path.resolve(process.cwd(), relativePath),
+        path.resolve(process.cwd(), '../..', relativePath),
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+    return candidates[0];
+}
+
+function readFixtureFile(fixtureName: string, fileName: string): string {
+    return fs.readFileSync(fixturePath(fixtureName, fileName), 'utf8');
+}
+
+function readFixtureJson<T>(fixtureName: string, fileName: string): T {
+    return JSON.parse(readFixtureFile(fixtureName, fileName)) as T;
+}
+
+function summarizeExtractedSymbol(symbol: ExtractedSymbol): ExpectedFixtureSymbol {
+    const summary: ExpectedFixtureSymbol = {
+        kind: symbol.kind,
+        name: symbol.name,
+        label: symbol.label,
+        qualifiedName: symbol.qualifiedName || '',
+        span: {
+            startLine: symbol.span.startLine,
+            endLine: symbol.span.endLine,
+        },
+    };
+    return symbol.parentQualifiedNamePath && symbol.parentQualifiedNamePath.length > 0
+        ? { ...summary, parentQualifiedNamePath: symbol.parentQualifiedNamePath }
+        : summary;
+}
+
+function buildFixtureRegistry(input: {
+    fixtureName: string;
+    relativePath: string;
+    language: string;
+    extractorVersion: string;
+    source: string;
+    extractedSymbols: readonly ExtractedSymbol[];
+}) {
+    const fileHash = hash(input.source);
+    const records = buildSymbolRecordsForFile({
+        relativePath: input.relativePath,
+        language: input.language,
+        content: input.source,
+        fileHash,
+        extractorVersion: input.extractorVersion,
+        extractedSymbols: input.extractedSymbols,
+        chunks: [{
+            content: input.source,
+            metadata: {
+                startLine: 1,
+                endLine: input.source.split('\n').length,
+                language: input.language,
+                filePath: input.relativePath,
+            },
+        }],
+    });
+    const manifest: SymbolRegistryManifest = {
+        schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+        normalizedRootPath: `/fixtures/navigation/${input.fixtureName}`,
+        rootFingerprint: 'fixture-root',
+        indexPolicyHash: 'fixture-policy',
+        languageRouterVersion: 'fixture-router',
+        extractorVersion: input.extractorVersion,
+        relationshipVersion: 'relationships',
+        builtAt: '2026-06-18T00:00:00.000Z',
+        files: [{
+            path: input.relativePath,
+            hash: fileHash,
+            language: input.language,
+            symbolCount: records.length,
+        }],
+    };
+    return buildSymbolRegistry({ manifest, symbols: records });
+}
+
+test('Go navigation fixture matches extractor and no-graph golden expectations', () => {
+    const fixtureName = 'go-basic-symbols';
+    const relativePath = 'svc.go';
+    const source = readFixtureFile(fixtureName, relativePath);
+    const expectedSymbols = readFixtureJson<ExpectedFixtureSymbol[]>(fixtureName, 'expected_symbols.json');
+    const expectedEdges = readFixtureJson<ExpectedFixtureEdges>(fixtureName, 'expected_edges.json');
+    const expectedToolOutputs = readFixtureJson<ExpectedFixtureToolOutputs>(fixtureName, 'expected_tool_outputs.json');
+    const declaration = getLanguageCapabilityDeclaration(expectedToolOutputs.language);
+    const extractor = getSymbolExtractorForLanguage(expectedToolOutputs.language);
     assert.ok(extractor);
 
-    const source = [
-        'package svc',
-        '',
-        'type User struct {',
-        '  Name string',
-        '}',
-        '',
-        'type Runner interface {',
-        '  Run() error',
-        '}',
-        '',
-        'func add(a, b int) int {',
-        '  return a + b',
-        '}',
-        '',
-        'func (s *Service) Start() error {',
-        '  return nil',
-        '}',
-        '',
-    ].join('\n');
+    const symbols = extractor.extract({ content: source, relativePath });
+    const registry = buildFixtureRegistry({
+        fixtureName,
+        relativePath,
+        language: expectedToolOutputs.language,
+        extractorVersion: extractor.extractorVersion,
+        source,
+        extractedSymbols: symbols,
+    });
 
-    const symbols = extractor.extract({ content: source, relativePath: 'svc.go' });
-
-    assert.deepEqual(symbols.map((symbol) => [symbol.kind, symbol.label, symbol.qualifiedName]), [
-        ['type', 'type User', 'User'],
-        ['interface', 'interface Runner', 'Runner'],
-        ['function', 'function add', 'add'],
-        ['method', 'method Start', 'Service.Start'],
-    ]);
+    assert.equal(declaration?.publicClaim, expectedToolOutputs.tier);
+    assert.equal(expectedToolOutputs.searchCodebase.nextActionsCallGraph, false);
+    assert.deepEqual(summarizeExtractedSymbol(symbols[0]), expectedSymbols[0]);
+    assert.deepEqual(symbols.map(summarizeExtractedSymbol), expectedSymbols);
+    assert.deepEqual(buildRelationshipsForRegistry({
+        registry,
+        contentByFile: new Map([[relativePath, source]]),
+    }), expectedEdges.calls);
+    assert.equal(expectedToolOutputs.callGraph.supported, false);
+    assert.equal(expectedToolOutputs.callGraph.reason, 'unsupported_language');
 });
 
-test('Rust symbol extractor returns type, trait, module, function, and impl method symbols', () => {
-    const extractor = getSymbolExtractorForLanguage('rs');
+test('Rust navigation fixture matches extractor and no-graph golden expectations', () => {
+    const fixtureName = 'rust-basic-symbols';
+    const relativePath = 'stack.rs';
+    const source = readFixtureFile(fixtureName, relativePath);
+    const expectedSymbols = readFixtureJson<ExpectedFixtureSymbol[]>(fixtureName, 'expected_symbols.json');
+    const expectedEdges = readFixtureJson<ExpectedFixtureEdges>(fixtureName, 'expected_edges.json');
+    const expectedToolOutputs = readFixtureJson<ExpectedFixtureToolOutputs>(fixtureName, 'expected_tool_outputs.json');
+    const declaration = getLanguageCapabilityDeclaration(expectedToolOutputs.language);
+    const extractor = getSymbolExtractorForLanguage(expectedToolOutputs.language);
     assert.ok(extractor);
 
-    const source = [
-        'pub struct Stack<T> { items: Vec<T> }',
-        '',
-        'impl<T> Stack<T> {',
-        '    pub fn new() -> Self { Stack { items: Vec::new() } }',
-        '    fn push(&mut self, item: T) { self.items.push(item); }',
-        '}',
-        '',
-        'pub trait Store { fn save(&self); }',
-        'mod inner { pub fn nested() {} }',
-        'fn demo() {}',
-        '',
-    ].join('\n');
+    const symbols = extractor.extract({ content: source, relativePath });
+    const registry = buildFixtureRegistry({
+        fixtureName,
+        relativePath,
+        language: expectedToolOutputs.language,
+        extractorVersion: extractor.extractorVersion,
+        source,
+        extractedSymbols: symbols,
+    });
 
-    const symbols = extractor.extract({ content: source, relativePath: 'stack.rs' });
-
-    assert.deepEqual(symbols.map((symbol) => [symbol.kind, symbol.label, symbol.qualifiedName]), [
-        ['type', 'type Stack', 'Stack'],
-        ['method', 'method new', 'Stack.new'],
-        ['method', 'method push', 'Stack.push'],
-        ['trait', 'trait Store', 'Store'],
-        ['method', 'method save', 'Store.save'],
-        ['module', 'module inner', 'inner'],
-        ['function', 'function nested', 'inner.nested'],
-        ['function', 'function demo', 'demo'],
-    ]);
+    assert.equal(declaration?.publicClaim, expectedToolOutputs.tier);
+    assert.equal(expectedToolOutputs.searchCodebase.nextActionsCallGraph, false);
+    assert.deepEqual(symbols.map(summarizeExtractedSymbol), expectedSymbols);
+    assert.deepEqual(buildRelationshipsForRegistry({
+        registry,
+        contentByFile: new Map([[relativePath, source]]),
+    }), expectedEdges.calls);
+    assert.equal(expectedToolOutputs.callGraph.supported, false);
+    assert.equal(expectedToolOutputs.callGraph.reason, 'unsupported_language');
 });
 
 test('Go and Rust extractors degrade malformed source to file-owner fallback eligibility', () => {

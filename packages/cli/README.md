@@ -5,8 +5,8 @@ Installer and shell client for Satori MCP. Use this package to configure support
 ## Quick Start
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.2 install --client all
-npx -y @zokizuan/satori-cli@0.4.2 doctor
+npx -y @zokizuan/satori-cli@0.4.4 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 doctor
 ```
 
 Supported clients are `codex`, `claude`, `opencode`, and `all`.
@@ -22,24 +22,39 @@ The installer only manages Satori-owned config and the first-party workflow skil
 ## Commands
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.2 install --client codex
-npx -y @zokizuan/satori-cli@0.4.2 install --client claude
-npx -y @zokizuan/satori-cli@0.4.2 install --client opencode
-npx -y @zokizuan/satori-cli@0.4.2 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.4.2 uninstall --client codex
+npx -y @zokizuan/satori-cli@0.4.4 install --client codex
+npx -y @zokizuan/satori-cli@0.4.4 install --client all --profile minimal
+npx -y @zokizuan/satori-cli@0.4.4 install --client codex --install-guidance-hook
+npx -y @zokizuan/satori-cli@0.4.4 install --client claude
+npx -y @zokizuan/satori-cli@0.4.4 install --client opencode
+npx -y @zokizuan/satori-cli@0.4.4 install --client all --dry-run
+npx -y @zokizuan/satori-cli@0.4.4 uninstall --client codex
 ```
 
 `doctor` checks Node, package visibility, provider env, and Milvus env without starting an MCP client.
 
+`--profile default|minimal|all-text` writes or updates repo-local `satori.toml` for the current working directory. `default` is safe-broad, `minimal` indexes source plus docs/text, and `all-text` indexes additional UTF-8 text files under the size limit. All profiles still honor ignore rules and hard-deny secrets, lockfiles, binaries, generated output, bundles, logs, and database dumps.
+
+`--install-guidance-hook` is Codex-only. It adds a marked `SessionStart` reminder hook to `~/.codex/config.toml` that prints the Satori discovery workflow; it does not run indexing, search, or provider-backed work.
+
 Typical first run:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.2 install --client all
-npx -y @zokizuan/satori-cli@0.4.2 doctor
+npx -y @zokizuan/satori-cli@0.4.4 install --client all
+npx -y @zokizuan/satori-cli@0.4.4 doctor
 # restart your MCP client
 ```
 
 The installer writes launcher config only. Runtime provider settings are read when the MCP client starts.
+
+Repo profile config is separate from client/provider config:
+
+```toml
+[index]
+profile = "minimal"
+```
+
+Changing `satori.toml` is treated as an index-policy control-file change. `search_codebase` can reconcile ordinary profile/ignore changes through freshness checks, while incompatible index fingerprints still return `requires_reindex`.
 
 Supported client installs expose the Satori runtime variable names in the client config:
 

@@ -49,6 +49,15 @@ function installOptions(homeDir: string) {
     };
 }
 
+function withTempRepo(run: (repoDir: string) => void): void {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-profile-repo-"));
+    try {
+        run(repoDir);
+    } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+}
+
 function withTempHome(run: (homeDir: string) => void): void {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-install-"));
     try {
@@ -113,6 +122,7 @@ test("install writes managed Codex config block and copies packaged skill", () =
         assert.equal(content.includes('command = "npx"'), false);
         assert.equal(content.includes("startup_timeout_ms"), false);
         assert.equal(content.includes(EXPECTED_PACKAGE_SPECIFIER), false);
+        assert.equal(content.includes("# >>> satori-cli managed codex guidance hook start >>>"), false);
         assert.equal(fs.existsSync(launcherPath(homeDir)), true);
         const launcher = readFile(launcherPath(homeDir));
         assert.equal(launcher.includes('require("node:child_process")'), true);
@@ -250,6 +260,75 @@ test("install preserves user-owned Codex env values outside the managed block", 
     });
 });
 
+test("install adds opt-in managed Codex guidance hook and preserves user hooks", () => {
+    withTempHome((homeDir) => {
+        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+        fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
+        fs.writeFileSync(
+            codexConfigPath,
+            [
+                'model = "gpt-5"',
+                "",
+                "[[hooks.SessionStart]]",
+                'matcher = "startup"',
+                "",
+                "[[hooks.SessionStart.hooks]]",
+                'type = "command"',
+                'command = \'echo "user hook"\'',
+                "",
+            ].join("\n"),
+            "utf8"
+        );
+
+        executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            installGuidanceHook: true,
+        }, installOptions(homeDir));
+
+        const content = readFile(codexConfigPath);
+        assert.equal(content.includes("# >>> satori-cli managed codex guidance hook start >>>"), true);
+        assert.equal(content.includes("# <<< satori-cli managed codex guidance hook end <<<"), true);
+        assert.equal(content.includes("Satori MCP: prefer search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
+        assert.equal(content.includes('command = \'echo "user hook"\''), true);
+    });
+});
+
+test("install replaces existing managed Codex guidance hook", () => {
+    withTempHome((homeDir) => {
+        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+        fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
+        fs.writeFileSync(
+            codexConfigPath,
+            [
+                "# >>> satori-cli managed codex guidance hook start >>>",
+                "[[hooks.SessionStart]]",
+                'matcher = "startup"',
+                "",
+                "[[hooks.SessionStart.hooks]]",
+                'type = "command"',
+                'command = \'echo "old satori guidance"\'',
+                "# <<< satori-cli managed codex guidance hook end <<<",
+                "",
+            ].join("\n"),
+            "utf8"
+        );
+
+        executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            installGuidanceHook: true,
+        }, installOptions(homeDir));
+
+        const content = readFile(codexConfigPath);
+        assert.equal(content.includes("old satori guidance"), false);
+        assert.equal(content.includes("Satori MCP: prefer search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
+        assert.equal(content.match(/satori-cli managed codex guidance hook start/g)?.length, 1);
+    });
+});
+
 test("uninstall removes an existing managed Codex block", () => {
     withTempHome((homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
@@ -278,6 +357,48 @@ test("uninstall removes an existing managed Codex block", () => {
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("[mcp_servers.satori]"), false);
         assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), false);
+    });
+});
+
+test("uninstall removes managed Codex guidance hook and preserves user hooks", () => {
+    withTempHome((homeDir) => {
+        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+        fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
+        fs.writeFileSync(
+            codexConfigPath,
+            [
+                'model = "gpt-5"',
+                "",
+                "# >>> satori-cli managed codex guidance hook start >>>",
+                "[[hooks.SessionStart]]",
+                'matcher = "startup|resume|clear|compact"',
+                "",
+                "[[hooks.SessionStart.hooks]]",
+                'type = "command"',
+                'command = \'echo "Satori guidance"\'',
+                "# <<< satori-cli managed codex guidance hook end <<<",
+                "",
+                "[[hooks.SessionStart]]",
+                'matcher = "startup"',
+                "",
+                "[[hooks.SessionStart.hooks]]",
+                'type = "command"',
+                'command = \'echo "user hook"\'',
+                "",
+            ].join("\n"),
+            "utf8"
+        );
+
+        executeInstallCommand({
+            kind: "uninstall",
+            client: "codex",
+            dryRun: false,
+        }, { homeDir });
+
+        const content = readFile(codexConfigPath);
+        assert.equal(content.includes("# >>> satori-cli managed codex guidance hook start >>>"), false);
+        assert.equal(content.includes("Satori guidance"), false);
+        assert.equal(content.includes('command = \'echo "user hook"\''), true);
     });
 });
 
@@ -546,6 +667,70 @@ test("install all smoke writes launcher-backed config for every supported client
         const opencodeInstructions = readFile(path.join(homeDir, ".config", "opencode", "AGENTS.md"));
         assert.equal(opencodeInstructions.includes("<!-- satori-mcp:start -->"), true);
         assert.equal(opencodeInstructions.includes("search_codebase"), true);
+    });
+});
+
+test("install --profile writes repo-local Satori config once for all clients", () => {
+    withTempHome((homeDir) => {
+        withTempRepo((repoDir) => {
+            const result = executeInstallCommand({
+                kind: "install",
+                client: "all",
+                dryRun: false,
+                profile: "minimal",
+            }, {
+                ...installOptions(homeDir),
+                repoDir,
+            });
+
+            const configPath = path.join(repoDir, "satori.toml");
+            assert.equal(result.profile, "minimal");
+            assert.equal(result.profileConfigPath, configPath);
+            assert.equal(result.profileConfigChanged, true);
+            assert.equal(fs.existsSync(configPath), true);
+            assert.equal(readFile(configPath), [
+                "# Satori project config",
+                "[index]",
+                "profile = \"minimal\"",
+                "",
+            ].join("\n"));
+        });
+    });
+});
+
+test("install --profile updates existing repo config and preserves unrelated TOML", () => {
+    withTempHome((homeDir) => {
+        withTempRepo((repoDir) => {
+            const configPath = path.join(repoDir, "satori.toml");
+            fs.writeFileSync(configPath, [
+                "[project]",
+                "name = \"demo\"",
+                "",
+                "[index]",
+                "profile = \"all-text\"",
+                "",
+            ].join("\n"), "utf8");
+
+            const result = executeInstallCommand({
+                kind: "install",
+                client: "codex",
+                dryRun: false,
+                profile: "minimal",
+            }, {
+                ...installOptions(homeDir),
+                repoDir,
+            });
+
+            assert.equal(result.profileConfigChanged, true);
+            assert.equal(readFile(configPath), [
+                "[project]",
+                "name = \"demo\"",
+                "",
+                "[index]",
+                "profile = \"minimal\"",
+                "",
+            ].join("\n"));
+        });
     });
 });
 

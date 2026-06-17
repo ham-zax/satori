@@ -5,13 +5,15 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { CliError } from "./errors.js";
-import type { InstallClient } from "./args.js";
+import type { InstallClient, InstallProfile } from "./args.js";
 import { resolveManagedPackageSpecifier } from "./managed-package.js";
 
 const MANAGED_BLOCK_START = "# >>> satori-cli managed satori start >>>";
 const MANAGED_BLOCK_END = "# <<< satori-cli managed satori end <<<";
 const CODEX_ENV_TEMPLATE_START = "# >>> satori-cli optional satori env template >>>";
 const CODEX_ENV_TEMPLATE_END = "# <<< satori-cli optional satori env template <<<";
+const CODEX_GUIDANCE_HOOK_START = "# >>> satori-cli managed codex guidance hook start >>>";
+const CODEX_GUIDANCE_HOOK_END = "# <<< satori-cli managed codex guidance hook end <<<";
 const INSTRUCTIONS_BLOCK_START = "<!-- satori-mcp:start -->";
 const INSTRUCTIONS_BLOCK_END = "<!-- satori-mcp:end -->";
 const OWNED_SKILL_DIRS = ["satori"] as const;
@@ -51,6 +53,7 @@ const CODEX_ENV_TEMPLATE_LINES = [
     "# MILVUS_TOKEN = \"your-zilliz-token\"",
     CODEX_ENV_TEMPLATE_END,
 ] as const;
+const CODEX_GUIDANCE_HOOK_COMMAND = 'printf "%s\\n" "Satori MCP: prefer search_codebase -> file_outline -> call_graph -> read_file(open_symbol) for code discovery. If unindexed, use manage_index(action=\\"create\\", path=<repo>). If requires_reindex or hints.reindex appears, run manage_index(action=\\"reindex\\", path=<hinted path>). Treat navigationFallback as authoritative."';
 const OPENCODE_INSTRUCTIONS = `# Satori MCP
 
 This project uses Satori MCP for semantic code search, deterministic navigation, and index lifecycle management.
@@ -82,10 +85,13 @@ export interface InstallCommandInput {
     kind: "install" | "uninstall";
     client: InstallClient;
     dryRun: boolean;
+    installGuidanceHook?: boolean;
+    profile?: InstallProfile;
 }
 
 export interface InstallCommandOptions {
     homeDir?: string;
+    repoDir?: string;
     packageSpecifier?: string;
     skillAssetRoot?: string;
     runtimeCommand?: ManagedRuntimeCommand;
@@ -108,6 +114,9 @@ export interface InstallCommandResult {
     action: "install" | "uninstall";
     client: InstallClient;
     dryRun: boolean;
+    profile?: InstallProfile;
+    profileConfigPath?: string;
+    profileConfigChanged?: boolean;
     results: ClientInstallResult[];
 }
 
@@ -218,6 +227,74 @@ function toTomlString(value: string): string {
 
 function buildTomlArray(values: string[]): string {
     return `[${values.map(toTomlString).join(", ")}]`;
+}
+
+function buildSatoriProjectConfig(profile: InstallProfile): string {
+    return [
+        "# Satori project config",
+        "[index]",
+        `profile = ${toTomlString(profile)}`,
+        "",
+    ].join("\n");
+}
+
+function updateSatoriProjectConfig(current: string, profile: InstallProfile): string {
+    if (current.trim().length === 0) {
+        return buildSatoriProjectConfig(profile);
+    }
+
+    const lines = current.replace(/\r\n/g, "\n").split("\n");
+    let indexTableLine = -1;
+    let nextTableLine = lines.length;
+
+    for (let i = 0; i < lines.length; i += 1) {
+        const tableMatch = lines[i]?.match(/^\s*\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?$/);
+        if (!tableMatch) {
+            continue;
+        }
+        if (tableMatch[1] === "index") {
+            indexTableLine = i;
+            nextTableLine = lines.length;
+            continue;
+        }
+        if (indexTableLine !== -1 && nextTableLine === lines.length) {
+            nextTableLine = i;
+        }
+    }
+
+    if (indexTableLine === -1) {
+        return `${normalizeTrailingNewline(current)}\n[index]\nprofile = ${toTomlString(profile)}\n`;
+    }
+
+    for (let i = indexTableLine + 1; i < nextTableLine; i += 1) {
+        if (/^\s*profile\s*=/.test(lines[i] || "")) {
+            lines[i] = `profile = ${toTomlString(profile)}`;
+            return normalizeTrailingNewline(lines.join("\n"));
+        }
+    }
+
+    lines.splice(indexTableLine + 1, 0, `profile = ${toTomlString(profile)}`);
+    return normalizeTrailingNewline(lines.join("\n"));
+}
+
+function prepareProjectProfileInstall(repoDir: string, profile: InstallProfile | undefined): FileMutation & { filePath?: string } {
+    if (!profile) {
+        return { changed: false, apply: () => {} };
+    }
+    const filePath = path.join(repoDir, "satori.toml");
+    const current = readTextIfExists(filePath) ?? "";
+    const next = updateSatoriProjectConfig(current, profile);
+    return {
+        filePath,
+        changed: next !== current,
+        apply: () => {
+            if (next === current) {
+                return;
+            }
+            ensureParentDir(filePath);
+            fs.writeFileSync(filePath, next, "utf8");
+        },
+    };
 }
 
 function runtimeEnvMap(valueForName: (name: string) => string): Record<string, string> {
@@ -424,6 +501,30 @@ function buildCodexEnvTemplateBlock(): string {
     return `${CODEX_ENV_TEMPLATE_LINES.join("\n")}\n`;
 }
 
+function buildCodexGuidanceHookBlock(): string {
+    return [
+        CODEX_GUIDANCE_HOOK_START,
+        "[[hooks.SessionStart]]",
+        `matcher = ${toTomlString("startup|resume|clear|compact")}`,
+        "",
+        "[[hooks.SessionStart.hooks]]",
+        `type = ${toTomlString("command")}`,
+        `command = ${toTomlString(CODEX_GUIDANCE_HOOK_COMMAND)}`,
+        CODEX_GUIDANCE_HOOK_END,
+        "",
+    ].join("\n");
+}
+
+function removeCodexGuidanceHookBlock(content: string): string {
+    if (!content.includes(CODEX_GUIDANCE_HOOK_START) || !content.includes(CODEX_GUIDANCE_HOOK_END)) {
+        return content;
+    }
+    return content
+        .replace(new RegExp(`\\n?${escapeRegExp(CODEX_GUIDANCE_HOOK_START)}[\\s\\S]*?${escapeRegExp(CODEX_GUIDANCE_HOOK_END)}\\n?`, "m"), "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .replace(/^\n+/, "");
+}
+
 function codexHasSatoriEnvTable(content: string): boolean {
     return /^\s*\[mcp_servers\.satori\.env\]\s*$/m.test(content);
 }
@@ -435,6 +536,17 @@ function ensureCodexEnvTemplate(content: string): string {
     return `${normalizeTrailingNewline(content)}\n${buildCodexEnvTemplateBlock()}`;
 }
 
+function ensureCodexGuidanceHook(content: string): string {
+    const block = buildCodexGuidanceHookBlock();
+    if (content.includes(CODEX_GUIDANCE_HOOK_START) && content.includes(CODEX_GUIDANCE_HOOK_END)) {
+        return content.replace(
+            new RegExp(`${escapeRegExp(CODEX_GUIDANCE_HOOK_START)}[\\s\\S]*?${escapeRegExp(CODEX_GUIDANCE_HOOK_END)}\\n?`, "m"),
+            block
+        );
+    }
+    return `${normalizeTrailingNewline(content)}\n${block}`;
+}
+
 function codexHasUnmanagedSatoriSection(content: string): boolean {
     if (!content.includes("[mcp_servers.satori]")) {
         return false;
@@ -442,7 +554,7 @@ function codexHasUnmanagedSatoriSection(content: string): boolean {
     return !(content.includes(MANAGED_BLOCK_START) && content.includes(MANAGED_BLOCK_END));
 }
 
-function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand, installGuidanceHook: boolean): FileMutation {
     const current = readTextIfExists(filePath) ?? "";
     if (codexHasUnmanagedSatoriSection(current)) {
         throw new CliError(
@@ -466,6 +578,9 @@ function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCom
     }
 
     next = ensureCodexEnvTemplate(next);
+    if (installGuidanceHook) {
+        next = ensureCodexGuidanceHook(next);
+    }
 
     return {
         changed: next !== current,
@@ -492,13 +607,27 @@ function prepareCodexUninstall(filePath: string): FileMutation {
         );
     }
     if (!current.includes(MANAGED_BLOCK_START) || !current.includes(MANAGED_BLOCK_END)) {
-        return { changed: false, apply: () => {} };
+        const next = removeCodexGuidanceHookBlock(current);
+        return {
+            changed: next !== current,
+            apply: () => {
+                if (next === current) {
+                    return;
+                }
+                fs.writeFileSync(filePath, next, "utf8");
+            },
+        };
     }
 
-    const next = current
+    const withoutManagedBlock = current
         .replace(new RegExp(`\\n?${escapeRegExp(MANAGED_BLOCK_START)}[\\s\\S]*?${escapeRegExp(MANAGED_BLOCK_END)}\\n?`, "m"), "\n")
         .replace(/\n{3,}/g, "\n\n")
         .replace(/^\n+/, "");
+    const next = removeCodexGuidanceHookBlock(withoutManagedBlock);
+
+    if (next === current) {
+        return { changed: false, apply: () => {} };
+    }
 
     return {
         changed: next !== current,
@@ -860,7 +989,7 @@ function prepareConfigMutation(
 ): FileMutation {
     if (target.client === "codex") {
         return command.kind === "install"
-            ? prepareCodexInstall(target.configPath, runtimeCommand)
+            ? prepareCodexInstall(target.configPath, runtimeCommand, command.installGuidanceHook === true)
             : prepareCodexUninstall(target.configPath);
     }
     if (target.client === "claude") {
@@ -898,12 +1027,16 @@ export function executeInstallCommand(
     options: InstallCommandOptions = {}
 ): InstallCommandResult {
     const homeDir = options.homeDir ?? os.homedir();
+    const repoDir = options.repoDir ?? process.cwd();
     const packageSpecifier = options.packageSpecifier ?? resolveDefaultPackageSpecifier();
     const skillAssetRoot = options.skillAssetRoot ?? resolveDefaultSkillAssetRoot();
     const plannedRuntimeCommand = options.runtimeCommand ?? plannedManagedRuntimeCommand(homeDir, packageSpecifier);
     const clientCommand = managedClientCommand(homeDir);
     let launcherMutation = command.kind === "install"
         ? prepareLauncherInstall(homeDir, plannedRuntimeCommand)
+        : { changed: false, apply: () => {} };
+    const profileMutation: FileMutation & { filePath?: string } = command.kind === "install"
+        ? prepareProjectProfileInstall(repoDir, command.profile)
         : { changed: false, apply: () => {} };
 
     const prepared = selectTargets(homeDir, command.client).map((target) => (
@@ -917,6 +1050,7 @@ export function executeInstallCommand(
         }
         if (command.kind === "install") {
             launcherMutation.apply();
+            profileMutation.apply();
         }
         for (const mutation of prepared) {
             mutation.apply();
@@ -927,6 +1061,9 @@ export function executeInstallCommand(
         action: command.kind,
         client: command.client,
         dryRun: command.dryRun,
+        profile: command.kind === "install" ? command.profile : undefined,
+        profileConfigPath: command.kind === "install" ? profileMutation.filePath : undefined,
+        profileConfigChanged: command.kind === "install" ? profileMutation.changed : undefined,
         results: prepared.map((mutation) => ({
             client: mutation.target.client,
             configPath: mutation.target.configPath,
@@ -935,7 +1072,7 @@ export function executeInstallCommand(
             configChanged: mutation.configChanged,
             skillsChanged: mutation.target.companion.kind === "skills" ? mutation.companionChanged : false,
             instructionsChanged: mutation.target.companion.kind === "instructions" ? mutation.companionChanged : false,
-            status: mutation.configChanged || mutation.companionChanged || launcherMutation.changed ? "updated" : "unchanged",
+            status: mutation.configChanged || mutation.companionChanged || launcherMutation.changed || profileMutation.changed ? "updated" : "unchanged",
             dryRun: command.dryRun,
         })),
     };

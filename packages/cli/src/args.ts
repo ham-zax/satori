@@ -18,7 +18,7 @@ export type ParsedCommand =
     | { kind: "help" }
     | { kind: "version" }
     | { kind: "doctor" }
-    | { kind: "install"; client: InstallClient; dryRun: boolean }
+    | { kind: "install"; client: InstallClient; dryRun: boolean; installGuidanceHook: boolean; profile?: InstallProfile }
     | { kind: "uninstall"; client: InstallClient; dryRun: boolean }
     | { kind: "tools-list" }
     | { kind: "tool-call"; toolName: string; rawArgsMode: RawArgsMode }
@@ -35,6 +35,7 @@ export interface ResolveRawArgsOptions {
 }
 
 export type InstallClient = "all" | "claude" | "codex" | "opencode";
+export type InstallProfile = "default" | "minimal" | "all-text";
 
 const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "doctor", "install", "uninstall"]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
@@ -159,6 +160,8 @@ function parseRawArgsMode(args: string[]): { rawArgsMode: RawArgsMode; remaining
 function parseInstallCommand(kind: "install" | "uninstall", args: string[]): ParsedCommand {
     let client: InstallClient = "all";
     let dryRun = false;
+    let installGuidanceHook = false;
+    let profile: InstallProfile | undefined;
 
     for (let i = 0; i < args.length; i += 1) {
         const token = args[i];
@@ -175,10 +178,25 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             dryRun = true;
             continue;
         }
+        if (kind === "install" && token === "--install-guidance-hook") {
+            installGuidanceHook = true;
+            continue;
+        }
+        if (kind === "install" && token === "--profile") {
+            const next = args[i + 1];
+            if (next !== "default" && next !== "minimal" && next !== "all-text") {
+                throw new CliError("E_USAGE", "--profile must be one of: default, minimal, all-text.", 2);
+            }
+            profile = next;
+            i += 1;
+            continue;
+        }
         throw new CliError("E_USAGE", `Unknown arguments for ${kind}: ${args.slice(i).join(" ")}`, 2);
     }
 
-    return { kind, client, dryRun };
+    return kind === "install"
+        ? { kind, client, dryRun, installGuidanceHook, profile }
+        : { kind, client, dryRun };
 }
 
 export function parseCliArgs(argv: string[]): ParsedCliInput {

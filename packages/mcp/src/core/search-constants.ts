@@ -42,6 +42,7 @@ export type PathCategory =
     | 'entrypoint'
     | 'core'
     | 'srcRuntime'
+    | 'scriptRuntime'
     | 'adapter'
     | 'example'
     | 'fixture'
@@ -57,6 +58,7 @@ export const SCOPE_PATH_MULTIPLIERS: Record<SearchScope, Record<PathCategory, nu
         entrypoint: 1.20,
         core: 1.35,
         srcRuntime: 1.10,
+        scriptRuntime: 1.15,
         adapter: 0.70,
         example: 0.60,
         fixture: 0.35,
@@ -71,6 +73,7 @@ export const SCOPE_PATH_MULTIPLIERS: Record<SearchScope, Record<PathCategory, nu
         entrypoint: 1.15,
         core: 1.10,
         srcRuntime: 1.05,
+        scriptRuntime: 1.05,
         adapter: 0.90,
         example: 0.85,
         fixture: 0.65,
@@ -85,6 +88,7 @@ export const SCOPE_PATH_MULTIPLIERS: Record<SearchScope, Record<PathCategory, nu
         entrypoint: 0.50,
         core: 0.50,
         srcRuntime: 0.50,
+        scriptRuntime: 0.50,
         adapter: 0.50,
         example: 0.70,
         fixture: 0.60,

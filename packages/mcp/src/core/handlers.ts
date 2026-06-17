@@ -110,7 +110,18 @@ const SEARCH_QUERY_STOPWORDS = new Set([
     'what', 'where', 'which', 'who', 'why'
 ]);
 const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
-const SEARCH_NAVIGATION_NEXT_STEP = 'Open the selected result, then trace callers/callees when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.';
+const SEARCH_NAVIGATION_NEXT_STEP = 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.';
+const SEARCH_GROUP_PREVIEW_MAX_CHARS = 800;
+const SEARCH_AGENT_FIT_NEUTRAL = 1.0;
+const SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER = 1.25;
+const SEARCH_AGENT_FIT_TEST_DEMOTION_RUNTIME = 0.45;
+const SEARCH_AGENT_FIT_TEST_DEMOTION_MIXED = 0.65;
+const SEARCH_AGENT_FIT_IMPLEMENTATION_SYMBOL_MULTIPLIER = 1.25;
+const SEARCH_AGENT_FIT_IMPLEMENTATION_CHUNK_MULTIPLIER = 1.15;
+const SEARCH_AGENT_FIT_SCRIPT_IMPLEMENTATION_MULTIPLIER = 1.30;
+const SEARCH_AGENT_FIT_TYPE_DEMOTION = 0.72;
+const SEARCH_AGENT_FIT_SCHEMA_DEMOTION = 0.80;
+const SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION = 0.70;
 // Recovery probe threshold for "likely interrupted" indexing states.
 // Keep this shorter than snapshot merge stale semantics for better operator UX.
 const STALE_INDEXING_RECOVERY_GRACE_MS = 2 * 60_000;
@@ -136,6 +147,8 @@ type SearchCandidate = {
     pathCategory: PathCategory;
     pathMultiplier: number;
     changedFilesMultiplier: number;
+    agentFitMultiplier: number;
+    agentFitReason: string;
     passesMatchedMust: boolean;
     exactLexicalMatch: boolean;
 };
@@ -155,6 +168,8 @@ type SearchQueryPlan = {
     confidence: SearchIntentConfidence;
     reasons: string[];
     referenceSeeking: boolean;
+    testSeeking: boolean;
+    implementationSeeking: boolean;
     lexicalTerms: SearchLexicalTerm[];
     retrievalMode: 'dense' | 'lexical' | 'hybrid';
     scorePolicyKind: 'dense_similarity_min' | 'topk_only';
@@ -1306,6 +1321,10 @@ export class ToolHandlers {
         return entryNames.some((prefix) => baseName.startsWith(prefix));
     }
 
+    private isScriptRuntimePath(normalizedPath: string): boolean {
+        return normalizedPath === 'scripts' || normalizedPath.startsWith('scripts/');
+    }
+
     private classifyPathCategory(relativePath: string): PathCategory {
         const normalized = this.normalizeSearchPath(relativePath);
         if (this.isGeneratedPath(normalized)) return 'generated';
@@ -1315,6 +1334,7 @@ export class ToolHandlers {
         if (this.isTestPath(normalized)) return 'tests';
         if (this.isDocPath(normalized)) return 'docs';
         if (this.isExamplePath(normalized)) return 'example';
+        if (this.isScriptRuntimePath(normalized)) return 'scriptRuntime';
         if (this.isAdapterPath(normalized)) return 'adapter';
         if (this.isEntrypointPath(normalized)) return 'entrypoint';
         if (normalized.includes('/src/core/') || normalized.includes('/core/')) return 'core';
@@ -1812,9 +1832,17 @@ export class ToolHandlers {
             .tokenizeLexicalTerms(identifierTokens.length > 0 ? identifierTokens : tokens)
             .filter((term) => !SEARCH_QUERY_STOPWORDS.has(term.value))
             .slice(0, 8);
-        const referenceSeeking = /\b(used|uses|usage|reference|references|referenced|callers?|called|imports?|imported|instantiat(?:e|ed|ion))\b/.test(normalizedQuery)
+        const explicitReferenceSeeking = /\b(used|uses|usage|reference|references|referenced|callers?|called|imports?|imported|instantiat(?:e|ed|ion))\b/.test(normalizedQuery)
+            || /\bwho\s+uses\b/.test(normalizedQuery);
+        const referenceSeeking = explicitReferenceSeeking
             || /\bwhere\s+is\b/.test(normalizedQuery)
             || /\bwho\s+uses\b/.test(normalizedQuery);
+        const testSeeking = /\b(test|tests|tested|testing|spec|specs|coverage|assert|asserts|assertion|assertions|fixture|fixtures|mock|mocks|mocked|stub|stubs)\b/.test(normalizedQuery)
+            || /\.test\b/.test(normalizedQuery)
+            || /\.spec\b/.test(normalizedQuery);
+        const implementationCue = /\b(implement|implements|implemented|implementation|owner|owning|built|build|builds|builder|construct|constructed|create|creates|created|install|installs|installed|emit|emits|emitted|producer|produces|normalize|normalizes|normalized|cap|caps|capped|script|scripts|check|checks|checked|wire|wired|assemble|assembles|assembled)\b/.test(normalizedQuery);
+        const ownerWhereSeeking = !explicitReferenceSeeking && /\bwhere\s+(?:does|is|are)\b/.test(normalizedQuery);
+        const implementationSeeking = !testSeeking && (implementationCue || ownerWhereSeeking);
 
         let intent: SearchQueryIntent = 'uncertain';
         let confidence: SearchIntentConfidence = 'low';
@@ -1842,6 +1870,12 @@ export class ToolHandlers {
         if (referenceSeeking) {
             reasons.push('reference_seeking_query');
         }
+        if (testSeeking) {
+            reasons.push('test_seeking_query');
+        }
+        if (implementationSeeking) {
+            reasons.push('implementation_seeking_query');
+        }
 
         return {
             semanticQuery,
@@ -1849,6 +1883,8 @@ export class ToolHandlers {
             confidence,
             reasons,
             referenceSeeking,
+            testSeeking,
+            implementationSeeking,
             lexicalTerms,
             retrievalMode: hybridEnabled
                 ? (intent === 'identifier' ? 'lexical' : 'hybrid')
@@ -2217,7 +2253,7 @@ export class ToolHandlers {
             };
         }
 
-        const ignoreOnlySet = new Set(['.gitignore', '.satoriignore']);
+        const ignoreOnlySet = new Set(['.gitignore', '.satoriignore', 'satori.toml']);
         if (changedFiles.every((changedFile) => ignoreOnlySet.has(changedFile))) {
             if (!isIndexedLikeStatus) {
                 return {
@@ -2310,6 +2346,98 @@ export class ToolHandlers {
             return category === 'docs' || category === 'tests';
         }
         return true;
+    }
+
+    private isImplementationPathCategory(category: PathCategory): boolean {
+        return category === 'entrypoint'
+            || category === 'core'
+            || category === 'srcRuntime'
+            || category === 'scriptRuntime'
+            || category === 'adapter'
+            || category === 'neutral';
+    }
+
+    private shouldApplyChangedFilesBoost(category: PathCategory, plan: SearchQueryPlan): boolean {
+        if (category === 'tests') {
+            return plan.testSeeking;
+        }
+        return this.isImplementationPathCategory(category);
+    }
+
+    private classifyAgentFitSymbolRole(result: any): 'implementation' | 'type' | 'schema' | 'anonymous' | 'unknown' {
+        const label = typeof result?.symbolLabel === 'string'
+            ? result.symbolLabel.trim().toLowerCase()
+            : '';
+        const content = typeof result?.content === 'string'
+            ? result.content.slice(0, 400).toLowerCase()
+            : '';
+        const evidence = `${label}\n${content}`;
+
+        if (/<anonymous>/.test(evidence)) {
+            return 'anonymous';
+        }
+        if (/\b(?:schema|inputschema|outputschema|responseenvelope|requestinput)\b/.test(evidence)) {
+            return 'schema';
+        }
+        if (/^(?:interface|type|enum)\b/.test(label)) {
+            return 'type';
+        }
+        if (/^(?:async\s+)?(?:function|method|class|def)\b/.test(label)) {
+            return 'implementation';
+        }
+        if (/^(?:const|let|var)\s+[a-z0-9_$]+\s*=/.test(label)
+            && /\b(?:async\s+)?function\b|=>/.test(content)) {
+            return 'implementation';
+        }
+
+        return 'unknown';
+    }
+
+    private resolveAgentFitMultiplier(
+        plan: SearchQueryPlan,
+        result: any,
+        category: PathCategory,
+        scope: SearchScope
+    ): { multiplier: number; reason: string } {
+        if (scope === 'docs') {
+            return { multiplier: SEARCH_AGENT_FIT_NEUTRAL, reason: 'docs_scope_neutral' };
+        }
+
+        if (category === 'tests') {
+            if (plan.testSeeking) {
+                return { multiplier: SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER, reason: 'test_intent' };
+            }
+            return {
+                multiplier: scope === 'mixed'
+                    ? SEARCH_AGENT_FIT_TEST_DEMOTION_MIXED
+                    : SEARCH_AGENT_FIT_TEST_DEMOTION_RUNTIME,
+                reason: 'test_without_test_intent',
+            };
+        }
+
+        const role = this.classifyAgentFitSymbolRole(result);
+        if (plan.implementationSeeking && category === 'scriptRuntime') {
+            return { multiplier: SEARCH_AGENT_FIT_SCRIPT_IMPLEMENTATION_MULTIPLIER, reason: 'script_implementation' };
+        }
+        if (plan.implementationSeeking && role === 'schema') {
+            return { multiplier: SEARCH_AGENT_FIT_SCHEMA_DEMOTION, reason: 'schema_not_owner' };
+        }
+        if (plan.implementationSeeking && role === 'type') {
+            return { multiplier: SEARCH_AGENT_FIT_TYPE_DEMOTION, reason: 'type_not_owner' };
+        }
+        if (plan.implementationSeeking && role === 'anonymous') {
+            return { multiplier: SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION, reason: 'anonymous_not_owner' };
+        }
+        if (plan.implementationSeeking && role === 'implementation') {
+            return { multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_SYMBOL_MULTIPLIER, reason: 'implementation_symbol' };
+        }
+        if (plan.implementationSeeking
+            && !result?.symbolLabel
+            && this.isImplementationPathCategory(category)) {
+            return { multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_CHUNK_MULTIPLIER, reason: 'implementation_chunk' };
+        }
+
+        return { multiplier: SEARCH_AGENT_FIT_NEUTRAL, reason: 'neutral' };
     }
 
     private parseIndexedAtMs(indexedAt?: string): number | undefined {
@@ -2433,6 +2561,8 @@ export class ToolHandlers {
                 pathCategory: (existing.debug?.pathCategory as PathCategory | undefined) || 'neutral',
                 pathMultiplier: existing.debug?.pathMultiplier || 1,
                 changedFilesMultiplier: existing.debug?.changedFilesMultiplier || 1,
+                agentFitMultiplier: existing.debug?.agentFitMultiplier || SEARCH_AGENT_FIT_NEUTRAL,
+                agentFitReason: existing.debug?.agentFitReason || 'neutral',
                 passesMatchedMust: existing.debug?.matchesMust === true,
                 exactLexicalMatch: (existing as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
             };
@@ -2453,8 +2583,10 @@ export class ToolHandlers {
                 pathCategory: (group.debug?.pathCategory as PathCategory | undefined) || 'neutral',
                 pathMultiplier: group.debug?.pathMultiplier || 1,
                 changedFilesMultiplier: group.debug?.changedFilesMultiplier || 1,
+                agentFitMultiplier: group.debug?.agentFitMultiplier || SEARCH_AGENT_FIT_NEUTRAL,
+                agentFitReason: group.debug?.agentFitReason || 'neutral',
                 passesMatchedMust: group.debug?.matchesMust === true,
-                    exactLexicalMatch: (group as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
+                exactLexicalMatch: (group as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
             };
 
             if (this.compareSearchCandidates(nextComparable, existingComparable) < 0) {
@@ -2594,7 +2726,6 @@ export class ToolHandlers {
             context: {
                 codebaseRoot,
                 relativeFile: normalizedFile,
-                absolutePath,
             },
             readSpan: {
                 tool: 'read_file',
@@ -2664,25 +2795,15 @@ export class ToolHandlers {
                     }
                 }
             },
-            traceCallers: {
+            callGraph: {
                 tool: 'call_graph',
                 args: {
                     path: codebaseRoot,
                     symbolRef,
-                    direction: 'callers',
                     depth: 1,
                     limit: 20,
-                }
-            },
-            traceCallees: {
-                tool: 'call_graph',
-                args: {
-                    path: codebaseRoot,
-                    symbolRef,
-                    direction: 'callees',
-                    depth: 1,
-                    limit: 20,
-                }
+                },
+                directions: ['callers', 'callees'],
             }
         };
 
@@ -3789,13 +3910,20 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const contextForThisTask = this.context;
 
+            if (typeof (this.context as any).loadIndexProfileForCodebase === 'function') {
+                const profileConfig = (this.context as any).loadIndexProfileForCodebase(absolutePath);
+                console.log(`[BACKGROUND-INDEX] Using index profile '${profileConfig.profile}'${profileConfig.configPath ? ` from ${profileConfig.configPath}` : ' (default)'}`);
+            }
+
             // Load supported root ignore files before synchronizer and index setup.
             await this.context.loadResolvedIgnorePatterns(absolutePath);
 
             // Initialize file synchronizer with proper ignore patterns (including project-specific patterns)
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
             const ignorePatterns = this.context.getActiveIgnorePatterns(absolutePath) || [];
-            const supportedExtensions = this.context.getIndexedExtensions();
+            const supportedExtensions = typeof (this.context as any).getIndexedExtensionsForCodebase === 'function'
+                ? (this.context as any).getIndexedExtensionsForCodebase(absolutePath)
+                : this.context.getIndexedExtensions();
             console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(', ')}`);
             const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns, supportedExtensions);
             await synchronizer.initialize();
@@ -3910,7 +4038,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 "reindex",
                 absolutePath,
                 "blocked",
-                `Reindex preflight blocked for '${absolutePath}': only ignore-control changes were detected. Use manage_index with {"action":"sync","path":"${absolutePath}"} for immediate convergence.`,
+                `Reindex preflight blocked for '${absolutePath}': only ignore/index-policy control changes were detected. Use manage_index with {"action":"sync","path":"${absolutePath}"} for immediate convergence.`,
                 {
                     reason: "unnecessary_reindex_ignore_only",
                     warnings: preflight.warnings,
@@ -4327,6 +4455,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                 pathCategory: 'neutral',
                                 pathMultiplier: 1.0,
                                 changedFilesMultiplier: 1.0,
+                                agentFitMultiplier: SEARCH_AGENT_FIT_NEUTRAL,
+                                agentFitReason: 'neutral',
                                 passesMatchedMust: false,
                                 exactLexicalMatch: false,
                             });
@@ -4394,8 +4524,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     }
 
                     const pathMultiplier = SCOPE_PATH_MULTIPLIERS[input.scope][category];
+                    const agentFit = this.resolveAgentFitMultiplier(queryPlan, candidate.result, category, input.scope);
                     let changedFilesMultiplier = 1.0;
-                    if (changedFilesBoostEnabled && changedFilesState.files.has(relativePath)) {
+                    if (changedFilesBoostEnabled
+                        && changedFilesState.files.has(relativePath)
+                        && this.shouldApplyChangedFilesBoost(category, queryPlan)) {
                         changedFilesMultiplier = SEARCH_CHANGED_FIRST_MULTIPLIER;
                         boostedCandidates += 1;
                     }
@@ -4403,11 +4536,16 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     candidate.pathCategory = category;
                     candidate.pathMultiplier = pathMultiplier;
                     candidate.changedFilesMultiplier = changedFilesMultiplier;
+                    candidate.agentFitMultiplier = agentFit.multiplier;
+                    candidate.agentFitReason = agentFit.reason;
                     candidate.passesMatchedMust = matchesMust;
                     const lexicalEvidence = this.scoreCandidateLexicalEvidence(queryPlan, candidate.result);
                     candidate.lexicalScore = lexicalEvidence.score;
                     candidate.exactLexicalMatch = lexicalEvidence.exactLexicalMatch;
-                    candidate.finalScore = (candidate.fusionScore + candidate.lexicalScore) * pathMultiplier * changedFilesMultiplier;
+                    candidate.finalScore = (candidate.fusionScore + candidate.lexicalScore)
+                        * pathMultiplier
+                        * changedFilesMultiplier
+                        * agentFit.multiplier;
                     scoredAttempt.push(candidate);
                 }
 
@@ -4487,7 +4625,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         }
                         const rerankRrf = 1 / (SEARCH_RERANK_RRF_K + rank);
                         rerankSlice[idx].fusionScore += SEARCH_RERANK_WEIGHT * rerankRrf;
-                        rerankSlice[idx].finalScore = (rerankSlice[idx].fusionScore + rerankSlice[idx].lexicalScore) * rerankSlice[idx].pathMultiplier * rerankSlice[idx].changedFilesMultiplier;
+                        rerankSlice[idx].finalScore = (rerankSlice[idx].fusionScore + rerankSlice[idx].lexicalScore)
+                            * rerankSlice[idx].pathMultiplier
+                            * rerankSlice[idx].changedFilesMultiplier
+                            * rerankSlice[idx].agentFitMultiplier;
                         rerankerUpdatedCandidates++;
                     }
 
@@ -4595,6 +4736,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             pathMultiplier: candidate.pathMultiplier,
                             pathCategory: candidate.pathCategory,
                             changedFilesMultiplier: candidate.changedFilesMultiplier,
+                            agentFitMultiplier: candidate.agentFitMultiplier,
+                            agentFitReason: candidate.agentFitReason,
                             matchesMust: candidate.passesMatchedMust,
                             exactLexicalMatch: candidate.exactLexicalMatch,
                             backendScore: candidate.backendScore,
@@ -4737,7 +4880,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     callGraphHint,
                     ...(navigationFallback ? { navigationFallback } : {}),
                     ...(nextActions ? { nextActions } : {}),
-                    preview: truncateContent(String(representative.result.content || ''), 4000),
+                    preview: truncateContent(String(representative.result.content || ''), SEARCH_GROUP_PREVIEW_MAX_CHARS),
                     __exactLexicalMatch: representative.exactLexicalMatch,
                     ...(input.debug ? {
                         debug: {
@@ -4747,6 +4890,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             topChunkScore: representative.finalScore,
                             lexicalScore: representative.lexicalScore,
                             changedFilesMultiplier: representative.changedFilesMultiplier,
+                            agentFitMultiplier: representative.agentFitMultiplier,
+                            agentFitReason: representative.agentFitReason,
                             matchesMust: representative.passesMatchedMust,
                             exactLexicalMatch: representative.exactLexicalMatch,
                         }

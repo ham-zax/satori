@@ -35,6 +35,13 @@ function getErrorMessage(response: ToolResponse): string {
     return "Unknown error";
 }
 
+function getResponseBytes(response: ToolResponse): number {
+    const text = response.content
+        ?.map((part) => typeof part.text === "string" ? part.text : "")
+        .join("") ?? "";
+    return Buffer.byteLength(text, "utf8");
+}
+
 function safeNumber(value: unknown, fallback = 0): number {
     if (typeof value !== "number" || !Number.isFinite(value)) {
         return fallback;
@@ -98,6 +105,7 @@ function emitSearchBackendErrorTelemetry(args: {
     limit: number;
     startedAt: number;
     code: string;
+    responseBytes?: number;
 }): void {
     emitSearchTelemetry({
         event: "search_executed",
@@ -113,6 +121,7 @@ function emitSearchBackendErrorTelemetry(args: {
         reranker_attempted: false,
         latency_ms: Date.now() - args.startedAt,
         parallel_fanout: true,
+        ...(args.responseBytes !== undefined ? { response_bytes: args.responseBytes } : {}),
         error: args.code,
     });
 }
@@ -176,6 +185,7 @@ export const searchCodebaseTool: McpTool = {
                 limit,
                 startedAt,
                 code: diagnostic.code,
+                responseBytes: getResponseBytes(response),
             });
             return response;
         }
@@ -198,6 +208,7 @@ export const searchCodebaseTool: McpTool = {
                 reranker_attempted: false,
                 latency_ms: Date.now() - startedAt,
                 parallel_fanout: true,
+                response_bytes: getResponseBytes(response),
                 error: executionContext.code,
             });
             return response;
@@ -224,6 +235,7 @@ export const searchCodebaseTool: McpTool = {
                 limit,
                 startedAt,
                 code: diagnostic.code,
+                responseBytes: getResponseBytes(response),
             });
             return response;
         }
@@ -247,6 +259,7 @@ export const searchCodebaseTool: McpTool = {
             search_pass_success_count: diagnostics.searchPassSuccessCount,
             search_pass_failure_count: diagnostics.searchPassFailureCount,
             parallel_fanout: true,
+            response_bytes: getResponseBytes(response),
             ...(response.isError ? { error: getErrorMessage(response) } : {})
         });
 

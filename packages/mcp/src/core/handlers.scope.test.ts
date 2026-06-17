@@ -198,7 +198,7 @@ test('handleSearchCode grouped output includes symbol metadata and callGraphHint
     });
 });
 
-test('handleSearchCode grouped output includes runnable nextActions for supported symbols', async () => {
+test('handleSearchCode grouped output includes compact nextActions for supported symbols', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [{
             content: 'return session.isValid();',
@@ -237,28 +237,50 @@ test('handleSearchCode grouped output includes runnable nextActions for supporte
                 }
             }
         });
-        assert.deepEqual(result.nextActions.traceCallers, {
+        assert.deepEqual(result.nextActions.callGraph, {
             tool: 'call_graph',
             args: {
                 path: repoPath,
                 symbolRef: result.callGraphHint.symbolRef,
-                direction: 'callers',
                 depth: 1,
                 limit: 20
-            }
+            },
+            directions: ['callers', 'callees']
         });
-        assert.deepEqual(result.nextActions.traceCallees, {
-            tool: 'call_graph',
-            args: {
-                path: repoPath,
-                symbolRef: result.callGraphHint.symbolRef,
-                direction: 'callees',
-                depth: 1,
-                limit: 20
-            }
-        });
+        assert.equal(result.nextActions.traceCallers, undefined);
+        assert.equal(result.nextActions.traceCallees, undefined);
         assert.equal(result.navigationFallback, undefined);
-        assert.equal(payload.hints?.navigation?.nextStep, 'Open the selected result, then trace callers/callees when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.');
+        assert.equal(payload.hints?.navigation?.nextStep, 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.');
+    });
+});
+
+test('handleSearchCode grouped output caps previews for compact default responses', async () => {
+    await withTempRepo(async (repoPath) => {
+        const longPreview = 'x'.repeat(1200);
+        const handlers = createHandlers(repoPath, [{
+            content: longPreview,
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_auth_validate',
+            symbolLabel: 'method validateSession(token: string)'
+        }]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].preview, `${'x'.repeat(800)}...`);
+        assert.equal(payload.results[0].preview.length, 803);
     });
 });
 
@@ -1562,6 +1584,214 @@ test('handleSearchCode ranks canonical owners above tool wrappers for implementa
     });
 });
 
+test('handleSearchCode demotes tests below implementation owners unless test intent is explicit', async () => {
+    await withTempRepo(async (repoPath) => {
+        const searchResults = [
+            {
+                content: 'test("installs the Codex guidance hook", () => expect(block).toContain("SessionStart"));',
+                relativePath: 'packages/cli/src/install.test.ts',
+                startLine: 260,
+                endLine: 322,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_install_test',
+                symbolLabel: 'async function <anonymous>()'
+            },
+            {
+                content: 'function ensureCodexGuidanceHook(config) { return buildCodexGuidanceHookBlock(config); }',
+                relativePath: 'packages/cli/src/install.ts',
+                startLine: 466,
+                endLine: 475,
+                language: 'typescript',
+                score: 0.98,
+                backendScore: 0.98,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_ensure_codex_guidance_hook',
+                symbolLabel: 'function ensureCodexGuidanceHook(config)'
+            }
+        ];
+        const handlers = createHandlers(repoPath, searchResults);
+
+        const ownerResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is codex guidance hook installed',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+        const ownerPayload = JSON.parse(ownerResponse.content[0]?.text || '{}');
+        assert.equal(ownerPayload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(ownerPayload.results[0].debug?.agentFitReason, 'implementation_symbol');
+        assert.equal(ownerPayload.results[1].debug?.agentFitReason, 'test_without_test_intent');
+
+        const testResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'codex guidance hook test coverage',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+        const testPayload = JSON.parse(testResponse.content[0]?.text || '{}');
+        assert.equal(testPayload.results[0].file, 'packages/cli/src/install.test.ts');
+        assert.equal(testPayload.results[0].debug?.agentFitReason, 'test_intent');
+    });
+});
+
+test('handleSearchCode ranks script runtime owners above package installability helpers for script queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'function verifyManagedPackageInstallability() { return npmView(packageName); }',
+                relativePath: 'packages/cli/src/package-installability.ts',
+                startLine: 94,
+                endLine: 127,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_verify_installability',
+                symbolLabel: 'function verifyManagedPackageInstallability()'
+            },
+            {
+                content: 'function findStalePackageVersionReferences(packageJson, docs) { return staleReferences; }',
+                relativePath: 'scripts/check-version-freshness.mjs',
+                startLine: 55,
+                endLine: 78,
+                language: 'javascript',
+                score: 0.98,
+                backendScore: 0.98,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_find_stale_versions',
+                symbolLabel: 'function findStalePackageVersionReferences(packageJson, docs)'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'script that checks package version references are fresh',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'scripts/check-version-freshness.mjs');
+        assert.equal(payload.results[0].debug?.pathCategory, 'scriptRuntime');
+        assert.equal(payload.results[0].debug?.agentFitReason, 'script_implementation');
+    });
+});
+
+test('handleSearchCode ranks implementation chunks above type-only results for owner queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export interface SearchGroupResult { preview: string; nextActions?: SearchNextActions; }',
+                relativePath: 'packages/mcp/src/core/search-types.ts',
+                startLine: 83,
+                endLine: 121,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_search_group_result',
+                symbolLabel: 'interface SearchGroupResult'
+            },
+            {
+                content: 'groupedResults.push({ preview: truncateContent(content, SEARCH_GROUP_PREVIEW_MAX_CHARS), nextActions });',
+                relativePath: 'packages/mcp/src/core/handlers.ts',
+                startLine: 4705,
+                endLine: 4751,
+                language: 'typescript',
+                score: 0.98,
+                backendScore: 0.98,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where does Satori cap grouped search previews',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'packages/mcp/src/core/handlers.ts');
+        assert.equal(payload.results[0].debug?.agentFitReason, 'implementation_chunk');
+        assert.equal(payload.results[1].debug?.agentFitReason, 'type_not_owner');
+    });
+});
+
+test('handleSearchCode does not boost dirty tests for non-test implementation queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'test("installs the hook", () => expect(block).toContain("SessionStart"));',
+                relativePath: 'packages/cli/src/install.test.ts',
+                startLine: 260,
+                endLine: 322,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_install_test_dirty',
+                symbolLabel: 'async function <anonymous>()'
+            },
+            {
+                content: 'function ensureCodexGuidanceHook(config) { return buildCodexGuidanceHookBlock(config); }',
+                relativePath: 'packages/cli/src/install.ts',
+                startLine: 466,
+                endLine: 475,
+                language: 'typescript',
+                score: 0.98,
+                backendScore: 0.98,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_install_owner_clean',
+                symbolLabel: 'function ensureCodexGuidanceHook(config)'
+            }
+        ]);
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set(['packages/cli/src/install.test.ts'])
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is codex guidance hook installed',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(payload.freshnessSummary.changedFilesBoostApplied, false);
+        assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.boostedCandidates, 0);
+        assert.equal(payload.results[1].debug?.changedFilesMultiplier, 1);
+    });
+});
+
 test('handleSearchCode collapses duplicate declaration groups for reference-seeking queries', async () => {
     await withTempRepo(async (repoPath) => {
         const reranker = {
@@ -2809,7 +3039,7 @@ test('handleSearchCode grouped fallback emits stable hash groupId and unsupporte
         assert.equal(firstPayload.results[0].navigationFallback.message, 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.');
         assert.equal(firstPayload.results[0].navigationFallback.context.codebaseRoot, repoPath);
         assert.equal(firstPayload.results[0].navigationFallback.context.relativeFile, 'src/runtime.ts');
-        assert.equal(firstPayload.results[0].navigationFallback.context.absolutePath, path.resolve(repoPath, 'src/runtime.ts'));
+        assert.equal(firstPayload.results[0].navigationFallback.context.absolutePath, undefined);
         assert.deepEqual(firstPayload.results[0].navigationFallback.readSpan, {
             tool: 'read_file',
             args: {
@@ -2948,7 +3178,7 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
         assert.equal(payload.results[0].file, 'src/runtime.ts');
         assert.equal(payload.results[0].navigationFallback.context.codebaseRoot, repoPath);
         assert.equal(payload.results[0].navigationFallback.context.relativeFile, 'src/runtime.ts');
-        assert.equal(payload.results[0].navigationFallback.context.absolutePath, path.resolve(repoPath, 'src/runtime.ts'));
+        assert.equal(payload.results[0].navigationFallback.context.absolutePath, undefined);
         assert.equal(payload.results[0].navigationFallback.readSpan.args.path, path.resolve(repoPath, 'src/runtime.ts'));
         assert.deepEqual(payload.results[0].navigationFallback.fileOutlineWindow, {
             tool: 'file_outline',

@@ -190,6 +190,7 @@ Grouped search output includes:
 - `symbolId` / `symbolLabel` (nullable when metadata is missing)
 - `indexedAt` (aggregated max), `stalenessBucket`, `collapsedChunkCount`
 - `callGraphHint` discriminated union (`supported: true|false`); supported hints include `validatedAt` and `sidecarBuiltAt`, and stale or missing sidecar refs are downgraded to unsupported fallbacks
+- compact `nextActions.callGraph` args plus allowed `directions`; grouped previews are capped for token efficiency
 
 `call_graph` is first-class and consumes `callGraphHint.symbolRef`:
 - TS/JS/Python supported

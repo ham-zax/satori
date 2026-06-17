@@ -96,6 +96,26 @@ test('watch-triggered sync is dropped for non-searchable statuses', async () => 
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
+test('ensureFreshness treats satori.toml as an index-policy control file', async () => {
+    const codebasePath = createTempDir();
+    fs.writeFileSync(path.join(codebasePath, 'satori.toml'), '[index]\nprofile = "minimal"\n', 'utf8');
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const context = createContext();
+    const snapshot = createSnapshot(statusByPath);
+    snapshot.setCodebaseIgnoreControlSignature(codebasePath, 'stale-signature');
+    snapshot.setCodebaseIndexManifest(codebasePath, ['src/app.ts']);
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: false,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 60000);
+
+    assert.equal(decision.mode, 'reconciled_ignore_change');
+    assert.equal(context.calls, 1);
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
 test('watch-triggered sync coalesces burst changes into one sync', async () => {
     const codebasePath = createTempDir();
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);

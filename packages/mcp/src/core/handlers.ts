@@ -124,6 +124,7 @@ const SEARCH_QUERY_STOPWORDS = new Set([
     'what', 'where', 'which', 'who', 'why'
 ]);
 const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
+const PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL = 'Partial index/search data may exist, but navigation sidecars were not published because indexing stopped before completion.';
 const SEARCH_NAVIGATION_NEXT_STEP = 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.';
 const SEARCH_GROUP_PREVIEW_MAX_CHARS = 800;
 const SEARCH_AGENT_FIT_NEUTRAL = 1.0;
@@ -865,13 +866,14 @@ export class ToolHandlers {
             direction: CallGraphDirection;
             depth: number;
             limit: number;
-        }
+        },
+        reason: NonOkReason = "requires_reindex"
     ): Record<string, unknown> {
         const detailLine = detail ? `${detail}\n\n` : '';
         return {
             status: "requires_reindex",
             supported: false,
-            reason: "requires_reindex" as NonOkReason,
+            reason,
             path: context.path,
             codebasePath,
             symbolRef: context.symbolRef,
@@ -2704,6 +2706,10 @@ export class ToolHandlers {
         return isLanguageCapabilitySupportedForFilename(file, 'fileOutline');
     }
 
+    private isPartialIndexNavigationUnavailable(info: { indexStatus?: unknown } | undefined): boolean {
+        return info?.indexStatus === 'limit_reached';
+    }
+
     private async loadRegistryValidatedCallGraphSidecar(input: {
         codebaseRoot: string;
         registryManifestHash?: string;
@@ -3184,12 +3190,13 @@ export class ToolHandlers {
     private buildRequiresReindexFileOutlinePayload(
         codebasePath: string,
         input: FileOutlineInput,
-        detail?: string
+        detail?: string,
+        reason: NonOkReason = 'requires_reindex'
     ): FileOutlineResponseEnvelope {
         const detailLine = detail ? `${detail}\n\n` : '';
         return {
             status: 'requires_reindex',
-            reason: 'requires_reindex',
+            reason,
             path: codebasePath,
             file: input.file,
             outline: null,
@@ -5789,6 +5796,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? { ok: false, reason: 'probe_failed' }
                 : undefined;
 
+            if (this.isPartialIndexNavigationUnavailable(matchedRoot.info)) {
+                const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(
+                    effectiveRoot,
+                    {
+                        ...args,
+                        file: normalizedFile
+                    },
+                    PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL,
+                    'partial_index_navigation_unavailable'
+                ), proofDebugHint);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
             if (!fs.existsSync(absoluteFile)) {
                 const payload: FileOutlineResponseEnvelope = {
                     status: 'not_found',
@@ -6098,6 +6120,27 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const proofDebugHint: CompletionProbeDebugHint | undefined = completionProof.outcome === 'probe_failed'
                 ? { ok: false, reason: 'probe_failed' }
                 : undefined;
+
+            if (this.isPartialIndexNavigationUnavailable(searchableRoot.info)) {
+                const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
+                    effectiveRoot,
+                    PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL,
+                    {
+                        path: absolutePath,
+                        symbolRef,
+                        direction,
+                        depth,
+                        limit
+                    },
+                    'partial_index_navigation_unavailable'
+                ), proofDebugHint);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(payload, null, 2)
+                    }]
+                };
+            }
 
             const normalizedSymbolFile = this.normalizeRelativeFilePath(symbolRef.file);
             const registryState = await this.navigationStore.getSymbolsByFile({

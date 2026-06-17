@@ -274,6 +274,58 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
     });
 });
 
+test('handleCallGraph reports partial index navigation unavailable for limit_reached indexes', async () => {
+    await withTempRepo(async (repoPath) => {
+        const info = {
+            status: 'indexed',
+            indexStatus: 'limit_reached',
+            lastUpdated: '2026-06-17T00:00:00.000Z',
+        };
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => info,
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => [{ path: repoPath, info }]
+        } as any;
+
+        const syncManager = {} as any;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/runtime.ts',
+                symbolId: 'sym_runtime_run'
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 20
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'requires_reindex');
+        assert.equal(payload.supported, false);
+        assert.equal(payload.reason, 'partial_index_navigation_unavailable');
+        assert.deepEqual(payload.nodes, []);
+        assert.deepEqual(payload.edges, []);
+        assert.match(payload.message, /partial index\/search data may exist/i);
+        assert.match(payload.message, /navigation sidecars were not published/i);
+        assert.equal(payload.hints.reindex.args.path, repoPath);
+    });
+});
+
 test('handleCallGraph returns requires_reindex for indexed roots that only have legacy v3 graph state', async () => {
     await withTempRepo(async (repoPath) => {
         const context = {

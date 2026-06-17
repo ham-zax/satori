@@ -340,6 +340,7 @@ export type VectorBackendResponseCode =
 export type NonOkReason =
     | "indexing"
     | "requires_reindex"
+    | "partial_index_navigation_unavailable"
     | "not_indexed"
     | "missing_provider_config"
     | "vector_backend_unavailable";

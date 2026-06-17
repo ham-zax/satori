@@ -674,6 +674,66 @@ test('ignore-change reconciliation deletes newly ignored indexed paths and force
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
+test('ignore-change reconciliation marks requires_reindex when sync fails after deleting ignored indexed paths', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+
+    let activePatterns = ['dist/**'];
+    let syncCalls = 0;
+    const deletedPaths: string[][] = [];
+
+    const snapshot = createSnapshot(statusByPath);
+    snapshot.setCodebaseIndexManifest(codebasePath, ['src/keep.ts', 'src/ignored.ts']);
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return activePatterns;
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async reloadIgnoreRulesForCodebase() {
+            activePatterns = ['dist/**', 'src/ignored.ts'];
+            return activePatterns;
+        },
+        async recreateSynchronizerForCodebase() {
+            return;
+        },
+        async deleteIndexedPathsByRelativePaths(_codebasePath: string, relativePaths: string[]) {
+            deletedPaths.push(relativePaths.slice());
+            return relativePaths.length;
+        },
+        getTrackedRelativePaths() {
+            return ['src/keep.ts'];
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            throw new Error('forced sync failure');
+        }
+    };
+
+    const manager = new SyncManager(context as any, snapshot as any, {
+        watchEnabled: true,
+        watchDebounceMs: 20,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 0, {
+        reason: 'ignore_change',
+        coalescedEdits: 1,
+    });
+
+    assert.equal(decision.mode, 'ignore_reload_failed');
+    assert.equal(decision.fallbackSyncExecuted, false);
+    assert.equal(syncCalls, 2);
+    assert.deepEqual(deletedPaths, [['src/ignored.ts']]);
+    assert.equal(statusByPath.get(codebasePath), 'requires_reindex');
+    assert.equal(snapshot.getCodebaseRequiresReindex(codebasePath)?.reason, 'navigation_recovery_failed');
+    assert.match(snapshot.getCodebaseRequiresReindex(codebasePath)?.message || '', /Ignore-rule reconciliation/);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
 test('ignore-change reconcile uses manifest paths captured before reload even when post-reload synchronizer excludes them', async () => {
     const codebasePath = createTempDir();
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);

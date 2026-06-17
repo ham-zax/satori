@@ -68,6 +68,10 @@ Language capability contract:
 - Capability names are exposed through `packages/core/src/language/registry.ts` and keep backward-compatible aliases for existing MCP callers.
 - `search` is broad retrieval eligibility and does not imply extracted symbols, owner resolution, imports, outline, or call graph support.
 - `owner` means chunks can resolve to extracted source symbols beyond the synthesized file owner. All indexed chunks may later receive a synthesized file owner when no extracted owner exists.
+- Future language expansion uses capability tiers. A language cannot be treated as symbol-production-ready unless extractor fixtures, parser/extractor failure fallback tests, indexing owner-metadata tests, `file_outline` tests, and `read_file(open_symbol)` tests pass.
+- Parser or extractor failure must degrade to synthesized file-owner fallback, must not crash indexing, and must not attach stale extracted-symbol owner metadata.
+- L1 symbol-only languages must not claim `callGraphBuild` or `callGraphQuery`, must not emit `nextActions.callGraph`, and must keep `call_graph` unsupported or not-ready even if relationship sidecars exist globally.
+- Adding extensions to the capability matrix must not silently broaden the default indexing profile. Any profile expansion requires an explicit allowlist/profile test.
 - Search-only artifact/container languages such as Vue, Svelte, Astro, CSS/SCSS, Dockerfile, Makefile, CMakeLists, and Justfile must not claim `symbols`, `owner`, `imports`, `fileOutline`, or `callGraph` until deterministic extractors exist.
 - TypeScript module extensions `.mts` and `.cts` route as TypeScript; C/C++ variants `.cc`, `.cxx`, `.hh`, `.hxx`, `.ixx` route as C++; `.kts` routes as Kotlin.
 

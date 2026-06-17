@@ -1627,8 +1627,8 @@ test('handleSearchCode demotes tests below implementation owners unless test int
         });
         const ownerPayload = JSON.parse(ownerResponse.content[0]?.text || '{}');
         assert.equal(ownerPayload.results[0].file, 'packages/cli/src/install.ts');
-        assert.equal(ownerPayload.results[0].debug?.agentFitReason, 'implementation_symbol');
-        assert.equal(ownerPayload.results[1].debug?.agentFitReason, 'test_without_test_intent');
+        assert.equal(ownerPayload.results[0].debug?.agentFitReason, 'writer_owner');
+        assert.equal(ownerPayload.results[1].debug?.agentFitReason, 'implementation_query_test_demotion');
 
         const testResponse = await handlers.handleSearchCode({
             path: repoPath,
@@ -1642,6 +1642,56 @@ test('handleSearchCode demotes tests below implementation owners unless test int
         const testPayload = JSON.parse(testResponse.content[0]?.text || '{}');
         assert.equal(testPayload.results[0].file, 'packages/cli/src/install.test.ts');
         assert.equal(testPayload.results[0].debug?.agentFitReason, 'test_intent');
+    });
+});
+
+test('handleSearchCode strongly demotes test helpers for implementation freshness queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'async function ensureFreshness() { return { mode: "skipped_recent", thresholdMs: 180000 }; }',
+                relativePath: 'packages/mcp/src/core/handlers.index_state_stability.test.ts',
+                startLine: 77,
+                endLine: 82,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_test_ensure_freshness',
+                symbolLabel: 'async function ensureFreshness()'
+            },
+            {
+                content: 'export class SyncManager { async ensureFreshness(codebasePath) { return this.reconcileControlFiles(codebasePath, "satori.toml"); } }',
+                relativePath: 'packages/mcp/src/core/sync.ts',
+                startLine: 110,
+                endLine: 209,
+                language: 'typescript',
+                score: 0.97,
+                backendScore: 0.97,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_sync_ensure_freshness',
+                symbolLabel: 'method SyncManager.ensureFreshness(codebasePath)'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'satori.toml freshness reconciliation control file ensureFreshness',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'packages/mcp/src/core/sync.ts');
+        assert.equal(payload.results[0].debug?.agentFitReason, 'implementation_symbol');
+        assert.equal(payload.results[1].debug?.agentFitReason, 'implementation_query_test_demotion');
+        assert.equal(payload.hints?.debugSearch?.rerank?.exactMatchPinningEnabled, false);
+        assert.equal(payload.hints?.debugSearch?.rerank?.exactMatchPinningApplied, false);
     });
 });
 
@@ -1690,6 +1740,154 @@ test('handleSearchCode ranks script runtime owners above package installability 
         assert.equal(payload.results[0].file, 'scripts/check-version-freshness.mjs');
         assert.equal(payload.results[0].debug?.pathCategory, 'scriptRuntime');
         assert.equal(payload.results[0].debug?.agentFitReason, 'script_implementation');
+    });
+});
+
+test('handleSearchCode ranks writer owners above repo config readers for write-intent queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'function parseSatoriRepoConfig(content, configPath) { const profile = readTomlProfile(content); return { configPath, profile }; }',
+                relativePath: 'packages/core/src/config/repo-config.ts',
+                startLine: 33,
+                endLine: 75,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_parse_repo_config',
+                symbolLabel: 'function parseSatoriRepoConfig(content, configPath)'
+            },
+            {
+                content: 'function updateSatoriProjectConfig(current, profile) { lines.splice(indexTableLine + 1, 0, `profile = ${profile}`); return normalizeTrailingNewline(lines.join("\\n")); }',
+                relativePath: 'packages/cli/src/install.ts',
+                startLine: 232,
+                endLine: 308,
+                language: 'typescript',
+                score: 0.97,
+                backendScore: 0.97,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_update_satori_project_config',
+                symbolLabel: 'function updateSatoriProjectConfig(current, profile)'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'what writes repo-local satori.toml profile during install',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(payload.results[0].debug?.agentFitReason, 'writer_owner');
+    });
+});
+
+test('handleSearchCode treats class-qualified mutator methods as writer owners', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'function parseSatoriRepoConfig(content, configPath) { const profile = readTomlProfile(content); return { configPath, profile }; }',
+                relativePath: 'packages/core/src/config/repo-config.ts',
+                startLine: 33,
+                endLine: 75,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_parse_repo_config',
+                symbolLabel: 'function parseSatoriRepoConfig(content, configPath)'
+            },
+            {
+                content: 'class ProjectConfigWriter { updateSatoriProjectConfig(current, profile) { return normalizeTrailingNewline(current); } }',
+                relativePath: 'packages/cli/src/install.ts',
+                startLine: 232,
+                endLine: 308,
+                language: 'typescript',
+                score: 0.97,
+                backendScore: 0.97,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_project_config_writer_update',
+                symbolLabel: 'method ProjectConfigWriter.updateSatoriProjectConfig(current, profile)'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'what updates repo-local satori.toml profile during install',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(payload.results[0].debug?.agentFitReason, 'writer_owner');
+    });
+});
+
+test('handleSearchCode does not treat formatter pushes as writer owners', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: [
+                    'const lines: string[] = [];',
+                    'lines.push("## Codebases");',
+                    'lines.push("");',
+                    'return lines.join("\\n");'
+                ].join('\n'),
+                relativePath: 'packages/mcp/src/tools/list_codebases.ts',
+                startLine: 28,
+                endLine: 142,
+                language: 'typescript',
+                score: 0.99,
+                backendScore: 0.99,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_list_codebases_description',
+                symbolLabel: 'function description()'
+            },
+            {
+                content: 'function ensureCodexGuidanceHook(content) { const block = buildCodexGuidanceHookBlock(); return content.includes("SessionStart") ? content : `${content}\\n${block}`; }',
+                relativePath: 'packages/cli/src/install.ts',
+                startLine: 529,
+                endLine: 597,
+                language: 'typescript',
+                score: 0.97,
+                backendScore: 0.97,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_ensure_codex_guidance_hook',
+                symbolLabel: 'function ensureCodexGuidanceHook(content)'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is codex guidance hook installed',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(payload.results[0].debug?.agentFitReason, 'writer_owner');
+        assert.equal(payload.results[1].file, 'packages/mcp/src/tools/list_codebases.ts');
+        assert.equal(payload.results[1].debug?.agentFitReason, 'writer_query_non_writer');
     });
 });
 
@@ -2577,6 +2775,53 @@ test('handleSearchCode emits deterministic noiseMitigation hint when top grouped
         assert.match(payload.hints?.noiseMitigation?.nextStep || '', /\"action\":\"sync\"/);
         assert.match(payload.hints?.noiseMitigation?.nextStep || '', /Reindex is only required when you see requires_reindex/i);
         assert.doesNotMatch(payload.hints?.noiseMitigation?.nextStep || '', /already covered by root \.gitignore/i);
+    });
+});
+
+test('handleSearchCode does not emit noiseMitigation hint for docs scope docs results', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: '# install profile minimal',
+                relativePath: 'README.md',
+                startLine: 1,
+                endLine: 12,
+                language: 'text',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: '# CLI install profile docs',
+                relativePath: 'packages/cli/README.md',
+                startLine: 1,
+                endLine: 20,
+                language: 'text',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            },
+            {
+                content: '# MCP install profile docs',
+                relativePath: 'packages/mcp/README.md',
+                startLine: 1,
+                endLine: 20,
+                language: 'text',
+                score: 0.97,
+                indexedAt: '2026-01-01T00:30:00.000Z'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'install --client all --profile minimal documented usage',
+            scope: 'docs',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            limit: 3
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.hints?.noiseMitigation, undefined);
     });
 });
 

@@ -1,0 +1,105 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { AstCodeSplitter } from './ast-splitter';
+
+test('AstCodeSplitter preserves symbol metadata for large TypeScript files', async () => {
+    const fillerMethods = Array.from({ length: 1200 }, (_, index) => [
+        `    public filler${index}(): number {`,
+        `        return ${index};`,
+        '    }',
+    ].join('\n')).join('\n');
+    const code = [
+        'export class HugeHandlers {',
+        fillerMethods,
+        '    public async targetOwner(input: string): Promise<string> {',
+        '        return input.trim();',
+        '    }',
+        '}',
+    ].join('\n');
+
+    assert.ok(code.length > 40_000);
+
+    const splitter = new AstCodeSplitter();
+    const chunks = await splitter.split(code, 'typescript', 'src/huge-handlers.ts');
+    const symbolChunks = chunks.filter((chunk) => typeof chunk.metadata.symbolId === 'string');
+
+    assert.ok(symbolChunks.length > 0);
+    assert.ok(symbolChunks.some((chunk) => chunk.metadata.symbolLabel === 'class HugeHandlers'));
+    assert.ok(symbolChunks.some((chunk) => chunk.metadata.symbolLabel === 'async method targetOwner(input: string)'));
+    assert.ok(symbolChunks.every((chunk) => chunk.metadata.startLine <= chunk.metadata.endLine));
+});
+
+test('AstCodeSplitter text-symbol fallback identifies class property arrow functions', async () => {
+    const filler = Array.from({ length: 1200 }, (_, index) => `export function filler${index}() { return ${index}; }`).join('\n');
+    const code = [
+        filler,
+        'export class Worker {',
+        '    private runTask = async (name: string) => {',
+        '        return name.toUpperCase();',
+        '    };',
+        '}',
+    ].join('\n');
+
+    const splitter = new AstCodeSplitter();
+    const chunks = await splitter.split(code, 'typescript', 'src/worker.ts');
+
+    assert.ok(chunks.some((chunk) => chunk.metadata.symbolLabel === 'async function runTask(...)'));
+});
+
+test('AstCodeSplitter preserves symbol metadata for large Python files', async () => {
+    const fillerMethods = Array.from({ length: 2500 }, (_, index) => [
+        `    def filler_${index}(self):`,
+        `        return ${index}`,
+        '',
+    ].join('\n')).join('\n');
+    const code = [
+        '@tracked',
+        'class HugePython:',
+        fillerMethods,
+        '    @staticmethod',
+        '    async def target_owner(value: str) -> str:',
+        '        return value.strip()',
+        '',
+        'def top_level(value):',
+        '    return value',
+    ].join('\n');
+
+    assert.ok(code.length > 100_000);
+
+    const splitter = new AstCodeSplitter();
+    const chunks = await splitter.split(code, 'python', 'src/huge_python.py');
+    const symbolChunks = chunks.filter((chunk) => typeof chunk.metadata.symbolId === 'string');
+    const target = symbolChunks.find((chunk) => chunk.metadata.symbolLabel === 'async function target_owner(value: str) -> str');
+
+    assert.ok(symbolChunks.length > 0);
+    assert.ok(symbolChunks.some((chunk) => chunk.metadata.symbolLabel === 'class HugePython'));
+    assert.ok(target);
+    assert.deepEqual(target.metadata.breadcrumbs, [
+        'class HugePython',
+        'async function target_owner(value: str) -> str',
+    ]);
+    assert.ok(target.content.includes('@staticmethod'));
+    assert.ok(symbolChunks.some((chunk) => chunk.metadata.symbolLabel === 'function top_level(value)'));
+});
+
+test('AstCodeSplitter Python text-symbol fallback preserves decorated top-level functions', async () => {
+    const filler = Array.from({ length: 2500 }, (_, index) => `def filler_${index}():\n    return ${index}`).join('\n\n');
+    const code = [
+        filler,
+        '@route("/health")',
+        '@cached',
+        'def health_check(request):',
+        '    return request.ok',
+    ].join('\n');
+
+    const splitter = new AstCodeSplitter();
+    const chunks = await splitter.split(code, 'python', 'src/routes.py');
+    const healthCheckChunks = chunks.filter((chunk) => chunk.metadata.symbolLabel === 'function health_check(request)');
+    const healthCheck = healthCheckChunks[0];
+
+    assert.equal(healthCheckChunks.length, 1);
+    assert.ok(healthCheck);
+    assert.ok(healthCheck.content.includes('@route("/health")'));
+    assert.ok(healthCheck.content.includes('@cached'));
+    assert.deepEqual(healthCheck.metadata.breadcrumbs, ['function health_check(request)']);
+});

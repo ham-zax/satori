@@ -116,9 +116,12 @@ const SEARCH_AGENT_FIT_NEUTRAL = 1.0;
 const SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER = 1.25;
 const SEARCH_AGENT_FIT_TEST_DEMOTION_RUNTIME = 0.45;
 const SEARCH_AGENT_FIT_TEST_DEMOTION_MIXED = 0.65;
+const SEARCH_AGENT_FIT_IMPLEMENTATION_TEST_DEMOTION = 0.25;
 const SEARCH_AGENT_FIT_IMPLEMENTATION_SYMBOL_MULTIPLIER = 1.25;
 const SEARCH_AGENT_FIT_IMPLEMENTATION_CHUNK_MULTIPLIER = 1.15;
 const SEARCH_AGENT_FIT_SCRIPT_IMPLEMENTATION_MULTIPLIER = 1.30;
+const SEARCH_AGENT_FIT_WRITER_OWNER_MULTIPLIER = 2.25;
+const SEARCH_AGENT_FIT_WRITER_NON_OWNER_DEMOTION = 0.55;
 const SEARCH_AGENT_FIT_TYPE_DEMOTION = 0.72;
 const SEARCH_AGENT_FIT_SCHEMA_DEMOTION = 0.80;
 const SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION = 0.70;
@@ -170,6 +173,7 @@ type SearchQueryPlan = {
     referenceSeeking: boolean;
     testSeeking: boolean;
     implementationSeeking: boolean;
+    writerSeeking: boolean;
     lexicalTerms: SearchLexicalTerm[];
     retrievalMode: 'dense' | 'lexical' | 'hybrid';
     scorePolicyKind: 'dense_similarity_min' | 'topk_only';
@@ -1543,7 +1547,14 @@ export class ToolHandlers {
         };
     }
 
-    private buildNoiseMitigationHint(codebaseRoot: string, filesInOrder: string[]): SearchNoiseMitigationHint | undefined {
+    private buildNoiseMitigationHint(
+        codebaseRoot: string,
+        filesInOrder: string[],
+        scope: SearchScope
+    ): SearchNoiseMitigationHint | undefined {
+        if (scope === 'docs') {
+            return undefined;
+        }
         if (!Array.isArray(filesInOrder) || filesInOrder.length === 0) {
             return undefined;
         }
@@ -1840,9 +1851,10 @@ export class ToolHandlers {
         const testSeeking = /\b(test|tests|tested|testing|spec|specs|coverage|assert|asserts|assertion|assertions|fixture|fixtures|mock|mocks|mocked|stub|stubs)\b/.test(normalizedQuery)
             || /\.test\b/.test(normalizedQuery)
             || /\.spec\b/.test(normalizedQuery);
-        const implementationCue = /\b(implement|implements|implemented|implementation|owner|owning|built|build|builds|builder|construct|constructed|create|creates|created|install|installs|installed|emit|emits|emitted|producer|produces|normalize|normalizes|normalized|cap|caps|capped|script|scripts|check|checks|checked|wire|wired|assemble|assembles|assembled)\b/.test(normalizedQuery);
+        const writerSeeking = /\b(writes?|writing|written|updates?|updated|updating|creates?|created|creating|generates?|generated|generating|emits?|emitted|emitting|persists?|persisted|persisting|configures?|configured|configuring|installs?|installed|installing)\b/.test(normalizedQuery);
+        const implementationCue = /\b(implement|implements|implemented|implementation|owner|owning|built|build|builds|builder|construct|constructed|create|creates|created|install|installs|installed|emit|emits|emitted|producer|produces|normalize|normalizes|normalized|cap|caps|capped|script|scripts|check|checks|checked|wire|wired|assemble|assembles|assembled|decide|decides|decided|deciding|freshness|reconcile|reconciles|reconciled|reconciliation|control)\b/.test(normalizedQuery);
         const ownerWhereSeeking = !explicitReferenceSeeking && /\bwhere\s+(?:does|is|are)\b/.test(normalizedQuery);
-        const implementationSeeking = !testSeeking && (implementationCue || ownerWhereSeeking);
+        const implementationSeeking = !testSeeking && (implementationCue || ownerWhereSeeking || writerSeeking);
 
         let intent: SearchQueryIntent = 'uncertain';
         let confidence: SearchIntentConfidence = 'low';
@@ -1876,6 +1888,9 @@ export class ToolHandlers {
         if (implementationSeeking) {
             reasons.push('implementation_seeking_query');
         }
+        if (writerSeeking) {
+            reasons.push('writer_seeking_query');
+        }
 
         return {
             semanticQuery,
@@ -1885,6 +1900,7 @@ export class ToolHandlers {
             referenceSeeking,
             testSeeking,
             implementationSeeking,
+            writerSeeking,
             lexicalTerms,
             retrievalMode: hybridEnabled
                 ? (intent === 'identifier' ? 'lexical' : 'hybrid')
@@ -1897,7 +1913,7 @@ export class ToolHandlers {
                     : intent === 'uncertain'
                         ? 0.60
                         : 0.00,
-            exactMatchPinningEnabled: intent !== 'semantic' && !referenceSeeking,
+            exactMatchPinningEnabled: intent !== 'semantic' && !referenceSeeking && !implementationSeeking && !writerSeeking,
             rerankAllowed: intent !== 'identifier',
         };
     }
@@ -2393,6 +2409,21 @@ export class ToolHandlers {
         return 'unknown';
     }
 
+    private isWriterOwnerResult(result: any): boolean {
+        const label = typeof result?.symbolLabel === 'string'
+            ? result.symbolLabel.trim().toLowerCase()
+            : '';
+        const content = typeof result?.content === 'string'
+            ? result.content.slice(0, 800).toLowerCase()
+            : '';
+        const evidence = `${label}\n${content}`;
+
+        if (/^(?:async\s+)?(?:(?:function|method|const|let|var)\s+)?(?:[a-z0-9_$]+\.)*(?:write|update|build|prepare|generate|emit|install|configure|persist|create|ensure|set|save|add|remove|delete)[a-z0-9_$]*(?:\b|\()/.test(label)) {
+            return true;
+        }
+        return /\b(?:writefilesync|writefile|appendfile|mkdir|rename|unlink|rm|copyfile|lines\.splice)\b/.test(evidence);
+    }
+
     private resolveAgentFitMultiplier(
         plan: SearchQueryPlan,
         result: any,
@@ -2407,6 +2438,12 @@ export class ToolHandlers {
             if (plan.testSeeking) {
                 return { multiplier: SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER, reason: 'test_intent' };
             }
+            if (plan.implementationSeeking) {
+                return {
+                    multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_TEST_DEMOTION,
+                    reason: 'implementation_query_test_demotion',
+                };
+            }
             return {
                 multiplier: scope === 'mixed'
                     ? SEARCH_AGENT_FIT_TEST_DEMOTION_MIXED
@@ -2416,6 +2453,21 @@ export class ToolHandlers {
         }
 
         const role = this.classifyAgentFitSymbolRole(result);
+        if (plan.writerSeeking) {
+            if (this.isWriterOwnerResult(result) && this.isImplementationPathCategory(category)) {
+                return { multiplier: SEARCH_AGENT_FIT_WRITER_OWNER_MULTIPLIER, reason: 'writer_owner' };
+            }
+            if (role === 'schema') {
+                return { multiplier: SEARCH_AGENT_FIT_SCHEMA_DEMOTION, reason: 'schema_not_owner' };
+            }
+            if (role === 'type') {
+                return { multiplier: SEARCH_AGENT_FIT_TYPE_DEMOTION, reason: 'type_not_owner' };
+            }
+            if (role === 'anonymous') {
+                return { multiplier: SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION, reason: 'anonymous_not_owner' };
+            }
+            return { multiplier: SEARCH_AGENT_FIT_WRITER_NON_OWNER_DEMOTION, reason: 'writer_query_non_writer' };
+        }
         if (plan.implementationSeeking && category === 'scriptRuntime') {
             return { multiplier: SEARCH_AGENT_FIT_SCRIPT_IMPLEMENTATION_MULTIPLIER, reason: 'script_implementation' };
         }
@@ -4745,7 +4797,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         }
                     } : {})
                 }));
-                const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, rawResults.map((result) => result.file));
+                const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, rawResults.map((result) => result.file), input.scope);
                 const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, rawResults.map((result) => ({
                     file: result.file,
                     span: result.span,
@@ -4919,7 +4971,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const diversityApplied = this.applyGroupDiversity(rankedGroupedResults, input.limit, input.groupBy);
             const visibleGroupedResults = diversityApplied.selected;
-            const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file));
+            const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file), input.scope);
             const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, visibleGroupedResults.map((result) => ({
                 file: result.file,
                 span: result.span,

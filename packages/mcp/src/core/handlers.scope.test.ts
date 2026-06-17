@@ -754,7 +754,7 @@ test('handleSearchCode grouped symbol mode collapses chunks by owner symbol iden
         assert.equal(payload.results[0].symbolInstanceId, 'owner_auth_login_instance');
         assert.equal(payload.results[0].symbolId, 'owner_auth_login_instance');
         assert.equal(payload.results[0].callGraphHint.supported, false);
-        assert.equal(payload.results[0].callGraphHint.reason, 'missing_sidecar');
+        assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol_registry');
         assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'owner_metadata');
     });
 });
@@ -906,7 +906,7 @@ test('handleSearchCode grouped symbol mode disables call graph hints when relati
             assert.equal(payload.results[0].symbolId, owner.symbolInstanceId);
             assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
             assert.equal(payload.results[0].callGraphHint.supported, false);
-            assert.equal(payload.results[0].callGraphHint.reason, 'missing_sidecar');
+            assert.equal(payload.results[0].callGraphHint.reason, 'incompatible_relationship_sidecar');
             assert.ok(payload.warnings.includes('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
         });
     });

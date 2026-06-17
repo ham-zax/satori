@@ -395,7 +395,13 @@ export class Context {
     async reindexByChange(
         codebasePath: string,
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
-    ): Promise<{ added: number; removed: number; modified: number; changedFiles: string[] }> {
+    ): Promise<{
+        added: number;
+        removed: number;
+        modified: number;
+        changedFiles: string[];
+        navigationRecovery?: 'rebuilt' | 'failed';
+    }> {
         this.loadIndexProfileForCodebase(codebasePath);
         const collectionName = this.resolveCollectionName(codebasePath);
         const synchronizer = this.synchronizers.get(collectionName);
@@ -458,6 +464,8 @@ export class Context {
             progressCallback?.({ phase, current: processedChanges, total: totalChanges, percentage });
         };
 
+        let navigationRecovery: 'rebuilt' | 'failed' | undefined;
+
         try {
             // Handle removed files
             for (const file of removed) {
@@ -513,6 +521,24 @@ export class Context {
                     indexedDelta.symbolRecords,
                     indexedDelta.symbolManifestFiles,
                 );
+            } else if (!canRebuildNavigationArtifacts && indexedDelta.status === 'completed') {
+                progressCallback?.({
+                    phase: 'Recovering navigation metadata...',
+                    current: totalChanges,
+                    total: totalChanges,
+                    percentage: 100,
+                });
+                try {
+                    await this.rebuildNavigationArtifacts(codebasePath);
+                    navigationRecovery = 'rebuilt';
+                    console.log('[Context] 🧭 Rebuilt navigation sidecars after incremental sync found no compatible pre-sync registry.');
+                } catch (error) {
+                    await this.clearSymbolRegistryForCodebase(codebasePath);
+                    navigationRecovery = 'failed';
+                    console.warn(
+                        `[Context] ⚠️  Failed to recover navigation sidecars after incremental sync; reindex is required: ${error instanceof Error ? error.message : String(error)}`
+                    );
+                }
             } else {
                 await this.clearSymbolRegistryForCodebase(codebasePath);
                 if (!canRebuildNavigationArtifacts) {
@@ -533,7 +559,8 @@ export class Context {
             added: added.length,
             removed: removed.length,
             modified: modified.length,
-            changedFiles: Array.from(new Set([...added, ...removed, ...modified]))
+            changedFiles: Array.from(new Set([...added, ...removed, ...modified])),
+            ...(navigationRecovery ? { navigationRecovery } : {}),
         };
     }
 

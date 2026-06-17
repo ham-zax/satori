@@ -220,6 +220,47 @@ test('handleFileOutline returns requires_reindex when sidecar metadata is missin
     });
 });
 
+test('handleFileOutline returns requires_reindex, not unsupported, for Go/Rust when the symbol registry is missing', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, 'src', 'service.go'), [
+            'package svc',
+            '',
+            'func add(a int, b int) int {',
+            '  return a + b',
+            '}',
+            '',
+        ].join('\n'));
+        fs.writeFileSync(path.join(repoPath, 'src', 'stack.rs'), [
+            'pub struct Stack { value: i32 }',
+            '',
+            'impl Stack {',
+            '  pub fn push(&mut self, value: i32) {',
+            '    self.value = value;',
+            '  }',
+            '}',
+            '',
+        ].join('\n'));
+
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        for (const file of ['src/service.go', 'src/stack.rs']) {
+            const response = await handlers.handleFileOutline({ path: repoPath, file });
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+
+            assert.equal(payload.status, 'requires_reindex');
+            assert.equal(payload.reason, 'requires_reindex');
+            assert.equal(payload.file, file);
+            assert.notEqual(payload.status, 'unsupported');
+            assert.equal(payload.hints.reindex.args.path, repoPath);
+        }
+    }));
+});
+
 test('handleFileOutline returns not_ready envelope when codebase is indexing', async () => {
     await withTempRepo(async (repoPath) => {
         const snapshotManager = {
@@ -901,7 +942,7 @@ test('handleFileOutline can read registry-backed outline from an injected naviga
         assert.equal(payload.outline.symbols.length, 1);
         assert.equal(payload.outline.symbols[0].symbolId, alpha.symbolInstanceId);
         assert.equal(payload.outline.symbols[0].callGraphHint.supported, false);
-        assert.equal(payload.outline.symbols[0].callGraphHint.reason, 'missing_sidecar');
+        assert.equal(payload.outline.symbols[0].callGraphHint.reason, 'missing_relationship_sidecar');
     });
 });
 
@@ -1214,7 +1255,7 @@ test('handleFileOutline returns unsupported graph hints when relationship sideca
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.outline.symbols[0].callGraphHint.supported, false);
-        assert.equal(payload.outline.symbols[0].callGraphHint.reason, 'missing_sidecar');
+        assert.equal(payload.outline.symbols[0].callGraphHint.reason, 'incompatible_relationship_sidecar');
         assert.ok(payload.warnings.includes('OUTLINE_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
     }));
 });

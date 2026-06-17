@@ -17,7 +17,7 @@ import {
     IndexFingerprint,
 } from "../config.js";
 
-type AccessGateReason = 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint';
+type AccessGateReason = 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';
 type MergeClass = 'searchable' | 'terminal_bad' | 'active';
 
 function isSearchableStatus(status: CodebaseInfo['status']): boolean {

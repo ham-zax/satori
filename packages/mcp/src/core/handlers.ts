@@ -14,6 +14,7 @@ import {
     getGraphNeighbors,
     getSupportedExtensionsForCapability,
     isLanguageCapabilitySupportedForExtension,
+    isLanguageCapabilitySupportedForFilename,
     isLanguageCapabilitySupportedForLanguage,
     resolveOwnerSymbolForChunk,
 } from "@zokizuan/satori-core";
@@ -138,6 +139,7 @@ const SEARCH_AGENT_FIT_WRITER_NON_OWNER_DEMOTION = 0.55;
 const SEARCH_AGENT_FIT_TYPE_DEMOTION = 0.72;
 const SEARCH_AGENT_FIT_SCHEMA_DEMOTION = 0.80;
 const SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION = 0.70;
+type CallGraphUnavailableReason = Extract<CallGraphHint, { supported: false }>['reason'];
 // Recovery probe threshold for "likely interrupted" indexing states.
 // Keep this shorter than snapshot merge stale semantics for better operator UX.
 const STALE_INDEXING_RECOVERY_GRACE_MS = 2 * 60_000;
@@ -2698,17 +2700,24 @@ export class ToolHandlers {
         return false;
     }
 
+    private isFileOutlineLanguageSupported(file: string): boolean {
+        return isLanguageCapabilitySupportedForFilename(file, 'fileOutline');
+    }
+
     private async loadRegistryValidatedCallGraphSidecar(input: {
         codebaseRoot: string;
         registryManifestHash?: string;
+        registryUnavailableReason?: CallGraphUnavailableReason;
     }): Promise<{
         relationshipReady: boolean;
         relationshipBuiltAt?: string;
+        relationshipUnavailableReason?: CallGraphUnavailableReason;
         warning?: string;
     }> {
         if (!input.registryManifestHash) {
             return {
                 relationshipReady: false,
+                relationshipUnavailableReason: input.registryUnavailableReason || 'missing_symbol_registry',
             };
         }
 
@@ -2717,8 +2726,12 @@ export class ToolHandlers {
             expectedSymbolRegistryManifestHash: input.registryManifestHash,
         });
         if (compatibility.relationships.status !== 'ok') {
+            const relationshipUnavailableReason = compatibility.relationships.status === 'missing'
+                ? 'missing_relationship_sidecar'
+                : 'incompatible_relationship_sidecar';
             return {
                 relationshipReady: false,
+                relationshipUnavailableReason,
                 warning: `RELATIONSHIP_SIDECAR_UNAVAILABLE:${compatibility.relationships.status}`,
             };
         }
@@ -3189,7 +3202,7 @@ export class ToolHandlers {
     }
 
     private getOutlineStatusForLanguage(relativeFilePath: string): FileOutlineStatus {
-        if (this.isCallGraphLanguageSupported('unknown', relativeFilePath)) {
+        if (this.isFileOutlineLanguageSupported(relativeFilePath)) {
             return 'ok';
         }
         return 'unsupported';
@@ -3275,6 +3288,7 @@ export class ToolHandlers {
         navigationState: {
             relationshipReady: boolean;
             relationshipBuiltAt?: string;
+            relationshipUnavailableReason?: CallGraphUnavailableReason;
         }
     ): CallGraphHint {
         if (!this.isCallGraphLanguageSupported(symbol.language, file)) {
@@ -3295,7 +3309,10 @@ export class ToolHandlers {
             });
         }
 
-        return { supported: false, reason: 'missing_sidecar' };
+        return {
+            supported: false,
+            reason: navigationState.relationshipUnavailableReason || 'missing_relationship_sidecar',
+        };
     }
 
     private buildRegistryFileOutlinePayload(input: {
@@ -3405,9 +3422,11 @@ export class ToolHandlers {
         ownerSymbolInstanceId?: string;
         registrySymbol?: SymbolRecord;
         registryLoaded?: boolean;
+        registryUnavailableReason?: CallGraphUnavailableReason;
         navigationState: {
             relationshipReady: boolean;
             relationshipBuiltAt?: string;
+            relationshipUnavailableReason?: CallGraphUnavailableReason;
         };
     }): CallGraphHint {
         if (input.registrySymbol) {
@@ -3420,6 +3439,10 @@ export class ToolHandlers {
 
         if (!input.ownerSymbolInstanceId) {
             return { supported: false, reason: 'missing_symbol' };
+        }
+
+        if (input.registryUnavailableReason) {
+            return { supported: false, reason: input.registryUnavailableReason };
         }
 
         if (input.registryLoaded) {
@@ -3437,7 +3460,10 @@ export class ToolHandlers {
             });
         }
 
-        return { supported: false, reason: 'missing_sidecar' };
+        return {
+            supported: false,
+            reason: input.navigationState.relationshipUnavailableReason || 'missing_relationship_sidecar',
+        };
     }
 
     private buildSearchPassWarning(passId: string): string {
@@ -5356,11 +5382,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 && scored.some((candidate) => !candidate.result.ownerSymbolKey || !candidate.result.ownerSymbolInstanceId);
             let searchSymbolRegistry: SymbolRegistry | undefined;
             let searchSymbolRegistryManifestHash: string | undefined;
+            let searchSymbolRegistryUnavailableReason: CallGraphUnavailableReason | undefined;
             if (input.groupBy === 'symbol') {
                 const registryState = await this.navigationStore.getManifest({ normalizedRootPath: effectiveRoot });
                 if (registryState.status === 'ok') {
                     searchSymbolRegistry = registryState.registry;
                     searchSymbolRegistryManifestHash = registryState.manifestHash;
+                } else if (registryState.status === 'missing') {
+                    searchSymbolRegistryUnavailableReason = 'missing_symbol_registry';
                 } else if (registryState.status === 'incompatible' && needsRegistryRepair) {
                     const payload = this.buildRequiresReindexPayload(
                         effectiveRoot,
@@ -5379,6 +5408,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         meta: { searchDiagnostics }
                     };
                 } else if (registryState.status === 'incompatible') {
+                    searchSymbolRegistryUnavailableReason = 'incompatible_symbol_registry';
                     searchWarnings.push(`SEARCH_SYMBOL_REGISTRY_UNAVAILABLE:${registryState.status}`);
                     finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
                 }
@@ -5426,6 +5456,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const callGraphNavigationState = await this.loadRegistryValidatedCallGraphSidecar({
                 codebaseRoot: effectiveRoot,
                 registryManifestHash: searchSymbolRegistryManifestHash,
+                registryUnavailableReason: searchSymbolRegistryUnavailableReason,
             });
             if (callGraphNavigationState.warning) {
                 searchWarnings.push(`SEARCH_${callGraphNavigationState.warning}`);
@@ -5474,6 +5505,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     ownerSymbolInstanceId,
                     registrySymbol,
                     registryLoaded: Boolean(searchSymbolRegistry),
+                    registryUnavailableReason: searchSymbolRegistryUnavailableReason,
                     navigationState: callGraphNavigationState,
                 });
                 const navigationFallback = this.buildNavigationFallback(

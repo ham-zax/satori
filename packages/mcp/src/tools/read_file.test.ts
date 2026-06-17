@@ -330,6 +330,31 @@ test('read_file annotated mode treats JavaScript files as outline-capable', asyn
     });
 });
 
+test('read_file annotated mode treats Go and Rust files as outline-capable', async () => {
+    await withTempDir(async (dir) => {
+        const goPath = path.join(dir, 'service.go');
+        const rustPath = path.join(dir, 'stack.rs');
+        fs.writeFileSync(goPath, 'package svc\nfunc add() {}\n', 'utf8');
+        fs.writeFileSync(rustPath, 'fn demo() {}\n', 'utf8');
+
+        for (const filePath of [goPath, rustPath]) {
+            const response = await runReadFile({
+                path: filePath,
+                mode: 'annotated'
+            }, 1000, {
+                snapshotManager: {
+                    getAllCodebases: () => []
+                } as any
+            });
+
+            const payload = JSON.parse(response.content[0].text);
+            assert.equal(payload.mode, 'annotated');
+            assert.equal(payload.outlineStatus, 'requires_reindex');
+            assert.equal(payload.outline, null);
+        }
+    });
+});
+
 test('read_file open_symbol treats symbolId as canonical symbolInstanceId on exact opens', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
@@ -379,6 +404,57 @@ test('read_file open_symbol treats symbolId as canonical symbolInstanceId on exa
 
         assert.equal(response.isError, undefined);
         assert.equal(response.content[0].text, 'line2\nline3');
+    });
+});
+
+test('read_file open_symbol opens a Go symbol by symbolInstanceId through exact outline resolution', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const filePath = path.join(repoPath, 'service.go');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'package svc\n\nfunc add() {\n  println("ok")\n}\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'go_add_instance'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as any,
+            toolHandlers: {
+                handleFileOutline: async (args: any) => {
+                    assert.equal(args.resolveMode, 'exact');
+                    assert.equal(args.symbolIdExact, 'go_add_instance');
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'ok',
+                                path: repoPath,
+                                file: 'service.go',
+                                outline: {
+                                    symbols: [{
+                                        symbolId: 'go_add_instance',
+                                        symbolLabel: 'function add',
+                                        span: { startLine: 3, endLine: 5 },
+                                        callGraphHint: {
+                                            supported: false,
+                                            reason: 'unsupported_language'
+                                        }
+                                    }]
+                                },
+                                hasMore: false
+                            })
+                        }]
+                    };
+                }
+            } as any
+        });
+
+        assert.equal(response.isError, undefined);
+        assert.equal(response.content[0].text, 'func add() {\n  println("ok")\n}');
     });
 });
 

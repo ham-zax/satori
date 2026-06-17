@@ -90,6 +90,7 @@ async function writeSearchSymbolRegistry(input: {
     repoPath: string;
     relativePath: string;
     content: string;
+    language?: string;
     chunks: Array<{
         content: string;
         startLine: number;
@@ -99,7 +100,7 @@ async function writeSearchSymbolRegistry(input: {
     }>;
 }) {
     const fileHash = 'test-search-file-hash';
-    const language = 'typescript';
+    const language = input.language || 'typescript';
     const symbols = buildSymbolRecordsForFile({
         relativePath: input.relativePath,
         language,
@@ -170,6 +171,7 @@ async function writeSearchNavigationSidecars(input: {
     repoPath: string;
     relativePath: string;
     content: string;
+    language?: string;
     chunks: Array<{
         content: string;
         startLine: number;
@@ -179,7 +181,7 @@ async function writeSearchNavigationSidecars(input: {
     }>;
 }) {
     const fileHash = 'test-search-file-hash';
-    const language = 'typescript';
+    const language = input.language || 'typescript';
     const symbols = buildSymbolRecordsForFile({
         relativePath: input.relativePath,
         language,
@@ -475,6 +477,64 @@ test('handleSearchCode does not emit supported callGraphHint from stale ownerSym
                 end_line: 3
             }
         });
+    }));
+});
+
+test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph for Go symbol-only results', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, 'src', 'service.go'), [
+            'package svc',
+            '',
+            'func add(a, b int) int {',
+            '  return a + b',
+            '}',
+            '',
+        ].join('\n'));
+        const { symbols } = await writeSearchNavigationSidecars({
+            repoPath,
+            relativePath: 'src/service.go',
+            language: 'go',
+            content: fs.readFileSync(path.join(repoPath, 'src', 'service.go'), 'utf8'),
+            chunks: [{
+                content: 'func add(a, b int) int {\n  return a + b\n}',
+                startLine: 3,
+                endLine: 5,
+                symbolLabel: 'function add',
+            }],
+        });
+        const addSymbol = symbols.find((symbol) => symbol.kind === 'function' && symbol.name === 'add');
+        assert.ok(addSymbol);
+
+        const handlers = createHandlers(repoPath, [{
+            content: 'return a + b',
+            relativePath: 'src/service.go',
+            startLine: 4,
+            endLine: 4,
+            language: 'go',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: addSymbol!.label,
+            ownerSymbolKey: addSymbol!.symbolKey,
+            ownerSymbolInstanceId: addSymbol!.symbolInstanceId,
+            symbolKind: addSymbol!.kind,
+        }], undefined, { sidecarReady: false });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'add',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const result = payload.results[0];
+        assert.equal(result.callGraphHint.supported, false);
+        assert.equal(result.callGraphHint.reason, 'unsupported_language');
+        assert.equal(result.nextActions, undefined);
+        assert.equal(result.navigationFallback.readSpan.tool, 'read_file');
     }));
 });
 

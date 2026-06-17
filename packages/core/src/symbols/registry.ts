@@ -7,6 +7,7 @@ import {
 import type {
     CodeChunk,
 } from '../splitter';
+import type { ExtractedSymbol, ExtractedSymbolKind } from '../languages';
 import type {
     SymbolKind,
     SymbolRecord,
@@ -51,6 +52,7 @@ export interface BuildSymbolRecordsForFileInput {
     fileHash: string;
     extractorVersion: string;
     chunks: CodeChunk[];
+    extractedSymbols?: readonly ExtractedSymbol[];
 }
 
 export interface ResolveOwnerSymbolForChunkInput {
@@ -182,6 +184,9 @@ function parseSymbolLabel(label: string): ParsedSymbolLabel | null {
         [/^class\s+(.+)$/, 'class'],
         [/^interface\s+(.+)$/, 'interface'],
         [/^type\s+(.+)$/, 'type'],
+        [/^enum\s+(.+)$/, 'enum'],
+        [/^trait\s+(.+)$/, 'trait'],
+        [/^module\s+(.+)$/, 'module'],
     ];
 
     for (const [pattern, kind] of prefixRules) {
@@ -220,6 +225,93 @@ function buildLineSpan(startLine: number, endLine: number): SymbolSpan {
     };
 }
 
+function buildExtractedSymbolSpan(symbol: ExtractedSymbol): SymbolSpan {
+    return {
+        startLine: symbol.span.startLine,
+        endLine: Math.max(symbol.span.startLine, symbol.span.endLine),
+        ...(symbol.span.startByte !== undefined ? { startByte: symbol.span.startByte } : {}),
+        ...(symbol.span.endByte !== undefined ? { endByte: symbol.span.endByte } : {}),
+        ...(symbol.span.startColumn !== undefined ? { startColumn: symbol.span.startColumn } : {}),
+        ...(symbol.span.endColumn !== undefined ? { endColumn: symbol.span.endColumn } : {}),
+    };
+}
+
+function toRegistrySymbolKind(kind: ExtractedSymbolKind): SymbolKind | null {
+    const mappings: Record<ExtractedSymbolKind, SymbolKind | null> = {
+        file: 'file',
+        class: 'class',
+        interface: 'interface',
+        type: 'type',
+        function: 'function',
+        method: 'method',
+        constructor: 'method',
+        struct: 'type',
+        enum: 'enum',
+        trait: 'trait',
+        module: 'module',
+        constant: 'property',
+        variable: 'property',
+    };
+    return mappings[kind] ?? null;
+}
+
+function normalizeExtractedParentPath(parentQualifiedNamePath: readonly string[] | undefined): string[] {
+    return (parentQualifiedNamePath || [])
+        .map((item) => item.replace(/\s+/g, ' ').trim())
+        .filter((item) => item.length > 0);
+}
+
+function buildRecordForExtractedSymbol(input: {
+    symbol: ExtractedSymbol;
+    relativePath: string;
+    language: string;
+    fileHash: string;
+    extractorVersion: string;
+}): SymbolRecord | null {
+    const kind = toRegistrySymbolKind(input.symbol.kind);
+    if (!kind || kind === 'file') {
+        return null;
+    }
+    const name = input.symbol.name.trim();
+    const label = input.symbol.label.replace(/\s+/g, ' ').trim();
+    if (!name || !label) {
+        return null;
+    }
+    const parentQualifiedNamePath = normalizeExtractedParentPath(input.symbol.parentQualifiedNamePath);
+    const qualifiedName = (input.symbol.qualifiedName || buildQualifiedName(name, parentQualifiedNamePath)).trim();
+    if (!qualifiedName) {
+        return null;
+    }
+    const span = buildExtractedSymbolSpan(input.symbol);
+    const symbolKey = createSymbolKey({
+        relativePath: input.relativePath,
+        language: input.language,
+        kind,
+        qualifiedName,
+        parentQualifiedNamePath,
+    });
+
+    return {
+        symbolKey,
+        symbolInstanceId: createSymbolInstanceId({
+            symbolKey,
+            fileHash: input.fileHash,
+            span,
+            extractorVersion: input.extractorVersion,
+        }),
+        language: input.language,
+        kind,
+        name,
+        qualifiedName,
+        label,
+        file: input.relativePath,
+        span,
+        parentQualifiedNamePath,
+        fileHash: input.fileHash,
+        extractorVersion: input.extractorVersion,
+    };
+}
+
 export function buildSymbolRecordsForFile(input: BuildSymbolRecordsForFileInput): SymbolRecord[] {
     const relativePath = normalizeRelativePath(input.relativePath);
     const fileOwner = createSynthesizedFileSymbol({
@@ -231,6 +323,25 @@ export function buildSymbolRecordsForFile(input: BuildSymbolRecordsForFileInput)
     });
     const extracted: SymbolRecord[] = [];
     const seenInstanceIds = new Set<string>();
+
+    for (const symbol of input.extractedSymbols || []) {
+        const record = buildRecordForExtractedSymbol({
+            symbol,
+            relativePath,
+            language: input.language,
+            fileHash: input.fileHash,
+            extractorVersion: input.extractorVersion,
+        });
+        if (!record || seenInstanceIds.has(record.symbolInstanceId)) {
+            continue;
+        }
+        seenInstanceIds.add(record.symbolInstanceId);
+        extracted.push(record);
+    }
+
+    if (input.extractedSymbols !== undefined) {
+        return [fileOwner, ...extracted.sort(compareSymbols)];
+    }
 
     for (const chunk of input.chunks) {
         const label = chunk.metadata.symbolLabel?.trim();

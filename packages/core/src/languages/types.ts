@@ -12,7 +12,11 @@ export type PublicLanguageClaim =
     | 'type_receiver_aware';
 
 export interface LanguageCapabilityFixtures {
+    readonly parser?: readonly string[];
     readonly symbols?: readonly string[];
+    readonly ownerMetadata?: readonly string[];
+    readonly fileOutline?: readonly string[];
+    readonly readFileOpenSymbol?: readonly string[];
     readonly importsExports?: readonly string[];
     readonly calls?: readonly string[];
     readonly typeReceiverAware?: readonly string[];
@@ -59,6 +63,10 @@ export interface ExtractedSymbol {
     readonly span: {
         readonly startLine: number;
         readonly endLine: number;
+        readonly startByte?: number;
+        readonly endByte?: number;
+        readonly startColumn?: number;
+        readonly endColumn?: number;
     };
 }
 

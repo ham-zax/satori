@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
     getLanguageCapabilityDeclaration,
     getLanguageCapabilityDeclarations,
+    getLanguageCapabilityTierCounts,
 } from './capabilities';
 import type {
     CapabilityStatus,
@@ -33,6 +36,19 @@ function enabled(status: CapabilityStatus): boolean {
 
 function productionReady(status: CapabilityStatus): boolean {
     return status === 'production_ready';
+}
+
+function resolveRepoPath(relativePath: string): string {
+    const candidates = [
+        path.resolve(process.cwd(), relativePath),
+        path.resolve(process.cwd(), '../..', relativePath),
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+    return candidates[0];
 }
 
 function assertPublicClaimConsistent(declaration: LanguageCapabilityDeclaration): void {
@@ -135,10 +151,25 @@ test('production_ready symbol extraction requires fixture metadata unless explic
             continue;
         }
 
+        assert.ok(declaration.fixtures.navigation?.length, `${declaration.languageId} must list golden navigation fixtures`);
         assert.ok(declaration.fixtures.symbols?.length, `${declaration.languageId} must list extractor fixtures`);
         assert.ok(declaration.fixtures.ownerMetadata?.length, `${declaration.languageId} must list owner metadata tests`);
         assert.ok(declaration.fixtures.fileOutline?.length, `${declaration.languageId} must list file_outline tests`);
         assert.ok(declaration.fixtures.readFileOpenSymbol?.length, `${declaration.languageId} must list read_file(open_symbol) tests`);
+    }
+});
+
+test('capability fixture evidence paths exist', () => {
+    for (const declaration of getLanguageCapabilityDeclarations()) {
+        for (const [category, evidencePaths] of Object.entries(declaration.fixtures)) {
+            for (const evidencePath of evidencePaths || []) {
+                assert.equal(
+                    fs.existsSync(resolveRepoPath(evidencePath)),
+                    true,
+                    `${declaration.languageId} fixture ${category} path does not exist: ${evidencePath}`
+                );
+            }
+        }
     }
 });
 
@@ -201,6 +232,34 @@ test('CMM-derived broad catalog stays tiered instead of becoming symbol or graph
         assert.equal(declaration?.callsCapability, 'none', language);
         assert.equal(declaration?.publicClaim, 'search_only', language);
     }
+});
+
+test('tiered catalog counts are computed from the Satori matrix', () => {
+    const declarations = getLanguageCapabilityDeclarations();
+    const counts = getLanguageCapabilityTierCounts();
+
+    assert.equal(counts.totalDeclarations, declarations.length);
+    assert.equal(
+        counts.recognizedRoutedLanguages,
+        declarations.filter((declaration) =>
+            declaration.extensions.length > 0 || (declaration.filenames?.length || 0) > 0
+        ).length
+    );
+    assert.equal(
+        counts.parserCoveredLanguages,
+        declarations.filter((declaration) => declaration.parserCapability !== 'none').length
+    );
+    assert.equal(
+        counts.symbolOnlyLanguages,
+        declarations.filter((declaration) => declaration.publicClaim === 'symbol_only').length
+    );
+    assert.equal(
+        counts.callGraphLanguages,
+        declarations.filter((declaration) => declaration.callsCapability === 'production_ready').length
+    );
+    assert.ok(counts.recognizedRoutedLanguages > counts.symbolOnlyLanguages);
+    assert.ok(counts.symbolOnlyLanguages > 0);
+    assert.ok(counts.callGraphLanguages > 0);
 });
 
 test('legacy imports facade remains separate from relationship-sidecar TS/JS import/export extraction', () => {

@@ -12,6 +12,7 @@ export type PublicLanguageClaim =
     | 'type_receiver_aware';
 
 export interface LanguageCapabilityFixtures {
+    readonly navigation?: readonly string[];
     readonly parser?: readonly string[];
     readonly symbols?: readonly string[];
     readonly ownerMetadata?: readonly string[];

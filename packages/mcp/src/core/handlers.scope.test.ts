@@ -538,6 +538,67 @@ test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph f
     }));
 });
 
+test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph for Rust symbol-only results', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, 'src', 'stack.rs'), [
+            'pub struct Stack { value: i32 }',
+            '',
+            'impl Stack {',
+            '  pub fn push(&mut self, value: i32) {',
+            '    self.value = value;',
+            '  }',
+            '}',
+            '',
+        ].join('\n'));
+        const { symbols } = await writeSearchNavigationSidecars({
+            repoPath,
+            relativePath: 'src/stack.rs',
+            language: 'rust',
+            content: fs.readFileSync(path.join(repoPath, 'src', 'stack.rs'), 'utf8'),
+            chunks: [{
+                content: 'pub fn push(&mut self, value: i32) {\n    self.value = value;\n  }',
+                startLine: 4,
+                endLine: 6,
+                symbolLabel: 'method push',
+                breadcrumbs: ['type Stack'],
+            }],
+        });
+        const pushSymbol = symbols.find((symbol) => symbol.kind === 'method' && symbol.name === 'push');
+        assert.ok(pushSymbol);
+
+        const handlers = createHandlers(repoPath, [{
+            content: 'self.value = value',
+            relativePath: 'src/stack.rs',
+            startLine: 5,
+            endLine: 5,
+            language: 'rust',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: pushSymbol!.label,
+            ownerSymbolKey: pushSymbol!.symbolKey,
+            ownerSymbolInstanceId: pushSymbol!.symbolInstanceId,
+            symbolKind: pushSymbol!.kind,
+        }], undefined, { sidecarReady: false });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'push',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const result = payload.results[0];
+        assert.equal(result.callGraphHint.supported, false);
+        assert.equal(result.callGraphHint.reason, 'unsupported_language');
+        assert.equal(result.nextActions, undefined);
+        assert.equal(result.navigationFallback.readSpan.tool, 'read_file');
+    }));
+});
+
 test('handleSearchCode relationship-backed callGraphHint works end to end with call_graph without a legacy sidecar', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const fileContent = [

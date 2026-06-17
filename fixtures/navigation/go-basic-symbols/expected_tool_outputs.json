@@ -1,0 +1,22 @@
+{
+    "language": "go",
+    "tier": "symbol_only",
+    "fileOutline": {
+        "status": "ok"
+    },
+    "readFileOpenSymbol": {
+        "targetQualifiedName": "add",
+        "status": "ok",
+        "span": {
+            "startLine": 11,
+            "endLine": 13
+        }
+    },
+    "searchCodebase": {
+        "nextActionsCallGraph": false
+    },
+    "callGraph": {
+        "supported": false,
+        "reason": "unsupported_language"
+    }
+}

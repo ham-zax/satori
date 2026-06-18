@@ -127,7 +127,7 @@ The full generated tool reference below is kept in the npm README for MCP client
 
 ### `manage_index`
 
-Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action="sync" for immediate convergence and action="reindex" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true).
+Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action="sync" for immediate convergence and action="reindex" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). create/reindex return the kickoff response immediately and do not poll to terminal state; use action="status" to observe progress.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -141,9 +141,7 @@ Manage index lifecycle operations (create/reindex/sync/status/clear) for a codeb
 
 ### `search_codebase`
 
-Unified semantic search with runtime-first defaults (start with scope="runtime"), grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Use debug:true for explainability payloads, and rely on response hints for remediation (.satoriignore noise handling, navigation fallback, reindex guidance).
-
-Search note: `search_codebase` can add a bounded tracked-file lexical recovery pass for high-precision queries such as exact identifiers, exact path filters, and quoted literal phrases when semantic retrieval under-delivers.
+Unified semantic search with runtime-first defaults (start with scope="runtime"), grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). For high-precision queries such as exact identifiers, quoted literal phrases, and strict path filters, search_codebase can add a bounded tracked-file lexical recovery pass when semantic retrieval under-delivers. Use debug:true for explainability payloads, and rely on response hints for remediation (.satoriignore noise handling, navigation fallback, reindex guidance).
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -158,7 +156,7 @@ Search note: `search_codebase` can add a bounded tracked-file lexical recovery p
 
 ### `call_graph`
 
-Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. On symbol-owned indexes, call_graph uses compatible relationship sidecars for conservative CALLS v0 traversal and upgrades low-confidence cross-file calls only when current IMPORTS/EXPORTS evidence deterministically supports the target symbol.
+Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. On symbol-owned indexes, call_graph uses compatible relationship sidecars for conservative CALLS v0 traversal and upgrades low-confidence cross-file calls only when current IMPORTS/EXPORTS evidence deterministically supports the target symbol. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report the counts returned in that response, not whole-sidecar totals for the indexed codebase.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -167,8 +165,6 @@ Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python 
 | `direction` | enum("callers", "callees", "both") | no | `"both"` | Traversal direction from the starting symbol. |
 | `depth` | integer | no | `1` | Traversal depth (max 3). |
 | `limit` | integer | no | `20` | Maximum number of returned edges. |
-
-Response note: `sidecar.nodeCount` and `sidecar.edgeCount` in the JSON envelope are the counts returned in that traversal response, not whole-sidecar totals for the indexed codebase.
 
 ### `file_outline`
 

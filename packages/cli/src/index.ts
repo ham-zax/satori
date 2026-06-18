@@ -7,14 +7,12 @@ import { parseCliArgs, parseWrapperArgumentsFromSchema, resolveRawArguments } fr
 import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
-import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope } from "./format.js";
+import { emitError, emitJson, parseStructuredEnvelope } from "./format.js";
 import { executeInstallCommand, type ManagedRuntimeCommand } from "./install.js";
 import { verifyManagedPackageInstallability } from "./package-installability.js";
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
 import { runDoctor } from "./doctor.js";
 import type { DoctorResult } from "./doctor.js";
-
-const MANAGE_INDEX_MIN_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface RunCliOptions {
     writeStdout?: (text: string) => void;
@@ -118,48 +116,6 @@ function resolveToolSchema(toolsResult: any, toolName: string): unknown {
     return schema;
 }
 
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-        const timer = setTimeout(resolve, ms);
-        timer.unref();
-    });
-}
-
-async function pollManageIndexUntilTerminal(
-    pathArg: string,
-    session: CliSession,
-    timeoutMs: number
-): Promise<{ result: any; state: ReturnType<typeof inferManageStatusState> }> {
-    const startedAt = Date.now();
-    const pollIntervalMs = 500;
-
-    while (Date.now() - startedAt < timeoutMs) {
-        await sleep(pollIntervalMs);
-        const statusResult = await session.callTool("manage_index", {
-            action: "status",
-            path: pathArg
-        });
-        const state = inferManageStatusState(statusResult);
-        if (state === "indexing" || state === "unknown") {
-            continue;
-        }
-        return { result: statusResult, state };
-    }
-
-    throw new CliError("E_CALL_TIMEOUT", `Timed out after ${timeoutMs}ms while waiting for manage_index status.`, 3);
-}
-
-function shouldWaitManageIndex(toolName: string, args: Record<string, unknown>): boolean {
-    if (toolName !== "manage_index") {
-        return false;
-    }
-    const action = args.action;
-    if (action !== "create" && action !== "reindex") {
-        return false;
-    }
-    return typeof args.path === "string" && args.path.length > 0;
-}
-
 function summarizeEnvelopeError(writers: { writeStderr: (text: string) => void }, envelope: ReturnType<typeof parseStructuredEnvelope>): void {
     if (!envelope) {
         return;
@@ -200,12 +156,11 @@ async function invokeTool(
     toolName: string,
     args: Record<string, unknown>,
     session: CliSession,
-    callTimeoutMs: number,
+    _callTimeoutMs: number,
     writers: { writeStdout: (text: string) => void; writeStderr: (text: string) => void; },
     format: "json" | "text"
 ): Promise<number> {
     let result = await session.callTool(toolName, args);
-    let manageWaitState: ReturnType<typeof inferManageStatusState> | null = null;
 
     const initialErrorExit = evaluateToolResultForError(result, writers);
     if (initialErrorExit !== null) {
@@ -216,13 +171,6 @@ async function invokeTool(
         return initialErrorExit;
     }
 
-    if (shouldWaitManageIndex(toolName, args)) {
-        const effectiveManagePollTimeoutMs = Math.max(callTimeoutMs, MANAGE_INDEX_MIN_POLL_TIMEOUT_MS);
-        const polled = await pollManageIndexUntilTerminal(args.path as string, session, effectiveManagePollTimeoutMs);
-        result = polled.result;
-        manageWaitState = polled.state;
-    }
-
     emitJson(writers, result);
     if (format === "text") {
         maybeEmitTextSummary(writers, result);
@@ -231,11 +179,6 @@ async function invokeTool(
     const finalErrorExit = evaluateToolResultForError(result, writers);
     if (finalErrorExit !== null) {
         return finalErrorExit;
-    }
-
-    if (manageWaitState === "indexfailed" || manageWaitState === "requires_reindex" || manageWaitState === "not_indexed") {
-        emitError(writers, "E_TOOL_ERROR", `manage_index terminal state=${manageWaitState}`);
-        return 1;
     }
 
     return 0;

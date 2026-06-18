@@ -734,6 +734,16 @@ export class ToolHandlers {
         });
     }
 
+    private refreshSnapshotStateFromDisk(): void {
+        const snapshotManager = this.snapshotManager as unknown as {
+            refreshFromDiskIfChanged?: () => boolean;
+        };
+        if (typeof snapshotManager.refreshFromDiskIfChanged !== 'function') {
+            return;
+        }
+        snapshotManager.refreshFromDiskIfChanged();
+    }
+
     private isPathWithinCodebase(targetPath: string, rootPath: string): boolean {
         return targetPath === rootPath || targetPath.startsWith(`${rootPath}${path.sep}`);
     }
@@ -778,6 +788,244 @@ export class ToolHandlers {
             return null;
         }
         return matches[0];
+    }
+
+    private async probeLocalSearchCollectionState(codebasePath: string): Promise<{
+        state: 'ready' | 'missing' | 'unknown';
+        collectionName?: string;
+    }> {
+        const context = this.context as unknown as {
+            getVectorStore?: () => { hasCollection?: (collectionName: string) => Promise<boolean> | boolean };
+            resolveCollectionName?: (codebasePath: string) => string;
+        };
+
+        if (typeof context.getVectorStore !== 'function' || typeof context.resolveCollectionName !== 'function') {
+            return { state: 'unknown' };
+        }
+
+        const vectorStore = context.getVectorStore();
+        if (!vectorStore || typeof vectorStore.hasCollection !== 'function') {
+            return { state: 'unknown' };
+        }
+
+        let collectionName: string;
+        try {
+            collectionName = context.resolveCollectionName(codebasePath);
+        } catch (error) {
+            console.warn(`[SEARCH-READINESS] Failed to resolve collection name for '${codebasePath}': ${formatUnknownError(error)}`);
+            return { state: 'unknown' };
+        }
+
+        if (typeof collectionName !== 'string' || collectionName.trim().length === 0) {
+            return { state: 'unknown' };
+        }
+
+        try {
+            const exists = await vectorStore.hasCollection(collectionName);
+            return {
+                state: exists ? 'ready' : 'missing',
+                collectionName
+            };
+        } catch (error) {
+            console.warn(`[SEARCH-READINESS] Failed to probe collection '${collectionName}' for '${codebasePath}': ${formatUnknownError(error)}`);
+            return { state: 'unknown' };
+        }
+    }
+
+    private async markCodebaseSearchStateMissing(codebasePath: string): Promise<void> {
+        const snapshotManager = this.snapshotManager as unknown as {
+            removeCodebaseCompletely?: (path: string) => void;
+            saveCodebaseSnapshot?: () => void;
+        };
+
+        if (typeof snapshotManager.removeCodebaseCompletely === 'function') {
+            snapshotManager.removeCodebaseCompletely(codebasePath);
+            if (typeof snapshotManager.saveCodebaseSnapshot === 'function') {
+                snapshotManager.saveCodebaseSnapshot();
+            }
+        }
+
+        try {
+            await this.unwatchCodebase(codebasePath);
+        } catch (error) {
+            console.warn(`[SEARCH-READINESS] Failed to unwatch stale codebase '${codebasePath}': ${formatUnknownError(error)}`);
+        }
+    }
+
+    private buildMissingLocalCollectionMessage(codebasePath: string, requestedPath: string, collectionName?: string): string {
+        const requestedPathDetail = requestedPath !== codebasePath
+            ? ` Requested path: '${requestedPath}'.`
+            : '';
+        const collectionDetail = collectionName
+            ? ` Vector collection is missing from the configured vector backend ('${collectionName}').`
+            : ' Vector collection is missing from the configured vector backend.';
+        return `Codebase '${codebasePath}' has stale local index metadata.${collectionDetail}${requestedPathDetail} Read paths fail closed and will not rebuild implicitly. Run manage_index with {"action":"create","path":"${codebasePath}"} to restore local readiness.`;
+    }
+
+    private buildMissingLocalCollectionSearchPayload(
+        codebasePath: string,
+        searchContext: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        },
+        collectionName?: string
+    ): SearchResponseEnvelope {
+        return {
+            status: "not_indexed",
+            reason: "not_indexed",
+            codebasePath,
+            path: searchContext.path,
+            query: searchContext.query,
+            scope: searchContext.scope,
+            groupBy: searchContext.groupBy,
+            resultMode: searchContext.resultMode,
+            limit: searchContext.limit,
+            freshnessDecision: null,
+            message: this.buildMissingLocalCollectionMessage(codebasePath, searchContext.path, collectionName),
+            hints: {
+                create: this.buildCreateHint(codebasePath)
+            },
+            results: []
+        } as SearchResponseEnvelope;
+    }
+
+    private buildMissingLocalCollectionFileOutlinePayload(
+        codebasePath: string,
+        requestedPath: string,
+        file: string,
+        collectionName?: string
+    ): FileOutlineResponseEnvelope {
+        return {
+            status: 'not_indexed',
+            reason: 'not_indexed',
+            path: requestedPath,
+            file,
+            outline: null,
+            hasMore: false,
+            message: this.buildMissingLocalCollectionMessage(codebasePath, requestedPath, collectionName),
+            hints: {
+                create: this.buildCreateHint(codebasePath)
+            }
+        };
+    }
+
+    private buildMissingLocalCollectionCallGraphPayload(
+        codebasePath: string,
+        context: {
+            path: string;
+            symbolRef: CallGraphSymbolRef;
+            direction: CallGraphDirection;
+            depth: number;
+            limit: number;
+        },
+        collectionName?: string
+    ): CallGraphResponseEnvelope {
+        return {
+            status: 'not_indexed',
+            supported: false,
+            reason: 'not_indexed',
+            path: context.path,
+            codebaseRoot: codebasePath,
+            symbolRef: context.symbolRef,
+            direction: context.direction,
+            depth: context.depth,
+            limit: context.limit,
+            nodes: [],
+            edges: [],
+            notes: [],
+            message: this.buildMissingLocalCollectionMessage(codebasePath, context.path, collectionName),
+            hints: {
+                create: this.buildCreateHint(codebasePath)
+            }
+        };
+    }
+
+    private async prepareTrackedRootForRead(absolutePath: string): Promise<
+        | { state: 'ready'; root: { path: string; info: any }; proofDebugHint?: CompletionProbeDebugHint }
+        | { state: 'requires_reindex'; codebasePath: string; message?: string }
+        | { state: 'indexing'; codebasePath: string }
+        | { state: 'not_indexed' }
+        | { state: 'stale_local'; codebasePath: string; reason: CompletionProofReason }
+        | { state: 'missing_collection'; codebasePath: string; collectionName?: string; proofDebugHint?: CompletionProbeDebugHint }
+    > {
+        this.refreshSnapshotStateFromDisk();
+
+        const blockedRoot = this.getMatchingBlockedRoot(absolutePath);
+        if (blockedRoot) {
+            return {
+                state: 'requires_reindex',
+                codebasePath: blockedRoot.path,
+                message: blockedRoot.message
+            };
+        }
+
+        const searchableRoot = this.resolveTrackedRoot(absolutePath, ['indexed', 'sync_completed']);
+        const indexingRoot = this.resolveTrackedRoot(absolutePath, ['indexing']);
+
+        if (!searchableRoot && indexingRoot) {
+            return {
+                state: 'indexing',
+                codebasePath: indexingRoot.path
+            };
+        }
+
+        if (!searchableRoot) {
+            return {
+                state: 'not_indexed'
+            };
+        }
+
+        const effectiveRoot = searchableRoot.path;
+        const gateResult = this.enforceFingerprintGate(effectiveRoot);
+        if (gateResult.blockedResponse) {
+            return {
+                state: 'requires_reindex',
+                codebasePath: effectiveRoot,
+                message: gateResult.message
+            };
+        }
+
+        const completionProof = await this.validateCompletionProof(effectiveRoot);
+        if (completionProof.outcome === 'fingerprint_mismatch') {
+            return {
+                state: 'requires_reindex',
+                codebasePath: effectiveRoot,
+                message: 'Completion proof fingerprint does not match the current runtime fingerprint.'
+            };
+        }
+
+        if (completionProof.outcome === 'stale_local') {
+            return {
+                state: 'stale_local',
+                codebasePath: effectiveRoot,
+                reason: completionProof.reason || 'missing_marker_doc'
+            };
+        }
+
+        const proofDebugHint: CompletionProbeDebugHint | undefined = completionProof.outcome === 'probe_failed'
+            ? { ok: false, reason: 'probe_failed' }
+            : undefined;
+
+        const collectionState = await this.probeLocalSearchCollectionState(effectiveRoot);
+        if (collectionState.state === 'missing') {
+            await this.markCodebaseSearchStateMissing(effectiveRoot);
+            return {
+                state: 'missing_collection',
+                codebasePath: effectiveRoot,
+                collectionName: collectionState.collectionName,
+                proofDebugHint
+            };
+        }
+
+        return {
+            state: 'ready',
+            root: searchableRoot,
+            proofDebugHint
+        };
     }
 
     private summarizeFingerprint(fingerprint: IndexFingerprint): string {
@@ -5579,9 +5827,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             trackCodebasePath(absolutePath);
 
-            const blockedRoot = this.getMatchingBlockedRoot(absolutePath);
-            if (blockedRoot) {
-                const payload = this.buildRequiresReindexPayload(blockedRoot.path, blockedRoot.message, {
+            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
+            if (trackedRootState.state === 'requires_reindex') {
+                const payload = this.buildRequiresReindexPayload(trackedRootState.codebasePath, trackedRootState.message, {
                     path: absolutePath,
                     query: input.query,
                     scope: input.scope,
@@ -5595,18 +5843,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const searchableRoot = this.resolveTrackedRoot(absolutePath, ['indexed', 'sync_completed']);
-            const indexingRoot = this.resolveTrackedRoot(absolutePath, ['indexing']);
-            let effectiveRoot = searchableRoot?.path || absolutePath;
-            const partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot?.info)
-                ? [
-                    SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,
-                    SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,
-                ]
-                : [];
-
-            if (!searchableRoot && indexingRoot) {
-                const payload = this.buildNotReadySearchPayload(indexingRoot.path, {
+            if (trackedRootState.state === 'indexing') {
+                const payload = this.buildNotReadySearchPayload(trackedRootState.codebasePath, {
                     path: absolutePath,
                     query: input.query,
                     scope: input.scope,
@@ -5620,7 +5858,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            if (!searchableRoot && !indexingRoot) {
+            if (trackedRootState.state === 'not_indexed') {
                 const envelope: SearchResponseEnvelope = {
                     status: "not_indexed",
                     reason: "not_indexed",
@@ -5646,48 +5884,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            if (searchableRoot && searchableRoot.path !== absolutePath) {
-                console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${searchableRoot.path}'`);
-            }
-
-            const gateResult = this.enforceFingerprintGate(effectiveRoot);
-            if (gateResult.blockedResponse) {
-                const payload = this.buildRequiresReindexPayload(effectiveRoot, gateResult.message, {
-                    path: absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    resultMode: input.resultMode,
-                    limit: input.limit
-                }) as unknown as SearchResponseEnvelope;
-                return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-                    meta: { searchDiagnostics }
-                };
-            }
-
-            const completionProof = await this.validateCompletionProof(effectiveRoot);
-            if (completionProof.outcome === 'fingerprint_mismatch') {
-                const payload = this.buildRequiresReindexPayload(
-                    effectiveRoot,
-                    'Completion proof fingerprint does not match the current runtime fingerprint.',
-                    {
-                        path: absolutePath,
-                        query: input.query,
-                        scope: input.scope,
-                        groupBy: input.groupBy,
-                        resultMode: input.resultMode,
-                        limit: input.limit
-                    }
-                ) as unknown as SearchResponseEnvelope;
-                return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-                    meta: { searchDiagnostics }
-                };
-            }
-
-            if (completionProof.outcome === 'stale_local') {
-                const staleReason = completionProof.reason || 'missing_marker_doc';
+            if (trackedRootState.state === 'stale_local') {
                 const envelope: SearchResponseEnvelope = {
                     status: "not_indexed",
                     reason: "not_indexed",
@@ -5698,10 +5895,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit,
                     resultMode: input.resultMode,
                     freshnessDecision: null,
-                    message: this.buildStaleLocalMessage(effectiveRoot, absolutePath, staleReason),
+                    message: this.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason),
                     hints: {
-                        create: this.buildCreateHint(effectiveRoot),
-                        staleLocal: this.buildStaleLocalHint(effectiveRoot, staleReason)
+                        create: this.buildCreateHint(trackedRootState.codebasePath),
+                        staleLocal: this.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason)
                     },
                     results: []
                 };
@@ -5711,8 +5908,37 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            if (completionProof.outcome === 'probe_failed') {
-                proofDebugHint = { ok: false, reason: 'probe_failed' };
+            if (trackedRootState.state === 'missing_collection') {
+                const payload = this.withProofDebugHint(this.buildMissingLocalCollectionSearchPayload(
+                    trackedRootState.codebasePath,
+                    {
+                        path: absolutePath,
+                        query: input.query,
+                        scope: input.scope,
+                        groupBy: input.groupBy,
+                        resultMode: input.resultMode,
+                        limit: input.limit
+                    },
+                    trackedRootState.collectionName
+                ), trackedRootState.proofDebugHint);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    meta: { searchDiagnostics }
+                };
+            }
+
+            const searchableRoot = trackedRootState.root;
+            let effectiveRoot = searchableRoot.path || absolutePath;
+            proofDebugHint = trackedRootState.proofDebugHint;
+            const partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot.info)
+                ? [
+                    SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,
+                    SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,
+                ]
+                : [];
+
+            if (searchableRoot.path !== absolutePath) {
+                console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${searchableRoot.path}'`);
             }
 
             const freshnessDecision = await this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000);
@@ -6644,32 +6870,54 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             trackCodebasePath(absoluteRoot);
 
-            const blockedRoot = this.getMatchingBlockedRoot(absoluteRoot);
-            if (blockedRoot) {
-                const payload = this.buildRequiresReindexFileOutlinePayload(blockedRoot.path, {
+            const trackedRootState = await this.prepareTrackedRootForRead(absoluteRoot);
+            if (trackedRootState.state === 'requires_reindex') {
+                const payload = this.buildRequiresReindexFileOutlinePayload(trackedRootState.codebasePath, {
                     ...args,
                     file: normalizedFile
-                }, blockedRoot.message);
+                }, trackedRootState.message);
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
                 };
             }
 
-            const matchedRoot = this.resolveTrackedRoot(absoluteRoot, ['indexed', 'sync_completed', 'indexing']);
-            if (!matchedRoot) {
+            if (trackedRootState.state === 'not_indexed') {
                 const payload = this.buildNotIndexedFileOutlinePayload(normalizedFile, absoluteRoot);
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
                 };
             }
 
-            if (matchedRoot.info.status === 'indexing') {
-                const payload = this.buildNotReadyFileOutlinePayload(matchedRoot.path, normalizedFile, absoluteRoot);
+            if (trackedRootState.state === 'indexing') {
+                const payload = this.buildNotReadyFileOutlinePayload(trackedRootState.codebasePath, normalizedFile, absoluteRoot);
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
                 };
             }
 
+            if (trackedRootState.state === 'stale_local') {
+                const payload = this.buildNotIndexedFileOutlinePayload(normalizedFile, absoluteRoot, {
+                    codebaseRoot: trackedRootState.codebasePath,
+                    reason: trackedRootState.reason
+                });
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            if (trackedRootState.state === 'missing_collection') {
+                const payload = this.withProofDebugHint(this.buildMissingLocalCollectionFileOutlinePayload(
+                    trackedRootState.codebasePath,
+                    absoluteRoot,
+                    normalizedFile,
+                    trackedRootState.collectionName
+                ), trackedRootState.proofDebugHint);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                };
+            }
+
+            const matchedRoot = trackedRootState.root;
             const effectiveRoot = matchedRoot.path;
             const absoluteFile = path.resolve(effectiveRoot, normalizedFile);
             const relativeToRoot = path.relative(effectiveRoot, absoluteFile);
@@ -6685,47 +6933,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     isError: true
                 };
             }
-
-            const gateResult = this.enforceFingerprintGate(effectiveRoot);
-            if (gateResult.blockedResponse) {
-                const payload = this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
-                    ...args,
-                    file: normalizedFile
-                }, gateResult.message);
-                return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
-                };
-            }
-
-            const completionProof = await this.validateCompletionProof(effectiveRoot);
-            if (completionProof.outcome === 'fingerprint_mismatch') {
-                const payload = this.buildRequiresReindexFileOutlinePayload(
-                    effectiveRoot,
-                    {
-                        ...args,
-                        file: normalizedFile
-                    },
-                    'Completion proof fingerprint does not match the current runtime fingerprint.'
-                );
-                return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
-                };
-            }
-
-            if (completionProof.outcome === 'stale_local') {
-                const staleReason = completionProof.reason || 'missing_marker_doc';
-                const payload = this.buildNotIndexedFileOutlinePayload(normalizedFile, absoluteRoot, {
-                    codebaseRoot: effectiveRoot,
-                    reason: staleReason
-                });
-                return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
-                };
-            }
-
-            const proofDebugHint: CompletionProbeDebugHint | undefined = completionProof.outcome === 'probe_failed'
-                ? { ok: false, reason: 'probe_failed' }
-                : undefined;
+            const proofDebugHint = trackedRootState.proofDebugHint;
 
             if (this.isPartialIndexNavigationUnavailable(matchedRoot.info)) {
                 const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(
@@ -6986,14 +7194,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             trackCodebasePath(absolutePath);
 
-            const blockedMatch = this.getMatchingBlockedRoot(absolutePath);
-            if (blockedMatch) {
+            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
+            if (trackedRootState.state === 'requires_reindex') {
                 return {
                     content: [{
                         type: "text",
                         text: JSON.stringify(this.buildRequiresReindexCallGraphPayload(
-                            blockedMatch.path,
-                            blockedMatch.message,
+                            trackedRootState.codebasePath,
+                            trackedRootState.message,
                             {
                                 path: absolutePath,
                                 symbolRef,
@@ -7006,15 +7214,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const searchableRoot = this.resolveTrackedRoot(absolutePath, ['indexed', 'sync_completed']);
-            const indexingRoot = this.resolveTrackedRoot(absolutePath, ['indexing']);
-
-            if (!searchableRoot && indexingRoot) {
+            if (trackedRootState.state === 'indexing') {
                 return {
                     content: [{
                         type: "text",
                         text: JSON.stringify(
-                            this.buildNotReadyCallGraphPayload(indexingRoot.path, {
+                            this.buildNotReadyCallGraphPayload(trackedRootState.codebasePath, {
                                 path: absolutePath,
                                 symbolRef,
                                 direction,
@@ -7028,7 +7233,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            if (!searchableRoot) {
+            if (trackedRootState.state === 'not_indexed') {
                 return {
                     content: [{
                         type: "text",
@@ -7043,50 +7248,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const effectiveRoot = searchableRoot.path;
-
-            const gateResult = this.enforceFingerprintGate(effectiveRoot);
-            if (gateResult.blockedResponse) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(this.buildRequiresReindexCallGraphPayload(
-                            effectiveRoot,
-                            gateResult.message,
-                            {
-                                path: absolutePath,
-                                symbolRef,
-                                direction,
-                                depth,
-                                limit
-                            }
-                        ), null, 2)
-                    }]
-                };
-            }
-
-            const completionProof = await this.validateCompletionProof(effectiveRoot);
-            if (completionProof.outcome === 'fingerprint_mismatch') {
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(this.buildRequiresReindexCallGraphPayload(
-                            effectiveRoot,
-                            'Completion proof fingerprint does not match the current runtime fingerprint.',
-                            {
-                                path: absolutePath,
-                                symbolRef,
-                                direction,
-                                depth,
-                                limit
-                            }
-                        ), null, 2)
-                    }]
-                };
-            }
-
-            if (completionProof.outcome === 'stale_local') {
-                const staleReason = completionProof.reason || 'missing_marker_doc';
+            if (trackedRootState.state === 'stale_local') {
                 return {
                     content: [{
                         type: "text",
@@ -7099,17 +7261,36 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                 limit
                             },
                             {
-                                codebaseRoot: effectiveRoot,
-                                reason: staleReason
+                                codebaseRoot: trackedRootState.codebasePath,
+                                reason: trackedRootState.reason
                             }
                         ), null, 2)
                     }]
                 };
             }
 
-            const proofDebugHint: CompletionProbeDebugHint | undefined = completionProof.outcome === 'probe_failed'
-                ? { ok: false, reason: 'probe_failed' }
-                : undefined;
+            if (trackedRootState.state === 'missing_collection') {
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(this.withProofDebugHint(this.buildMissingLocalCollectionCallGraphPayload(
+                            trackedRootState.codebasePath,
+                            {
+                                path: absolutePath,
+                                symbolRef,
+                                direction,
+                                depth,
+                                limit,
+                            },
+                            trackedRootState.collectionName
+                        ), trackedRootState.proofDebugHint), null, 2)
+                    }]
+                };
+            }
+
+            const searchableRoot = trackedRootState.root;
+            const effectiveRoot = searchableRoot.path;
+            const proofDebugHint = trackedRootState.proofDebugHint;
 
             if (this.isPartialIndexNavigationUnavailable(searchableRoot.info)) {
                 const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
@@ -7546,6 +7727,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return this.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
             }
 
+            this.refreshSnapshotStateFromDisk();
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);
 
             // Check indexing status using new status system

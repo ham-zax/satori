@@ -664,6 +664,8 @@ profile = "minimal"</code></pre>
           Configure the embedding provider and vector backend before indexing.
           Those values are part of the index fingerprint, so changing provider,
           model, dimension, or vector-store schema later requires a reindex.
+          Restart every Satori MCP client before mutating indexes after those
+          changes.
         </p>
         <div class="grid">
           <div class="panel">
@@ -791,6 +793,15 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             before retrying the original call.
           </p>
         </div>
+        <div class="callout">
+          <p>
+            If <code>manage_index</code> returns
+            <code>reason="runtime_owner_conflict"</code>, restart all Satori
+            MCP clients so only one runtime fingerprint/config identity is
+            active, then retry the mutation. MCP tools never kill processes or
+            ask interactive cleanup questions.
+          </p>
+        </div>
       </section>
 
       <section class="section" id="navigation-sidecars">
@@ -915,6 +926,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
           Lifecycle operations have different meanings. Use sync for ordinary
           file changes, reindex for fingerprint or sidecar incompatibility, and
           clear only when you intentionally want to remove a tracked codebase.
+          Create, reindex, sync, and clear are blocked when another live Satori
+          MCP runtime has a different fingerprint, version, or config identity.
         </p>
         <div class="grid">
           <div class="panel">

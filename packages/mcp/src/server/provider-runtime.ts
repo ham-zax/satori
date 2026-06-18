@@ -9,6 +9,7 @@ import {
 import { CapabilityResolver } from "../core/capabilities.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { ToolHandlers } from "../core/handlers.js";
+import type { RuntimeOwnerMutationGate } from "../core/runtime-owner.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import { SyncManager } from "../core/sync.js";
 import { ContextMcpConfig, IndexFingerprint } from "../config.js";
@@ -118,6 +119,7 @@ export class ProviderRuntime {
     private readonly watchSyncEnabled: boolean;
     private readonly watchDebounceMs: number;
     private readonly callGraphManager: CallGraphSidecarManager;
+    private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null;
     private readonly now: () => number;
     private embeddingRuntimePromise: Promise<ToolContext> | null = null;
     private vectorRuntimePromise: Promise<ToolContext> | null = null;
@@ -132,6 +134,7 @@ export class ProviderRuntime {
         watchSyncEnabled: boolean;
         watchDebounceMs: number;
         callGraphManager: CallGraphSidecarManager;
+        runtimeOwnerGate?: RuntimeOwnerMutationGate | null;
         now?: () => number;
     }) {
         this.config = args.config;
@@ -142,6 +145,7 @@ export class ProviderRuntime {
         this.watchSyncEnabled = args.watchSyncEnabled;
         this.watchDebounceMs = args.watchDebounceMs;
         this.callGraphManager = args.callGraphManager;
+        this.runtimeOwnerGate = args.runtimeOwnerGate || null;
         this.now = args.now || (() => Date.now());
     }
 
@@ -226,8 +230,9 @@ export class ProviderRuntime {
                         this.snapshotManager.saveCodebaseSnapshot();
                         console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
                     }
-                } catch (error: any) {
-                    console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${error?.message || error}`);
+                } catch (error: unknown) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${message}`);
                 }
             }
         });
@@ -248,7 +253,10 @@ export class ProviderRuntime {
             this.capabilities,
             this.now,
             this.callGraphManager,
-            reranker
+            reranker,
+            undefined,
+            undefined,
+            this.runtimeOwnerGate
         );
 
         const toolContext = {

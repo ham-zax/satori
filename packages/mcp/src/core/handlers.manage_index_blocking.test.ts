@@ -7,6 +7,7 @@ import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 import type { ManageIndexResponseEnvelope } from './manage-types.js';
+import type { RuntimeOwnerMutationGate } from './runtime-owner.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -82,12 +83,134 @@ function assertBlockedEnvelope(envelope: ManageIndexResponseEnvelope, repoPath: 
     assert.match(text, /retryAfterMs=2000/);
 }
 
+function runtimeOwnerConflictGate(): RuntimeOwnerMutationGate {
+    return {
+        checkMutation: async () => ({
+            blocked: true,
+            reason: 'runtime_owner_conflict',
+            message: 'Index mutation is blocked because multiple Satori runtimes with different fingerprints/configs are active.',
+            conflictingOwners: [{
+                ownerId: 'other-owner',
+                pid: 4242,
+                ppid: 1,
+                cmd: 'node /tmp/satori.js',
+                cwd: '/tmp',
+                startedAt: '2026-06-18T00:00:00.000Z',
+                lastSeenAt: '2026-06-18T00:01:00.000Z',
+                satoriVersion: '4.10.0',
+                runtimeOwnerIdentityHash: 'different',
+                configSource: 'env',
+                conflictReasons: ['satoriVersion'],
+            }]
+        })
+    };
+}
+
+function createMutationReadyHandlers(repoPath: string, gate: RuntimeOwnerMutationGate, counters: {
+    collectionLimitCalls?: number;
+    setIndexingCalls?: number;
+    ensureFreshnessCalls?: number;
+    clearIndexCalls?: number;
+}): ToolHandlers {
+    const context = {
+        getVectorStore: () => ({
+            checkCollectionLimit: async () => {
+                counters.collectionLimitCalls = (counters.collectionLimitCalls ?? 0) + 1;
+                return true;
+            }
+        }),
+        clearIndex: async () => {
+            counters.clearIndexCalls = (counters.clearIndexCalls ?? 0) + 1;
+        },
+        resolveCollectionName: () => 'test_collection',
+    } as any;
+
+    const snapshotManager = {
+        getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+        getIndexingCodebases: () => [],
+        getIndexedCodebases: () => [repoPath],
+        getCodebaseStatus: () => 'indexed',
+        getCodebaseInfo: () => ({
+            status: 'indexed',
+            indexedFiles: 1,
+            totalChunks: 1,
+            indexStatus: 'completed',
+            lastUpdated: new Date().toISOString()
+        }),
+        ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+        removeCodebaseCompletely: () => undefined,
+        saveCodebaseSnapshot: () => undefined,
+        setCodebaseIndexing: () => {
+            counters.setIndexingCalls = (counters.setIndexingCalls ?? 0) + 1;
+        },
+        markCodebaseCleared: () => undefined,
+    } as any;
+
+    const syncManager = {
+        getWatchDebounceMs: () => 2000,
+        ensureFreshness: async () => {
+            counters.ensureFreshnessCalls = (counters.ensureFreshnessCalls ?? 0) + 1;
+            return { mode: 'synced', checkedAt: new Date().toISOString(), thresholdMs: 0, stats: { added: 0, removed: 0, modified: 0 } };
+        },
+        unwatchCodebase: async () => undefined,
+    } as any;
+
+    return new ToolHandlers(
+        context,
+        snapshotManager,
+        syncManager,
+        RUNTIME_FINGERPRINT,
+        CAPABILITIES,
+        () => Date.now(),
+        undefined,
+        null,
+        undefined,
+        undefined,
+        gate
+    );
+}
+
 test('handleIndexCodebase returns blocked manage message with status hint and retryAfterMs while indexing', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath);
         const response = await handlers.handleIndexCodebase({ path: repoPath });
         const envelope = parseManageEnvelope(response);
         assertBlockedEnvelope(envelope, repoPath, 'create');
+    });
+});
+
+test('handleIndexCodebase blocks create before mutation when runtime owners conflict', async () => {
+    await withTempRepo(async (repoPath) => {
+        const counters = {};
+        const handlers = createMutationReadyHandlers(repoPath, runtimeOwnerConflictGate(), counters);
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.action, 'create');
+        assert.equal(envelope.status, 'blocked');
+        assert.equal(envelope.reason, 'runtime_owner_conflict');
+        assert.match(envelope.humanText, /multiple Satori runtimes/i);
+        assert.equal((envelope.hints?.runtimeOwners as any[])?.[0]?.pid, 4242);
+        assert.match(String(envelope.hints?.nextStep), /Restart all Satori MCP clients/i);
+        assert.equal((counters as any).collectionLimitCalls ?? 0, 0);
+        assert.equal((counters as any).setIndexingCalls ?? 0, 0);
+    });
+});
+
+test('handleReindexCodebase blocks before preflight and force cleanup when runtime owners conflict', async () => {
+    await withTempRepo(async (repoPath) => {
+        const counters = {};
+        const handlers = createMutationReadyHandlers(repoPath, runtimeOwnerConflictGate(), counters);
+
+        const response = await handlers.handleReindexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.action, 'reindex');
+        assert.equal(envelope.status, 'blocked');
+        assert.equal(envelope.reason, 'runtime_owner_conflict');
+        assert.equal((counters as any).collectionLimitCalls ?? 0, 0);
+        assert.equal((counters as any).setIndexingCalls ?? 0, 0);
     });
 });
 
@@ -100,12 +223,60 @@ test('handleSyncCodebase returns blocked manage message with status hint and ret
     });
 });
 
+test('handleSyncCodebase blocks before freshness mutation when runtime owners conflict', async () => {
+    await withTempRepo(async (repoPath) => {
+        const counters = {};
+        const handlers = createMutationReadyHandlers(repoPath, runtimeOwnerConflictGate(), counters);
+
+        const response = await handlers.handleSyncCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.action, 'sync');
+        assert.equal(envelope.status, 'blocked');
+        assert.equal(envelope.reason, 'runtime_owner_conflict');
+        assert.equal((counters as any).ensureFreshnessCalls ?? 0, 0);
+    });
+});
+
 test('handleClearIndex returns blocked manage message with status hint and retryAfterMs while indexing', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath);
         const response = await handlers.handleClearIndex({ path: repoPath });
         const envelope = parseManageEnvelope(response);
         assertBlockedEnvelope(envelope, repoPath, 'clear');
+    });
+});
+
+test('handleClearIndex blocks before destructive clear when runtime owners conflict', async () => {
+    await withTempRepo(async (repoPath) => {
+        const counters = {};
+        const handlers = createMutationReadyHandlers(repoPath, runtimeOwnerConflictGate(), counters);
+
+        const response = await handlers.handleClearIndex({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.action, 'clear');
+        assert.equal(envelope.status, 'blocked');
+        assert.equal(envelope.reason, 'runtime_owner_conflict');
+        assert.equal((counters as any).clearIndexCalls ?? 0, 0);
+    });
+});
+
+test('handleGetIndexingStatus does not consult runtime owner mutation gate', async () => {
+    await withTempRepo(async (repoPath) => {
+        const counters = {};
+        const gate: RuntimeOwnerMutationGate = {
+            checkMutation: async () => {
+                throw new Error('status must not use mutation gate');
+            }
+        };
+        const handlers = createMutationReadyHandlers(repoPath, gate, counters);
+
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.action, 'status');
+        assert.notEqual(envelope.reason, 'runtime_owner_conflict');
     });
 });
 

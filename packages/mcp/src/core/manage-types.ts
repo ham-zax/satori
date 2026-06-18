@@ -19,7 +19,8 @@ export type ManageIndexReason =
     | "backend_timeout"
     | "remote_delete_pending"
     | "missing_provider_config"
-    | "vector_backend_unavailable";
+    | "vector_backend_unavailable"
+    | "runtime_owner_conflict";
 
 export type VectorBackendResponseCode =
     | "ZILLIZ_CLUSTER_STOPPED"

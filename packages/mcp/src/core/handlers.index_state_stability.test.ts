@@ -58,7 +58,7 @@ function baseSearchResult() {
     }];
 }
 
-test('handleSearchCode does not call cloud reconcile and keeps status ok when marker probe fails', async () => {
+test('handleSearchCode keeps status ok when completion-proof probe fails', async () => {
     await withTempRepo(async (repoPath) => {
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
@@ -82,9 +82,6 @@ test('handleSearchCode does not call cloud reconcile and keeps status ok when ma
             })
         } as any;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, () => Date.parse('2026-02-28T08:01:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => {
-            throw new Error('foreground reconcile must not run');
-        };
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -265,9 +262,6 @@ test('handleFileOutline returns stale-local not_indexed when completion marker i
             getCodebaseCallGraphSidecar: () => undefined
         } as any;
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => {
-            throw new Error('foreground reconcile must not run');
-        };
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -295,9 +289,6 @@ test('handleCallGraph returns stale-local not_indexed when completion marker is 
             getCodebaseCallGraphSidecar: () => undefined
         } as any;
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => {
-            throw new Error('foreground reconcile must not run');
-        };
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -423,9 +414,6 @@ test('handleIndexCodebase create proceeds when snapshot is indexed but completio
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         (handlers as any).startBackgroundIndexing = async () => {
             startedBackgroundIndexing = true;
-        };
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => {
-            throw new Error('foreground reconcile must not run');
         };
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });

@@ -89,7 +89,6 @@ function createHandlers(
     } as any;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-    (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     (handlers as any).startBackgroundIndexing = () => undefined;
     return handlers;
 }

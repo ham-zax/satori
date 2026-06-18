@@ -332,10 +332,8 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
             () => Date.parse('2026-06-18T00:00:00.000Z'),
         );
         const testHandlers = handlers as unknown as {
-            syncIndexedCodebasesFromCloud: () => Promise<void>;
             validateCompletionProof: () => Promise<{ outcome: 'ok' }>;
         };
-        testHandlers.syncIndexedCodebasesFromCloud = async () => undefined;
         testHandlers.validateCompletionProof = async () => ({ outcome: 'ok' });
 
         const initialOutline = parsePayload(await handlers.handleFileOutline({
@@ -496,10 +494,8 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
             () => Date.parse('2026-06-18T00:00:00.000Z'),
         );
         const testHandlers = handlers as unknown as {
-            syncIndexedCodebasesFromCloud: () => Promise<void>;
             validateCompletionProof: () => Promise<{ outcome: 'ok' }>;
         };
-        testHandlers.syncIndexedCodebasesFromCloud = async () => undefined;
         testHandlers.validateCompletionProof = async () => ({ outcome: 'ok' });
 
         const initialOutline = parsePayload(await handlers.handleFileOutline({

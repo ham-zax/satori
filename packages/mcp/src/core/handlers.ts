@@ -3188,9 +3188,6 @@ export class ToolHandlers {
     }
 
     private sortSearchCandidates(candidates: SearchCandidate[], exactMatchFirst: boolean, mustMatchesFirst = false): boolean {
-        for (const candidate of candidates) {
-            candidate.exactMatchPinned = false;
-        }
         const topWithoutPinning = candidates.length > 0
             ? [...candidates].sort((a, b) => this.compareSearchCandidates(a, b, { mustMatchesFirst }))[0]
             : undefined;
@@ -3201,6 +3198,45 @@ export class ToolHandlers {
         const applied = topWithoutPinning.exactLexicalMatch !== candidates[0].exactLexicalMatch;
         if (applied) {
             candidates[0].exactMatchPinned = true;
+        }
+        return applied;
+    }
+
+    private compareGroupedSearchResults(
+        a: SearchGroupResult & { __exactLexicalMatch: boolean },
+        b: SearchGroupResult & { __exactLexicalMatch: boolean },
+    ): number {
+        if (b.score !== a.score) return b.score - a.score;
+        const fileCmp = a.file.localeCompare(b.file);
+        if (fileCmp !== 0) return fileCmp;
+        const spanCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+        if (spanCmp !== 0) return spanCmp;
+        const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+        if (labelCmp !== 0) return labelCmp;
+        return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+    }
+
+    private sortGroupedSearchResults<T extends SearchGroupResult & { __exactLexicalMatch: boolean }>(
+        results: T[],
+        exactMatchPinningEnabled: boolean,
+    ): boolean {
+        const topWithoutPinning = results.length > 0
+            ? [...results].sort((a, b) => this.compareGroupedSearchResults(a, b))[0]
+            : undefined;
+        results.sort((a, b) => {
+            if (exactMatchPinningEnabled && a.__exactLexicalMatch !== b.__exactLexicalMatch) {
+                return a.__exactLexicalMatch ? -1 : 1;
+            }
+            return this.compareGroupedSearchResults(a, b);
+        });
+        const applied = Boolean(
+            exactMatchPinningEnabled
+            && topWithoutPinning
+            && results.length > 0
+            && topWithoutPinning.__exactLexicalMatch !== results[0].__exactLexicalMatch
+        );
+        if (applied && results[0].debug?.provenance) {
+            results[0].debug.provenance.exactMatchPinned = true;
         }
         return applied;
     }
@@ -6372,19 +6408,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ? this.collapseDuplicateDeclarationGroups(groupedResults)
                 : groupedResults;
 
-            rankedGroupedResults.sort((a, b) => {
-                if (queryPlan.exactMatchPinningEnabled && a.__exactLexicalMatch !== b.__exactLexicalMatch) {
-                    return a.__exactLexicalMatch ? -1 : 1;
-                }
-                if (b.score !== a.score) return b.score - a.score;
-                const fileCmp = a.file.localeCompare(b.file);
-                if (fileCmp !== 0) return fileCmp;
-                const spanCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
-                if (spanCmp !== 0) return spanCmp;
-                const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
-                if (labelCmp !== 0) return labelCmp;
-                return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
-            });
+            if (this.sortGroupedSearchResults(rankedGroupedResults, queryPlan.exactMatchPinningEnabled)) {
+                exactMatchPinningApplied = true;
+                rankingProvenance.exactMatchPinningApplied = true;
+            }
 
             const diversityApplied = this.applyGroupDiversity(rankedGroupedResults, input.limit, input.groupBy);
             const visibleGroupedResults = diversityApplied.selected;

@@ -247,7 +247,6 @@ function createHandlers(repoPath: string, searchResults: any[] = []) {
         CAPABILITIES,
         () => Date.parse('2026-01-01T01:00:00.000Z'),
     );
-    (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     (handlers as any).validateCompletionProof = async () => ({ outcome: 'ok' });
     return { handlers, snapshotManager: createSnapshotManager(repoPath), syncManager };
 }

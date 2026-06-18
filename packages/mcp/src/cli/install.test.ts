@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { executeInstallCommand } from "./install.js";
 
@@ -69,6 +70,25 @@ function withTempHome(run: (homeDir: string) => void): void {
 
 function readFile(filePath: string): string {
     return fs.readFileSync(filePath, "utf8");
+}
+
+function extractCodexGuidanceCommand(content: string): string {
+    const block = content.match(/# >>> satori-cli managed codex guidance hook start >>>([\s\S]*?)# <<< satori-cli managed codex guidance hook end <<</);
+    assert.ok(block, "expected managed Codex guidance hook block");
+    const commandLine = block[1].match(/^command = (".*")$/m);
+    assert.ok(commandLine, "expected command to be serialized as a TOML basic string");
+    return JSON.parse(commandLine[1]) as string;
+}
+
+function runGuidanceCommand(command: string, cwd: string, runtimeDir: string): string {
+    return execFileSync("sh", ["-c", command], {
+        cwd,
+        env: {
+            ...process.env,
+            XDG_RUNTIME_DIR: runtimeDir,
+        },
+        encoding: "utf8",
+    });
 }
 
 function installRuntimePackageStub(relativeEntry: string) {
@@ -292,7 +312,36 @@ test("install adds opt-in managed Codex guidance hook and preserves user hooks",
         assert.equal(content.includes("# <<< satori-cli managed codex guidance hook end <<<"), true);
         assert.equal(content.includes("Satori MCP: search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
         assert.equal(content.includes("satori-codex-guidance"), true);
+        assert.equal(extractCodexGuidanceCommand(content).startsWith("sh -lc "), true);
         assert.equal(content.includes('command = \'echo "user hook"\''), true);
+    });
+});
+
+test("managed Codex guidance hook command suppresses duplicate prints per working directory", () => {
+    withTempHome((homeDir) => {
+        const runtimeDir = path.join(homeDir, "runtime");
+        const repoA = path.join(homeDir, "repo-a");
+        const repoB = path.join(homeDir, "repo-b");
+        fs.mkdirSync(runtimeDir, { recursive: true });
+        fs.mkdirSync(repoA, { recursive: true });
+        fs.mkdirSync(repoB, { recursive: true });
+
+        executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            installGuidanceHook: true,
+        }, installOptions(homeDir));
+
+        const command = extractCodexGuidanceCommand(readFile(path.join(homeDir, ".codex", "config.toml")));
+        assert.match(runGuidanceCommand(command, repoA, runtimeDir), /Satori MCP: search_codebase/);
+        assert.equal(runGuidanceCommand(command, repoA, runtimeDir), "");
+        assert.match(runGuidanceCommand(command, repoB, runtimeDir), /Satori MCP: search_codebase/);
+
+        const uid = execFileSync("id", ["-u"], { encoding: "utf8" }).trim();
+        const stampDir = path.join(runtimeDir, `satori-codex-guidance.${uid}`);
+        assert.equal(fs.statSync(stampDir).isDirectory(), true);
+        assert.equal(fs.statSync(stampDir).mode & 0o777, 0o700);
     });
 });
 

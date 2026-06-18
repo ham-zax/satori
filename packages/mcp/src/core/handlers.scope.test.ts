@@ -1111,6 +1111,135 @@ test('sortGroupedSearchResults preserves exactMatchPinned provenance when exact 
     });
 });
 
+test('handleSearchCode debug exposes tracked lexical scan caps when the bounded file scan truncates recovery', async () => {
+    await withTempRepo(async (repoPath) => {
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        const trackedPaths = Array.from({ length: 129 }, (_, index) => {
+            const relativePath = `src/file-${String(index).padStart(3, '0')}.ts`;
+            fs.writeFileSync(
+                path.join(repoPath, relativePath),
+                `export const TRACKED_NEEDLE_${index} = "trackedneedle";\n`,
+                'utf8',
+            );
+            return relativePath;
+        });
+
+        const handlers = createHandlers(repoPath, []);
+        (handlers as any).context.getTrackedRelativePaths = () => trackedPaths;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is trackedneedle emitted',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 20,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.enabled, true);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.trackedPathCount, 129);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.filesConsidered, 128);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.filesScanned, 128);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.cappedByFiles, true);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.cappedByBytes, false);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.returnedResults, 16);
+    });
+});
+
+test('handleSearchCode tracked lexical supplement respects ignore rules and deterministic operators', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/path-scoped.test.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, relativePath),
+            [
+                'describe("tracked lexical evidence", () => {',
+                '  it("keeps exact span metadata", () => {',
+                '    const span = { startLine: 7, endColumn: 42 };',
+                '    assert.equal(span.endColumn, 42);',
+                '  });',
+                '});',
+            ].join('\n'),
+            'utf8',
+        );
+
+        const cases = [
+            {
+                name: 'active ignore rule',
+                query: `path:${relativePath} endColumn`,
+                ignorePatterns: [relativePath],
+            },
+            {
+                name: 'lang operator',
+                query: `lang:javascript path:${relativePath} endColumn`,
+            },
+            {
+                name: 'exclude path operator',
+                query: `path:${relativePath} -path:${relativePath} endColumn`,
+            },
+            {
+                name: 'exclude token operator',
+                query: `path:${relativePath} exclude:endColumn endColumn`,
+            },
+            {
+                name: 'must token operator',
+                query: `path:${relativePath} must:missing endColumn`,
+            },
+        ];
+
+        for (const testCase of cases) {
+            const handlers = createHandlers(repoPath, []);
+            (handlers as any).context.getTrackedRelativePaths = () => [relativePath];
+            (handlers as any).context.getActiveIgnorePatterns = () => testCase.ignorePatterns || [];
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: testCase.query,
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok', testCase.name);
+            assert.equal(payload.results.length, 0, testCase.name);
+            assert.equal(payload.hints?.debugSearch?.trackedLexical?.enabled, true, testCase.name);
+        }
+    });
+});
+
+test('handleSearchCode ignores tracked lexical paths that resolve outside the repo root', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, []);
+        (handlers as any).context.getTrackedRelativePaths = () => ['../escape.ts'];
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'endColumn',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 0);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.enabled, true);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.trackedPathCount, 1);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.filesConsidered, 0);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.filesScanned, 0);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.returnedResults, 0);
+    });
+});
+
 test('handleSearchCode repairs symbol-only file-owner results to tighter outline symbols with strong evidence', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {

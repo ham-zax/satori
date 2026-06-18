@@ -123,28 +123,41 @@ async function withNavigationEnv(
     }
 }
 
-async function writeTestNavigation(stateRoot: string): Promise<{
+async function removeJsonSidecars(stateRoot: string, normalizedRootPath: string): Promise<void> {
+    const sqlitePath = resolveNavigationSqlitePath(stateRoot, normalizedRootPath);
+    const rootPath = path.dirname(sqlitePath);
+    await fs.promises.rm(path.join(rootPath, 'manifest.json'), { force: true });
+    await fs.promises.rm(path.join(rootPath, 'symbols'), { recursive: true, force: true });
+    await fs.promises.rm(path.join(rootPath, 'relationships'), { recursive: true, force: true });
+}
+
+async function writeTestNavigation(stateRoot: string, options: {
+    functionName?: string;
+    fileHash?: string;
+} = {}): Promise<{
     fileOwner: SymbolRecord;
     login: SymbolRecord;
     registryManifestHash: string;
 }> {
+    const functionName = options.functionName || 'login';
+    const fileHash = options.fileHash || 'hash-auth';
     const fileOwner = createSynthesizedFileSymbol({
         relativePath: 'src/auth.ts',
         language: 'typescript',
-        content: 'export function login() { return true; }\n',
-        fileHash: 'hash-auth',
+        content: `export function ${functionName}() { return true; }\n`,
+        fileHash,
         extractorVersion: 'extractor-v1',
     });
     const login = createFunctionSymbol({
         file: 'src/auth.ts',
-        name: 'login',
+        name: functionName,
         startLine: 1,
         endLine: 1,
-        fileHash: 'hash-auth',
+        fileHash,
     });
     const registry = buildSymbolRegistry({
         manifest: manifest([
-            { path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 2 },
+            { path: 'src/auth.ts', hash: fileHash, language: 'typescript', symbolCount: 2 },
         ]),
         symbols: [fileOwner, login],
     });
@@ -206,11 +219,7 @@ test('RuntimeNavigationStore keeps JSON as the serving backend even when SQLite 
             normalizedRootPath: '/repo',
         });
 
-        const sqlitePath = resolveNavigationSqlitePath(stateRoot, '/repo');
-        const rootPath = path.dirname(sqlitePath);
-        await fs.promises.rm(path.join(rootPath, 'manifest.json'), { force: true });
-        await fs.promises.rm(path.join(rootPath, 'symbols'), { recursive: true, force: true });
-        await fs.promises.rm(path.join(rootPath, 'relationships'), { recursive: true, force: true });
+        await removeJsonSidecars(stateRoot, '/repo');
 
         const store = new RuntimeNavigationStore();
         const byInstance = await store.getSymbolByInstanceId({
@@ -222,7 +231,7 @@ test('RuntimeNavigationStore keeps JSON as the serving backend even when SQLite 
     });
 });
 
-test('RuntimeNavigationStore serves SQLite when explicit sqlite backend is selected', async () => {
+test('RuntimeNavigationStore serves SQLite when explicit sqlite backend is selected and JSON parity is proven', async () => {
     await withTempDir(async (stateRoot) => {
         const { login } = await writeTestNavigation(stateRoot);
         await importNavigationToSqlite({
@@ -230,14 +239,14 @@ test('RuntimeNavigationStore serves SQLite when explicit sqlite backend is selec
             normalizedRootPath: '/repo',
         });
 
-        const sqlitePath = resolveNavigationSqlitePath(stateRoot, '/repo');
-        const rootPath = path.dirname(sqlitePath);
-        await fs.promises.rm(path.join(rootPath, 'manifest.json'), { force: true });
-        await fs.promises.rm(path.join(rootPath, 'symbols'), { recursive: true, force: true });
-        await fs.promises.rm(path.join(rootPath, 'relationships'), { recursive: true, force: true });
-
+        const warnings: string[] = [];
         const store = new RuntimeNavigationStore({
             servingBackend: 'sqlite',
+            logger: {
+                warn: (message: string) => {
+                    warnings.push(message);
+                },
+            },
         });
         const byInstance = await store.getSymbolByInstanceId({
             stateRoot,
@@ -246,6 +255,70 @@ test('RuntimeNavigationStore serves SQLite when explicit sqlite backend is selec
         });
         assert.equal(byInstance.status, 'ok');
         assert.equal(byInstance.symbol?.symbolInstanceId, login.symbolInstanceId);
+        assert.deepEqual(warnings, []);
+    });
+});
+
+test('RuntimeNavigationStore does not serve SQLite when canonical JSON sidecars are missing', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { login } = await writeTestNavigation(stateRoot);
+        await importNavigationToSqlite({
+            stateRoot,
+            normalizedRootPath: '/repo',
+        });
+        await removeJsonSidecars(stateRoot, '/repo');
+
+        const store = new RuntimeNavigationStore({
+            servingBackend: 'sqlite',
+            logger: { warn: () => undefined },
+        });
+        const byInstance = await store.getSymbolByInstanceId({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolInstanceId: login.symbolInstanceId,
+        });
+        assert.equal(byInstance.status, 'missing');
+    });
+});
+
+test('RuntimeNavigationStore does not serve SQLite when canonical JSON relationships are missing', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { login, registryManifestHash } = await writeTestNavigation(stateRoot);
+        await importNavigationToSqlite({
+            stateRoot,
+            normalizedRootPath: '/repo',
+        });
+
+        const sqlitePath = resolveNavigationSqlitePath(stateRoot, '/repo');
+        const rootPath = path.dirname(sqlitePath);
+        await fs.promises.rm(path.join(rootPath, 'relationships'), { recursive: true, force: true });
+
+        const warnings: string[] = [];
+        const store = new RuntimeNavigationStore({
+            servingBackend: 'sqlite',
+            logger: {
+                warn: (message: string) => {
+                    warnings.push(message);
+                },
+            },
+        });
+        const byInstance = await store.getSymbolByInstanceId({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolInstanceId: login.symbolInstanceId,
+        });
+        assert.equal(byInstance.status, 'ok');
+        assert.equal(byInstance.symbol?.symbolInstanceId, login.symbolInstanceId);
+
+        const relationships = await store.getRelationships({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: registryManifestHash,
+        });
+        assert.equal(relationships.status, 'missing');
+        assert.match(relationships.reason, /relationship/i);
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0] || '', /canonical JSON relationships are unavailable/);
     });
 });
 
@@ -272,6 +345,118 @@ test('RuntimeNavigationStore falls back to JSON and warns when explicit sqlite b
         assert.equal(warnings.length, 1);
         assert.match(warnings[0] || '', /SQLite backend fallback to JSON/);
         assert.match(warnings[0] || '', /navigation sqlite database is missing/);
+    });
+});
+
+test('RuntimeNavigationStore falls back to JSON when SQLite cache parity mismatches', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { registryManifestHash } = await writeTestNavigation(stateRoot);
+        await importNavigationToSqlite({
+            stateRoot,
+            normalizedRootPath: '/repo',
+        });
+
+        const sqlitePath = resolveNavigationSqlitePath(stateRoot, '/repo');
+        const database = new DatabaseSync(sqlitePath);
+        try {
+            database.exec('DELETE FROM relationships');
+        } finally {
+            database.close();
+        }
+
+        const warnings: string[] = [];
+        const store = new RuntimeNavigationStore({
+            servingBackend: 'sqlite',
+            logger: {
+                warn: (message: string) => {
+                    warnings.push(message);
+                },
+            },
+        });
+        const relationships = await store.getRelationships({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: registryManifestHash,
+        });
+        assert.equal(relationships.status, 'ok');
+        assert.equal(relationships.records.length, 1);
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0] || '', /SQLite parity mismatch: relationship_records/);
+    });
+});
+
+test('RuntimeNavigationStore falls back to JSON when SQLite cache is stale', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { login: staleLogin } = await writeTestNavigation(stateRoot);
+        await importNavigationToSqlite({
+            stateRoot,
+            normalizedRootPath: '/repo',
+        });
+        const { login: currentLogin } = await writeTestNavigation(stateRoot, {
+            functionName: 'logout',
+            fileHash: 'hash-auth-current',
+        });
+
+        const warnings: string[] = [];
+        const store = new RuntimeNavigationStore({
+            servingBackend: 'sqlite',
+            logger: {
+                warn: (message: string) => {
+                    warnings.push(message);
+                },
+            },
+        });
+        const currentByInstance = await store.getSymbolByInstanceId({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolInstanceId: currentLogin.symbolInstanceId,
+        });
+        assert.equal(currentByInstance.status, 'ok');
+        assert.equal(currentByInstance.symbol?.symbolInstanceId, currentLogin.symbolInstanceId);
+
+        const staleByInstance = await store.getSymbolByInstanceId({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolInstanceId: staleLogin.symbolInstanceId,
+        });
+        assert.equal(staleByInstance.status, 'ok');
+        assert.equal(staleByInstance.symbol, null);
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0] || '', /SQLite registry manifest hash does not match canonical JSON/);
+    });
+});
+
+test('RuntimeNavigationStore invalidates explicit SQLite parity cache when JSON manifest changes', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { login: initialLogin } = await writeTestNavigation(stateRoot);
+        await importNavigationToSqlite({
+            stateRoot,
+            normalizedRootPath: '/repo',
+        });
+
+        const store = new RuntimeNavigationStore({
+            servingBackend: 'sqlite',
+            logger: { warn: () => undefined },
+        });
+        const initialByInstance = await store.getSymbolByInstanceId({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolInstanceId: initialLogin.symbolInstanceId,
+        });
+        assert.equal(initialByInstance.status, 'ok');
+        assert.equal(initialByInstance.symbol?.symbolInstanceId, initialLogin.symbolInstanceId);
+
+        const { login: currentLogin } = await writeTestNavigation(stateRoot, {
+            functionName: 'logout',
+            fileHash: 'hash-auth-current',
+        });
+        const currentByInstance = await store.getSymbolByInstanceId({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolInstanceId: currentLogin.symbolInstanceId,
+        });
+        assert.equal(currentByInstance.status, 'ok');
+        assert.equal(currentByInstance.symbol?.symbolInstanceId, currentLogin.symbolInstanceId);
     });
 });
 
@@ -332,6 +517,57 @@ test('RuntimeNavigationStore falls back to JSON and warns when explicit sqlite b
         assert.equal(warnings.length, 1);
         assert.match(warnings[0] || '', /SQLite backend fallback to JSON/);
         assert.match(warnings[0] || '', /synthetic sqlite failure/);
+    });
+});
+
+test('RuntimeNavigationStore falls back to JSON when explicit sqlite compatibility check throws', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { login } = await writeTestNavigation(stateRoot);
+        const jsonStore = new JsonNavigationStore();
+        const warnings: string[] = [];
+        const throwingCompatibilitySqliteStore: NavigationStore = {
+            getManifest(input) {
+                return jsonStore.getManifest(input);
+            },
+            async getSymbolsByFile() {
+                throw new Error('sqlite should not serve symbols');
+            },
+            async getSymbolByInstanceId() {
+                throw new Error('sqlite should not serve symbols');
+            },
+            async getSymbolCandidatesByKey() {
+                throw new Error('sqlite should not serve symbols');
+            },
+            async findOwnerForSpan() {
+                throw new Error('sqlite should not serve symbols');
+            },
+            async getRelationships() {
+                throw new Error('sqlite should not serve relationships');
+            },
+            async getCompatibilityState() {
+                throw new Error('synthetic sqlite compatibility failure');
+            },
+        };
+        const store = new RuntimeNavigationStore({
+            servingBackend: 'sqlite',
+            servingStore: jsonStore,
+            candidateStore: throwingCompatibilitySqliteStore,
+            logger: {
+                warn: (message: string) => {
+                    warnings.push(message);
+                },
+            },
+        });
+
+        const byInstance = await store.getSymbolByInstanceId({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolInstanceId: login.symbolInstanceId,
+        });
+        assert.equal(byInstance.status, 'ok');
+        assert.equal(byInstance.symbol?.symbolInstanceId, login.symbolInstanceId);
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0] || '', /synthetic sqlite compatibility failure/);
     });
 });
 
@@ -486,7 +722,7 @@ test('createRuntimeNavigationStore honors SATORI_NAVIGATION_DUAL_READ for the sh
     });
 });
 
-test('createRuntimeNavigationStore honors SATORI_NAVIGATION_BACKEND=sqlite for the shared default runtime store', async () => {
+test('createRuntimeNavigationStore requires canonical JSON when SATORI_NAVIGATION_BACKEND=sqlite', async () => {
     await withTempDir(async (stateRoot) => {
         const { login } = await writeTestNavigation(stateRoot);
         await importNavigationToSqlite({
@@ -494,11 +730,7 @@ test('createRuntimeNavigationStore honors SATORI_NAVIGATION_BACKEND=sqlite for t
             normalizedRootPath: '/repo',
         });
 
-        const sqlitePath = resolveNavigationSqlitePath(stateRoot, '/repo');
-        const rootPath = path.dirname(sqlitePath);
-        await fs.promises.rm(path.join(rootPath, 'manifest.json'), { force: true });
-        await fs.promises.rm(path.join(rootPath, 'symbols'), { recursive: true, force: true });
-        await fs.promises.rm(path.join(rootPath, 'relationships'), { recursive: true, force: true });
+        await removeJsonSidecars(stateRoot, '/repo');
 
         await withNavigationEnv({
             SATORI_NAVIGATION_BACKEND: 'sqlite',
@@ -509,8 +741,7 @@ test('createRuntimeNavigationStore honors SATORI_NAVIGATION_BACKEND=sqlite for t
                 normalizedRootPath: '/repo',
                 symbolInstanceId: login.symbolInstanceId,
             });
-            assert.equal(byInstance.status, 'ok');
-            assert.equal(byInstance.symbol?.symbolInstanceId, login.symbolInstanceId);
+            assert.equal(byInstance.status, 'missing');
         });
     });
 });

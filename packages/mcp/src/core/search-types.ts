@@ -116,6 +116,15 @@ export interface SearchChunkResult {
         exactLexicalMatch: boolean;
         backendScore?: number;
         backendScoreKind?: "dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown";
+        provenance?: {
+            retrievalPasses: string[];
+            backendScoreKinds: Array<"dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown">;
+            semanticCandidate: boolean;
+            lexicalCandidate: boolean;
+            rerankAdjusted: boolean;
+            exactMatchPinned: boolean;
+            ownerRepairApplied: boolean;
+        };
     };
 }
 
@@ -154,6 +163,15 @@ export interface SearchGroupResult {
             ownerSource: "owner_metadata" | "registry_repair" | "fallback";
             evidenceChunkCount: number;
             supportBoost: number;
+        };
+        provenance?: {
+            retrievalPasses: string[];
+            backendScoreKinds: Array<"dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown">;
+            semanticCandidate: boolean;
+            lexicalCandidate: boolean;
+            rerankAdjusted: boolean;
+            exactMatchPinned: boolean;
+            ownerRepairApplied: boolean;
         };
     };
 }
@@ -214,7 +232,7 @@ export interface SearchNavigationHint {
 }
 
 export interface SearchFreshnessSummary {
-    syncMode: FreshnessDecision["mode"] | "skipped_requires_reindex" | "skipped_indexing";
+    syncMode: FreshnessDecision["mode"];
     lastSyncAt: string | null;
     changedFileCount: number;
     gitDirtyFilesConsidered: boolean;
@@ -243,6 +261,15 @@ export interface SearchDebugHint {
         mode: "dense" | "lexical" | "hybrid";
         scorePolicyKind: "dense_similarity_min" | "topk_only";
         backendScoreKinds: Array<"dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown">;
+    };
+    rankingProvenance: {
+        semanticPassesUsed: string[];
+        lexicalPassesUsed: string[];
+        livePathSupplementUsed: boolean;
+        lexicalFileScanUsed: boolean;
+        rerankApplied: boolean;
+        exactMatchPinningApplied: boolean;
+        registryRepairGroupCount: number;
     };
     passesUsed: string[];
     candidateLimit: number;
@@ -490,12 +517,6 @@ export interface CallGraphTestReferenceResult {
     confidence: number;
 }
 
-export interface CallGraphInvalidSymbolRefResponseEnvelope {
-    supported: false;
-    reason: "invalid_symbol_ref";
-    hints?: NavigationToolHints;
-}
-
 export interface CallGraphTraversalResponseEnvelope {
     status: CallGraphResponseStatus;
     supported: boolean;
@@ -531,9 +552,7 @@ export interface CallGraphTraversalResponseEnvelope {
     };
 }
 
-export type CallGraphResponseEnvelope =
-    | CallGraphInvalidSymbolRefResponseEnvelope
-    | CallGraphTraversalResponseEnvelope;
+export type CallGraphResponseEnvelope = CallGraphTraversalResponseEnvelope;
 
 export interface ReadFileOpenSymbolResponseEnvelope {
     status: Exclude<FileOutlineStatus, "ok">;

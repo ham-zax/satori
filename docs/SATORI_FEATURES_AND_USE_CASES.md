@@ -449,13 +449,13 @@ Why it matters:
 
 ### 24. Clear Tombstones
 
-Satori records clear tombstones to prevent cloud repair from restoring a collection that was intentionally cleared.
+Satori records clear tombstones to persist explicit clear intent and the cleared collection identity across snapshot save/load.
 
 Recent hardening scopes tombstones to collection identity rather than path alone.
 
 Why it matters:
 
-- An intentional clear does not immediately get undone by cloud reconciliation.
+- An intentional clear does not silently reappear as ready local state.
 - A later legitimate re-index of the same path by another session can still repair local state if it uses a new collection identity.
 
 ### 25. Snapshot Manager v3
@@ -1505,16 +1505,16 @@ Why Satori is better:
 
 ## Cloud Index and Reindex Lifecycle Deep Dive
 
-This section describes the operational behavior behind cloud index checks, intelligent deletion, reindex decisions, and recovery. These details are important because Satori keeps two kinds of state:
+This section describes the operational behavior behind cloud collection checks, intelligent deletion, reindex decisions, and recovery. These details are important because Satori keeps two kinds of state:
 
 - remote vector database state in Milvus/Zilliz collections,
 - local state in `~/.satori` snapshots, Merkle sync files, sidecar metadata, and clear tombstones.
 
-The core design rule is conservative: remote operations must be verified before local ready state is removed, and local repair from cloud must be backed by completion proof.
+The core design rule is conservative: remote operations must be verified before local ready state is removed, and steady-state runtime readiness is proven from local snapshot state plus completion proof, not by opportunistic cloud-side snapshot repair.
 
 ### Cloud Collection Discovery
 
-Cloud reconciliation starts by asking the active vector store for collections.
+Explicit lifecycle operations such as create, clear, and force-reindex may ask the active vector store for collections.
 
 The reconcile logic only considers Satori code collections:
 
@@ -1531,37 +1531,9 @@ That field links a remote collection back to the original indexed repository pat
 
 Why this matters:
 
-- Satori can discover indexes that exist in cloud even when local snapshot state is missing.
-- Reconciliation does not rely only on local files.
 - Non-Satori collections in the same Milvus/Zilliz instance are left alone.
-
-### Non-Destructive Cloud Repair
-
-`syncIndexedCodebasesFromCloud()` is intentionally non-destructive.
-
-Its invariant is:
-
-- it may add or repair local snapshot metadata,
-- it must not remove local snapshot entries.
-
-The flow is:
-
-1. List cloud collections.
-2. Keep only Satori code collections.
-3. Query collection metadata to recover `codebasePath`.
-4. Group collection names by codebase path.
-5. Filter out collections covered by matching clear tombstones.
-6. Skip paths that are currently indexing locally.
-7. Validate completion proof for the path.
-8. If proof is valid and local state is not ready, repair local snapshot state as indexed.
-9. Save the local snapshot only if repairs were made.
-
-Why this matters:
-
-- Cloud state can repair missing local ready metadata.
-- Cloud state cannot delete local state during reconcile.
-- In-progress local indexing wins over passive repair.
-- Repair requires proof that indexing actually completed.
+- Collection identity can still be resolved during destructive lifecycle operations.
+- Foreground handlers do not treat cloud collection existence as readiness proof.
 
 ### Completion Marker Documents
 
@@ -1630,17 +1602,17 @@ The tombstone records:
 - cleared timestamp,
 - collection name.
 
-Cloud repair checks tombstones before restoring a local snapshot entry.
+Steady-state foreground handlers do not repair snapshot state from cloud collections. Tombstones persist clear intent and collection identity so explicit maintenance flows do not accidentally blur a user-requested clear with later collection activity.
 
 The important hardening is collection scoping:
 
-- a tombstone blocks repair only for the cleared collection identity,
-- a later legitimate re-index of the same path using a different collection identity can repair local state.
+- a tombstone records exactly which collection identity was cleared,
+- a later legitimate re-index of the same path is treated as a fresh explicit indexing event instead of passive background repair.
 
 Why this matters:
 
-- A user-requested clear is not immediately undone by cloud reconcile.
-- A future valid remote re-index is not suppressed forever just because the path was once cleared.
+- A user-requested clear is not silently re-advertised as ready.
+- A future valid remote re-index is still possible through explicit create/reindex flows.
 
 ### Local Status from Cloud State
 
@@ -1913,8 +1885,8 @@ Why this matters:
 | Only `.gitignore` / `.satoriignore` changed | block unnecessary reindex | `manage_index(action="sync")` |
 | `dropCollection()` times out, probe says absent | proceed with local cleanup | no extra action |
 | `dropCollection()` times out, probe also times out | preserve local state | retry clear/reindex later |
-| Cloud has valid marker but local snapshot missing | repair local ready state | no manual action if reconcile ran |
-| Cloud collection matches clear tombstone | skip repair | create/reindex explicitly if wanted |
+| Cloud has valid marker but local snapshot missing | remain `not_indexed` until explicit create/reindex | run `manage_index(action="create")` or `reindex` |
+| Cloud collection matches clear tombstone | cleared intent remains persisted locally | create/reindex explicitly if wanted |
 | Create validation times out | local state unchanged, retryable error | check backend/network and retry |
 | Force cleanup cannot verify all drops | abort before local mutation | fix backend/delete issue and retry |
 

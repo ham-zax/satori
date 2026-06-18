@@ -59,6 +59,8 @@ import {
 import {
     CallGraphHint,
     CallGraphResponseEnvelope,
+    CallGraphResponseReason,
+    CallGraphResponseStatus,
     FingerprintCompatibilityDiagnostics,
     FileOutlineInput,
     FileOutlineResponseEnvelope,
@@ -135,6 +137,11 @@ const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES = 256 * 1024;
 const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_FILES = 8;
 const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_RESULTS = 8;
 const SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES = 2;
+const SEARCH_TRACKED_LEXICAL_MAX_BYTES = 192 * 1024;
+const SEARCH_TRACKED_LEXICAL_MAX_FILES = 128;
+const SEARCH_TRACKED_LEXICAL_MAX_RESULTS = 16;
+const SEARCH_TRACKED_LEXICAL_CONTEXT_LINES = 2;
+const SEARCH_TRACKED_LEXICAL_TOTAL_BYTES = 2 * 1024 * 1024;
 const SEARCH_AGENT_FIT_NEUTRAL = 1.0;
 const SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER = 1.25;
 const SEARCH_AGENT_FIT_TEST_DEMOTION_RUNTIME = 0.45;
@@ -168,6 +175,7 @@ type SearchCandidate = {
     baseScore: number;
     backendScore: number;
     backendScoreKind: 'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown';
+    backendScoreKindsSeen: Array<'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown'>;
     fusionScore: number;
     lexicalScore: number;
     finalScore: number;
@@ -178,6 +186,9 @@ type SearchCandidate = {
     agentFitReason: string;
     passesMatchedMust: boolean;
     exactLexicalMatch: boolean;
+    exactMatchPinned: boolean;
+    rerankAdjusted: boolean;
+    retrievalPasses: string[];
 };
 
 type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'fallback';
@@ -1059,6 +1070,34 @@ export class ToolHandlers {
         } as SearchResponseEnvelope;
     }
 
+    private buildInvalidSearchRequestPayload(
+        searchContext: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        },
+        message: string,
+        status: SearchResponseEnvelope["status"] = "not_ready",
+        reason?: NonOkReason
+    ): SearchResponseEnvelope {
+        return {
+            status,
+            ...(reason ? { reason } : {}),
+            path: searchContext.path,
+            query: searchContext.query,
+            scope: searchContext.scope,
+            groupBy: searchContext.groupBy,
+            resultMode: searchContext.resultMode,
+            limit: searchContext.limit,
+            freshnessDecision: null,
+            message,
+            results: []
+        } as SearchResponseEnvelope;
+    }
+
     private buildNotReadyFileOutlinePayload(codebasePath: string, file: string, requestedPath: string): FileOutlineResponseEnvelope & Record<string, unknown> {
         return {
             status: 'not_ready',
@@ -1110,6 +1149,24 @@ export class ToolHandlers {
             hints: {
                 create: this.buildCreateHint(requestedPath)
             }
+        };
+    }
+
+    private buildInvalidFileOutlineRequestPayload(
+        requestedPath: string,
+        file: string,
+        message: string,
+        status: FileOutlineStatus = "not_ready",
+        reason?: NonOkReason
+    ): FileOutlineResponseEnvelope {
+        return {
+            status,
+            ...(reason ? { reason } : {}),
+            path: requestedPath,
+            file,
+            outline: null,
+            hasMore: false,
+            message
         };
     }
 
@@ -1184,6 +1241,37 @@ export class ToolHandlers {
                 }
             },
             indexing: this.buildIndexingMetadata(codebasePath)
+        };
+    }
+
+    private buildInvalidCallGraphRequestPayload(
+        context: {
+            path: string;
+            symbolRef: CallGraphSymbolRef;
+            direction: CallGraphDirection;
+            depth: number;
+            limit: number;
+        },
+        message: string,
+        status: CallGraphResponseStatus = "not_ready",
+        reason?: CallGraphResponseReason
+    ): CallGraphResponseEnvelope {
+        return {
+            status,
+            supported: false,
+            ...(reason ? { reason } : {}),
+            path: context.path,
+            symbolRef: context.symbolRef,
+            direction: context.direction,
+            depth: context.depth,
+            limit: context.limit,
+            nodes: [],
+            edges: [],
+            notes: [],
+            notesTruncated: false,
+            totalNoteCount: 0,
+            returnedNoteCount: 0,
+            message
         };
     }
 
@@ -1634,6 +1722,213 @@ export class ToolHandlers {
         }
 
         return results;
+    }
+
+    private shouldRunTrackedLexicalSearch(input: {
+        parsedOperators: ParsedSearchOperators;
+        queryPlan: SearchQueryPlan;
+    }): boolean {
+        if (input.queryPlan.lexicalTerms.length === 0) {
+            return false;
+        }
+        if (input.parsedOperators.path.some((pattern) => {
+            const normalized = this.normalizeRelativePathForIgnoreCheck(pattern);
+            return Boolean(normalized && this.isExactSearchPathFilter(normalized));
+        })) {
+            return true;
+        }
+        return input.queryPlan.intent === 'identifier'
+            || input.queryPlan.referenceSeeking
+            || input.queryPlan.implementationSeeking
+            || input.queryPlan.writerSeeking;
+    }
+
+    private buildTrackedLexicalSearchResults(input: {
+        effectiveRoot: string;
+        parsedOperators: ParsedSearchOperators;
+        queryPlan: SearchQueryPlan;
+        scope: SearchScope;
+        limit: number;
+    }): any[] {
+        if (!this.shouldRunTrackedLexicalSearch(input)) {
+            return [];
+        }
+
+        const getTrackedRelativePaths = (this.context as any).getTrackedRelativePaths;
+        if (typeof getTrackedRelativePaths !== 'function') {
+            return [];
+        }
+
+        const trackedRelativePaths = getTrackedRelativePaths.call(this.context, input.effectiveRoot);
+        if (!Array.isArray(trackedRelativePaths) || trackedRelativePaths.length === 0) {
+            return [];
+        }
+
+        const normalizedExactPathFilters = new Set(
+            input.parsedOperators.path
+                .map((pattern) => this.normalizeRelativePathForIgnoreCheck(pattern))
+                .filter((pattern): pattern is string => Boolean(pattern && this.isExactSearchPathFilter(pattern)))
+        );
+        const lexicalTerms = input.queryPlan.lexicalTerms
+            .map((term) => term.value.toLowerCase())
+            .filter((term) => term.length > 0);
+        const normalizedPaths = trackedRelativePaths
+            .map((relativePath) => this.normalizeRelativePathForIgnoreCheck(relativePath))
+            .filter((relativePath): relativePath is string => Boolean(relativePath));
+        const uniquePaths = Array.from(new Set(normalizedPaths));
+        uniquePaths.sort((a, b) => {
+            const aExact = normalizedExactPathFilters.has(a) ? 1 : 0;
+            const bExact = normalizedExactPathFilters.has(b) ? 1 : 0;
+            if (aExact !== bExact) {
+                return bExact - aExact;
+            }
+            const aPathMatch = lexicalTerms.some((term) => a.toLowerCase().includes(term)) ? 1 : 0;
+            const bPathMatch = lexicalTerms.some((term) => b.toLowerCase().includes(term)) ? 1 : 0;
+            if (aPathMatch !== bPathMatch) {
+                return bPathMatch - aPathMatch;
+            }
+            return a.localeCompare(b);
+        });
+
+        const candidates: Array<{
+            relativePath: string;
+            score: number;
+            exactLexicalMatch: boolean;
+            startLine: number;
+            endLine: number;
+            content: string;
+            language: string;
+        }> = [];
+        let bytesRead = 0;
+        let filesScanned = 0;
+
+        for (const relativePath of uniquePaths) {
+            if (filesScanned >= SEARCH_TRACKED_LEXICAL_MAX_FILES || bytesRead >= SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
+                break;
+            }
+            if (!isLanguageCapabilitySupportedForFilename(relativePath, 'search')) {
+                continue;
+            }
+            if (!this.shouldIncludeCategoryInScope(input.scope, this.classifyPathCategory(relativePath))) {
+                continue;
+            }
+            if (input.parsedOperators.lang.length > 0) {
+                const languageValue = getLanguageIdFromFilename(relativePath, 'text').toLowerCase();
+                if (!input.parsedOperators.lang.includes(languageValue)) {
+                    continue;
+                }
+            }
+            if (input.parsedOperators.path.length > 0 && !this.pathMatchesAnyPattern(relativePath, input.parsedOperators.path)) {
+                continue;
+            }
+            if (input.parsedOperators.excludePath.length > 0 && this.pathMatchesAnyPattern(relativePath, input.parsedOperators.excludePath)) {
+                continue;
+            }
+            if (this.activeIgnorePatternsExcludePath(input.effectiveRoot, relativePath)) {
+                continue;
+            }
+
+            const absolutePath = path.resolve(input.effectiveRoot, relativePath);
+            const rootPrefix = `${path.resolve(input.effectiveRoot)}${path.sep}`;
+            if (!absolutePath.startsWith(rootPrefix)) {
+                continue;
+            }
+
+            let stat: fs.Stats;
+            try {
+                stat = fs.statSync(absolutePath);
+            } catch {
+                continue;
+            }
+            if (!stat.isFile() || stat.size > SEARCH_TRACKED_LEXICAL_MAX_BYTES || bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
+                continue;
+            }
+
+            let content: string;
+            try {
+                content = fs.readFileSync(absolutePath, 'utf8');
+            } catch {
+                continue;
+            }
+            filesScanned += 1;
+            bytesRead += stat.size;
+
+            const lowerContent = content.toLowerCase();
+            const quickMatch = lexicalTerms.length === 0
+                || lexicalTerms.some((term) => lowerContent.includes(term) || relativePath.toLowerCase().includes(term));
+            if (!quickMatch) {
+                continue;
+            }
+
+            const lines = content.split(/\r?\n/);
+            let bestLineIndex = -1;
+            let bestScore = 0;
+            let bestExactLexicalMatch = false;
+            for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+                const evidence = this.scoreCandidateLexicalEvidence(input.queryPlan, {
+                    relativePath,
+                    content: lines[lineIndex],
+                    symbolLabel: '',
+                });
+                if (
+                    evidence.score > bestScore
+                    || (evidence.score === bestScore && evidence.exactLexicalMatch && !bestExactLexicalMatch)
+                ) {
+                    bestScore = evidence.score;
+                    bestExactLexicalMatch = evidence.exactLexicalMatch;
+                    bestLineIndex = lineIndex;
+                }
+            }
+
+            if (bestScore <= 0) {
+                continue;
+            }
+
+            const anchorLineIndex = bestLineIndex >= 0 ? bestLineIndex : 0;
+            const startLine = Math.max(1, anchorLineIndex + 1 - SEARCH_TRACKED_LEXICAL_CONTEXT_LINES);
+            const endLine = Math.min(lines.length, anchorLineIndex + 1 + SEARCH_TRACKED_LEXICAL_CONTEXT_LINES);
+            const windowContent = lines.slice(startLine - 1, endLine).join('\n');
+            const windowEvidence = this.scoreCandidateLexicalEvidence(input.queryPlan, {
+                relativePath,
+                content: windowContent,
+                symbolLabel: '',
+            });
+
+            candidates.push({
+                relativePath,
+                score: windowEvidence.score > 0 ? windowEvidence.score : bestScore,
+                exactLexicalMatch: windowEvidence.exactLexicalMatch || bestExactLexicalMatch,
+                startLine,
+                endLine,
+                content: windowContent,
+                language: getLanguageIdFromFilename(relativePath, 'text'),
+            });
+        }
+
+        candidates.sort((a, b) => {
+            if (a.exactLexicalMatch !== b.exactLexicalMatch) {
+                return a.exactLexicalMatch ? -1 : 1;
+            }
+            if (b.score !== a.score) {
+                return b.score - a.score;
+            }
+            const fileCmp = a.relativePath.localeCompare(b.relativePath);
+            if (fileCmp !== 0) {
+                return fileCmp;
+            }
+            return a.startLine - b.startLine;
+        });
+
+        return candidates.slice(0, Math.min(input.limit, SEARCH_TRACKED_LEXICAL_MAX_RESULTS)).map((candidate) => ({
+            content: candidate.content,
+            relativePath: candidate.relativePath,
+            startLine: candidate.startLine,
+            endLine: candidate.endLine,
+            language: candidate.language,
+            score: candidate.score,
+            backendScore: candidate.score,
+            backendScoreKind: 'lexical_rank',
+        }));
     }
 
     private findBestLivePathLexicalLineIndex(lines: string[], lexicalTerms: SearchLexicalTerm[]): number {
@@ -2893,6 +3188,9 @@ export class ToolHandlers {
     }
 
     private sortSearchCandidates(candidates: SearchCandidate[], exactMatchFirst: boolean, mustMatchesFirst = false): boolean {
+        for (const candidate of candidates) {
+            candidate.exactMatchPinned = false;
+        }
         const topWithoutPinning = candidates.length > 0
             ? [...candidates].sort((a, b) => this.compareSearchCandidates(a, b, { mustMatchesFirst }))[0]
             : undefined;
@@ -2900,7 +3198,26 @@ export class ToolHandlers {
         if (!exactMatchFirst || !topWithoutPinning || candidates.length === 0) {
             return false;
         }
-        return topWithoutPinning.exactLexicalMatch !== candidates[0].exactLexicalMatch;
+        const applied = topWithoutPinning.exactLexicalMatch !== candidates[0].exactLexicalMatch;
+        if (applied) {
+            candidates[0].exactMatchPinned = true;
+        }
+        return applied;
+    }
+
+    private buildSearchCandidateProvenance(candidate: SearchCandidate, ownerSource: SearchOwnerSource = 'fallback') {
+        const retrievalPasses = [...candidate.retrievalPasses].sort();
+        const backendScoreKinds = [...candidate.backendScoreKindsSeen].sort();
+        return {
+            retrievalPasses,
+            backendScoreKinds,
+            semanticCandidate: retrievalPasses.some((passId) => passId === 'primary' || passId === 'expanded'),
+            lexicalCandidate: retrievalPasses.some((passId) => passId === 'lexical_files' || passId === 'live_path')
+                || backendScoreKinds.includes('lexical_rank'),
+            rerankAdjusted: candidate.rerankAdjusted,
+            exactMatchPinned: candidate.exactMatchPinned,
+            ownerRepairApplied: ownerSource === 'registry_repair',
+        };
     }
 
     private isDeclarationSearchGroup(group: SearchGroupResult): boolean {
@@ -2962,6 +3279,7 @@ export class ToolHandlers {
                 baseScore: 0,
                 backendScore: 0,
                 backendScoreKind: 'unknown',
+                backendScoreKindsSeen: ['unknown'],
                 fusionScore: 0,
                 lexicalScore: existing.debug?.lexicalScore || 0,
                 finalScore: existing.score,
@@ -2972,6 +3290,9 @@ export class ToolHandlers {
                 agentFitReason: existing.debug?.agentFitReason || 'neutral',
                 passesMatchedMust: existing.debug?.matchesMust === true,
                 exactLexicalMatch: (existing as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
+                exactMatchPinned: existing.debug?.provenance?.exactMatchPinned === true,
+                rerankAdjusted: existing.debug?.provenance?.rerankAdjusted === true,
+                retrievalPasses: existing.debug?.provenance?.retrievalPasses || [],
             };
             const nextComparable: SearchCandidate = {
                 result: {
@@ -2984,6 +3305,7 @@ export class ToolHandlers {
                 baseScore: 0,
                 backendScore: 0,
                 backendScoreKind: 'unknown',
+                backendScoreKindsSeen: ['unknown'],
                 fusionScore: 0,
                 lexicalScore: group.debug?.lexicalScore || 0,
                 finalScore: group.score,
@@ -2994,6 +3316,9 @@ export class ToolHandlers {
                 agentFitReason: group.debug?.agentFitReason || 'neutral',
                 passesMatchedMust: group.debug?.matchesMust === true,
                 exactLexicalMatch: (group as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
+                exactMatchPinned: group.debug?.provenance?.exactMatchPinned === true,
+                rerankAdjusted: group.debug?.provenance?.rerankAdjusted === true,
+                retrievalPasses: group.debug?.provenance?.retrievalPasses || [],
             };
 
             if (this.compareSearchCandidates(nextComparable, existingComparable) < 0) {
@@ -3819,6 +4144,10 @@ export class ToolHandlers {
             relationshipUnavailableReason?: CallGraphUnavailableReason;
         }
     ): CallGraphHint {
+        if (symbol.kind === 'file') {
+            return { supported: false, reason: 'missing_symbol' };
+        }
+
         if (!this.isCallGraphLanguageSupported(symbol.language, file)) {
             return { supported: false, reason: 'unsupported_language' };
         }
@@ -4160,8 +4489,8 @@ export class ToolHandlers {
             returnedNoteCount: 0,
             sidecar: {
                 builtAt: neighbors.manifest.builtAt,
-                nodeCount: input.registry.symbols.length,
-                edgeCount: neighbors.records.length,
+                nodeCount: nodes.length,
+                edgeCount: edges.length,
             },
         };
     }
@@ -4535,146 +4864,6 @@ Agent instructions:
         }
 
         return { droppedCodebasePath };
-    }
-
-    /**
-     * Non-destructive cloud reconcile for explicitly-invoked maintenance paths.
-     *
-     * Invariant: this method never removes local snapshot entries.
-     * It may only add/repair local metadata when cloud-derived marker proof is valid.
-     */
-    private async syncIndexedCodebasesFromCloud(): Promise<void> {
-        try {
-            console.log(`[SYNC-CLOUD] 🔄 Syncing indexed codebases from Zilliz Cloud...`);
-
-            // Get all collections using the interface method
-            const vectorDb = this.context.getVectorStore();
-
-            // Use the new listCollections method from the interface
-            const collections = await vectorDb.listCollections();
-
-            console.log(`[SYNC-CLOUD] 📋 Found ${collections.length} collections in Zilliz Cloud`);
-
-            if (collections.length === 0) {
-                console.log(`[SYNC-CLOUD] ✅ No collections found in cloud (non-destructive reconcile keeps local snapshot unchanged)`);
-                return;
-            }
-
-            const cloudCodebaseCollections = new Map<string, Set<string>>();
-
-            // Check each collection for codebase path
-            for (const collectionName of collections) {
-                try {
-                    // Skip collections that don't match the code_chunks pattern (support both legacy and new collections)
-                    if (!collectionName.startsWith('code_chunks_') && !collectionName.startsWith('hybrid_code_chunks_')) {
-                        console.log(`[SYNC-CLOUD] ⏭️  Skipping non-code collection: ${collectionName}`);
-                        continue;
-                    }
-
-                    console.log(`[SYNC-CLOUD] 🔍 Checking collection: ${collectionName}`);
-
-                    // Query the first document to get metadata
-                    const results = await vectorDb.query(
-                        collectionName,
-                        '', // Empty filter to get all results
-                        ['metadata'], // Only fetch metadata field
-                        1 // Only need one result to extract codebasePath
-                    );
-
-                    if (results && results.length > 0) {
-                        const firstResult = results[0];
-                        const metadataStr = firstResult.metadata;
-
-                        if (metadataStr) {
-                            try {
-                                const metadata = JSON.parse(metadataStr);
-                                const codebasePath = metadata.codebasePath;
-
-                                if (codebasePath && typeof codebasePath === 'string') {
-                                    console.log(`[SYNC-CLOUD] 📍 Found codebase path: ${codebasePath} in collection: ${collectionName}`);
-                                    const collectionNames = cloudCodebaseCollections.get(codebasePath) ?? new Set<string>();
-                                    collectionNames.add(collectionName);
-                                    cloudCodebaseCollections.set(codebasePath, collectionNames);
-                                } else {
-                                    console.warn(`[SYNC-CLOUD] ⚠️  No codebasePath found in metadata for collection: ${collectionName}`);
-                                }
-                            } catch (parseError) {
-                                console.warn(`[SYNC-CLOUD] ⚠️  Failed to parse metadata JSON for collection ${collectionName}:`, parseError);
-                            }
-                        } else {
-                            console.warn(`[SYNC-CLOUD] ⚠️  No metadata found in collection: ${collectionName}`);
-                        }
-                    } else {
-                        console.log(`[SYNC-CLOUD] ℹ️  Collection ${collectionName} is empty`);
-                    }
-                } catch (collectionError: any) {
-                    console.warn(`[SYNC-CLOUD] ⚠️  Error checking collection ${collectionName}:`, collectionError.message || collectionError);
-                    // Continue with next collection
-                }
-            }
-
-            console.log(`[SYNC-CLOUD] 📊 Found ${cloudCodebaseCollections.size} valid codebases in cloud`);
-
-            let hasChanges = false;
-
-            for (const [cloudCodebasePath, collectionNames] of cloudCodebaseCollections.entries()) {
-                const activeCollectionNames = Array.from(collectionNames)
-                    .filter((collectionName) => (
-                        typeof (this.snapshotManager as any).isCodebaseCleared !== 'function'
-                        || !this.snapshotManager.isCodebaseCleared(cloudCodebasePath, collectionName)
-                    ));
-                if (typeof (this.snapshotManager as any).isCodebaseCleared === 'function'
-                    && activeCollectionNames.length === 0) {
-                    console.log(`[SYNC-CLOUD] ⏭️  Skipping repair for intentionally cleared root '${cloudCodebasePath}'`);
-                    continue;
-                }
-
-                const localInfo = this.snapshotManager.getCodebaseInfo(cloudCodebasePath);
-                if (localInfo?.status === 'indexing') {
-                    console.log(`[SYNC-CLOUD] ⏸️  Skipping repair for indexing root '${cloudCodebasePath}'`);
-                    continue;
-                }
-
-                const proof = await this.validateCompletionProof(cloudCodebasePath);
-                if (proof.outcome !== 'valid' || !proof.marker) {
-                    console.log(`[SYNC-CLOUD] ⚠️  Skipping repair for '${cloudCodebasePath}' due to incomplete proof (${proof.reason || proof.outcome})`);
-                    continue;
-                }
-
-                const isLocallyReady = localInfo?.status === 'indexed' || localInfo?.status === 'sync_completed';
-                const requiresRepair = !isLocallyReady;
-                if (!requiresRepair) {
-                    continue;
-                }
-
-                if (typeof (this.snapshotManager as any).setCodebaseIndexed === 'function') {
-                    this.snapshotManager.setCodebaseIndexed(
-                        cloudCodebasePath,
-                        {
-                            indexedFiles: Number(proof.marker.indexedFiles) || 0,
-                            totalChunks: Number(proof.marker.totalChunks) || 0,
-                            status: 'completed'
-                        },
-                        this.runtimeFingerprint,
-                        'verified'
-                    );
-                    hasChanges = true;
-                    console.log(`[SYNC-CLOUD] ➕ Repaired local snapshot entry: ${cloudCodebasePath}`);
-                }
-            }
-
-            if (hasChanges) {
-                this.snapshotManager.saveCodebaseSnapshot();
-                console.log(`[SYNC-CLOUD] 💾 Saved non-destructive reconcile repairs`);
-            } else {
-                console.log(`[SYNC-CLOUD] ✅ No local snapshot repairs needed`);
-            }
-
-            console.log(`[SYNC-CLOUD] ✅ Cloud sync completed successfully`);
-        } catch (error: any) {
-            console.error(`[SYNC-CLOUD] ❌ Error syncing codebases from cloud:`, formatUnknownError(error));
-            // Don't throw - this is not critical for the main functionality
-        }
     }
 
     public async handleIndexCodebase(args: any) {
@@ -5198,12 +5387,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         const isRankingModeValid = input.rankingMode === 'default' || input.rankingMode === 'auto_changed_first';
 
         if (!isScopeValid || !isResultModeValid || !isGroupByValid || !isRankingModeValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
+            const payload = this.buildInvalidSearchRequestPayload({
+                path: typeof input.path === 'string' ? input.path : '',
+                query: typeof input.query === 'string' ? input.query : '',
+                scope: input.scope,
+                groupBy: input.groupBy,
+                resultMode: input.resultMode,
+                limit: input.limit
+            }, 'Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file. Valid rankingMode: default|auto_changed_first.');
             return {
-                content: [{
-                    type: "text",
-                    text: "Error: Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file. Valid rankingMode: default|auto_changed_first."
-                }],
-                isError: true
+                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                isError: true,
             };
         }
 
@@ -5227,22 +5421,32 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         try {
             const absolutePath = ensureAbsolutePath(input.path);
             if (!fs.existsSync(absolutePath)) {
+                const payload = this.buildInvalidSearchRequestPayload({
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                }, `Path '${absolutePath}' does not exist. search_codebase requires an existing directory root or subdirectory.`, 'not_indexed', 'not_indexed');
                 return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' does not exist. Original input: '${input.path}'`
-                    }],
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                     isError: true
                 };
             }
 
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
+                const payload = this.buildInvalidSearchRequestPayload({
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                }, `Path '${absolutePath}' is not a directory. search_codebase requires a directory root or subdirectory.`, 'not_indexed', 'not_indexed');
                 return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' is not a directory`
-                    }],
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                     isError: true
                 };
             }
@@ -5457,6 +5661,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const backendScoreKinds = new Set<'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown'>();
             let scored: SearchCandidate[] = [];
             let exactMatchPinningApplied = false;
+            const rankingProvenance = {
+                semanticPassesUsed: [] as string[],
+                lexicalPassesUsed: [] as string[],
+                livePathSupplementUsed: false,
+                lexicalFileScanUsed: false,
+                rerankApplied: false,
+                exactMatchPinningApplied: false,
+                registryRepairGroupCount: 0,
+            };
 
             for (let attempt = 0; attempt < maxAttempts; attempt++) {
                 attemptsUsed = attempt + 1;
@@ -5545,7 +5758,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     removedByMust: 0,
                     removedByExclude: 0,
                 };
-                const addPass = (results: any[], passWeight = 1) => {
+                const addPass = (results: any[], passId: string, passWeight = 1) => {
                     for (let i = 0; i < results.length; i++) {
                         const result = results[i];
                         if (!result || typeof result.relativePath !== 'string') continue;
@@ -5567,6 +5780,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                     ? result.backendScore
                                     : (typeof result.score === 'number' ? result.score : 0),
                                 backendScoreKind,
+                                backendScoreKindsSeen: [backendScoreKind],
                                 fusionScore: rrf,
                                 lexicalScore: 0,
                                 finalScore: 0,
@@ -5577,6 +5791,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                 agentFitReason: 'neutral',
                                 passesMatchedMust: false,
                                 exactLexicalMatch: false,
+                                exactMatchPinned: false,
+                                rerankAdjusted: false,
+                                retrievalPasses: [passId],
                             });
                         } else {
                             existing.fusionScore += rrf;
@@ -5589,13 +5806,30 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             }
                             if (typeof result.backendScoreKind === 'string') {
                                 backendScoreKinds.add(result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion');
+                                if (!existing.backendScoreKindsSeen.includes(result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown')) {
+                                    existing.backendScoreKindsSeen.push(result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown');
+                                }
+                            }
+                            if (!existing.retrievalPasses.includes(passId)) {
+                                existing.retrievalPasses.push(passId);
                             }
                         }
                     }
                 };
 
                 for (const pass of successfulPasses) {
-                    addPass(pass.results, 1);
+                    addPass(pass.results, pass.id, 1);
+                }
+                const trackedLexicalResults = this.buildTrackedLexicalSearchResults({
+                    effectiveRoot,
+                    parsedOperators,
+                    queryPlan,
+                    scope: input.scope,
+                    limit: candidateLimit,
+                });
+                if (trackedLexicalResults.length > 0) {
+                    addPass(trackedLexicalResults, 'lexical_files', 1);
+                    passesUsed.add('lexical_files');
                 }
                 if (canSupplementLivePathEvidence) {
                     const livePathResults = this.buildLivePathScopedSearchResults({
@@ -5605,7 +5839,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         changedFiles: observedChangedFilesState.files,
                     });
                     if (livePathResults.length > 0) {
-                        addPass(livePathResults, 1);
+                        addPass(livePathResults, 'live_path', 1);
                         passesUsed.add('live_path');
                     }
                 }
@@ -5685,6 +5919,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 scored = scoredAttempt;
 
                 exactMatchPinningApplied = this.sortSearchCandidates(scored, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
+                rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
 
                 if (parsedOperators.must.length === 0 || scored.length >= input.limit || attempt === maxAttempts - 1 || candidateLimit >= SEARCH_MAX_CANDIDATES) {
                     break;
@@ -5758,6 +5993,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             * rerankSlice[idx].pathMultiplier
                             * rerankSlice[idx].changedFilesMultiplier
                             * rerankSlice[idx].agentFitMultiplier;
+                        rerankSlice[idx].rerankAdjusted = true;
                         rerankerUpdatedCandidates++;
                     }
 
@@ -5774,6 +6010,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             searchDiagnostics.excludedByIgnore = Math.max(0, searchDiagnostics.resultsBeforeFilter - searchDiagnostics.resultsAfterFilter);
             searchDiagnostics.rerankerAttempted = rerankerAttempted;
             searchDiagnostics.rerankerUsed = rerankerApplied;
+            rankingProvenance.semanticPassesUsed = Array.from(passesUsed).filter((passId) => passId === 'primary' || passId === 'expanded').sort();
+            rankingProvenance.lexicalPassesUsed = Array.from(passesUsed).filter((passId) => passId === 'lexical_files' || passId === 'live_path').sort();
+            rankingProvenance.livePathSupplementUsed = passesUsed.has('live_path');
+            rankingProvenance.lexicalFileScanUsed = passesUsed.has('lexical_files');
+            rankingProvenance.rerankApplied = rerankerApplied;
+            rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
             const mustApplied = parsedOperators.must.length > 0;
             const mustSatisfied = !mustApplied || scored.length > 0;
             if (mustApplied && !mustSatisfied) {
@@ -5795,6 +6037,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         scorePolicyKind: queryPlan.scorePolicyKind,
                         backendScoreKinds: Array.from(backendScoreKinds).sort(),
                     },
+                    rankingProvenance,
                     passesUsed: Array.from(passesUsed).sort(),
                     candidateLimit,
                     mustRetry: {
@@ -5874,6 +6117,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             exactLexicalMatch: candidate.exactLexicalMatch,
                             backendScore: candidate.backendScore,
                             backendScoreKind: candidate.backendScoreKind,
+                            provenance: this.buildSearchCandidateProvenance(candidate),
                         }
                     } : {})
                 }));
@@ -6019,6 +6263,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
             for (const group of groups.values()) {
                 exactMatchPinningApplied = this.sortSearchCandidates(group.chunks, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
+                rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
                 const representative = group.chunks[0];
                 const spanStart = Math.min(...group.chunks.map((c) => c.result.startLine || 0));
                 const spanEnd = Math.max(...group.chunks.map((c) => c.result.endLine || 0));
@@ -6044,6 +6289,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const confidence = group.ownerSource === 'owner_metadata' || group.ownerSource === 'registry_repair'
                     ? (symbolKind === 'file' ? 'low' : 'medium')
                     : 'low';
+                if (group.ownerSource === 'registry_repair') {
+                    rankingProvenance.registryRepairGroupCount += 1;
+                }
                 const groupId = ownerSymbolInstanceId
                     || ownerSymbolKey
                     || this.buildFallbackGroupId(representative.result.relativePath, span);
@@ -6114,6 +6362,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                 evidenceChunkCount: group.chunks.length,
                                 supportBoost,
                             },
+                            provenance: this.buildSearchCandidateProvenance(representative, group.ownerSource),
                         }
                     } : {})
                 });
@@ -6215,11 +6464,16 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
+            const payload = this.buildInvalidSearchRequestPayload({
+                path: typeof input.path === 'string' ? ensureAbsolutePath(input.path) : '',
+                query: typeof input.query === 'string' ? input.query : '',
+                scope: input.scope,
+                groupBy: input.groupBy,
+                resultMode: input.resultMode,
+                limit: input.limit
+            }, `Unexpected search_codebase failure: ${errorMessage}`, 'not_ready');
             return {
-                content: [{
-                    type: "text",
-                    text: `Error searching code: ${errorMessage} Please check if the codebase has been indexed first.`
-                }],
+                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                 isError: true
             };
         }
@@ -6240,22 +6494,30 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const normalizedFile = this.normalizeRelativeFilePath(args.file);
 
             if (!fs.existsSync(absoluteRoot)) {
+                const payload = this.buildInvalidFileOutlineRequestPayload(
+                    absoluteRoot,
+                    normalizedFile,
+                    `Path '${absoluteRoot}' does not exist. file_outline requires an indexed codebase directory root.`,
+                    'not_indexed',
+                    'not_indexed'
+                );
                 return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absoluteRoot}' does not exist.`
-                    }],
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                     isError: true
                 };
             }
 
             const rootStat = fs.statSync(absoluteRoot);
             if (!rootStat.isDirectory()) {
+                const payload = this.buildInvalidFileOutlineRequestPayload(
+                    absoluteRoot,
+                    normalizedFile,
+                    `Path '${absoluteRoot}' is not a directory. file_outline requires an indexed codebase directory root.`,
+                    'not_indexed',
+                    'not_indexed'
+                );
                 return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absoluteRoot}' is not a directory`
-                    }],
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                     isError: true
                 };
             }
@@ -6292,11 +6554,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const absoluteFile = path.resolve(effectiveRoot, normalizedFile);
             const relativeToRoot = path.relative(effectiveRoot, absoluteFile);
             if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
+                const payload = this.buildInvalidFileOutlineRequestPayload(
+                    effectiveRoot,
+                    normalizedFile,
+                    `File '${normalizedFile}' must be inside codebase root '${effectiveRoot}'.`,
+                    'not_found'
+                );
                 return {
-                    content: [{
-                        type: "text",
-                        text: `Error: File '${normalizedFile}' must be inside codebase root '${effectiveRoot}'.`
-                    }],
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                     isError: true
                 };
             }
@@ -6507,11 +6772,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
             };
         } catch (error: any) {
+            const payload = this.buildInvalidFileOutlineRequestPayload(
+                typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
+                typeof args?.file === 'string' ? this.normalizeRelativeFilePath(args.file) : '',
+                `Unexpected file_outline failure: ${error?.message || error}`,
+                'not_ready'
+            );
             return {
-                content: [{
-                    type: "text",
-                    text: `Error building file outline: ${error?.message || error}`
-                }],
+                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                 isError: true
             };
         }
@@ -6525,15 +6793,27 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         const depth = Number.isFinite(args?.depth) ? Math.max(1, Math.min(3, Number(args.depth))) : 1;
         const limit = Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 20;
         const symbolRef = args?.symbolRef as CallGraphSymbolRef | undefined;
+        const normalizedSymbolRef: CallGraphSymbolRef = {
+            file: typeof symbolRef?.file === 'string' ? this.normalizeRelativeFilePath(symbolRef.file) : '',
+            symbolId: typeof symbolRef?.symbolId === 'string' ? symbolRef.symbolId : '',
+            ...(typeof symbolRef?.symbolLabel === 'string' ? { symbolLabel: symbolRef.symbolLabel } : {}),
+            ...(symbolRef?.span ? { span: symbolRef.span } : {}),
+        };
+        const invalidSymbolRefContext = {
+            path: typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
+            symbolRef: normalizedSymbolRef,
+            direction,
+            depth,
+            limit,
+        };
 
         if (!symbolRef || typeof symbolRef.file !== 'string' || typeof symbolRef.symbolId !== 'string') {
-            const payload: CallGraphResponseEnvelope = {
-                supported: false,
-                reason: 'invalid_symbol_ref',
-                hints: {
-                    message: "symbolRef with { file, symbolId } is required."
-                }
-            };
+            const payload = this.buildInvalidCallGraphRequestPayload(
+                invalidSymbolRefContext,
+                'symbolRef with { file, symbolId } is required.',
+                'not_found',
+                'invalid_symbol_ref'
+            );
             return {
                 content: [{
                     type: "text",
@@ -6546,22 +6826,40 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         try {
             const absolutePath = ensureAbsolutePath(args?.path);
             if (!fs.existsSync(absolutePath)) {
+                const payload = this.buildInvalidCallGraphRequestPayload(
+                    {
+                        path: absolutePath,
+                        symbolRef: normalizedSymbolRef,
+                        direction,
+                        depth,
+                        limit,
+                    },
+                    `Path '${absolutePath}' does not exist. call_graph requires an indexed codebase directory root.`,
+                    'not_indexed',
+                    'not_indexed'
+                );
                 return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' does not exist.`
-                    }],
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                     isError: true
                 };
             }
 
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
+                const payload = this.buildInvalidCallGraphRequestPayload(
+                    {
+                        path: absolutePath,
+                        symbolRef: normalizedSymbolRef,
+                        direction,
+                        depth,
+                        limit,
+                    },
+                    `Path '${absolutePath}' is not a directory. call_graph requires an indexed codebase directory root.`,
+                    'not_indexed',
+                    'not_indexed'
+                );
                 return {
-                    content: [{
-                        type: "text",
-                        text: `Error: Path '${absolutePath}' is not a directory`
-                    }],
+                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
                     isError: true
                 };
             }
@@ -6962,7 +7260,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             return {
                 content: [{
                     type: "text",
-                    text: `Error generating call graph: ${error.message || error}`
+                    text: JSON.stringify(this.buildInvalidCallGraphRequestPayload(
+                        {
+                            path: typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
+                            symbolRef: normalizedSymbolRef,
+                            direction,
+                            depth,
+                            limit,
+                        },
+                        `Unexpected call_graph failure: ${error?.message || error}`,
+                        'not_ready'
+                    ), null, 2)
                 }],
                 isError: true
             };

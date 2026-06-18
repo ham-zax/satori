@@ -7,6 +7,7 @@ import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 import { SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES } from './search-constants.js';
+import { createLocalOnlyContext } from '../server/provider-runtime.js';
 import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRecordsForFile,
@@ -960,6 +961,60 @@ test('handleSearchCode ranks natural-language emitted warning site above generic
     });
 });
 
+test('handleSearchCode supplements exact warning-code retrieval from tracked lexical evidence when semantic search misses it', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'packages/mcp/src/core/handlers.ts';
+        fs.mkdirSync(path.join(repoPath, 'packages/mcp/src/core'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, relativePath),
+            [
+                'export async function handleSearchCode() {',
+                '  return [',
+                '    SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,',
+                '    SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,',
+                '  ];',
+                '}',
+            ].join('\n'),
+            'utf8'
+        );
+
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'private buildReindexHint(codebasePath: string) { return { tool: "manage_index" }; }',
+                relativePath: 'packages/mcp/src/core/helpers.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_build_reindex_hint',
+                symbolLabel: 'method buildReindexHint(codebasePath: string)',
+            },
+        ]);
+
+        (handlers as any).context.getTrackedRelativePaths = () => [relativePath];
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is SEARCH_PARTIAL_INDEX emitted',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results[0].file, relativePath);
+        assert.match(payload.results[0].preview, /SEARCH_PARTIAL_INDEX/);
+        assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
+        assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
+        assert.equal(payload.results[0].debug?.provenance?.semanticCandidate, false);
+        assert.equal(payload.results[0].debug?.provenance?.lexicalCandidate, true);
+    });
+});
+
 test('handleSearchCode repairs symbol-only file-owner results to tighter outline symbols with strong evidence', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {
@@ -1207,6 +1262,9 @@ test('handleSearchCode does not emit method graph hints from weak graph-capable 
             assert.equal(payload.status, 'ok');
             assert.equal(payload.results[0].symbolInstanceId, fileOwner.symbolInstanceId);
             assert.equal(payload.results[0].symbolKind, 'file');
+            assert.equal(payload.results[0].callGraphHint.supported, false);
+            assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol');
+            assert.equal(payload.results[0].nextActions, undefined);
             assert.notEqual(payload.results[0].callGraphHint?.symbolRef?.symbolId, emitLogin.symbolInstanceId);
             assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'owner_metadata');
         });
@@ -2315,6 +2373,161 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence after s
         assert.match(payload.results[0].preview, /endColumn/);
         assert.equal(payload.warnings?.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), undefined);
         assert.equal(payload.hints.debugSearch.passesUsed.includes('live_path'), true);
+    });
+});
+
+test('handleSearchCode supplements exact path-scoped tracked test evidence without dirty-file live path fallback', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/path-scoped.test.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, relativePath),
+            [
+                'describe("tracked lexical evidence", () => {',
+                '  it("keeps exact span metadata", () => {',
+                '    const span = { startLine: 7, endColumn: 42 };',
+                '    assert.equal(span.endColumn, 42);',
+                '  });',
+                '});',
+            ].join('\n'),
+            'utf8'
+        );
+
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const unrelated = true;',
+                relativePath: 'src/unrelated.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_unrelated',
+                symbolLabel: 'const unrelated',
+            }
+        ]);
+
+        (handlers as any).context.getTrackedRelativePaths = () => [relativePath, 'src/unrelated.ts'];
+        (handlers as any).syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        };
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set<string>()
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: `path:${relativePath} endColumn`,
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, relativePath);
+        assert.match(payload.results[0].preview, /endColumn/);
+        assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('live_path'), false);
+        assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
+        assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
+        assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('live_path'), false);
+        assert.equal(payload.warnings?.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), undefined);
+    });
+});
+
+test('handleSearchCode uses real synchronizer tracked paths for exact path-scoped lexical evidence', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/path-scoped-real.test.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, relativePath),
+            [
+                'describe("tracked lexical evidence", () => {',
+                '  it("keeps exact span metadata", () => {',
+                '    const span = { startLine: 7, endColumn: 42 };',
+                '    assert.equal(span.endColumn, 42);',
+                '  });',
+                '});',
+            ].join('\n'),
+            'utf8'
+        );
+
+        const context = createLocalOnlyContext({
+            name: 'test',
+            version: '0.0.0',
+            encoderProvider: 'VoyageAI',
+            encoderModel: 'voyage-4-large',
+            encoderOutputDimension: 1024,
+            milvusEndpoint: 'http://127.0.0.1:19530',
+        }) as any;
+        await context.recreateSynchronizerForCodebase(repoPath);
+        context.semanticSearch = async () => ([
+            {
+                content: 'export const unrelated = true;',
+                relativePath: 'src/unrelated.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_unrelated',
+                symbolLabel: 'const unrelated',
+            }
+        ]);
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES_NO_RERANK,
+            () => Date.parse('2026-01-01T01:00:00.000Z')
+        );
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: `path:${relativePath} endColumn`,
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, relativePath);
+        assert.match(payload.results[0].preview, /endColumn/);
+        assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
+        assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
+        assert.equal(payload.results[0].debug?.provenance?.semanticCandidate, false);
+        assert.equal(payload.results[0].debug?.provenance?.lexicalCandidate, true);
     });
 });
 

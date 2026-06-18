@@ -254,7 +254,7 @@ Inputs/defaults:
 Outputs:
 - JSON envelope with `status` plus graph payload.
 - Status variants via handler mapping: `ok|not_found|unsupported|not_ready|requires_reindex|not_indexed`.
-- Malformed direct handler calls can return `{supported:false, reason:"invalid_symbol_ref"}`; normal MCP tool execution rejects malformed `symbolRef` at schema validation before dispatch.
+- Malformed direct handler calls fail as a normal JSON envelope with `status:"not_found"`, `reason:"invalid_symbol_ref"`, and empty `nodes`/`edges`/`notes`; normal MCP tool execution rejects malformed `symbolRef` at schema validation before dispatch.
 - `testReferences` are static call-graph references from test-like files to returned symbols. They are investigation hints only; they do not prove runtime coverage, assertion coverage, or that a test executed a path.
 
 Warnings/hints:
@@ -442,7 +442,7 @@ Recent vs legacy:
 - Trigger: grouped search result construction.
 - Effect: returns `{supported:true,symbolRef,validated:true,validatedAt,sidecarBuiltAt}` when graph readiness is established through a compatible relationship sidecar bound to the loaded symbol registry manifest hash. On symbol-owned flows, `symbolRef.symbolId` carries the owner `symbolInstanceId`. Otherwise returns `{supported:false,reason}`.
 - Observability: `results[].callGraphHint`.
-- Determinism: supported symbolRef uses deterministic registry file/span metadata on symbol-owned flows; unsupported search hint reasons are limited to `missing_symbol`, `unsupported_language`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, and `stale_symbol_ref`. The direct `call_graph` handler also has the public `invalid_symbol_ref` reason for malformed direct handler input. Legacy low-level sidecar diagnostics may still use `missing_sidecar`, but current public handlers normalize unavailable navigation state to the precise registry/relationship reasons above.
+- Determinism: supported symbolRef uses deterministic registry file/span metadata on symbol-owned flows; unsupported search hint reasons are limited to `missing_symbol`, `unsupported_language`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, and `stale_symbol_ref`. The direct `call_graph` handler keeps the public `invalid_symbol_ref` reason for malformed direct handler input, but emits it inside the normal call-graph envelope. Legacy low-level sidecar diagnostics may still use `missing_sidecar`, but current public handlers normalize unavailable navigation state to the precise registry/relationship reasons above.
 - Performance: no graph query until explicit `call_graph` call.
 
 2) `navigationFallback`
@@ -648,11 +648,11 @@ Recent vs legacy:
 - Determinism: runtime-vs-indexed fingerprint comparison and gate transitions are deterministic.
 - Performance: cheap metadata check that avoids unsafe reads on incompatible indexes.
 
-8) Cloud-state reconciliation is maintenance-only and non-destructive
-- Trigger: explicit maintenance paths (not foreground read handlers).
-- Effect: may repair/add local metadata only when marker completion proof is valid; never prunes local snapshot membership.
-- Observability: `[SYNC-CLOUD]` logs.
-- Determinism: cloud collection existence is not completion proof; marker-doc validation controls repair eligibility.
+8) Cloud-state snapshot repair is not part of steady-state runtime
+- Trigger: none in the current public runtime path.
+- Effect: foreground handlers and maintenance handlers do not repair local ready state from cloud collection existence alone.
+- Observability: absence of any foreground cloud-reconcile log or handler path; readiness remains gated by local snapshot state plus completion proof.
+- Determinism: cloud collection existence is not completion proof, and explicit create/reindex remains the only recovery path when local ready state is missing or incompatible.
 - Performance: no cloud reconcile overhead on foreground reads.
 
 9) Snapshot persistence hardening (multi-process)

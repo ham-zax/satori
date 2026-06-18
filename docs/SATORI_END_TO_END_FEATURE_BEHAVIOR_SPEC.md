@@ -203,6 +203,7 @@ Common recipes:
 Behavior:
 - Trigger: search call.
 - Effect: sync-on-read + multi-pass retrieval + deterministic post-processing.
+- Effect detail: when semantic retrieval under-delivers, exact identifiers, exact path filters, and quoted literal phrases may trigger a bounded tracked-file lexical recovery pass before final ranking/grouping.
 - Observability: envelope + debug hints.
 - Determinism: explicit comparator chains and bounded loops.
 - Performance: bounded candidates, TTL cache, rerank top-K, coalesced freshness.
@@ -356,6 +357,13 @@ Behavior:
 - Observability: `hints.debugSearch.filterSummary`.
 - Determinism: fixed order in candidate loop.
 - Performance: hard filters prune early before rerank/group/diversity.
+
+5a) Bounded tracked-file lexical recovery
+- Trigger: exact path filters, identifier-style lookups, quoted literal phrases, or implementation/reference/writer-seeking queries.
+- Effect: scan currently tracked indexable files under active ignore rules with hard file/byte/result caps, recover exact lexical evidence when vector retrieval misses it, and merge those hits into normal ranking/grouping with provenance `lexical_files`.
+- Observability: `hints.debugSearch.passesUsed`, `hints.debugSearch.trackedLexical`, per-result `debug.provenance.retrievalPasses`, and `queryIntent.reasons` such as `quoted_literal_query`.
+- Determinism: tracked path set is normalized/sorted, exact path filters sort first, and lexical candidates tie-break by exact-match flag -> score -> file -> line.
+- Performance: bounded by hard caps; this is not an unbounded whole-repo grep fallback.
 
 6) Must retry
 - Trigger: active `must:` constraints and insufficient results.

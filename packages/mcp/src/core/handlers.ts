@@ -225,6 +225,7 @@ type SearchQueryPlan = {
     intent: SearchQueryIntent;
     confidence: SearchIntentConfidence;
     reasons: string[];
+    quotedLiteralPhrases: string[];
     referenceSeeking: boolean;
     testSeeking: boolean;
     implementationSeeking: boolean;
@@ -1739,13 +1740,16 @@ export class ToolHandlers {
         parsedOperators: ParsedSearchOperators;
         queryPlan: SearchQueryPlan;
     }): boolean {
-        if (input.queryPlan.lexicalTerms.length === 0) {
+        if (input.queryPlan.lexicalTerms.length === 0 && input.queryPlan.quotedLiteralPhrases.length === 0) {
             return false;
         }
         if (input.parsedOperators.path.some((pattern) => {
             const normalized = this.normalizeRelativePathForIgnoreCheck(pattern);
             return Boolean(normalized && this.isExactSearchPathFilter(normalized));
         })) {
+            return true;
+        }
+        if (input.queryPlan.quotedLiteralPhrases.length > 0) {
             return true;
         }
         return input.queryPlan.intent === 'identifier'
@@ -2428,6 +2432,22 @@ export class ToolHandlers {
             || /\d/.test(trimmed);
     }
 
+    private extractQuotedLiteralPhrases(query: string): string[] {
+        const phrases = new Set<string>();
+        const pattern = /(["'`])([^"'`]+?)\1/g;
+        let match: RegExpExecArray | null;
+        while ((match = pattern.exec(query)) !== null) {
+            const normalized = match[2]
+                .trim()
+                .replace(/\s+/g, ' ')
+                .toLowerCase();
+            if (normalized.length >= 3) {
+                phrases.add(normalized);
+            }
+        }
+        return Array.from(phrases.values()).slice(0, 4);
+    }
+
     private buildSearchQueryPlan(semanticQuery: string): SearchQueryPlan {
         const hybridEnabled = this.runtimeFingerprint.schemaVersion.startsWith('hybrid');
         const tokens = semanticQuery
@@ -2447,6 +2467,8 @@ export class ToolHandlers {
             && /^[a-z][a-z0-9]{2,63}$/.test(tokens[0])
             && !SEARCH_QUERY_STOPWORDS.has(normalizedTokens[0] || '');
         const exactPinEligible = identifierTokens.some((token) => /[A-Z_]/.test(token));
+        const quotedLiteralPhrases = this.extractQuotedLiteralPhrases(semanticQuery);
+        const quotedLiteralSeeking = quotedLiteralPhrases.length > 0;
         const lexicalSourceTokens = identifierTokens.length > 0 && naturalLanguageTokens.length > 0
             ? tokens
             : (identifierTokens.length > 0 ? identifierTokens : tokens);
@@ -2493,6 +2515,9 @@ export class ToolHandlers {
         if (referenceSeeking) {
             reasons.push('reference_seeking_query');
         }
+        if (quotedLiteralSeeking) {
+            reasons.push('quoted_literal_query');
+        }
         if (testSeeking) {
             reasons.push('test_seeking_query');
         }
@@ -2508,6 +2533,7 @@ export class ToolHandlers {
             intent,
             confidence,
             reasons,
+            quotedLiteralPhrases,
             referenceSeeking,
             testSeeking,
             implementationSeeking,
@@ -2517,7 +2543,9 @@ export class ToolHandlers {
                 ? (intent === 'identifier' ? 'lexical' : 'hybrid')
                 : 'dense',
             scorePolicyKind: 'topk_only',
-            lexicalWeight: intent === 'identifier'
+            lexicalWeight: quotedLiteralSeeking
+                ? 1.35
+                : intent === 'identifier'
                 ? 1.35
                 : intent === 'mixed'
                     ? (referenceSeeking || implementationSeeking || writerSeeking ? 0.30 : 0.10)
@@ -2525,8 +2553,9 @@ export class ToolHandlers {
                         ? 0.60
                         : (referenceSeeking || implementationSeeking || writerSeeking ? 0.18 : 0.00),
             exactMatchPinningEnabled: intent === 'identifier'
+                || quotedLiteralSeeking
                 || (writerSeeking && exactPinEligible),
-            rerankAllowed: intent !== 'identifier',
+            rerankAllowed: intent !== 'identifier' && !quotedLiteralSeeking,
         };
     }
 
@@ -2600,7 +2629,7 @@ export class ToolHandlers {
     }
 
     private scoreCandidateLexicalEvidence(plan: SearchQueryPlan, result: any): SearchLexicalEvidence {
-        if (plan.lexicalTerms.length === 0) {
+        if (plan.lexicalTerms.length === 0 && plan.quotedLiteralPhrases.length === 0) {
             return { score: 0, exactLexicalMatch: false };
         }
 
@@ -2612,6 +2641,23 @@ export class ToolHandlers {
         let score = 0;
         let exactLexicalMatch = false;
         const matchedWholeTerms = new Set<string>();
+
+        for (const phrase of plan.quotedLiteralPhrases) {
+            if (symbolLabel.includes(phrase)) {
+                score = Math.max(score, 1.75);
+                exactLexicalMatch = true;
+                continue;
+            }
+            if (pathSegments.some((segment: string) => segment.includes(phrase))) {
+                score = Math.max(score, 1.60);
+                exactLexicalMatch = true;
+                continue;
+            }
+            if (content.includes(phrase)) {
+                score = Math.max(score, 1.70);
+                exactLexicalMatch = true;
+            }
+        }
 
         for (const term of plan.lexicalTerms) {
             const usageKind = plan.referenceSeeking ? this.getReferenceUsageKind(content, term.value) : null;

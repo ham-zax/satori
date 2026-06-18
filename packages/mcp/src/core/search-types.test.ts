@@ -10,13 +10,18 @@ import type {
 
 test("navigation response contracts include call_graph invalid symbol refs", () => {
     const payload: CallGraphResponseEnvelope = {
+        status: "not_found",
         supported: false,
         reason: "invalid_symbol_ref",
-        hints: {
-            message: "symbolRef with { file, symbolId } is required."
-        }
+        path: "/repo",
+        symbolRef: { file: "", symbolId: "" },
+        nodes: [],
+        edges: [],
+        notes: [],
+        message: "symbolRef with { file, symbolId } is required."
     };
 
+    assert.equal(payload.status, "not_found");
     assert.equal(payload.supported, false);
     assert.equal(payload.reason, "invalid_symbol_ref");
 });

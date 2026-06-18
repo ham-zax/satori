@@ -615,11 +615,116 @@ test('golden MCP call_graph invalid symbol ref shape', async () => {
         assert.equal(response.isError, true);
         const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
         assert.deepEqual(payload, {
+            status: 'not_found',
             supported: false,
             reason: 'invalid_symbol_ref',
-            hints: {
-                message: 'symbolRef with { file, symbolId } is required.',
+            path: '<repo>',
+            symbolRef: {
+                file: '',
+                symbolId: '',
             },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+            nodes: [],
+            edges: [],
+            notes: [],
+            notesTruncated: false,
+            totalNoteCount: 0,
+            returnedNoteCount: 0,
+            message: 'symbolRef with { file, symbolId } is required.',
+        });
+    }));
+});
+
+test('golden MCP search_codebase invalid root shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const missingRoot = path.join(repoPath, 'missing-root');
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleSearchCode({
+            path: missingRoot,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            rankingMode: 'auto_changed_first',
+            limit: 10,
+        });
+
+        assert.equal(response.isError, true);
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            status: 'not_indexed',
+            reason: 'not_indexed',
+            path: '<repo>/missing-root',
+            query: 'runtime',
+            scope: 'runtime',
+            groupBy: 'symbol',
+            resultMode: 'grouped',
+            limit: 10,
+            freshnessDecision: null,
+            message: "Path '<repo>/missing-root' does not exist. search_codebase requires an existing directory root or subdirectory.",
+            results: [],
+        });
+    }));
+});
+
+test('golden MCP file_outline invalid root shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const missingRoot = path.join(repoPath, 'missing-root');
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleFileOutline({
+            path: missingRoot,
+            file: 'src/runtime.ts',
+        });
+
+        assert.equal(response.isError, true);
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            status: 'not_indexed',
+            reason: 'not_indexed',
+            path: '<repo>/missing-root',
+            file: 'src/runtime.ts',
+            outline: null,
+            hasMore: false,
+            message: "Path '<repo>/missing-root' does not exist. file_outline requires an indexed codebase directory root.",
+        });
+    }));
+});
+
+test('golden MCP call_graph invalid root shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const missingRoot = path.join(repoPath, 'missing-root');
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleCallGraph({
+            path: missingRoot,
+            symbolRef: { file: 'src/runtime.ts', symbolId: 'sym_runtime' },
+        });
+
+        assert.equal(response.isError, true);
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            status: 'not_indexed',
+            supported: false,
+            reason: 'not_indexed',
+            path: '<repo>/missing-root',
+            symbolRef: {
+                file: 'src/runtime.ts',
+                symbolId: 'sym_runtime',
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+            nodes: [],
+            edges: [],
+            notes: [],
+            notesTruncated: false,
+            totalNoteCount: 0,
+            returnedNoteCount: 0,
+            message: "Path '<repo>/missing-root' does not exist. call_graph requires an indexed codebase directory root.",
         });
     }));
 });

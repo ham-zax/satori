@@ -707,6 +707,9 @@ test('handleCallGraph returns the relationship-backed root node with no edges wh
             login.symbolInstanceId,
         ]);
         assert.equal(payload.edges.length, 0);
+        assert.equal(typeof payload.sidecar?.builtAt, 'string');
+        assert.equal(payload.sidecar?.nodeCount, 1);
+        assert.equal(payload.sidecar?.edgeCount, 0);
         assert.deepEqual(payload.notes, []);
     }));
 });
@@ -808,6 +811,9 @@ test('handleCallGraph does not merge legacy notes or test references into relati
         assert.equal(payload.notesTruncated, false);
         assert.equal(payload.totalNoteCount, 0);
         assert.equal(payload.returnedNoteCount, 0);
+        assert.equal(typeof payload.sidecar?.builtAt, 'string');
+        assert.equal(payload.sidecar?.nodeCount, 2);
+        assert.equal(payload.sidecar?.edgeCount, 1);
     }));
 });
 

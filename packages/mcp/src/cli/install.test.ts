@@ -126,6 +126,9 @@ test("install writes managed Codex config block and copies packaged skill", () =
         assert.equal(result.results.length, 1);
         assert.equal(result.results[0]?.client, "codex");
         assert.equal(result.results[0]?.status, "updated");
+        assert.equal(result.results[0]?.skillsChanged, true);
+        assert.equal(result.results[0]?.instructionsChanged, true);
+        assert.equal(result.results[0]?.instructionsPath, path.join(homeDir, ".codex", "AGENTS.md"));
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("[mcp_servers.satori]"), true);
         assert.equal(content.includes(`command = "${process.execPath.replace(/\\/g, "\\\\")}"`), true);
@@ -150,6 +153,14 @@ test("install writes managed Codex config block and copies packaged skill", () =
         assert.equal(launcher.includes("node_modules"), true);
         assert.equal(launcher.includes("dist/index.js"), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md")), true);
+        const codexInstructions = readFile(path.join(homeDir, ".codex", "AGENTS.md"));
+        assert.equal(codexInstructions.includes("<!-- satori-mcp:start -->"), true);
+        assert.equal(codexInstructions.includes("Use Satori primarily for semantic code exploration"), true);
+        assert.equal(codexInstructions.includes("Start with plain-English behavior or ownership queries"), true);
+        assert.equal(codexInstructions.includes("Do not treat call_graph inbound results as sole authority"), true);
+        const codexSkill = readFile(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md"));
+        assert.equal(codexSkill.includes("plain-English semantic code discovery"), true);
+        assert.equal(codexSkill.includes("Do not treat call_graph inbound results as sole authority"), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori-search")), false);
     });
 });
@@ -186,6 +197,13 @@ test("package exposes a single satori bin for npx package execution", () => {
     });
 });
 
+test("packaged Satori skill assets stay identical across CLI and MCP packages", () => {
+    const mcpSkill = readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md"));
+    const cliSkill = readFile(path.join(PACKAGE_ROOT, "..", "cli", "assets", "skills", "satori", "SKILL.md"));
+
+    assert.equal(mcpSkill, cliSkill);
+});
+
 test("install is idempotent for managed Codex config", () => {
     withTempHome((homeDir) => {
         executeInstallCommand({
@@ -202,7 +220,43 @@ test("install is idempotent for managed Codex config", () => {
 
         assert.equal(second.results[0]?.configChanged, false);
         assert.equal(second.results[0]?.skillsChanged, false);
+        assert.equal(second.results[0]?.instructionsChanged, false);
         assert.equal(second.results[0]?.status, "unchanged");
+    });
+});
+
+test("install replaces only the managed Codex AGENTS block and preserves user content", () => {
+    withTempHome((homeDir) => {
+        const agentsPath = path.join(homeDir, ".codex", "AGENTS.md");
+        fs.mkdirSync(path.dirname(agentsPath), { recursive: true });
+        fs.writeFileSync(agentsPath, [
+            "# User Rules",
+            "Keep this introduction.",
+            "",
+            "<!-- satori-mcp:start -->",
+            "# Old Satori Instructions",
+            "old exact-only guidance",
+            "<!-- satori-mcp:end -->",
+            "",
+            "## Local Notes",
+            "Keep this footer.",
+            "",
+        ].join("\n"), "utf8");
+
+        const result = executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        const content = readFile(agentsPath);
+        assert.equal(result.results[0]?.instructionsChanged, true);
+        assert.equal(content.includes("Keep this introduction."), true);
+        assert.equal(content.includes("Keep this footer."), true);
+        assert.equal(content.includes("old exact-only guidance"), false);
+        assert.equal(content.includes("Use Satori primarily for semantic code exploration"), true);
+        assert.equal(content.match(/<!-- satori-mcp:start -->/g)?.length, 1);
+        assert.equal(content.match(/<!-- satori-mcp:end -->/g)?.length, 1);
     });
 });
 
@@ -310,7 +364,8 @@ test("install adds opt-in managed Codex guidance hook and preserves user hooks",
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("# >>> satori-cli managed codex guidance hook start >>>"), true);
         assert.equal(content.includes("# <<< satori-cli managed codex guidance hook end <<<"), true);
-        assert.equal(content.includes("Satori MCP: use search_codebase for plain-English behavior/concept discovery"), true);
+        assert.equal(content.includes("Satori MCP: use search_codebase for semantic ownership/context discovery"), true);
+        assert.equal(content.includes("verify inbound impact with rg/tests"), true);
         assert.equal(content.includes("satori-codex-guidance"), true);
         assert.equal(extractCodexGuidanceCommand(content).startsWith("sh -lc "), true);
         assert.equal(content.includes('command = \'echo "user hook"\''), true);
@@ -334,9 +389,9 @@ test("managed Codex guidance hook command suppresses duplicate prints per workin
         }, installOptions(homeDir));
 
         const command = extractCodexGuidanceCommand(readFile(path.join(homeDir, ".codex", "config.toml")));
-        assert.match(runGuidanceCommand(command, repoA, runtimeDir), /Satori MCP: use search_codebase for plain-English behavior\/concept discovery/);
+        assert.match(runGuidanceCommand(command, repoA, runtimeDir), /Satori MCP: use search_codebase for semantic ownership\/context discovery/);
         assert.equal(runGuidanceCommand(command, repoA, runtimeDir), "");
-        assert.match(runGuidanceCommand(command, repoB, runtimeDir), /Satori MCP: use search_codebase for plain-English behavior\/concept discovery/);
+        assert.match(runGuidanceCommand(command, repoB, runtimeDir), /Satori MCP: use search_codebase for semantic ownership\/context discovery/);
 
         const uid = execFileSync("id", ["-u"], { encoding: "utf8" }).trim();
         const stampDir = path.join(runtimeDir, `satori-codex-guidance.${uid}`);
@@ -374,7 +429,7 @@ test("install replaces existing managed Codex guidance hook", () => {
 
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("old satori guidance"), false);
-        assert.equal(content.includes("Satori MCP: use search_codebase for plain-English behavior/concept discovery"), true);
+        assert.equal(content.includes("Satori MCP: use search_codebase for semantic ownership/context discovery"), true);
         assert.equal(content.includes("satori-codex-guidance"), true);
         assert.equal(content.match(/satori-cli managed codex guidance hook start/g)?.length, 1);
     });
@@ -383,7 +438,10 @@ test("install replaces existing managed Codex guidance hook", () => {
 test("uninstall removes an existing managed Codex block", () => {
     withTempHome((homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+        const agentsPath = path.join(homeDir, ".codex", "AGENTS.md");
+        const skillPath = path.join(homeDir, ".codex", "skills", "satori", "SKILL.md");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
+        fs.mkdirSync(path.dirname(skillPath), { recursive: true });
         fs.writeFileSync(
             codexConfigPath,
             [
@@ -398,16 +456,33 @@ test("uninstall removes an existing managed Codex block", () => {
             ].join("\n"),
             "utf8"
         );
+        fs.writeFileSync(skillPath, "# Managed Satori Skill\n", "utf8");
+        fs.writeFileSync(agentsPath, [
+            "# User Rules",
+            "",
+            "<!-- satori-mcp:start -->",
+            "# Managed Satori",
+            "<!-- satori-mcp:end -->",
+            "",
+            "Keep this local note.",
+            "",
+        ].join("\n"), "utf8");
 
-        executeInstallCommand({
+        const result = executeInstallCommand({
             kind: "uninstall",
             client: "codex",
             dryRun: false,
         }, { homeDir });
 
         const content = readFile(codexConfigPath);
+        const instructions = readFile(agentsPath);
+        assert.equal(result.results[0]?.skillsChanged, true);
+        assert.equal(result.results[0]?.instructionsChanged, true);
         assert.equal(content.includes("[mcp_servers.satori]"), false);
         assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), false);
+        assert.equal(fs.existsSync(path.dirname(skillPath)), false);
+        assert.equal(instructions.includes("<!-- satori-mcp:start -->"), false);
+        assert.equal(instructions.includes("Keep this local note."), true);
     });
 });
 
@@ -695,6 +770,10 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(codexConfig.includes("node_modules"), false);
         assert.equal(codexConfig.includes("dist/index.js"), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md")), true);
+        const codexInstructions = readFile(path.join(homeDir, ".codex", "AGENTS.md"));
+        assert.equal(codexInstructions.includes("<!-- satori-mcp:start -->"), true);
+        assert.equal(codexInstructions.includes("Use Satori primarily for semantic code exploration"), true);
+        assert.equal(codexInstructions.includes("Do not treat call_graph inbound results as sole authority"), true);
 
         const claudeConfig = JSON.parse(readFile(path.join(homeDir, ".claude.json")));
         assert.equal(claudeConfig.mcpServers.satori.type, "stdio");
@@ -901,6 +980,10 @@ test("dry-run reports install actions without writing files", () => {
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".claude.json")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".config", "opencode", "opencode.json")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "AGENTS.md")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".claude", "skills", "satori", "SKILL.md")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".config", "opencode", "AGENTS.md")), false);
         assert.equal(fs.existsSync(launcherPath(homeDir)), false);
     });
 });

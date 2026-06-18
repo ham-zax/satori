@@ -290,7 +290,8 @@ test("install adds opt-in managed Codex guidance hook and preserves user hooks",
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("# >>> satori-cli managed codex guidance hook start >>>"), true);
         assert.equal(content.includes("# <<< satori-cli managed codex guidance hook end <<<"), true);
-        assert.equal(content.includes("Satori MCP: prefer search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
+        assert.equal(content.includes("Satori MCP: search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
+        assert.equal(content.includes("satori-codex-guidance"), true);
         assert.equal(content.includes('command = \'echo "user hook"\''), true);
     });
 });
@@ -324,7 +325,8 @@ test("install replaces existing managed Codex guidance hook", () => {
 
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("old satori guidance"), false);
-        assert.equal(content.includes("Satori MCP: prefer search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
+        assert.equal(content.includes("Satori MCP: search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
+        assert.equal(content.includes("satori-codex-guidance"), true);
         assert.equal(content.match(/satori-cli managed codex guidance hook start/g)?.length, 1);
     });
 });

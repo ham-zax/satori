@@ -75,7 +75,7 @@ Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/sa
 
 Restart the MCP client after changing config.
 
-For Codex, `satori-cli install --client codex --install-guidance-hook` also installs a marked `SessionStart` reminder that prints the Satori tool workflow. The hook is guidance-only and does not run indexing, search, or provider-backed work.
+For Codex, `satori-cli install --client codex --install-guidance-hook` also installs a marked `SessionStart` reminder that prints the Satori tool workflow. The hook is guidance-only, suppresses duplicate startup prints for the same working directory, and does not run indexing, search, or provider-backed work.
 
 ## First Repo Workflow
 

@@ -2022,8 +2022,12 @@ export class ToolHandlers {
         const singleBareLookup = tokens.length === 1
             && /^[a-z][a-z0-9]{2,63}$/.test(tokens[0])
             && !SEARCH_QUERY_STOPWORDS.has(normalizedTokens[0] || '');
+        const exactPinEligible = identifierTokens.some((token) => /[A-Z_]/.test(token));
+        const lexicalSourceTokens = identifierTokens.length > 0 && naturalLanguageTokens.length > 0
+            ? tokens
+            : (identifierTokens.length > 0 ? identifierTokens : tokens);
         const lexicalTerms = this
-            .tokenizeLexicalTerms(identifierTokens.length > 0 ? identifierTokens : tokens)
+            .tokenizeLexicalTerms(lexicalSourceTokens)
             .filter((term) => !SEARCH_QUERY_STOPWORDS.has(term.value))
             .slice(0, 8);
         const explicitReferenceSeeking = /\b(used|uses|usage|reference|references|referenced|callers?|called|imports?|imported|instantiat(?:e|ed|ion))\b/.test(normalizedQuery)
@@ -2092,11 +2096,12 @@ export class ToolHandlers {
             lexicalWeight: intent === 'identifier'
                 ? 1.35
                 : intent === 'mixed'
-                    ? (referenceSeeking ? 0.18 : 0.05)
+                    ? (referenceSeeking || implementationSeeking || writerSeeking ? 0.30 : 0.10)
                     : intent === 'uncertain'
                         ? 0.60
-                        : 0.00,
-            exactMatchPinningEnabled: intent !== 'semantic' && !referenceSeeking && !implementationSeeking && !writerSeeking,
+                        : (referenceSeeking || implementationSeeking || writerSeeking ? 0.18 : 0.00),
+            exactMatchPinningEnabled: intent === 'identifier'
+                || (writerSeeking && exactPinEligible),
             rerankAllowed: intent !== 'identifier',
         };
     }
@@ -2182,6 +2187,7 @@ export class ToolHandlers {
 
         let score = 0;
         let exactLexicalMatch = false;
+        const matchedWholeTerms = new Set<string>();
 
         for (const term of plan.lexicalTerms) {
             const usageKind = plan.referenceSeeking ? this.getReferenceUsageKind(content, term.value) : null;
@@ -2200,7 +2206,10 @@ export class ToolHandlers {
 
             if (this.hasTokenBoundaryMatch(symbolLabel, term.value)) {
                 score = Math.max(score, (plan.referenceSeeking ? 0.02 : 1.30) * termFactor);
-                if (!plan.referenceSeeking && term.kind === 'whole') {
+                if (term.kind === 'whole') {
+                    matchedWholeTerms.add(term.value);
+                }
+                if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
                     exactLexicalMatch = true;
                 }
                 continue;
@@ -2208,7 +2217,10 @@ export class ToolHandlers {
 
             if (pathSegments.some((segment: string) => this.hasTokenBoundaryMatch(segment, term.value))) {
                 score = Math.max(score, (plan.referenceSeeking ? 0.02 : 1.20) * termFactor);
-                if (!plan.referenceSeeking && term.kind === 'whole') {
+                if (term.kind === 'whole') {
+                    matchedWholeTerms.add(term.value);
+                }
+                if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
                     exactLexicalMatch = true;
                 }
                 continue;
@@ -2216,7 +2228,10 @@ export class ToolHandlers {
 
             if (this.hasTokenBoundaryMatch(content, term.value)) {
                 score = Math.max(score, (plan.referenceSeeking ? (declarationMatch ? 0.10 : 1.25) : 0.90) * termFactor);
-                if (!plan.referenceSeeking && term.kind === 'whole') {
+                if (term.kind === 'whole') {
+                    matchedWholeTerms.add(term.value);
+                }
+                if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
                     exactLexicalMatch = true;
                 }
                 continue;
@@ -2224,21 +2239,35 @@ export class ToolHandlers {
 
             if (symbolLabel.includes(term.value)) {
                 score = Math.max(score, (plan.referenceSeeking ? 0.04 : 0.55) * termFactor);
+                if (term.kind === 'whole') {
+                    matchedWholeTerms.add(term.value);
+                }
                 continue;
             }
 
             if (relativePath.includes(term.value)) {
                 score = Math.max(score, (plan.referenceSeeking ? 0.04 : 0.45) * termFactor);
+                if (term.kind === 'whole') {
+                    matchedWholeTerms.add(term.value);
+                }
                 continue;
             }
 
             if (content.includes(term.value)) {
                 score = Math.max(score, (plan.referenceSeeking ? (declarationMatch ? 0.08 : 0.30) : 0.25) * termFactor);
+                if (term.kind === 'whole') {
+                    matchedWholeTerms.add(term.value);
+                }
             }
         }
 
+        const coverageBoost = Math.min(
+            matchedWholeTerms.size * (plan.implementationSeeking || plan.writerSeeking ? 0.18 : 0.08),
+            plan.implementationSeeking || plan.writerSeeking ? 0.54 : 0.24
+        );
+
         return {
-            score: score * plan.lexicalWeight,
+            score: (score + coverageBoost) * plan.lexicalWeight,
             exactLexicalMatch,
         };
     }
@@ -2611,6 +2640,47 @@ export class ToolHandlers {
         return /\b(?:writefilesync|writefile|appendfile|mkdir|rename|unlink|rm|copyfile|lines\.splice)\b/.test(evidence);
     }
 
+    private isStrongWriterOwnerResult(result: any): boolean {
+        const label = typeof result?.symbolLabel === 'string'
+            ? result.symbolLabel.trim().toLowerCase()
+            : '';
+        const content = typeof result?.content === 'string'
+            ? result.content.slice(0, 800).toLowerCase()
+            : '';
+        const evidence = `${label}\n${content}`;
+
+        if (/^(?:async\s+)?(?:(?:function|method|const|let|var)\s+)?(?:[a-z0-9_$]+\.)*(?:write|update|generate|emit|install|configure|persist|create|set|save|add|remove|delete)[a-z0-9_$]*(?:\b|\()/.test(label)) {
+            return true;
+        }
+        return /\b(?:writefilesync|writefile|appendfile|mkdir|rename|unlink|rm|copyfile|lines\.splice)\b/.test(evidence);
+    }
+
+    private isWriterActionTerm(term: string): boolean {
+        return /^(?:write|writes|writing|written|update|updates|updated|updating|create|creates|created|creating|generate|generates|generated|generating|emit|emits|emitted|emitting|persist|persists|persisted|persisting|configure|configures|configured|configuring|install|installs|installed|installing|build|builds|built|builder)$/.test(term);
+    }
+
+    private countCandidateDomainTermMatches(plan: SearchQueryPlan, result: any): number {
+        const content = typeof result?.content === 'string' ? result.content : '';
+        const label = typeof result?.symbolLabel === 'string' ? result.symbolLabel : '';
+        const relativePath = typeof result?.relativePath === 'string' ? result.relativePath : '';
+        const evidence = `${label}\n${relativePath}\n${content}`
+            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+            .replace(/[/\\._:-]+/g, ' ')
+            .toLowerCase();
+        const matched = new Set<string>();
+
+        for (const term of plan.lexicalTerms) {
+            if (term.kind !== 'whole' || this.isWriterActionTerm(term.value)) {
+                continue;
+            }
+            if (this.hasTokenBoundaryMatch(evidence, term.value)) {
+                matched.add(term.value);
+            }
+        }
+
+        return matched.size;
+    }
+
     private resolveAgentFitMultiplier(
         plan: SearchQueryPlan,
         result: any,
@@ -2640,9 +2710,19 @@ export class ToolHandlers {
         }
 
         const role = this.classifyAgentFitSymbolRole(result);
+        const domainTermMatches = plan.writerSeeking
+            ? this.countCandidateDomainTermMatches(plan, result)
+            : 0;
         if (plan.writerSeeking) {
-            if (this.isWriterOwnerResult(result) && this.isImplementationPathCategory(category)) {
+            if (this.isWriterOwnerResult(result)
+                && this.isImplementationPathCategory(category)
+                && (domainTermMatches >= 2 || this.isStrongWriterOwnerResult(result))) {
                 return { multiplier: SEARCH_AGENT_FIT_WRITER_OWNER_MULTIPLIER, reason: 'writer_owner' };
+            }
+            if (role === 'implementation'
+                && this.isImplementationPathCategory(category)
+                && domainTermMatches >= 2) {
+                return { multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_SYMBOL_MULTIPLIER, reason: 'implementation_symbol' };
             }
             if (role === 'schema') {
                 return { multiplier: SEARCH_AGENT_FIT_SCHEMA_DEMOTION, reason: 'schema_not_owner' };
@@ -2984,7 +3064,108 @@ export class ToolHandlers {
         };
     }
 
-    private resolveSearchOwnerFromRegistry(result: any, registry?: SymbolRegistry): SearchOwnerResolution {
+    private resolveBestOverlappingSearchSymbol(
+        fileSymbols: SymbolRecord[],
+        ownerChunk: CodeChunk,
+        plan: SearchQueryPlan
+    ): SymbolRecord | undefined {
+        const chunkStart = Math.max(1, Number(ownerChunk.metadata.startLine || 1));
+        const chunkEnd = Math.max(chunkStart, Number(ownerChunk.metadata.endLine || chunkStart));
+        const chunkLines = ownerChunk.content.split(/\r?\n/);
+        const normalizeSymbolEvidence = (value: string): string => value
+            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+            .replace(/[/\\._:-]+/g, ' ')
+            .toLowerCase();
+        const scored = fileSymbols
+            .filter((symbol) => symbol.kind !== 'file')
+            .filter((symbol) => symbol.span.startLine <= chunkEnd && chunkStart <= symbol.span.endLine)
+            .map((symbol) => {
+                const symbolName = normalizeSymbolEvidence(symbol.name);
+                const symbolIdentityEvidence = normalizeSymbolEvidence([
+                    symbol.name,
+                    symbol.qualifiedName,
+                    symbol.label,
+                ].join('\n'));
+                const symbolParentEvidence = normalizeSymbolEvidence(symbol.parentQualifiedNamePath.join('\n'));
+                const symbolRelativeStart = Math.max(0, symbol.span.startLine - chunkStart);
+                const symbolRelativeEnd = Math.max(symbolRelativeStart, symbol.span.endLine - chunkStart);
+                const symbolContent = chunkLines
+                    .slice(symbolRelativeStart, symbolRelativeEnd + 1)
+                    .join('\n')
+                    .toLowerCase();
+                const matchedDomainTerms = new Set<string>();
+                let symbolNameMatches = 0;
+                let identityMatches = 0;
+                let contentMatches = 0;
+                let strongIdentifierMatches = 0;
+                for (const term of plan.lexicalTerms) {
+                    if (term.kind !== 'whole' || this.isWriterActionTerm(term.value)) {
+                        continue;
+                    }
+                    const nameMatch = this.hasTokenBoundaryMatch(symbolName, term.value);
+                    const identityMatch = this.hasTokenBoundaryMatch(symbolIdentityEvidence, term.value);
+                    const parentMatch = this.hasTokenBoundaryMatch(symbolParentEvidence, term.value);
+                    const contentMatch = this.hasTokenBoundaryMatch(symbolContent, term.value);
+                    if (nameMatch) {
+                        symbolNameMatches += 1;
+                    }
+                    if (identityMatch || parentMatch) {
+                        identityMatches += 1;
+                    }
+                    if (contentMatch) {
+                        contentMatches += 1;
+                    }
+                    if (identityMatch || parentMatch || contentMatch) {
+                        matchedDomainTerms.add(term.value);
+                    }
+                    if (identityMatch && /[_/\\.:]/.test(term.value)) {
+                        strongIdentifierMatches += 1;
+                    }
+                }
+                return {
+                    symbol,
+                    lexicalMatches: matchedDomainTerms.size,
+                    symbolNameMatches,
+                    identityMatches,
+                    contentMatches,
+                    strongIdentifierMatches,
+                };
+            })
+            .filter((entry) => (
+                entry.lexicalMatches >= 2
+                || entry.symbolNameMatches > 0
+                || entry.strongIdentifierMatches > 0
+            ))
+            .sort((a, b) => {
+                if (b.lexicalMatches !== a.lexicalMatches) return b.lexicalMatches - a.lexicalMatches;
+                if (b.symbolNameMatches !== a.symbolNameMatches) return b.symbolNameMatches - a.symbolNameMatches;
+                if (b.identityMatches !== a.identityMatches) return b.identityMatches - a.identityMatches;
+                if (b.strongIdentifierMatches !== a.strongIdentifierMatches) return b.strongIdentifierMatches - a.strongIdentifierMatches;
+                if (b.contentMatches !== a.contentMatches) return b.contentMatches - a.contentMatches;
+                const aLines = a.symbol.span.endLine - a.symbol.span.startLine;
+                const bLines = b.symbol.span.endLine - b.symbol.span.startLine;
+                if (aLines !== bLines) return aLines - bLines;
+                const aDepth = a.symbol.parentQualifiedNamePath.length;
+                const bDepth = b.symbol.parentQualifiedNamePath.length;
+                if (aDepth !== bDepth) return bDepth - aDepth;
+                const startCmp = this.compareNullableNumbersAsc(a.symbol.span.startLine, b.symbol.span.startLine);
+                if (startCmp !== 0) return startCmp;
+                return this.compareNullableStringsAsc(a.symbol.symbolInstanceId, b.symbol.symbolInstanceId);
+            });
+
+        const [best, second] = scored;
+        if (best && second
+            && best.lexicalMatches === second.lexicalMatches
+            && best.symbolNameMatches === second.symbolNameMatches
+            && best.identityMatches === second.identityMatches
+            && best.strongIdentifierMatches === second.strongIdentifierMatches
+            && best.contentMatches === second.contentMatches) {
+            return undefined;
+        }
+        return scored[0]?.symbol;
+    }
+
+    private resolveSearchOwnerFromRegistry(result: any, registry?: SymbolRegistry, plan?: SearchQueryPlan): SearchOwnerResolution {
         const metadataOwnerKey = typeof result?.ownerSymbolKey === 'string' && result.ownerSymbolKey.length > 0
             ? result.ownerSymbolKey
             : undefined;
@@ -3006,12 +3187,29 @@ export class ToolHandlers {
                 : {};
         }
 
+        const normalizedFile = typeof result?.relativePath === 'string'
+            ? this.sanitizeIndexedRelativeFilePath(result.relativePath)
+            : undefined;
+        const fileSymbols = normalizedFile ? registry.symbolsByFile.get(normalizedFile) : undefined;
+        const ownerChunk = this.buildSearchOwnerChunk(result);
+
         if (
             metadataOwnerKey
             && metadataOwnerInstanceId
             && registry.symbolsByInstanceId.has(metadataOwnerInstanceId)
         ) {
             const owner = registry.symbolsByInstanceId.get(metadataOwnerInstanceId);
+            if (owner?.kind === 'file' && fileSymbols && ownerChunk && plan) {
+                const tighterOwner = this.resolveBestOverlappingSearchSymbol(fileSymbols, ownerChunk, plan);
+                if (tighterOwner && tighterOwner.symbolInstanceId !== metadataOwnerInstanceId) {
+                    return {
+                        ownerSymbolKey: tighterOwner.symbolKey,
+                        ownerSymbolInstanceId: tighterOwner.symbolInstanceId,
+                        symbolKind: tighterOwner.kind,
+                        ownerSource: 'registry_repair',
+                    };
+                }
+            }
             return {
                 ownerSymbolKey: metadataOwnerKey,
                 ownerSymbolInstanceId: metadataOwnerInstanceId,
@@ -3020,14 +3218,19 @@ export class ToolHandlers {
             };
         }
 
-        const normalizedFile = typeof result?.relativePath === 'string'
-            ? this.sanitizeIndexedRelativeFilePath(result.relativePath)
-            : undefined;
-        const fileSymbols = normalizedFile ? registry.symbolsByFile.get(normalizedFile) : undefined;
-        const ownerChunk = this.buildSearchOwnerChunk(result);
-
         if (fileSymbols && ownerChunk) {
             try {
+                if (plan) {
+                    const overlappingOwner = this.resolveBestOverlappingSearchSymbol(fileSymbols, ownerChunk, plan);
+                    if (overlappingOwner) {
+                        return {
+                            ownerSymbolKey: overlappingOwner.symbolKey,
+                            ownerSymbolInstanceId: overlappingOwner.symbolInstanceId,
+                            symbolKind: overlappingOwner.kind,
+                            ownerSource: 'registry_repair',
+                        };
+                    }
+                }
                 if (metadataOwnerKey) {
                     const keyCandidates = fileSymbols.filter((symbol) => symbol.symbolKey === metadataOwnerKey);
                     if (keyCandidates.length > 0) {
@@ -5684,7 +5887,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const result = candidate.result;
                 let groupKey = '';
                 const ownerResolution = input.groupBy === 'symbol'
-                    ? this.resolveSearchOwnerFromRegistry(result, searchSymbolRegistry)
+                    ? this.resolveSearchOwnerFromRegistry(result, searchSymbolRegistry, queryPlan)
                     : {};
                 const ownerSymbolKey = ownerResolution.ownerSymbolKey;
                 const ownerSymbolInstanceId = ownerResolution.ownerSymbolInstanceId;

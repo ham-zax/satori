@@ -255,6 +255,7 @@ Outputs:
 - JSON envelope with `status` plus graph payload.
 - Status variants via handler mapping: `ok|not_found|unsupported|not_ready|requires_reindex|not_indexed`.
 - Malformed direct handler calls fail as a normal JSON envelope with `status:"not_found"`, `reason:"invalid_symbol_ref"`, and empty `nodes`/`edges`/`notes`; normal MCP tool execution rejects malformed `symbolRef` at schema validation before dispatch.
+- `sidecar.nodeCount` and `sidecar.edgeCount` report the node/edge counts returned in that traversal response. They are not whole-sidecar totals for the indexed codebase.
 - `testReferences` are static call-graph references from test-like files to returned symbols. They are investigation hints only; they do not prove runtime coverage, assertion coverage, or that a test executed a path.
 
 Warnings/hints:

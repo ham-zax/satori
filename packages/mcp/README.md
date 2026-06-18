@@ -166,6 +166,8 @@ Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python 
 | `depth` | integer | no | `1` | Traversal depth (max 3). |
 | `limit` | integer | no | `20` | Maximum number of returned edges. |
 
+Response note: `sidecar.nodeCount` and `sidecar.edgeCount` in the JSON envelope are the counts returned in that traversal response, not whole-sidecar totals for the indexed codebase.
+
 ### `file_outline`
 
 Return a sidecar-backed symbol outline for one file, including call_graph jump handles.

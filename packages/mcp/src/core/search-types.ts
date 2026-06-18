@@ -548,7 +548,9 @@ export interface CallGraphTraversalResponseEnvelope {
     returnedNoteCount?: number;
     sidecar?: {
         builtAt: string;
+        /** Count of nodes returned in this traversal response, not total nodes stored for the codebase sidecar. */
         nodeCount: number;
+        /** Count of edges returned in this traversal response, not total edges stored for the codebase sidecar. */
         edgeCount: number;
     };
     freshnessDecision?: FreshnessDecision | { mode: "skipped_requires_reindex" | "skipped_indexing" };

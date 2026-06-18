@@ -347,6 +347,7 @@ export type NonOkReason =
     | "missing_relationship_sidecar"
     | "incompatible_symbol_registry"
     | "incompatible_relationship_sidecar"
+    | "stale_symbol_ref"
     | "missing_provider_config"
     | "vector_backend_unavailable";
 

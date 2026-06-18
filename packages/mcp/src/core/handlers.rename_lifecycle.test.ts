@@ -456,3 +456,123 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         );
     });
 });
+
+test('MCP direct navigation fails closed for dirty files until search freshness syncs', async () => {
+    await withTempState(async ({ repoPath, stateRoot }) => {
+        const relativePath = 'src/runtime.ts';
+        const filePath = path.join(repoPath, relativePath);
+
+        fs.writeFileSync(filePath, 'export function run() {\n  return true;\n}\n', 'utf8');
+
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            codeSplitter: new TestSplitter(),
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await context.recreateSynchronizerForCodebase(repoPath);
+        await context.indexCodebase(repoPath);
+
+        let ensureFreshnessCalls = 0;
+        const syncManager = {
+            ensureFreshness: async () => {
+                ensureFreshnessCalls += 1;
+                const stats = await context.reindexByChange(repoPath);
+                return {
+                    mode: 'synced',
+                    checkedAt: '2026-06-18T00:00:00.000Z',
+                    thresholdMs: 180000,
+                    stats,
+                };
+            },
+            touchWatchedCodebase: async () => undefined,
+        } as unknown as SyncManager;
+        const handlers = new ToolHandlers(
+            context,
+            createSnapshotManager(repoPath),
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            () => Date.parse('2026-06-18T00:00:00.000Z'),
+        );
+        const testHandlers = handlers as unknown as {
+            syncIndexedCodebasesFromCloud: () => Promise<void>;
+            validateCompletionProof: () => Promise<{ outcome: 'ok' }>;
+        };
+        testHandlers.syncIndexedCodebasesFromCloud = async () => undefined;
+        testHandlers.validateCompletionProof = async () => ({ outcome: 'ok' });
+
+        const initialOutline = parsePayload(await handlers.handleFileOutline({
+            path: repoPath,
+            file: relativePath,
+        }));
+        assert.equal(initialOutline.status, 'ok');
+        const oldRunSymbol = findSymbol(initialOutline, 'run');
+        const oldSymbolInstanceId = oldRunSymbol.symbolId;
+
+        fs.writeFileSync(filePath, 'export function runFresh() {\n  return false;\n}\n', 'utf8');
+
+        const staleExactOutline = parsePayload(await handlers.handleFileOutline({
+            path: repoPath,
+            file: relativePath,
+            resolveMode: 'exact',
+            symbolIdExact: oldSymbolInstanceId,
+        }));
+        assert.equal(staleExactOutline.status, 'requires_reindex');
+        assert.equal(staleExactOutline.reason, 'stale_symbol_ref');
+        assert.equal(ensureFreshnessCalls, 0);
+
+        const staleReadResponse = await readFileTool.execute({
+            path: filePath,
+            open_symbol: {
+                symbolId: oldSymbolInstanceId,
+            },
+        }, createToolContext(repoPath, handlers));
+        assert.equal(staleReadResponse.isError, true);
+        const staleReadPayload = parsePayload(staleReadResponse);
+        assert.equal(staleReadPayload.status, 'requires_reindex');
+        assert.equal(staleReadPayload.reason, 'stale_symbol_ref');
+        assert.equal(JSON.stringify(staleReadPayload).includes('return false'), false);
+        assert.equal(ensureFreshnessCalls, 0);
+
+        const staleCallGraph = parsePayload(await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: relativePath,
+                symbolId: oldSymbolInstanceId,
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 10,
+        }));
+        assert.equal(staleCallGraph.status, 'not_found');
+        assert.equal(staleCallGraph.reason, 'stale_symbol_ref');
+        assert.equal(staleCallGraph.supported, false);
+        assert.equal(ensureFreshnessCalls, 0);
+
+        const searchPayload = parsePayload(await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runFresh',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 10,
+        }));
+        assert.equal(searchPayload.status, 'ok');
+        assert.equal(ensureFreshnessCalls, 1);
+        assert.equal(JSON.stringify(searchPayload).includes(oldSymbolInstanceId), false);
+
+        const freshGroup = findSearchGroup(searchPayload, relativePath, 'runFresh');
+        assert.equal(typeof freshGroup.symbolId, 'string');
+        assert.notEqual(freshGroup.symbolId, oldSymbolInstanceId);
+
+        const freshExactOutline = parsePayload(await handlers.handleFileOutline({
+            path: repoPath,
+            file: relativePath,
+            resolveMode: 'exact',
+            symbolIdExact: freshGroup.symbolId,
+        }));
+        assert.equal(freshExactOutline.status, 'ok');
+        const freshExactSymbols = (freshExactOutline.outline as { symbols?: OutlineSymbol[] }).symbols || [];
+        assert.equal(freshExactSymbols[0]?.symbolId, freshGroup.symbolId);
+    });
+});

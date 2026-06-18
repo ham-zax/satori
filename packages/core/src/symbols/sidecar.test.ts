@@ -710,10 +710,39 @@ test('readSymbolRegistrySidecar rejects malformed symbol shard records', async (
             },
         },
         {
+            name: 'missing symbolKey',
+            mutate: (symbol) => {
+                const withoutSymbolKey: Partial<SymbolRecord> = { ...symbol };
+                delete withoutSymbolKey.symbolKey;
+                return withoutSymbolKey;
+            },
+        },
+        {
             name: 'invalid span',
             mutate: (symbol) => ({
                 ...symbol,
                 span: { startLine: 3, endLine: 2 },
+            }),
+        },
+        {
+            name: 'invalid kind',
+            mutate: (symbol) => ({
+                ...symbol,
+                kind: 'procedure',
+            }),
+        },
+        {
+            name: 'mismatched file hash',
+            mutate: (symbol) => ({
+                ...symbol,
+                fileHash: 'different-hash',
+            }),
+        },
+        {
+            name: 'mismatched language',
+            mutate: (symbol) => ({
+                ...symbol,
+                language: 'javascript',
             }),
         },
     ];
@@ -735,11 +764,66 @@ test('readSymbolRegistrySidecar rejects malformed symbol shard records', async (
     }
 });
 
+test('readSymbolRegistrySidecar rejects malformed symbol shard metadata', async () => {
+    const cases: Array<{
+        name: string;
+        mutate: (shard: Record<string, unknown>) => Record<string, unknown>;
+    }> = [
+        {
+            name: 'mismatched shard path',
+            mutate: (shard) => ({ ...shard, path: 'src/other.ts' }),
+        },
+        {
+            name: 'mismatched shard hash',
+            mutate: (shard) => ({ ...shard, hash: 'different-hash' }),
+        },
+        {
+            name: 'mismatched shard language',
+            mutate: (shard) => ({ ...shard, language: 'javascript' }),
+        },
+    ];
+
+    for (const item of cases) {
+        await withTempDir(async (stateRoot) => {
+            const { shardPath } = await writeSingleSymbolRegistryFixture(stateRoot);
+            const shard = await readJsonFile<Record<string, unknown>>(shardPath);
+            await writeJsonFile(shardPath, item.mutate(shard));
+
+            const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+
+            assert.equal(loaded.status, 'incompatible', item.name);
+            assert.match(loaded.reason || '', /symbol registry shard is invalid/);
+        });
+    }
+});
+
 test('readRelationshipSidecar rejects malformed relationship shard records', async () => {
     const cases: Array<{
         name: string;
         mutate: (record: RelationshipRecord) => unknown;
     }> = [
+        {
+            name: 'missing source id',
+            mutate: (record) => {
+                const withoutSource: Partial<RelationshipRecord> = { ...record };
+                delete withoutSource.sourceKey;
+                return withoutSource;
+            },
+        },
+        {
+            name: 'missing target id/path',
+            mutate: (record) => {
+                const withoutTarget: Partial<RelationshipRecord> = { ...record };
+                delete withoutTarget.targetKey;
+                delete withoutTarget.targetInstanceId;
+                delete withoutTarget.targetPath;
+                return withoutTarget;
+            },
+        },
+        {
+            name: 'invalid target id',
+            mutate: (record) => ({ ...record, targetInstanceId: '' }),
+        },
         {
             name: 'invalid relationship kind',
             mutate: (record) => ({ ...record, type: 'INVOKES' }),
@@ -754,6 +838,10 @@ test('readRelationshipSidecar rejects malformed relationship shard records', asy
                 ...record,
                 span: { startLine: 4, endLine: 3 },
             }),
+        },
+        {
+            name: 'mismatched file',
+            mutate: (record) => ({ ...record, file: 'src/other.ts' }),
         },
     ];
 
@@ -774,6 +862,46 @@ test('readRelationshipSidecar rejects malformed relationship shard records', asy
 
             assert.equal(loaded.status, 'incompatible', item.name);
             assert.match(loaded.reason || '', /relationship shard record is invalid/);
+        });
+    }
+});
+
+test('readRelationshipSidecar rejects malformed relationship shard metadata', async () => {
+    const cases: Array<{
+        name: string;
+        mutate: (shard: Record<string, unknown>) => Record<string, unknown>;
+        expectedReason: RegExp;
+    }> = [
+        {
+            name: 'mismatched shard hash',
+            mutate: (shard) => ({ ...shard, manifestHash: 'other-manifest-hash' }),
+            expectedReason: /relationship shard hash does not match/,
+        },
+        {
+            name: 'missing shard path',
+            mutate: (shard) => {
+                const withoutPath = { ...shard };
+                delete withoutPath.path;
+                return withoutPath;
+            },
+            expectedReason: /relationship shard metadata is invalid/,
+        },
+    ];
+
+    for (const item of cases) {
+        await withTempDir(async (stateRoot) => {
+            const { registryResult, shardPath } = await writeSingleRelationshipFixture(stateRoot);
+            const shard = await readJsonFile<Record<string, unknown>>(shardPath);
+            await writeJsonFile(shardPath, item.mutate(shard));
+
+            const loaded = await readRelationshipSidecar({
+                stateRoot,
+                normalizedRootPath: '/repo',
+                expectedSymbolRegistryManifestHash: registryResult.manifestHash,
+            });
+
+            assert.equal(loaded.status, 'incompatible', item.name);
+            assert.match(loaded.reason || '', item.expectedReason);
         });
     }
 });

@@ -568,16 +568,33 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
         const symbols: SymbolRecord[] = [];
         for (const file of indexFile.files) {
             const shardPath = path.join(rootPath, file.shardPath);
-            const shard = await readJson(shardPath) as { manifestHash?: unknown; symbols?: unknown };
+            const shard = await readJson(shardPath) as {
+                manifestHash?: unknown;
+                path?: unknown;
+                hash?: unknown;
+                language?: unknown;
+                symbols?: unknown;
+            };
             const shardSymbols = shard.symbols;
-            if (shard.manifestHash !== manifestHash || !Array.isArray(shardSymbols)) {
+            if (
+                shard.manifestHash !== manifestHash
+                || shard.path !== file.path
+                || shard.hash !== file.hash
+                || shard.language !== file.language
+                || !Array.isArray(shardSymbols)
+            ) {
                 return {
                     status: 'incompatible',
                     rootPath,
                     reason: `symbol registry shard is invalid for ${file.path}`,
                 };
             }
-            if (!shardSymbols.every((symbol) => isSymbolRecord(symbol) && symbol.file === file.path)) {
+            if (!shardSymbols.every((symbol) =>
+                isSymbolRecord(symbol)
+                && symbol.file === file.path
+                && symbol.fileHash === file.hash
+                && symbol.language === file.language
+            )) {
                 return {
                     status: 'incompatible',
                     rootPath,
@@ -607,7 +624,11 @@ function isRelationshipRecord(value: unknown): value is RelationshipRecord {
     if (!isRecord(value)) {
         return false;
     }
+    const hasTarget = isNonEmptyString(value.targetKey)
+        || isNonEmptyString(value.targetInstanceId)
+        || isNonEmptyString(value.targetPath);
     return isNonEmptyString(value.sourceKey)
+        && hasTarget
         && isNonEmptyString(value.type)
         && VALID_RELATIONSHIP_TYPES.has(value.type)
         && isNonEmptyString(value.file)
@@ -676,12 +697,19 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                     reason: `relationship shard is invalid for ${entry.name}`,
                 };
             }
-            const shard = rawShard as { manifestHash?: unknown; relationships?: unknown; records?: unknown };
+            const shard = rawShard as { manifestHash?: unknown; path?: unknown; relationships?: unknown; records?: unknown };
             if (shard.manifestHash !== input.expectedSymbolRegistryManifestHash) {
                 return {
                     status: 'incompatible',
                     rootPath,
                     reason: `relationship shard hash does not match manifest for ${entry.name}`,
+                };
+            }
+            if (!isNonEmptyString(shard.path)) {
+                return {
+                    status: 'incompatible',
+                    rootPath,
+                    reason: `relationship shard metadata is invalid for ${entry.name}`,
                 };
             }
             const shardRecords = Array.isArray(shard.relationships) ? shard.relationships : shard.records;
@@ -693,7 +721,7 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                 };
             }
             for (const record of shardRecords) {
-                if (!isRelationshipRecord(record)) {
+                if (!isRelationshipRecord(record) || record.file !== shard.path) {
                     return {
                         status: 'incompatible',
                         rootPath,

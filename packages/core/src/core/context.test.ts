@@ -89,6 +89,19 @@ type ContextWithProcessFileList = Context & {
 class InMemoryVectorDatabase implements VectorDatabase {
     readonly collections = new Map<string, Map<string, VectorDocument>>();
 
+    private listDocuments(collectionName: string, filterExpr?: string): VectorDocument[] {
+        const collection = this.collections.get(collectionName);
+        if (!collection) {
+            return [];
+        }
+        let documents = Array.from(collection.values());
+        const relativePathMatch = /^relativePath == "(.+)"$/.exec(filterExpr || '');
+        if (relativePathMatch?.[1]) {
+            documents = documents.filter((document) => document.relativePath === relativePathMatch[1]);
+        }
+        return documents;
+    }
+
     async createCollection(collectionName: string): Promise<void> {
         this.collections.set(collectionName, new Map());
     }
@@ -127,12 +140,16 @@ class InMemoryVectorDatabase implements VectorDatabase {
         await this.insert(collectionName, documents);
     }
 
-    async search(_collectionName: string, _queryVector: number[], _options?: SearchOptions): Promise<VectorSearchResult[]> {
-        return [];
+    async search(collectionName: string, _queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
+        return this.listDocuments(collectionName, options?.filterExpr)
+            .slice(0, options?.topK ?? 1000)
+            .map((document, index) => ({ document, score: 1 - (index / 1000) }));
     }
 
-    async hybridSearch(_collectionName: string, _searchRequests: HybridSearchRequest[], _options?: HybridSearchOptions): Promise<HybridSearchResult[]> {
-        return [];
+    async hybridSearch(collectionName: string, _searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]> {
+        return this.listDocuments(collectionName, options?.filterExpr)
+            .slice(0, options?.limit ?? 1000)
+            .map((document, index) => ({ document, score: 1 - (index / 1000) }));
     }
 
     async delete(collectionName: string, ids: string[]): Promise<void> {
@@ -143,11 +160,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 
     async query(collectionName: string, _filter: string, outputFields: string[], limit: number = 1000): Promise<Record<string, unknown>[]> {
-        const collection = this.collections.get(collectionName);
-        if (!collection) {
-            return [];
-        }
-        return Array.from(collection.values()).slice(0, limit).map((document) => {
+        return this.listDocuments(collectionName, _filter).slice(0, limit).map((document) => {
             const row: Record<string, unknown> = {};
             for (const field of outputFields) {
                 row[field] = (document as unknown as Record<string, unknown>)[field];
@@ -709,6 +722,126 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
         assert.ok(nextCallRecord);
         assert.equal(nextCallRecord?.targetInstanceId, nextAuthSymbol.symbolInstanceId);
         assert.notEqual(nextCallRecord?.targetInstanceId, initialCallRecord?.targetInstanceId);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange removes renamed-file navigation and publishes new symbol ownership', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-rename-symbols-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const oldPath = path.join(codebasePath, 'src', 'old.ts');
+    const newPath = path.join(codebasePath, 'src', 'new.ts');
+    const callerPath = path.join(codebasePath, 'src', 'caller.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(oldPath), { recursive: true });
+        fs.writeFileSync(oldPath, 'export function login() { return true; }\n', 'utf8');
+        fs.writeFileSync(
+            callerPath,
+            "import { login } from './old';\nexport function run() { return login(); }\n",
+            'utf8',
+        );
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+
+        const initialRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+        assert.equal(initialRegistry.status, 'ok');
+        if (initialRegistry.status !== 'ok') {
+            return;
+        }
+
+        const initialLoginSymbol = initialRegistry.registry.symbolsByFile
+            .get('src/old.ts')
+            ?.find((symbol) => symbol.kind === 'function' && symbol.name === 'login');
+        assert.ok(initialLoginSymbol);
+        if (!initialLoginSymbol) {
+            return;
+        }
+
+        fs.renameSync(oldPath, newPath);
+        fs.writeFileSync(
+            callerPath,
+            "import { login } from './new';\nexport function run() { return login(); }\n",
+            'utf8',
+        );
+
+        const result = await context.reindexByChange(codebasePath);
+        assert.equal(result.added, 1);
+        assert.equal(result.removed, 1);
+        assert.equal(result.modified, 1);
+        assert.deepEqual([...result.changedFiles].sort(), ['src/caller.ts', 'src/new.ts', 'src/old.ts']);
+
+        const nextRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+        assert.equal(nextRegistry.status, 'ok');
+        if (nextRegistry.status !== 'ok') {
+            return;
+        }
+
+        assert.equal(nextRegistry.registry.manifest.files.some((file) => file.path === 'src/old.ts'), false);
+        assert.equal(nextRegistry.registry.symbolsByFile.has('src/old.ts'), false);
+        assert.equal(nextRegistry.registry.symbolsByInstanceId.has(initialLoginSymbol.symbolInstanceId), false);
+
+        const nextLoginSymbol = nextRegistry.registry.symbolsByFile
+            .get('src/new.ts')
+            ?.find((symbol) => symbol.kind === 'function' && symbol.name === 'login');
+        const nextCallerSymbol = nextRegistry.registry.symbolsByFile
+            .get('src/caller.ts')
+            ?.find((symbol) => symbol.kind === 'function' && symbol.name === 'run');
+        assert.ok(nextLoginSymbol);
+        assert.ok(nextCallerSymbol);
+        if (!nextLoginSymbol || !nextCallerSymbol) {
+            return;
+        }
+        assert.notEqual(nextLoginSymbol.symbolInstanceId, initialLoginSymbol.symbolInstanceId);
+
+        const nextRelationships = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+            expectedSymbolRegistryManifestHash: nextRegistry.manifestHash,
+        });
+        assert.equal(nextRelationships.status, 'ok');
+        if (nextRelationships.status !== 'ok') {
+            return;
+        }
+
+        assert.equal(nextRelationships.records.some((record) =>
+            record.file === 'src/old.ts'
+            || record.sourceInstanceId === initialLoginSymbol.symbolInstanceId
+            || record.targetInstanceId === initialLoginSymbol.symbolInstanceId
+            || record.targetPath === 'src/old.ts'
+        ), false);
+
+        const nextCallRecord = nextRelationships.records.find((record) =>
+            record.type === 'CALLS'
+            && record.file === 'src/caller.ts'
+            && record.sourceInstanceId === nextCallerSymbol.symbolInstanceId
+        );
+        assert.ok(nextCallRecord);
+        assert.equal(nextCallRecord?.targetInstanceId, nextLoginSymbol.symbolInstanceId);
+
+        const searchResults = await context.semanticSearch({
+            codebasePath,
+            query: 'login',
+            topK: 50,
+            retrievalMode: 'hybrid',
+            scorePolicy: { kind: 'topk_only' },
+        });
+        assert.equal(searchResults.some((result) => result.relativePath === 'src/old.ts'), false);
+        assert.equal(searchResults.some((result) => result.ownerSymbolInstanceId === initialLoginSymbol.symbolInstanceId), false);
+        assert.ok(searchResults.some((result) =>
+            result.relativePath === 'src/new.ts'
+            && result.ownerSymbolInstanceId === nextLoginSymbol.symbolInstanceId
+        ));
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

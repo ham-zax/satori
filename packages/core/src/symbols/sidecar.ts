@@ -426,7 +426,8 @@ function isSymbolSpan(value: unknown): boolean {
         return false;
     }
     if (
-        typeof value.startColumn === 'number'
+        value.startLine === value.endLine
+        && typeof value.startColumn === 'number'
         && typeof value.endColumn === 'number'
         && value.endColumn < value.startColumn
     ) {

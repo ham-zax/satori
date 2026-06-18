@@ -764,6 +764,32 @@ test('readSymbolRegistrySidecar rejects malformed symbol shard records', async (
     }
 });
 
+test('readSymbolRegistrySidecar accepts multi-line spans whose end column precedes the start column', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { symbol, shardPath } = await writeSingleSymbolRegistryFixture(stateRoot);
+        const shard = await readJsonFile<{ manifestHash: string; symbols: unknown[] }>(shardPath);
+        await writeJsonFile(shardPath, {
+            ...shard,
+            symbols: [{
+                ...symbol,
+                span: {
+                    startLine: 3,
+                    endLine: 5,
+                    startByte: 18,
+                    endByte: 47,
+                    startColumn: 5,
+                    endColumn: 1,
+                },
+            }],
+        });
+
+        const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+
+        assert.equal(loaded.status, 'ok');
+        assert.equal(loaded.registry?.symbolsByInstanceId.has(symbol.symbolInstanceId), true);
+    });
+});
+
 test('readSymbolRegistrySidecar rejects malformed symbol shard metadata', async () => {
     const cases: Array<{
         name: string;

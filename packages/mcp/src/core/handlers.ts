@@ -2633,6 +2633,26 @@ export class ToolHandlers {
         return trimmed;
     }
 
+    private deriveOperatorOnlySemanticQuery(operators: ParsedSearchOperators): string | null {
+        if (operators.must.length !== 1) {
+            return null;
+        }
+
+        const mustValue = operators.must[0].trim();
+        if (/\s/.test(mustValue)) {
+            return null;
+        }
+
+        const symbolInstanceIdLike = /^syminst_[a-f0-9]{32}$/i.test(mustValue);
+        const identifierLike = /^[A-Za-z_$][A-Za-z0-9_$]*(?:(?:[.#:/-]|::)[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(mustValue);
+        const strongIdentifierSignal = /[A-Z_]/.test(mustValue) || /(?:\.|::|#|\/)/.test(mustValue);
+        if (symbolInstanceIdLike || (identifierLike && strongIdentifierSignal)) {
+            return mustValue;
+        }
+
+        return null;
+    }
+
     private parseSearchOperators(query: string): ParsedSearchOperators {
         const trimmedQuery = query.trim();
         if (trimmedQuery.length === 0) {
@@ -2719,7 +2739,9 @@ export class ToolHandlers {
         const semanticFromPrefix = semanticTokens.join(" ").trim();
         const semanticSuffix = suffixText.trim();
         const semanticParts = [semanticFromPrefix, semanticSuffix].filter((part) => part.length > 0);
-        operators.semanticQuery = semanticParts.length > 0 ? semanticParts.join("\n") : trimmedQuery;
+        operators.semanticQuery = semanticParts.length > 0
+            ? semanticParts.join("\n")
+            : (this.deriveOperatorOnlySemanticQuery(operators) || trimmedQuery);
         return operators;
     }
 

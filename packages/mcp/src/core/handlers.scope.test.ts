@@ -1502,6 +1502,64 @@ test('handleSearchCode exact symbolInstanceId fast path only uses current regist
     });
 });
 
+test('handleSearchCode uses must-only exact identifier queries for exact registry lookup', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/cli/main.py';
+            const content = [
+                'def cli_entry_point():',
+                '    return 0',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'src/cli'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            const symbols = await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                language: 'python',
+                chunks: [{
+                    content,
+                    startLine: 1,
+                    endLine: 2,
+                    symbolLabel: 'function cli_entry_point()',
+                }],
+            });
+            const owner = symbols.find((symbol) => symbol.name === 'cli_entry_point');
+            assert.ok(owner);
+
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            (handlers as any).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                throw new Error('semanticSearch should not run for must-only exact identifier hits');
+            };
+            (handlers as any).context.getTrackedRelativePaths = () => {
+                throw new Error('tracked lexical scan should not run for must-only exact identifier hits');
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'must:cli_entry_point',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 1,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls, 0);
+            assert.equal(payload.results.length, 1);
+            assert.equal(payload.results[0].file, relativePath);
+            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.hints?.debugSearch?.queryIntent?.semanticQuery, 'cli_entry_point');
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('exact_registry'), true);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('primary'), false);
+        });
+    });
+});
+
 test('handleSearchCode ambiguous exact registry lookup falls back to existing semantic search path', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {

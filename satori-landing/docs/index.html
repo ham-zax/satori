@@ -830,6 +830,13 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               unresolved paths, ambiguous local exports, and multiline module
               syntax are intentionally skipped.
             </p>
+            <p>
+              TypeScript, JavaScript, and Python are the only production-ready
+              <code>call_graph</code> languages. Go and Rust are
+              <code>symbol_only</code>: they can expose outlines through
+              compatible sidecars, but graph traversal returns
+              <code>unsupported_language</code>.
+            </p>
           </div>
           <div class="panel">
             <h3>Runtime Navigation</h3>
@@ -837,7 +844,10 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               <code>call_graph</code> now traverses compatible relationship
               sidecars directly. Canonical JSON sidecars remain the serving
               source by default, while <code>navigation.sqlite</code> is an
-              additive cache for parity checks or explicit experimental reads.
+              additive cache for validation or explicit experimental reads.
+              Explicit SQLite serving requires parity with the canonical JSON
+              registry and relationship sidecars; SQLite is never trusted as
+              truth by itself.
             </p>
           </div>
         </div>
@@ -869,6 +879,9 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               Semantic search with runtime/docs/mixed scopes, path operators,
               must/exclude filters, grouped output, and debug metadata.
+              Search is the freshness-aware read path and can warn when dirty
+              files were not freshened or when a partial index makes recall
+              incomplete.
             </p>
           </div>
           <div class="panel">
@@ -966,11 +979,13 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <h3>Stable Warnings</h3>
             <p>
               Warnings mean the result is usable but degraded. Examples include
-              unsatisfied must filters, reranker failure, or a failed search
-              pass that still left usable fallback output.
+              unsatisfied must filters, partial-index search results, reranker
+              failure, or a failed search pass that still left usable fallback
+              output.
             </p>
             <div class="code-list">
               <code>FILTER_MUST_UNSATISFIED</code>
+              <code>SEARCH_PARTIAL_INDEX:limit_reached</code>
               <code>RERANKER_FAILED</code>
               <code>SEARCH_PASS_FAILED:*</code>
             </div>
@@ -987,9 +1002,14 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <h3>Diagnostic Causes</h3>
             <p>
               <code>fingerprint_mismatch</code>,
-              <code>completion_marker_missing</code>, sidecar readiness, and
-              watcher state are status diagnostics. They explain why the tool
-              chose a lifecycle state; they are not all search warnings.
+              <code>completion_marker_missing</code>,
+              <code>missing_symbol_registry</code>,
+              <code>missing_relationship_sidecar</code>,
+              <code>incompatible_symbol_registry</code>,
+              <code>incompatible_relationship_sidecar</code>, watcher state,
+              and sidecar readiness explain why the tool chose a lifecycle
+              state. Legacy <code>missing_sidecar</code> wording is less
+              precise and should not be preferred for new public paths.
             </p>
           </div>
           <div class="panel">
@@ -1019,6 +1039,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               <li>Reranker attempt and usage state.</li>
               <li>Freshness mode and changed-file boost state.</li>
               <li>Relaxed search pass usage when grouped output underfills.</li>
+              <li>Live path-scoped evidence when exact dirty-file search supplements stale chunks.</li>
             </ul>
           </div>
           <div class="panel">

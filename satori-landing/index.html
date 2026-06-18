@@ -1067,6 +1067,7 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
         <span class="trust-chip" role="listitem">Six MCP tools</span>
         <span class="trust-chip" role="listitem">Installer-owned startup</span>
         <span class="trust-chip" role="listitem">Read-only repo context</span>
+        <span class="trust-chip" role="listitem">JSON sidecars canonical</span>
       </div>
     </section>
 
@@ -1269,8 +1270,9 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
           <span class="flow-index">04</span>
           <strong>Edit with guardrails</strong>
           <p>
-            Requires-reindex, backend timeout, missing sidecar, and noisy-result
-            states return explicit guidance instead of silent degradation.
+            Requires-reindex, backend timeout, missing registry or relationship
+            sidecar, and noisy-result states return explicit guidance instead
+            of silent degradation.
           </p>
         </div>
       </div>
@@ -1555,8 +1557,9 @@ profile = "minimal"</code></pre>
         <article class="card">
           <h4>Scope filtering</h4>
           <p>
-            <code>scope=runtime</code> excludes docs/tests, <code>docs</code>
-            targets documentation, and <code>mixed</code> includes everything.
+            <code>scope=runtime</code> keeps implementation discovery first,
+            excludes docs/generated noise, and keeps tests searchable without
+            letting them dominate unless the query has test intent.
           </p>
         </article>
         <article class="card">
@@ -1571,9 +1574,18 @@ profile = "minimal"</code></pre>
         <article class="card">
           <h4>Honest capability states</h4>
           <p>
-            TypeScript, JavaScript, and Python get the strongest graph/outline
-            support. Other languages still search, but unsupported graph states
-            return explicit fallback guidance.
+            TypeScript, JavaScript, and Python are the production-ready
+            <code>call_graph</code> languages. Go and Rust are
+            <code>symbol_only</code>: outline can work, graph traversal returns
+            <code>unsupported_language</code>.
+          </p>
+        </article>
+        <article class="card">
+          <h4>SQLite parity gate</h4>
+          <p>
+            JSON navigation sidecars stay canonical. Explicit SQLite serving is
+            allowed only after proving parity with the JSON registry and
+            relationship sidecars.
           </p>
         </article>
         <article class="card">
@@ -1605,6 +1617,14 @@ profile = "minimal"</code></pre>
           <p>
             Indeterminate Milvus/Zilliz delete or validation timeouts are
             returned as backend state, not repo failure.
+          </p>
+        </article>
+        <article class="card">
+          <h4>Path-scoped live evidence</h4>
+          <p>
+            Exact <code>path:</code> searches can supplement dirty tracked files
+            with bounded live reads, so fresh regression lines are not hidden by
+            stale vector chunks.
           </p>
         </article>
       </div>
@@ -1664,6 +1684,16 @@ score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc</c
               If <code>call_graph</code> returns <code>not_ready</code>, search
               results still include <code>navigationFallback</code> with a
               runnable read span and optional file outline window.
+            </p>
+          </div>
+        </details>
+        <details>
+          <summary>Partial Index</summary>
+          <div class="details-body">
+            <p>
+              If a full index reaches a limit, search may still return partial
+              chunks, but Satori warns that results may be incomplete and
+              navigation sidecars were not published as complete.
             </p>
           </div>
         </details>

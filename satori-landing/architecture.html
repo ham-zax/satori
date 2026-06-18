@@ -1208,7 +1208,9 @@
             <p>
               <code>call_graph</code> now traverses compatible relationship
               sidecars directly. JSON sidecars remain canonical; SQLite is an
-              additive cache for parity checks or explicit experimental reads.
+              additive cache for validation or explicit experimental reads and
+              can serve only after parity with JSON registry and relationship
+              sidecars is proven.
             </p>
           </article>
         </div>
@@ -1380,9 +1382,11 @@
           <article class="card">
             <h3>Language Capabilities</h3>
             <p>
-              TypeScript, JavaScript, and Python have the strongest graph and
-              outline support. Other languages use AST chunking or text
-              fallback with explicit unsupported states.
+              TypeScript, JavaScript, and Python are the only production-ready
+              <code>call_graph</code> languages. Go and Rust are
+              <code>symbol_only</code>: compatible registries can power
+              outlines, while graph traversal returns
+              <code>unsupported_language</code>.
             </p>
           </article>
           <article class="card">
@@ -1408,6 +1412,16 @@
               changed-file chunk updates. Navigation reuses changed-file symbol
               output, preserves unchanged registry state, and recomputes
               relationships globally without re-splitting unchanged files.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Fail-Closed Navigation</h3>
+            <p>
+              Missing, stale, incompatible, partial, or recovery-failed
+              navigation does not publish fake graph truth. Public tools return
+              precise reasons such as <code>missing_symbol_registry</code>,
+              <code>missing_relationship_sidecar</code>, or
+              <code>partial_index_navigation_unavailable</code>.
             </p>
           </article>
           <article class="card">
@@ -1466,7 +1480,7 @@
           </div>
           <div class="flow-step">
             <strong>Agent handles unsafe state explicitly</strong>
-            <p>Requires-reindex, missing sidecar, noisy results, and backend timeout states return recovery guidance.</p>
+            <p>Requires-reindex, missing registry or relationship sidecar, noisy results, and backend timeout states return recovery guidance.</p>
           </div>
           <div class="flow-step">
             <strong>Agent edits with verified context</strong>

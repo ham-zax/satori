@@ -16,7 +16,8 @@ Satori indexes a repository, keeps the index fresh, and gives agents a fixed six
 - Open exact files, line ranges, and symbols instead of dumping broad context.
 - Trace nearby callers/callees from relationship-backed navigation when compatible sidecars are ready.
 - Build derived symbol registry and relationship sidecars during completed full indexes.
-- Get explicit `requires_reindex`, stale-state, and noise guidance instead of silent bad context.
+- Get explicit `requires_reindex`, partial-index, stale-state, and precise sidecar guidance instead of silent bad context.
+- Compare Satori against another code-intelligence MCP on the same deterministic task suite.
 - Install the MCP server and first-party workflow skill with one command.
 - Avoid resident MCP startup through `npx`; clients launch an installer-owned Node launcher.
 
@@ -184,6 +185,8 @@ Default search behavior is developer-oriented:
 - `rankingMode="auto_changed_first"` to prefer active work when safe.
 - `debug=false` unless you are inspecting ranking/filter behavior.
 
+Search is freshness-aware. It can sync on read, warn when dirty files were not freshened, and supplement exact path-scoped dirty-file evidence with bounded live reads so recent test or regression lines are not hidden behind stale vector chunks. If a full index stops at `limit_reached`, search may still return partial chunks, but it warns that results may be incomplete and navigation sidecars were not published as complete.
+
 ## Symbol-Owned Navigation
 
 Satori's grouped search is symbol-owned: retrieval finds candidate chunks, ownership maps those chunks to a derived symbol registry, and `search_codebase` returns symbol groups with supporting evidence. Files remain the source of truth; the symbol registry is a deterministic navigation view for the indexed snapshot.
@@ -193,13 +196,15 @@ Completed full indexes write navigation sidecars:
 - Symbol registry sidecar with candidate-lookup `symbolKey`, exact `symbolInstanceId`, file-owner fallback symbols, and outline data for exact navigation.
 - Relationship sidecar with conservative `CALLS v0` edges plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges used by `call_graph`.
 - Compatibility manifests so stale, missing, or incompatible sidecars degrade explicitly instead of being silently trusted.
-- Canonical JSON navigation state plus an additive `navigation.sqlite` cache. JSON remains the source that runtime navigation serves by default; SQLite is optional for parity checks or explicit experimental reads.
+- Canonical JSON navigation state plus an additive `navigation.sqlite` cache. JSON remains the source that runtime navigation serves by default; SQLite is optional for validation or explicit experimental reads and may serve only after proving parity with the canonical JSON registry and relationship sidecars.
 
 Current relationship limits are intentional. `CALLS v0` is heuristic/name-based: unique same-file targets can be high confidence, unique cross-file name-only targets are low confidence, and ambiguous same-name targets are skipped. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
 
+Language capability is explicit. TypeScript, JavaScript, and Python are the only production-ready `call_graph` languages. Go and Rust are `symbol_only`: `file_outline` can return compatible sidecar symbols, but `call_graph` returns `unsupported_language`. Broader catalog/parser support does not imply graph-ready navigation.
+
 Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish across small edits, but it is candidate lookup only and is not exact identity.
 
-`call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and recompute relationships against the merged registry without re-splitting unchanged files. If changed-file indexing stops early, Satori clears navigation state instead of publishing a mixed generation.
+`call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and recompute relationships against the merged registry without re-splitting unchanged files. If changed-file indexing stops early, recovery fails, or a partial full index hits a limit, Satori clears or withholds navigation state instead of publishing a mixed generation. Public reasons prefer precise values such as `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `stale_symbol_ref`, `navigation_recovery_failed`, and `partial_index_navigation_unavailable`.
 
 ## Six MCP Tools
 
@@ -242,6 +247,15 @@ pnpm -C packages/mcp manifest:check
 pnpm --filter @zokizuan/satori-mcp test
 pnpm --filter @zokizuan/satori-cli test
 pnpm test:integration
+```
+
+Run the deterministic Satori-vs-codebase-memory comparison harness:
+
+```bash
+pnpm run build:mcp
+pnpm run vs:code-intelligence -- \
+  --cmm-command /home/hamza/.local/bin/codebase-memory-mcp \
+  --out /tmp/satori-vs-both.json
 ```
 
 To test the current checkout in your local MCP clients before publishing, rewrite the existing stable Satori launcher to point at this repo's built MCP runtime:

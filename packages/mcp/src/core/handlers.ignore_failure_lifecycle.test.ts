@@ -342,10 +342,8 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
             () => Date.parse('2026-06-18T00:00:00.000Z'),
         );
         const testHandlers = handlers as unknown as {
-            syncIndexedCodebasesFromCloud: () => Promise<void>;
             validateCompletionProof: () => Promise<{ outcome: 'ok' }>;
         };
-        testHandlers.syncIndexedCodebasesFromCloud = async () => undefined;
         testHandlers.validateCompletionProof = async () => ({ outcome: 'ok' });
 
         const initialOutline = parsePayload(await handlers.handleFileOutline({

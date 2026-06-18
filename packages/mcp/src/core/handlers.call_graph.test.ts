@@ -184,7 +184,6 @@ function createHandlers(repoPath: string) {
     const syncManager = {} as any;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-    (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }
 
@@ -251,7 +250,6 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
 
         const syncManager = {} as any;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -301,7 +299,6 @@ test('handleCallGraph reports partial index navigation unavailable for limit_rea
 
         const syncManager = {} as any;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -361,7 +358,6 @@ test('handleCallGraph returns requires_reindex for indexed roots that only have 
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -434,7 +430,6 @@ test('handleCallGraph traverses compatible relationship sidecars without requiri
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -535,7 +530,6 @@ test('handleCallGraph does not accept legacy v3 symbol ids as steady-state exact
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -606,7 +600,6 @@ test('handleCallGraph does not accept symbolKey as a steady-state exact input', 
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -686,7 +679,6 @@ test('handleCallGraph returns the relationship-backed root node with no edges wh
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -788,7 +780,6 @@ test('handleCallGraph does not merge legacy notes or test references into relati
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -919,7 +910,6 @@ test('handleCallGraph includes import/export-backed cross-file CALLS v0 edges in
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -980,7 +970,6 @@ test('handleCallGraph maps missing_symbol to status not_found', async () => {
         } as any;
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
         (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1037,7 +1026,6 @@ test('handleCallGraph maps unsupported_language to status unsupported', async ()
         } as any;
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
         (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1090,7 +1078,6 @@ test('handleCallGraph returns not_ready envelope when codebase is indexing', asy
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleCallGraph({
             path: repoPath,

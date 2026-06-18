@@ -57,7 +57,6 @@ function createHandlers(repoPath: string): ToolHandlers {
     } as any;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-    (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }
 
@@ -132,7 +131,6 @@ test('handleSyncCodebase returns vector backend diagnostics when freshness sync 
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSyncCodebase({ path: repoPath });
         const envelope = parseManageEnvelope(response);

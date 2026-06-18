@@ -312,7 +312,6 @@ function createHandlers(
         reranker || null,
         options?.gitignoreForceReloadEveryN
     );
-    (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     return handlers;
 }
 
@@ -1012,6 +1011,103 @@ test('handleSearchCode supplements exact warning-code retrieval from tracked lex
         assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
         assert.equal(payload.results[0].debug?.provenance?.semanticCandidate, false);
         assert.equal(payload.results[0].debug?.provenance?.lexicalCandidate, true);
+    });
+});
+
+test('sortGroupedSearchResults preserves exactMatchPinned provenance when exact pinning changes the grouped winner', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, []);
+        const grouped = [
+            {
+                kind: 'group',
+                groupId: 'grp_helper',
+                file: 'packages/mcp/src/core/helper.ts',
+                span: { startLine: 1, endLine: 1 },
+                language: 'typescript',
+                symbolLabel: 'function emitWarning()',
+                score: 5,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                stalenessBucket: 'fresh',
+                collapsedChunkCount: 1,
+                confidence: 'medium',
+                callGraphHint: { supported: false, reason: 'missing_symbol' },
+                preview: 'export function emitWarning() {}',
+                __exactLexicalMatch: false,
+                debug: {
+                    representativeChunkCount: 1,
+                    pathCategory: 'core',
+                    pathMultiplier: 1.1,
+                    topChunkScore: 5,
+                    lexicalScore: 0.2,
+                    changedFilesMultiplier: 1,
+                    agentFitMultiplier: 1,
+                    agentFitReason: 'neutral',
+                    matchesMust: true,
+                    exactLexicalMatch: false,
+                    symbolAggregation: {
+                        ownerSource: 'fallback',
+                        evidenceChunkCount: 1,
+                        supportBoost: 0,
+                    },
+                    provenance: {
+                        retrievalPasses: ['primary'],
+                        backendScoreKinds: ['unknown'],
+                        semanticCandidate: true,
+                        lexicalCandidate: false,
+                        rerankAdjusted: false,
+                        exactMatchPinned: false,
+                        ownerRepairApplied: false,
+                    },
+                },
+            },
+            {
+                kind: 'group',
+                groupId: 'grp_exact',
+                file: 'docs/exact.md',
+                span: { startLine: 1, endLine: 1 },
+                language: 'markdown',
+                symbolLabel: 'const SEARCH_PARTIAL_INDEX',
+                score: 1,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                stalenessBucket: 'fresh',
+                collapsedChunkCount: 1,
+                confidence: 'low',
+                callGraphHint: { supported: false, reason: 'missing_symbol' },
+                preview: 'const SEARCH_PARTIAL_INDEX = true;',
+                __exactLexicalMatch: true,
+                debug: {
+                    representativeChunkCount: 1,
+                    pathCategory: 'docs',
+                    pathMultiplier: 0.9,
+                    topChunkScore: 1,
+                    lexicalScore: 0.5,
+                    changedFilesMultiplier: 1,
+                    agentFitMultiplier: 1,
+                    agentFitReason: 'neutral',
+                    matchesMust: true,
+                    exactLexicalMatch: true,
+                    symbolAggregation: {
+                        ownerSource: 'fallback',
+                        evidenceChunkCount: 1,
+                        supportBoost: 0,
+                    },
+                    provenance: {
+                        retrievalPasses: ['primary'],
+                        backendScoreKinds: ['unknown'],
+                        semanticCandidate: true,
+                        lexicalCandidate: false,
+                        rerankAdjusted: false,
+                        exactMatchPinned: false,
+                        ownerRepairApplied: false,
+                    },
+                },
+            },
+        ] as any[];
+
+        const applied = (handlers as any).sortGroupedSearchResults(grouped, true);
+        assert.equal(applied, true);
+        assert.equal(grouped[0].file, 'docs/exact.md');
+        assert.equal(grouped[0].debug?.provenance?.exactMatchPinned, true);
     });
 });
 
@@ -1860,7 +1956,6 @@ test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', asy
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -1914,7 +2009,6 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -2507,7 +2601,6 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
             CAPABILITIES_NO_RERANK,
             () => Date.parse('2026-01-01T01:00:00.000Z')
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -2606,7 +2699,6 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
             () => Date.parse('2026-01-01T01:00:00.000Z'),
             callGraphManager
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
         (handlers as any).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set(['src/changed.ts'])
@@ -2943,7 +3035,6 @@ test('handleSearchCode marks rerank.enabled=false when reranker instance is miss
             undefined,
             null
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -4933,7 +5024,6 @@ test('handleSearchCode emits fileOutlineWindow navigation fallback when sidecar 
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -5000,7 +5090,6 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: subdirPath,
@@ -5097,7 +5186,6 @@ test('handleSearchCode builds explicit hybrid semantic search requests with topk
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -5153,7 +5241,6 @@ test('handleSearchCode falls back to dense retrieval when hybrid mode is disable
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -5225,7 +5312,6 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const responsePromise = handlers.handleSearchCode({
             path: repoPath,
@@ -5274,7 +5360,6 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -5315,7 +5400,6 @@ test('handleSearchCode returns structured backend diagnostics when all semantic 
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -5390,7 +5474,6 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
             } as any;
 
             const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-            (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
             const response = await handlers.handleSearchCode({
                 path: repoPath,
@@ -5467,7 +5550,6 @@ test('handleSearchCode ignores fault injection env outside test mode', { concurr
             } as any;
 
             const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-            (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
             const response = await handlers.handleSearchCode({
                 path: repoPath,
@@ -5524,7 +5606,6 @@ test('handleSearchCode returns deterministic all-pass error when test fault inje
             } as any;
 
             const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-            (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
             const response = await handlers.handleSearchCode({
                 path: repoPath,
@@ -5591,7 +5672,6 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -5667,7 +5747,6 @@ async function runSearchFreshnessDecisionCase(
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
         (handlers as any).validateCompletionProof = async () => {
             completionProofCalls += 1;
             return { outcome: 'ok' };
@@ -5796,7 +5875,6 @@ test('handleSearchCode not_indexed payload includes stable reason code', async (
         } as any;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,

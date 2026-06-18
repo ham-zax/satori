@@ -205,7 +205,6 @@ test('handleFileOutline returns requires_reindex when sidecar metadata is missin
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -246,7 +245,6 @@ test('handleFileOutline returns requires_reindex, not unsupported, for Go/Rust w
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         for (const file of ['src/service.go', 'src/stack.rs']) {
             const response = await handlers.handleFileOutline({ path: repoPath, file });
@@ -275,7 +273,6 @@ test('handleFileOutline reports partial index navigation unavailable for limit_r
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -313,7 +310,6 @@ test('handleFileOutline returns not_ready envelope when codebase is indexing', a
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -367,7 +363,6 @@ test('handleFileOutline returns unsupported for unsupported file extensions', as
             () => Date.parse('2026-01-01T01:00:00.000Z'),
             callGraphManager
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -387,7 +382,6 @@ test('handleFileOutline supports JavaScript extensions for sidecar-backed outlin
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -425,7 +419,6 @@ test('handleFileOutline returns registry-backed outline when call graph sidecar 
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -469,7 +462,6 @@ test('handleFileOutline returns relationship-backed call graph hints when legacy
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -520,7 +512,6 @@ test('handleFileOutline returns Go symbols without enabling call_graph even when
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const outlineResponse = await handlers.handleFileOutline({
             path: repoPath,
@@ -589,7 +580,6 @@ test('handleFileOutline returns Rust symbols without enabling call_graph even wh
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const outlineResponse = await handlers.handleFileOutline({
             path: repoPath,
@@ -663,7 +653,6 @@ test('handleFileOutline relationship-backed callGraphHint works end to end with 
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const outlineResponse = await handlers.handleFileOutline({
             path: repoPath,
@@ -759,7 +748,6 @@ test('handleFileOutline explicit sqlite backend does not serve navigation after 
             undefined,
             new RuntimeNavigationStore({ servingBackend: 'sqlite' })
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const warnings: string[] = [];
         const previousWarn = console.warn;
@@ -856,7 +844,6 @@ test('handleFileOutline env-selected sqlite backend does not serve navigation af
                 getCodebaseCallGraphSidecar: () => undefined,
             } as any;
             const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-            (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
             const warnings: string[] = [];
             const previousWarn = console.warn;
@@ -980,7 +967,6 @@ test('handleFileOutline can read registry-backed outline from an injected naviga
             undefined,
             fakeNavigationStore as any
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1021,7 +1007,6 @@ test('handleFileOutline registry exact mode resolves a unique symbolInstanceId',
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1063,7 +1048,6 @@ test('handleFileOutline registry exact mode returns ambiguous for duplicate exac
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1127,7 +1111,6 @@ test('handleFileOutline registry-backed outline emits symbolInstanceId call grap
             () => Date.parse('2026-01-01T01:00:00.000Z'),
             callGraphManager
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1190,7 +1173,6 @@ test('handleFileOutline registry exact mode does not resolve legacy call graph s
             () => Date.parse('2026-01-01T01:00:00.000Z'),
             callGraphManager
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1222,7 +1204,6 @@ test('handleFileOutline registry exact mode does not treat symbolKey as an exact
             getCodebaseCallGraphSidecar: () => undefined,
         } as any;
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1295,7 +1276,6 @@ test('handleFileOutline returns unsupported graph hints when relationship sideca
             () => Date.parse('2026-01-01T01:00:00.000Z'),
             callGraphManager
         );
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1337,7 +1317,6 @@ test('handleFileOutline returns not_found for missing files under root', async (
         } as any;
 
         const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleFileOutline({
             path: repoPath,

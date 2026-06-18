@@ -215,7 +215,6 @@ test('handleIndexCodebase touches the watch list when create starts successfully
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         (handlers as any).startBackgroundIndexing = () => undefined;
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
         const payload = parsePayload(response);
@@ -245,7 +244,6 @@ test('handleReindexCodebase touches the watch list when reindex starts successfu
         });
         (handlers as any).clearAllCollectionsForForceReindex = async () => [];
         (handlers as any).startBackgroundIndexing = () => undefined;
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const response = await handlers.handleReindexCodebase({ path: repoPath });
         const payload = parsePayload(response);
@@ -265,7 +263,6 @@ test('handleSyncCodebase touches the watch list on success and handleClearIndex 
         } as any;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const syncResponse = await handlers.handleSyncCodebase({ path: repoPath });
         const syncPayload = parsePayload(syncResponse);
@@ -299,7 +296,6 @@ test('handleClearIndex clears a tracked repo after its directory was deleted', a
         } as any;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         fs.rmSync(repoPath, { recursive: true, force: true });
 
@@ -335,7 +331,6 @@ test('handleSearchCode touches the watch list only for successful indexed-root s
 
         const indexedHandlers = new ToolHandlers(indexedContext, indexedSnapshot, indexedWatch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         (indexedHandlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
-        (indexedHandlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const okResponse = await indexedHandlers.handleSearchCode({
             path: repoPath,
@@ -352,7 +347,6 @@ test('handleSearchCode touches the watch list only for successful indexed-root s
         const notIndexedSnapshot = createMutableSnapshot(repoPath, 'not_found');
         const notIndexedWatch = createWatchRecorder();
         const notIndexedHandlers = new ToolHandlers(indexedContext, notIndexedSnapshot, notIndexedWatch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (notIndexedHandlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const notIndexedResponse = await notIndexedHandlers.handleSearchCode({
             path: repoPath,
@@ -398,7 +392,6 @@ test('handleFileOutline and handleCallGraph touch the watch list for successful 
             CAPABILITIES
         );
         (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
-        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
         const outlineResponse = await handlers.handleFileOutline({
             path: repoPath,

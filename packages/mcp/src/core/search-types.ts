@@ -18,6 +18,23 @@ export interface CallGraphSymbolRef {
     span?: SearchSpan;
 }
 
+export type NavigationRegistryUnavailableReason =
+    | "missing_symbol_registry"
+    | "missing_relationship_sidecar"
+    | "incompatible_symbol_registry"
+    | "incompatible_relationship_sidecar";
+
+export type NavigationExactSymbolUnavailableReason =
+    | "missing_symbol"
+    | "stale_symbol_ref";
+
+export type NavigationUnsupportedReason = "unsupported_language";
+
+export type NavigationUnavailableReason =
+    | NavigationExactSymbolUnavailableReason
+    | NavigationUnsupportedReason
+    | NavigationRegistryUnavailableReason;
+
 export type CallGraphHint =
     | {
         supported: true;
@@ -28,14 +45,7 @@ export type CallGraphHint =
     }
     | {
         supported: false;
-        reason:
-            | "missing_symbol"
-            | "unsupported_language"
-            | "stale_symbol_ref"
-            | "missing_symbol_registry"
-            | "missing_relationship_sidecar"
-            | "incompatible_symbol_registry"
-            | "incompatible_relationship_sidecar";
+        reason: NavigationUnavailableReason;
     };
 
 export interface SearchNextActionReadSymbol {
@@ -343,10 +353,7 @@ export type NonOkReason =
     | "requires_reindex"
     | "partial_index_navigation_unavailable"
     | "not_indexed"
-    | "missing_symbol_registry"
-    | "missing_relationship_sidecar"
-    | "incompatible_symbol_registry"
-    | "incompatible_relationship_sidecar"
+    | NavigationRegistryUnavailableReason
     | "stale_symbol_ref"
     | "missing_provider_config"
     | "vector_backend_unavailable";
@@ -434,7 +441,7 @@ export type CallGraphResponseStatus =
     | "unsupported";
 
 export type CallGraphResponseReason =
-    | Extract<CallGraphHint, { supported: false }>["reason"]
+    | NavigationUnavailableReason
     | "invalid_symbol_ref"
     | "indexing"
     | "not_indexed"

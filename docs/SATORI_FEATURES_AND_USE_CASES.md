@@ -78,6 +78,8 @@ Why it matters:
 
 This fits the most common agent need: find the production behavior first, while still allowing tests to surface when the query asks for test/spec/coverage evidence.
 
+For exact identifier-style lookups, `search_codebase` can use a current compatible symbol registry before vector search. A unique exact registry hit returns a grouped symbol result without semantic search, tracked lexical scanning, or rerank. Missing, unavailable, or ambiguous registry state falls back without guessing.
+
 Supported scopes:
 
 - `runtime`: includes source/runtime code, top-level `scripts/**`, and test evidence; tests are demoted unless test intent is explicit.
@@ -219,6 +221,7 @@ Behavior is deterministic:
 - escaped prefixes can be used as literals,
 - `path:` and `-path:` use gitignore-style matching,
 - filtering order is fixed.
+- exact `path:` filters constrain exact-registry lookup to symbols from the requested file before any broader fallback.
 
 Use cases:
 
@@ -1138,6 +1141,7 @@ Behavior includes:
 - partial pass failures emit warnings,
 - full pass failure returns a structured tool error,
 - telemetry reports pass counts and success/failure counts.
+- exact-registry-eligible misses or ambiguities skip the expanded semantic pass and continue with the primary semantic pass plus bounded lexical recovery.
 
 Why it matters:
 

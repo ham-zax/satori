@@ -365,6 +365,13 @@ Behavior:
 - Determinism: tracked path set is normalized/sorted, exact path filters sort first, and lexical candidates tie-break by exact-match flag -> score -> file -> line.
 - Performance: bounded by hard caps; this is not an unbounded whole-repo grep fallback.
 
+5b) Exact registry identifier fast path
+- Trigger: grouped symbol searches with exact identifier-like queries, current compatible symbol registry, and no ambiguous exact owner.
+- Effect: after freshness gates pass, exact symbol registry hits can return a symbol group before semantic/vector search, tracked lexical scan, or rerank. Ambiguous/missing registry matches fall back to the normal search path without guessing; exact-eligible fallback uses the primary semantic pass plus bounded lexical recovery, not the expanded semantic pass.
+- Observability: `hints.debugSearch.exactRegistry`, `hints.debugSearch.phaseTimingsMs`, `hints.debugSearch.passesUsed`, and per-result `debug.provenance.retrievalPasses` include `exact_registry` on hits. Missing or incompatible registry state reports `exactRegistry.reason=registry_unavailable` when `debug:true`.
+- Determinism: exact path filters inspect only that file's registry symbols; unscoped duplicate exact names are ambiguous and fall back.
+- Performance: warm exact identifier lookup avoids vector search, tracked lexical scan, and rerank when the registry hit is unique.
+
 6) Must retry
 - Trigger: active `must:` constraints and insufficient results.
 - Effect: bounded retries with `candidateLimit` expansion.

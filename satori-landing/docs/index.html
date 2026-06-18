@@ -1016,8 +1016,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <h3>Debug Payloads</h3>
             <p>
               Use <code>debug=true</code> on <code>search_codebase</code> when
-              you need ranking, filter, freshness, reranker, or relaxed-pass
-              explanations.
+              you need ranking, filter, freshness, exact-registry,
+              tracked-lexical, reranker, or phase-timing explanations.
             </p>
           </div>
         </div>
@@ -1036,10 +1036,12 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <ul>
               <li>Filters applied in deterministic order.</li>
               <li>Candidate counts before and after filtering.</li>
+              <li>Exact-registry hit, miss, ambiguity, or registry-unavailable state.</li>
+              <li>Phase timings for freshness, registry lookup, semantic search, lexical recovery, rerank, grouping, and navigation validation.</li>
               <li>Reranker attempt and usage state.</li>
               <li>Freshness mode and changed-file boost state.</li>
               <li>Relaxed search pass usage when grouped output underfills.</li>
-              <li>Live path-scoped evidence when exact dirty-file search supplements stale chunks.</li>
+              <li>Tracked lexical and live path-scoped evidence when exact lookup supplements semantic chunks.</li>
             </ul>
           </div>
           <div class="panel">

@@ -22,19 +22,19 @@ Satori exposes exactly six MCP tools:
 
 1. Use `manage_index(action="status", path=...)` when index state is unknown.
 2. If the codebase is not indexed, use `manage_index(action="create", path=...)`.
-3. Search the requested path with `search_codebase(path=..., query=..., scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`.
+3. Search the requested path with `search_codebase(path=..., query=..., scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`; exact identifier-like queries may return from the registry before semantic/vector search.
 4. Use `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)` to lock exact symbol spans when identity is available.
 5. If `callGraphHint.supported=true`, call `call_graph(path=..., symbolRef=..., direction="both", depth=1)`.
 6. Use `read_file(path=..., open_symbol=...)` or deterministic line spans for final evidence before editing.
 
 ## Search Rules
 
-- Start with natural-language intent, not filenames.
+- Start with natural-language intent for fuzzy discovery; use exact identifiers for symbol, constant, warning-code, or path-scoped lookups.
 - Default to `scope="runtime"`.
 - Use operators only when useful: `lang:`, `path:`, `-path:`, `must:`, `exclude:`.
 - Pass the user's requested path; if Satori resolves an indexed parent, follow returned fallback payloads exactly.
 - Treat warnings as usable-but-degraded results, not fatal errors.
-- Use `debug=true` only when ranking or filter explanations are required.
+- Use `debug=true` only when ranking, filter, freshness, exact-registry, tracked-lexical, or latency explanations are required; inspect `debugSearch.exactRegistry`, `phaseTimingsMs`, `trackedLexical`, and `passesUsed`.
 
 ## Navigation Rules
 

@@ -1132,7 +1132,7 @@
               </div>
               <div class="tool-card">
                 <h3><code>search_codebase</code></h3>
-                <p>Finds relevant code with scoped semantic search, symbol-owned grouping, freshness checks, and navigation hints.</p>
+                <p>Finds relevant code with scoped semantic search, exact identifier lookup, symbol-owned grouping, freshness checks, and navigation hints.</p>
                 <p class="refusal">Refuses stale or unsafe context when index gates require attention.</p>
               </div>
             </div>
@@ -1198,7 +1198,8 @@
           <article class="card">
             <h3>Search Contract</h3>
             <p>
-              <code>search_codebase</code> returns symbols in grouped mode.
+              <code>search_codebase</code> returns exact registry hits or
+              symbols in grouped mode.
               Matching chunks are evidence for those symbols, not the final
               unit the agent should edit from.
             </p>
@@ -1468,7 +1469,7 @@
         <div class="flow-list">
           <div class="flow-step">
             <strong>Agent asks for the relevant implementation</strong>
-            <p><code>search_codebase</code> returns ranked code groups with freshness state and navigation hints.</p>
+            <p><code>search_codebase</code> returns exact identifier hits or ranked code groups with freshness state and navigation hints.</p>
           </div>
           <div class="flow-step">
             <strong>Agent opens the exact symbol</strong>

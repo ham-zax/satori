@@ -1,9 +1,9 @@
 ---
 name: satori-cli
-description: Semantic code search + symbol navigation for Satori CLI (MCP-backed). Use when users ask to search codebases (for example lazy loading, prefetch/preload, “where is X implemented”, trace callers/callees), and prefer search_codebase/file_outline/call_graph/read_file over ad-hoc grep.
+description: Satori CLI code search + symbol navigation (MCP-backed). Use when users ask to search codebases (for example lazy loading, prefetch/preload, exact identifiers, “where is X implemented”, trace callers/callees), and prefer search_codebase/file_outline/call_graph/read_file over ad-hoc grep.
 ---
 
-# Satori CLI (Semantic Search + Symbol Navigation)
+# Satori CLI (Code Search + Symbol Navigation)
 
 Use this skill for codebase discovery/navigation requests, especially:
 - "search my codebase"
@@ -21,12 +21,12 @@ Use exactly these 6 tools:
 5. `call_graph`
 6. `read_file`
 
-## Semantic-First Execution Plan
+## Satori-First Execution Plan
 
 1. Check/index status for target path:
    - `manage_index(action="status", path=...)`
    - if needed: `manage_index(action="create", path=...)`
-2. Run semantic retrieval first (not grep-first):
+2. Run Satori retrieval first (not grep-first); exact identifier-like queries may return from the registry before semantic/vector search:
    - `search_codebase(path, query, scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`
 3. Use symbol-aware navigation from grouped results:
    - if `callGraphHint.supported=true`, call `call_graph(path, symbolRef=callGraphHint.symbolRef, direction="both", depth=1)`
@@ -37,9 +37,10 @@ Use exactly these 6 tools:
    - Use `file` from grouped result metadata or `navigationFallback.fileOutlineWindow.args.file`.
    - Use absolute read path from `navigationFallback.readSpan.args.path` when available; otherwise derive from codebase root + relative file.
 
-## Query Strategy (semantic search)
+## Query Strategy
 
-- Start with natural-language intent (example: "lazy loading prefetch preload flow in landing page").
+- Start with natural-language intent for fuzzy discovery (example: "lazy loading prefetch preload flow in landing page").
+- Use exact identifiers for symbol, constant, warning-code, or path-scoped lookups; unique registry hits can avoid semantic search, tracked lexical scan, and rerank.
 - Use operators only when needed:
   - `lang:` `path:` `-path:` `must:` `exclude:`
 - Scope policy:
@@ -47,6 +48,7 @@ Use exactly these 6 tools:
   - `docs` for docs/tests only
   - `mixed` for everything
 - Keep grouped symbol mode for architecture tracing; use raw mode only for chunk-level deep inspection.
+- Use `debug=true` only when diagnosing ranking, filter, freshness, exact-registry, tracked-lexical, reranker, or latency behavior. Inspect `debugSearch.exactRegistry`, `phaseTimingsMs`, `trackedLexical`, and `passesUsed`.
 
 ## Symbol Reference Features (must use)
 

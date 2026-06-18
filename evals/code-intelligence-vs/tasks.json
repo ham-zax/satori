@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "name": "Satori vs codebase-memory-mcp code intelligence baseline",
+  "repo": ".",
+  "cmmProject": "home-hamza-repo-satori",
+  "tasks": [
+    {
+      "id": "find-search-handler",
+      "kind": "search",
+      "query": "search_codebase grouped result handler freshness warnings next actions",
+      "limit": 10,
+      "scope": "runtime",
+      "expected": {
+        "files": [
+          "packages/mcp/src/core/handlers.ts"
+        ],
+        "symbols": [
+          "handleSearchCode"
+        ]
+      }
+    },
+    {
+      "id": "outline-handler-file",
+      "kind": "outline",
+      "file": "packages/mcp/src/core/handlers.ts",
+      "query": "ToolHandlers handleSearchCode handleFileOutline handleCallGraph",
+      "limitSymbols": 800,
+      "expected": {
+        "files": [
+          "packages/mcp/src/core/handlers.ts"
+        ],
+        "symbols": [
+          "ToolHandlers",
+          "handleSearchCode",
+          "handleFileOutline",
+          "handleCallGraph"
+        ]
+      }
+    },
+    {
+      "id": "trace-search-handler",
+      "kind": "callgraph",
+      "query": "handleSearchCode",
+      "functionName": "handleSearchCode",
+      "direction": "both",
+      "depth": 2,
+      "graphLimit": 40,
+      "expected": {
+        "files": [
+          "packages/mcp/src/core/handlers.ts"
+        ],
+        "symbols": [
+          "handleSearchCode"
+        ]
+      }
+    },
+    {
+      "id": "architecture-packages",
+      "kind": "architecture",
+      "query": "Satori package architecture core mcp cli runtime responsibilities",
+      "limit": 12,
+      "expected": {
+        "text": [
+          "core",
+          "mcp",
+          "cli"
+        ]
+      }
+    },
+    {
+      "id": "default-profile-safety",
+      "kind": "search",
+      "query": "default supported extensions minimal profile language capability matrix does not broaden",
+      "limit": 10,
+      "scope": "runtime",
+      "expected": {
+        "files": [
+          "packages/core/src/config/defaults.ts"
+        ],
+        "symbols": [
+          "getSupportedExtensionsForIndexProfile"
+        ],
+        "text": [
+          "DEFAULT_SUPPORTED_EXTENSIONS"
+        ]
+      }
+    }
+  ]
+}

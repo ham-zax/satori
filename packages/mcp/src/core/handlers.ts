@@ -12,6 +12,7 @@ import {
     RemoteCollectionDeletePendingError,
     deleteCollectionWithVerification,
     getGraphNeighbors,
+    getLanguageIdFromFilename,
     getSupportedExtensionsForCapability,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForFilename,
@@ -130,6 +131,10 @@ const SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING = 'SEARCH_PARTIAL_INDEX:limit_r
 const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = 'SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE';
 const SEARCH_NAVIGATION_NEXT_STEP = 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.';
 const SEARCH_GROUP_PREVIEW_MAX_CHARS = 800;
+const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES = 256 * 1024;
+const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_FILES = 8;
+const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_RESULTS = 8;
+const SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES = 2;
 const SEARCH_AGENT_FIT_NEUTRAL = 1.0;
 const SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER = 1.25;
 const SEARCH_AGENT_FIT_TEST_DEMOTION_RUNTIME = 0.45;
@@ -1424,6 +1429,144 @@ export class ToolHandlers {
         return normalized;
     }
 
+    private isExactSearchPathFilter(pattern: string): boolean {
+        return !/[!*?[\]{}]/.test(pattern) && !pattern.endsWith('/');
+    }
+
+    private activeIgnorePatternsExcludePath(codebaseRoot: string, relativePath: string): boolean {
+        const getActiveIgnorePatterns = (this.context as any).getActiveIgnorePatterns;
+        if (typeof getActiveIgnorePatterns !== 'function') {
+            return false;
+        }
+
+        const patterns = getActiveIgnorePatterns.call(this.context, codebaseRoot);
+        if (!Array.isArray(patterns) || patterns.length === 0) {
+            return false;
+        }
+
+        const normalized = this.normalizeRelativePathForIgnoreCheck(relativePath);
+        if (!normalized) {
+            return true;
+        }
+
+        try {
+            const matcher = ignore();
+            matcher.add(patterns.filter((pattern: unknown) => typeof pattern === 'string'));
+            if (matcher.ignores(normalized)) {
+                return true;
+            }
+            const withSlash = normalized.endsWith('/') ? normalized : `${normalized}/`;
+            return matcher.ignores(withSlash);
+        } catch {
+            return true;
+        }
+    }
+
+    private buildLivePathScopedSearchResults(input: {
+        effectiveRoot: string;
+        parsedOperators: ParsedSearchOperators;
+        queryPlan: SearchQueryPlan;
+        changedFiles: Set<string>;
+    }): any[] {
+        if (input.parsedOperators.path.length === 0 || input.changedFiles.size === 0) {
+            return [];
+        }
+
+        const results: any[] = [];
+        const seenPaths = new Set<string>();
+        const lexicalTerms = input.queryPlan.lexicalTerms
+            .map((term) => term.value.toLowerCase())
+            .filter((term) => term.length > 0);
+
+        for (const pattern of input.parsedOperators.path) {
+            if (results.length >= SEARCH_LIVE_PATH_SUPPLEMENT_MAX_RESULTS || seenPaths.size >= SEARCH_LIVE_PATH_SUPPLEMENT_MAX_FILES) {
+                break;
+            }
+
+            const normalized = this.normalizeRelativePathForIgnoreCheck(pattern);
+            if (!normalized || !this.isExactSearchPathFilter(normalized) || seenPaths.has(normalized)) {
+                continue;
+            }
+            seenPaths.add(normalized);
+
+            if (!input.changedFiles.has(normalized)) {
+                continue;
+            }
+            if (!isLanguageCapabilitySupportedForFilename(normalized, 'search')) {
+                continue;
+            }
+            if (this.activeIgnorePatternsExcludePath(input.effectiveRoot, normalized)) {
+                continue;
+            }
+
+            const absolutePath = path.resolve(input.effectiveRoot, normalized);
+            const rootPrefix = `${path.resolve(input.effectiveRoot)}${path.sep}`;
+            if (!absolutePath.startsWith(rootPrefix)) {
+                continue;
+            }
+
+            let stat: fs.Stats;
+            try {
+                stat = fs.statSync(absolutePath);
+            } catch {
+                continue;
+            }
+            if (!stat.isFile() || stat.size > SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES) {
+                continue;
+            }
+
+            let content: string;
+            try {
+                content = fs.readFileSync(absolutePath, 'utf8');
+            } catch {
+                continue;
+            }
+
+            const lowerContent = content.toLowerCase();
+            if (lexicalTerms.length > 0 && !lexicalTerms.some((term) => lowerContent.includes(term))) {
+                continue;
+            }
+
+            const lines = content.split(/\r?\n/);
+            const matchingLineIndex = lexicalTerms.length > 0
+                ? this.findBestLivePathLexicalLineIndex(lines, input.queryPlan.lexicalTerms)
+                : 0;
+            const anchorLineIndex = matchingLineIndex >= 0 ? matchingLineIndex : 0;
+            const startLine = Math.max(1, anchorLineIndex + 1 - SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES);
+            const endLine = Math.min(lines.length, anchorLineIndex + 1 + SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES);
+            const windowContent = lines.slice(startLine - 1, endLine).join('\n');
+
+            results.push({
+                content: windowContent,
+                relativePath: normalized,
+                startLine,
+                endLine,
+                language: getLanguageIdFromFilename(normalized, 'text'),
+                score: 1,
+                backendScore: 1,
+                backendScoreKind: 'lexical_rank',
+            });
+        }
+
+        return results;
+    }
+
+    private findBestLivePathLexicalLineIndex(lines: string[], lexicalTerms: SearchLexicalTerm[]): number {
+        const orderedTerms = [
+            ...lexicalTerms.filter((term) => term.kind === 'whole'),
+            ...lexicalTerms.filter((term) => term.kind !== 'whole'),
+        ].map((term) => term.value.toLowerCase()).filter((term) => term.length > 0);
+
+        for (const term of orderedTerms) {
+            const lineIndex = lines.findIndex((line) => line.toLowerCase().includes(term));
+            if (lineIndex >= 0) {
+                return lineIndex;
+            }
+        }
+
+        return -1;
+    }
+
     private trimTrailingSeparators(inputPath: string): string {
         const parsedRoot = path.parse(inputPath).root;
         if (inputPath === parsedRoot) {
@@ -2073,6 +2216,9 @@ export class ToolHandlers {
 
             if (this.hasTokenBoundaryMatch(content, term.value)) {
                 score = Math.max(score, (plan.referenceSeeking ? (declarationMatch ? 0.10 : 1.25) : 0.90) * termFactor);
+                if (!plan.referenceSeeking && term.kind === 'whole') {
+                    exactLexicalMatch = true;
+                }
                 continue;
             }
 
@@ -5009,6 +5155,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 changedFilesBoostApplied: false,
                 changedFilesBoostSkippedForLargeChangeSet,
             };
+            const dirtyFilesNotFreshened = observedChangedFilesState.available
+                && observedChangedFilesCount > 0
+                && freshnessDecision.mode !== 'synced'
+                && freshnessDecision.mode !== 'reconciled_ignore_change';
+            const canSupplementLivePathEvidence = observedChangedFilesState.available
+                && observedChangedFilesCount > 0
+                && parsedOperators.path.length > 0;
             let boostedCandidates = 0;
             let attemptsUsed = 0;
             const searchWarningsSet = new Set<string>();
@@ -5156,6 +5309,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 for (const pass of successfulPasses) {
                     addPass(pass.results, 1);
                 }
+                if (canSupplementLivePathEvidence) {
+                    const livePathResults = this.buildLivePathScopedSearchResults({
+                        effectiveRoot,
+                        parsedOperators,
+                        queryPlan,
+                        changedFiles: observedChangedFilesState.files,
+                    });
+                    if (livePathResults.length > 0) {
+                        addPass(livePathResults, 1);
+                        passesUsed.add('live_path');
+                    }
+                }
 
                 const beforeFilter = byChunkKey.size;
                 const scoredAttempt: SearchCandidate[] = [];
@@ -5247,10 +5412,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 ...Array.from(searchWarningsSet),
                 ...partialIndexSearchWarnings,
             ];
-            const dirtyFilesNotFreshened = observedChangedFilesState.available
-                && observedChangedFilesCount > 0
-                && freshnessDecision.mode !== 'synced'
-                && freshnessDecision.mode !== 'reconciled_ignore_change';
             if (dirtyFilesNotFreshened) {
                 searchWarnings.push(WARNING_CODES.SEARCH_DIRTY_WORKTREE_NOT_SYNCED);
             }

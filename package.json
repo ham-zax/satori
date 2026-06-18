@@ -31,7 +31,8 @@
         "release:mcp": "pnpm --filter @zokizuan/satori-mcp... run build && pnpm run release:smoke:mcp && pnpm --filter @zokizuan/satori-mcp publish --access public --no-git-checks",
         "release:cli": "pnpm --filter @zokizuan/satori-cli... run build && pnpm run release:smoke:cli && pnpm --filter @zokizuan/satori-cli publish --access public --no-git-checks",
         "test:integration": "pnpm --filter @zokizuan/satori-core run test:integration",
-        "benchmark": "node scripts/build-benchmark.js"
+        "benchmark": "node scripts/build-benchmark.js",
+        "vs:code-intelligence": "node scripts/code-intelligence-vs.mjs"
     },
     "devDependencies": {
         "@eslint/js": "^9.28.0",

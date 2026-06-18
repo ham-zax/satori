@@ -265,6 +265,67 @@ test('buildSymbolRecordsForFile skips chunks without labels and deduplicates rep
     assert.equal(records[1].qualifiedName, 'health_check');
 });
 
+test('buildSymbolRecordsForFile collapses overlapping chunk-derived symbols by stable identity', () => {
+    const label = 'async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecarInput)';
+    const chunks = [
+        {
+            content: 'export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecarInput) {',
+            metadata: {
+                startLine: 501,
+                endLine: 584,
+                language: 'typescript',
+                filePath: 'packages/core/src/symbols/sidecar.ts',
+                symbolLabel: label,
+                breadcrumbs: [label],
+            },
+        },
+        {
+            content: 'async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecarInput) {',
+            metadata: {
+                startLine: 511,
+                endLine: 584,
+                language: 'typescript',
+                filePath: 'packages/core/src/symbols/sidecar.ts',
+                symbolLabel: label,
+                breadcrumbs: [label],
+            },
+        },
+        {
+            content: 'return registry;',
+            metadata: {
+                startLine: 577,
+                endLine: 622,
+                language: 'typescript',
+                filePath: 'packages/core/src/symbols/sidecar.ts',
+                symbolLabel: label,
+                breadcrumbs: [label],
+            },
+        },
+    ];
+
+    const records = buildSymbolRecordsForFile({
+        relativePath: 'packages/core/src/symbols/sidecar.ts',
+        language: 'typescript',
+        content: 'export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecarInput) {}\n',
+        fileHash: 'file-hash',
+        extractorVersion: 'extractor-v1',
+        chunks,
+    });
+
+    const symbols = records.filter((record) => record.kind !== 'file');
+    const matches = records.filter((record) => record.label === label);
+    const symbolInstanceIds = new Set(records.map((record) => record.symbolInstanceId));
+
+    assert.equal(symbols.length, 1);
+    assert.equal(matches.length, 1);
+    assert.equal(symbolInstanceIds.size, records.length);
+    assert.deepEqual(matches[0]?.span, {
+        startLine: 501,
+        endLine: 622,
+    });
+    assert.notEqual(matches[0]?.symbolInstanceId, matches[0]?.symbolKey);
+});
+
 test('resolveOwnerSymbolForChunk chooses tightest extracted line owner before synthesized file fallback', () => {
     const records = buildSymbolRecordsForFile({
         relativePath: 'src/auth.ts',

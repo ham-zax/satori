@@ -343,6 +343,8 @@ export function buildSymbolRecordsForFile(input: BuildSymbolRecordsForFileInput)
         return [fileOwner, ...extracted.sort(compareSymbols)];
     }
 
+    const chunkRecordsByLogicalIdentity = new Map<string, SymbolRecord>();
+
     for (const chunk of input.chunks) {
         const label = chunk.metadata.symbolLabel?.trim();
         if (!label) {
@@ -376,13 +378,28 @@ export function buildSymbolRecordsForFile(input: BuildSymbolRecordsForFileInput)
             span,
             extractorVersion: input.extractorVersion,
         });
+        const logicalIdentity = `${symbolKey}\0${label}`;
+        const existing = chunkRecordsByLogicalIdentity.get(logicalIdentity);
 
-        if (seenInstanceIds.has(symbolInstanceId)) {
+        if (existing) {
+            const mergedSpan = buildLineSpan(
+                Math.min(existing.span.startLine, span.startLine),
+                Math.max(existing.span.endLine, span.endLine),
+            );
+            chunkRecordsByLogicalIdentity.set(logicalIdentity, {
+                ...existing,
+                symbolInstanceId: createSymbolInstanceId({
+                    symbolKey,
+                    fileHash: input.fileHash,
+                    span: mergedSpan,
+                    extractorVersion: input.extractorVersion,
+                }),
+                span: mergedSpan,
+            });
             continue;
         }
-        seenInstanceIds.add(symbolInstanceId);
 
-        extracted.push({
+        chunkRecordsByLogicalIdentity.set(logicalIdentity, {
             symbolKey,
             symbolInstanceId,
             language: input.language,
@@ -398,7 +415,7 @@ export function buildSymbolRecordsForFile(input: BuildSymbolRecordsForFileInput)
         });
     }
 
-    return [fileOwner, ...extracted.sort(compareSymbols)];
+    return [fileOwner, ...[...chunkRecordsByLogicalIdentity.values()].sort(compareSymbols)];
 }
 
 const SYMBOL_OWNER_KIND_PRIORITY: Record<SymbolKind, number> = {

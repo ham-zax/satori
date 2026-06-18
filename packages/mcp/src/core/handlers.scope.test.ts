@@ -1821,6 +1821,129 @@ test('handleSearchCode exposes freshness summary and warns when dirty files were
     });
 });
 
+test('handleSearchCode supplements exact path-scoped dirty file evidence when indexed retrieval misses it', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/path-scoped.test.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, relativePath),
+            [
+                'const earlierFragment = { startLine: 1, endLine: 2 };',
+                'test("captures exact span metadata", () => {',
+                '    const span = { startLine: 7, endColumn: 42 };',
+                '    assert.equal(span.endColumn, 42);',
+                '});',
+            ].join('\n')
+        );
+
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'const staleSpan = { startLine: 7, endLine: 9 };',
+                relativePath,
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+            },
+            {
+                content: 'export const unrelated = true;',
+                relativePath: 'src/unrelated.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_unrelated',
+                symbolLabel: 'const unrelated'
+            }
+        ]);
+
+        (handlers as any).syncManager = {
+            ensureFreshness: async () => ({ mode: 'skipped_recent', changed: false })
+        };
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set([relativePath])
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: `path:${relativePath} endColumn`,
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, relativePath);
+        assert.match(payload.results[0].preview, /endColumn/);
+        assert.equal(payload.warnings.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
+    });
+});
+
+test('handleSearchCode supplements exact path-scoped dirty file evidence after sync when indexed retrieval misses it', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/synced-path-scoped.test.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, relativePath),
+            [
+                'const earlierFragment = { startLine: 1, endLine: 2 };',
+                'test("captures synced exact span metadata", () => {',
+                '    const span = { startLine: 11, endColumn: 84 };',
+                '    assert.equal(span.endColumn, 84);',
+                '});',
+            ].join('\n')
+        );
+
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'const staleSpan = { startLine: 11, endLine: 13 };',
+                relativePath,
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+            }
+        ]);
+
+        (handlers as any).syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'synced',
+                changed: true,
+                stats: { added: 0, removed: 0, modified: 1 },
+            })
+        };
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set([relativePath])
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: `path:${relativePath} endColumn`,
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, relativePath);
+        assert.match(payload.results[0].preview, /endColumn/);
+        assert.equal(payload.warnings?.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), undefined);
+        assert.equal(payload.hints.debugSearch.passesUsed.includes('live_path'), true);
+    });
+});
+
 test('handleSearchCode debug exposes changed tracked symbols and direct callers from sidecar data', async () => {
     await withTempRepo(async (repoPath) => {
         const context = {

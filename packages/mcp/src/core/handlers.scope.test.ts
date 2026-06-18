@@ -5399,6 +5399,165 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
     });
 });
 
+async function runSearchFreshnessDecisionCase(
+    decision: any,
+    expected: {
+        status: string;
+        reason?: string;
+        semanticSearchCalls: number;
+        messageIncludes?: string;
+    }
+): Promise<any> {
+    let semanticSearchCalls = 0;
+    let ensureFreshnessCalls = 0;
+    let completionProofCalls = 0;
+
+    return withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                semanticSearchCalls += 1;
+                return [{
+                    content: 'export function freshRuntime() { return true; }',
+                    relativePath: 'src/runtime.ts',
+                    startLine: 1,
+                    endLine: 1,
+                    language: 'typescript',
+                    score: 0.99,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'fresh_runtime',
+                    symbolLabel: 'function freshRuntime()'
+                }];
+            }
+        } as any;
+
+        const codebaseInfo = {
+            status: 'indexed',
+            lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified'
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
+            getCodebaseInfo: () => codebaseInfo,
+            getCodebaseStatus: () => 'indexed',
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => {
+                ensureFreshnessCalls += 1;
+                return decision;
+            }
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+        (handlers as any).validateCompletionProof = async () => {
+            completionProofCalls += 1;
+            return { outcome: 'ok' };
+        };
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(ensureFreshnessCalls, 1);
+        assert.equal(completionProofCalls, 1);
+        assert.equal(semanticSearchCalls, expected.semanticSearchCalls);
+        assert.equal(payload.status, expected.status);
+        if (expected.reason) {
+            assert.equal(payload.reason, expected.reason);
+        }
+        assert.equal(payload.freshnessDecision?.mode, decision.mode);
+        if (expected.messageIncludes) {
+            assert.match(String(payload.message || ''), new RegExp(expected.messageIncludes));
+        }
+        return payload;
+    });
+}
+
+test('handleSearchCode blocks skipped_requires_reindex freshness before vector search', async () => {
+    const payload = await runSearchFreshnessDecisionCase({
+        mode: 'skipped_requires_reindex',
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        thresholdMs: 180000,
+        errorMessage: 'navigation recovery failed'
+    }, {
+        status: 'requires_reindex',
+        reason: 'requires_reindex',
+        semanticSearchCalls: 0
+    });
+
+    assert.equal(payload.hints?.reindex?.tool, 'manage_index');
+    assert.equal(payload.hints?.reindex?.args?.action, 'reindex');
+});
+
+test('handleSearchCode blocks skipped_missing_path freshness before vector search', async () => {
+    await runSearchFreshnessDecisionCase({
+        mode: 'skipped_missing_path',
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        thresholdMs: 180000
+    }, {
+        status: 'not_indexed',
+        reason: 'not_indexed',
+        semanticSearchCalls: 0,
+        messageIncludes: 'no longer exists'
+    });
+});
+
+test('handleSearchCode blocks ignore_reload_failed freshness before vector search', async () => {
+    const payload = await runSearchFreshnessDecisionCase({
+        mode: 'ignore_reload_failed',
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        thresholdMs: 180000,
+        errorMessage: 'forced ignore reload failure',
+        fallbackSyncExecuted: true
+    }, {
+        status: 'requires_reindex',
+        reason: 'requires_reindex',
+        semanticSearchCalls: 0,
+        messageIncludes: 'ignore-rule reconciliation failed'
+    });
+
+    assert.match(payload.message, /Fallback incremental sync was executed/);
+});
+
+test('handleSearchCode blocks failed coalesced freshness before vector search', async () => {
+    await runSearchFreshnessDecisionCase({
+        mode: 'coalesced',
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        thresholdMs: 180000,
+        errorMessage: 'coalesced sync failed'
+    }, {
+        status: 'requires_reindex',
+        reason: 'requires_reindex',
+        semanticSearchCalls: 0,
+        messageIncludes: 'coalesced in-flight sync failed'
+    });
+});
+
+test('handleSearchCode allows successful coalesced freshness reuse', async () => {
+    const payload = await runSearchFreshnessDecisionCase({
+        mode: 'coalesced',
+        checkedAt: '2026-01-01T00:00:00.000Z',
+        thresholdMs: 180000
+    }, {
+        status: 'ok',
+        semanticSearchCalls: 2
+    });
+
+    assert.equal(payload.results.length, 1);
+});
+
 test('handleSearchCode not_indexed payload includes stable reason code', async () => {
     await withTempRepo(async (repoPath) => {
         const context = {

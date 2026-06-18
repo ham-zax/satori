@@ -958,64 +958,77 @@ export class ToolHandlers {
             limit: number;
         }
     ): SearchResponseEnvelope | null {
-        if (freshnessDecision.mode === 'skipped_requires_reindex') {
-            const detail = freshnessDecision.errorMessage
-                ? `Search blocked because this codebase requires reindex (${freshnessDecision.errorMessage}).`
-                : 'Search blocked because this codebase requires reindex.';
-            const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
-            return {
-                ...payload,
-                freshnessDecision
-            };
-        }
+        switch (freshnessDecision.mode) {
+            case 'skipped_indexing':
+                return this.buildNotReadySearchPayload(codebasePath, searchContext);
 
-        if (freshnessDecision.mode === 'skipped_missing_path') {
-            return {
-                status: "not_indexed",
-                reason: "not_indexed",
-                codebasePath,
-                path: searchContext.path,
-                query: searchContext.query,
-                scope: searchContext.scope,
-                groupBy: searchContext.groupBy,
-                resultMode: searchContext.resultMode,
-                limit: searchContext.limit,
-                freshnessDecision,
-                message: `Indexed codebase path '${codebasePath}' no longer exists. Search cannot serve stale vector results for this path.`,
-                hints: {
-                    create: this.buildCreateHint(searchContext.path)
-                },
-                results: []
-            } as SearchResponseEnvelope;
-        }
+            case 'skipped_requires_reindex': {
+                const detail = freshnessDecision.errorMessage
+                    ? `Search blocked because this codebase requires reindex (${freshnessDecision.errorMessage}).`
+                    : 'Search blocked because this codebase requires reindex.';
+                const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
+                return {
+                    ...payload,
+                    freshnessDecision
+                };
+            }
 
-        if (freshnessDecision.mode === 'ignore_reload_failed') {
-            const fallbackLine = freshnessDecision.fallbackSyncExecuted
-                ? ' Fallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
-                : '';
-            const detail = `Search blocked because ignore-rule reconciliation failed (${freshnessDecision.errorMessage || 'unknown_ignore_reload_error'}).${fallbackLine}`;
-            const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
-            return {
-                ...payload,
-                freshnessDecision
-            };
-        }
+            case 'skipped_missing_path':
+                return {
+                    status: "not_indexed",
+                    reason: "not_indexed",
+                    codebasePath,
+                    path: searchContext.path,
+                    query: searchContext.query,
+                    scope: searchContext.scope,
+                    groupBy: searchContext.groupBy,
+                    resultMode: searchContext.resultMode,
+                    limit: searchContext.limit,
+                    freshnessDecision,
+                    message: `Indexed codebase path '${codebasePath}' no longer exists. Search cannot serve stale vector results for this path.`,
+                    hints: {
+                        create: this.buildCreateHint(searchContext.path)
+                    },
+                    results: []
+                } as SearchResponseEnvelope;
 
-        if (freshnessDecision.mode === 'coalesced'
-            && typeof freshnessDecision.errorMessage === 'string'
-            && freshnessDecision.errorMessage.trim().length > 0) {
-            const fallbackLine = freshnessDecision.fallbackSyncExecuted
-                ? ' Fallback incremental sync was executed, but freshness still could not be proven.'
-                : '';
-            const detail = `Search blocked because coalesced in-flight sync failed (${freshnessDecision.errorMessage}).${fallbackLine}`;
-            const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
-            return {
-                ...payload,
-                freshnessDecision
-            };
-        }
+            case 'ignore_reload_failed': {
+                const fallbackLine = freshnessDecision.fallbackSyncExecuted
+                    ? ' Fallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
+                    : '';
+                const detail = `Search blocked because ignore-rule reconciliation failed (${freshnessDecision.errorMessage || 'unknown_ignore_reload_error'}).${fallbackLine}`;
+                const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
+                return {
+                    ...payload,
+                    freshnessDecision
+                };
+            }
 
-        return null;
+            case 'coalesced':
+                if (typeof freshnessDecision.errorMessage === 'string'
+                    && freshnessDecision.errorMessage.trim().length > 0) {
+                    const fallbackLine = freshnessDecision.fallbackSyncExecuted
+                        ? ' Fallback incremental sync was executed, but freshness still could not be proven.'
+                        : '';
+                    const detail = `Search blocked because coalesced in-flight sync failed (${freshnessDecision.errorMessage}).${fallbackLine}`;
+                    const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
+                    return {
+                        ...payload,
+                        freshnessDecision
+                    };
+                }
+                return null;
+
+            case 'synced':
+            case 'skipped_recent':
+            case 'reconciled_ignore_change':
+                return null;
+
+            default: {
+                const exhaustive: never = freshnessDecision.mode;
+                return exhaustive;
+            }
+        }
     }
 
     private buildVectorBackendSearchPayload(
@@ -5374,20 +5387,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const freshnessDecision = await this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000);
             searchDiagnostics.freshnessMode = freshnessDecision.mode;
-            if (freshnessDecision.mode === 'skipped_indexing') {
-                const payload = this.buildNotReadySearchPayload(effectiveRoot, {
-                    path: absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    resultMode: input.resultMode,
-                    limit: input.limit
-                });
-                return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-                    meta: { searchDiagnostics }
-                };
-            }
             const freshnessBlockedPayload = this.buildFreshnessBlockedSearchPayload(effectiveRoot, freshnessDecision, {
                 path: absolutePath,
                 query: input.query,

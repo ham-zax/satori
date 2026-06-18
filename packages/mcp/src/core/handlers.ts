@@ -57,6 +57,7 @@ import {
 } from "./search-constants.js";
 import {
     CallGraphHint,
+    CallGraphResponseEnvelope,
     FingerprintCompatibilityDiagnostics,
     FileOutlineInput,
     FileOutlineResponseEnvelope,
@@ -867,8 +868,8 @@ export class ToolHandlers {
             depth: number;
             limit: number;
         },
-        reason: NonOkReason = "requires_reindex"
-    ): Record<string, unknown> {
+        reason: Extract<NonOkReason, "requires_reindex" | "partial_index_navigation_unavailable"> = "requires_reindex"
+    ): CallGraphResponseEnvelope {
         const detailLine = detail ? `${detail}\n\n` : '';
         return {
             status: "requires_reindex",
@@ -1021,7 +1022,7 @@ export class ToolHandlers {
             limit: number;
         },
         staleLocal?: { codebaseRoot: string; reason: CompletionProofReason }
-    ): Record<string, unknown> {
+    ): CallGraphResponseEnvelope {
         const baseHints: Record<string, unknown> = staleLocal
             ? {
                 create: this.buildCreateHint(staleLocal.codebaseRoot),
@@ -1058,7 +1059,7 @@ export class ToolHandlers {
             depth: number;
             limit: number;
         }
-    ): Record<string, unknown> {
+    ): CallGraphResponseEnvelope {
         return {
             status: "not_ready",
             supported: false,
@@ -5956,16 +5957,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         const symbolRef = args?.symbolRef as CallGraphSymbolRef | undefined;
 
         if (!symbolRef || typeof symbolRef.file !== 'string' || typeof symbolRef.symbolId !== 'string') {
+            const payload: CallGraphResponseEnvelope = {
+                supported: false,
+                reason: 'invalid_symbol_ref',
+                hints: {
+                    message: "symbolRef with { file, symbolId } is required."
+                }
+            };
             return {
                 content: [{
                     type: "text",
-                    text: JSON.stringify({
-                        supported: false,
-                        reason: 'invalid_symbol_ref',
-                        hints: {
-                            message: "symbolRef with { file, symbolId } is required."
-                        }
-                    }, null, 2)
+                    text: JSON.stringify(payload, null, 2)
                 }],
                 isError: true
             };
@@ -6186,7 +6188,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     notesTruncated: false,
                     totalNoteCount: 0,
                     returnedNoteCount: 0,
-                }, proofDebugHint);
+                } satisfies CallGraphResponseEnvelope, proofDebugHint);
                 return {
                     content: [{
                         type: "text",
@@ -6209,7 +6211,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     notesTruncated: false,
                     totalNoteCount: 0,
                     returnedNoteCount: 0,
-                }, proofDebugHint);
+                } satisfies CallGraphResponseEnvelope, proofDebugHint);
                 return {
                     content: [{
                         type: "text",
@@ -6233,7 +6235,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     notesTruncated: false,
                     totalNoteCount: 0,
                     returnedNoteCount: 0,
-                }, proofDebugHint);
+                } satisfies CallGraphResponseEnvelope, proofDebugHint);
                 return {
                     content: [{
                         type: "text",
@@ -6301,7 +6303,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 path: effectiveRoot,
                 symbolRef,
                 ...relationshipBackedGraph,
-            }, proofDebugHint);
+            } satisfies CallGraphResponseEnvelope, proofDebugHint);
 
             return {
                 content: [{

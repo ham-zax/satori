@@ -9,6 +9,8 @@ export interface SearchSpan {
     endLine: number;
 }
 
+export type NavigationToolHints = Record<string, unknown>;
+
 export interface CallGraphSymbolRef {
     file: string;
     symbolId: string;
@@ -415,4 +417,133 @@ export interface FileOutlineResponseEnvelope {
     warnings?: string[];
     message?: string;
     hints?: Record<string, unknown>;
+}
+
+export type CallGraphDirection = "callers" | "callees" | "both";
+
+export type CallGraphResponseStatus =
+    | "ok"
+    | "not_found"
+    | "requires_reindex"
+    | "not_indexed"
+    | "not_ready"
+    | "unsupported";
+
+export type CallGraphResponseReason =
+    | Extract<CallGraphHint, { supported: false }>["reason"]
+    | "invalid_symbol_ref"
+    | "indexing"
+    | "not_indexed"
+    | "requires_reindex"
+    | "partial_index_navigation_unavailable";
+
+export interface CallGraphNodeResult {
+    symbolId: string;
+    symbolLabel?: string;
+    file: string;
+    language: string;
+    span: SearchSpan;
+}
+
+export interface CallGraphEdgeResult {
+    srcSymbolId: string;
+    dstSymbolId: string;
+    kind: "call" | "import" | "dynamic";
+    site: {
+        file: string;
+        startLine: number;
+        endLine?: number;
+    };
+    confidence: number;
+}
+
+export interface CallGraphNoteResult {
+    type: "unresolved_edge" | "dynamic_edge" | "missing_symbol_metadata";
+    file: string;
+    startLine: number;
+    symbolId?: string;
+    detail: string;
+}
+
+export interface CallGraphTestReferenceResult {
+    file: string;
+    symbolId: string;
+    symbolLabel?: string;
+    span: SearchSpan;
+    site: {
+        file: string;
+        startLine: number;
+        endLine?: number;
+    };
+    targetSymbolId: string;
+    kind: "call" | "import" | "dynamic";
+    confidence: number;
+}
+
+export interface CallGraphInvalidSymbolRefResponseEnvelope {
+    supported: false;
+    reason: "invalid_symbol_ref";
+    hints?: NavigationToolHints;
+}
+
+export interface CallGraphTraversalResponseEnvelope {
+    status: CallGraphResponseStatus;
+    supported: boolean;
+    reason?: CallGraphResponseReason;
+    path: string;
+    codebaseRoot?: string;
+    codebasePath?: string;
+    symbolRef: CallGraphSymbolRef;
+    direction?: CallGraphDirection;
+    depth?: number;
+    limit?: number;
+    nodes: CallGraphNodeResult[];
+    edges: CallGraphEdgeResult[];
+    notes: CallGraphNoteResult[];
+    warnings?: string[];
+    testReferences?: CallGraphTestReferenceResult[];
+    notesTruncated?: boolean;
+    totalNoteCount?: number;
+    returnedNoteCount?: number;
+    sidecar?: {
+        builtAt: string;
+        nodeCount: number;
+        edgeCount: number;
+    };
+    freshnessDecision?: FreshnessDecision | { mode: "skipped_requires_reindex" | "skipped_indexing" };
+    message?: string;
+    hints?: NavigationToolHints;
+    compatibility?: FingerprintCompatibilityDiagnostics;
+    indexing?: {
+        progressPct: number | null;
+        lastUpdated: string | null;
+        phase: string | null;
+    };
+}
+
+export type CallGraphResponseEnvelope =
+    | CallGraphInvalidSymbolRefResponseEnvelope
+    | CallGraphTraversalResponseEnvelope;
+
+export interface ReadFileOpenSymbolResponseEnvelope {
+    status: Exclude<FileOutlineStatus, "ok">;
+    reason?: NonOkReason;
+    message: string;
+    file?: string;
+    matches?: unknown[];
+    warnings?: string[];
+    hints?: NavigationToolHints;
+}
+
+export type ReadFileAnnotatedOutlineStatus = "ok" | "requires_reindex" | "unsupported" | "ambiguous";
+
+export interface ReadFileAnnotatedResponseEnvelope {
+    path: string;
+    mode: "annotated";
+    content: string;
+    outlineStatus: ReadFileAnnotatedOutlineStatus;
+    outline: { symbols: unknown[] } | null;
+    hasMore: boolean;
+    warnings?: string[];
+    hints?: NavigationToolHints;
 }

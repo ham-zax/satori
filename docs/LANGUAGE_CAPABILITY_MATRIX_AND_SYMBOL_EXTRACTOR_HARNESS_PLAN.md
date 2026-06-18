@@ -10,8 +10,9 @@ This is a core-pipeline expansion plan, not a new MCP product surface.
 
 - Public MCP surface is fixed at six tools: `list_codebases`, `manage_index`, `search_codebase`, `file_outline`, `call_graph`, and `read_file`.
 - `packages/core/src/language/registry.ts` currently exposes boolean capabilities such as `search`, `astSplitter`, `symbols`, `owner`, `imports`, `callGraphBuild`, `callGraphQuery`, and `fileOutline`.
-- TypeScript, JavaScript, and Python currently claim full navigation capabilities.
-- Java, C++, Go, Rust, C#, and Scala currently have tree-sitter parser wiring for AST splitting, but they do not produce symbol labels and do not claim symbols or owners.
+- TypeScript, JavaScript, and Python currently claim full navigation capabilities, including production-ready `call_graph`.
+- Go and Rust currently claim `symbol_only`: extractor-backed symbol records, owner metadata, `file_outline`, and `read_file(open_symbol)` are fixture-proven, but `call_graph` remains unsupported.
+- Java, C++, C#, and Scala currently have tree-sitter parser wiring for AST splitting, but they do not produce symbol labels and do not claim symbols or owners.
 - PHP, Ruby, Kotlin, and Swift currently route as search-only.
 - `processFileList` in production returns `status`, `symbolRecords`, and `symbolManifestFiles`, and it attaches `ownerSymbolKey` and `ownerSymbolInstanceId` to chunks through `resolveOwnerSymbolForChunk`.
 - The relationship builder already stores conservative `CALLS`, `IMPORTS`, and `EXPORTS` records behind relationship sidecars. That behavior must not be widened by L1.
@@ -29,7 +30,7 @@ This is a core-pipeline expansion plan, not a new MCP product surface.
 - L1 symbol-only languages must not claim `callGraphBuild` or `callGraphQuery`, must not emit `nextActions.callGraph`, and must keep `call_graph` unsupported or not-ready even when relationship sidecars exist globally.
 - Low-confidence or name-only relationship extraction must not be presented as graph truth.
 - Adding extensions to the capability matrix must not silently broaden the default indexing profile. Any profile expansion needs an explicit allowlist/profile test.
-- JSON navigation sidecars remain canonical. Do not add SQLite-default work in this patch family.
+- JSON navigation sidecars remain canonical. SQLite is optional cache/validation/parity-gated explicit serving only; explicit SQLite reads require canonical JSON registry and relationship sidecar parity. Do not add SQLite-default work in this patch family.
 - If any CMM code, tables, schemas, tests, fixtures, parser mappings, or generated artifacts are copied or substantially ported, the same patch must add `THIRD_PARTY.md` with MIT attribution.
 
 ## Non-Goals

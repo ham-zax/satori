@@ -193,7 +193,8 @@ Satori separates language capabilities instead of pretending every language has 
 Current capability split:
 
 - Full AST/symbol/call graph/file outline support: TypeScript, JavaScript, Python.
-- AST splitting only: Java, C/C++, Go, Rust, C#, Scala.
+- Symbol-only navigation support: Go, Rust. These languages have golden symbol fixtures, `file_outline`, and `read_file(open_symbol)` evidence, but no `call_graph` support.
+- AST splitting only: Java, C/C++, C#, Scala.
 - Fallback text indexing: PHP, Ruby, Swift, Kotlin, Objective-C, Jupyter notebooks, Markdown.
 
 Why it matters:

@@ -38,6 +38,8 @@ Profile behavior:
 
 All profiles still honor `.gitignore`, `.satoriignore`, and the hard denylist for secrets, lockfiles, generated output, dependency folders, binaries, bundles, logs, database dumps, source maps, and snapshots. `satori.toml` is treated as an index-policy control file; search freshness and `manage_index action="sync"` can reconcile ordinary profile/ignore changes, while incompatible fingerprints still return `requires_reindex`.
 
+Codex installs write two companion artifacts by default: the first-party `satori` skill under `~/.codex/skills` and a marked Satori guidance block in `~/.codex/AGENTS.md`. The AGENTS block tells Codex to use Satori for semantic ownership/context discovery first, then use exact navigation and reads for proof.
+
 For Codex, add `--install-guidance-hook` only when you want an installer-managed `SessionStart` reminder in `~/.codex/config.toml`. The hook prints guidance only, suppresses duplicate startup prints for the same working directory, and does not run indexing, search, or provider-backed work.
 
 Advanced direct execution is available through the package bin:

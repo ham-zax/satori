@@ -41,6 +41,7 @@ Satori exposes exactly six MCP tools:
 
 - Treat `navigationFallback` as authoritative. Do not invent spans.
 - `open_symbol` must resolve deterministically. Do not guess on ambiguity.
+- Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with `rg`, tests, or direct references.
 - Prefer `read_file(mode="annotated")` when outline metadata helps.
 - Follow continuation hints when plain reads are truncated.
 - Read the relevant implementation and call sites before editing behavior.

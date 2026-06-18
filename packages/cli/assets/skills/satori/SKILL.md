@@ -1,11 +1,11 @@
 ---
 name: satori
-description: Use when working with Satori MCP for code search, exact navigation, call graph context, bounded reads, indexing, sync, reindex, or stale index recovery.
+description: Use when working with Satori MCP for plain-English semantic code discovery, exact navigation, call graph context, bounded reads, indexing, sync, reindex, or stale index recovery.
 ---
 
 # Satori
 
-Use this skill when a task needs Satori MCP for code discovery, navigation, or index lifecycle work.
+Use this skill when a task needs Satori MCP for behavior-level code discovery, deterministic proof navigation, or index lifecycle work.
 
 ## Tools
 
@@ -22,14 +22,15 @@ Satori exposes exactly six MCP tools:
 
 1. Use `manage_index(action="status", path=...)` when index state is unknown.
 2. If the codebase is not indexed, use `manage_index(action="create", path=...)`.
-3. Search the requested path with `search_codebase(path=..., query=..., scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`; exact identifier-like queries may return from the registry before semantic/vector search.
+3. Search the requested path with `search_codebase(path=..., query=..., scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`; start with plain-English behavior/concept queries unless you already know the exact identifier, constant, warning code, or path.
 4. Use `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)` to lock exact symbol spans when identity is available.
 5. If `callGraphHint.supported=true`, call `call_graph(path=..., symbolRef=..., direction="both", depth=1)`.
 6. Use `read_file(path=..., open_symbol=...)` or deterministic line spans for final evidence before editing.
 
 ## Search Rules
 
-- Start with natural-language intent for fuzzy discovery; use exact identifiers for symbol, constant, warning-code, or path-scoped lookups.
+- Start with natural-language intent for fuzzy discovery: ask where behavior lives, what owns a flow, or how a policy is enforced.
+- Use exact identifiers for symbol, constant, warning-code, or path-scoped proof lookups.
 - Default to `scope="runtime"`.
 - Use operators only when useful: `lang:`, `path:`, `-path:`, `must:`, `exclude:`.
 - Pass the user's requested path; if Satori resolves an indexed parent, follow returned fallback payloads exactly.
@@ -40,6 +41,7 @@ Satori exposes exactly six MCP tools:
 
 - Treat `navigationFallback` as authoritative. Do not invent spans.
 - `open_symbol` must resolve deterministically. Do not guess on ambiguity.
+- Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with `rg`, tests, or direct references.
 - Prefer `read_file(mode="annotated")` when outline metadata helps.
 - Follow continuation hints when plain reads are truncated.
 - Read the relevant implementation and call sites before editing behavior.

@@ -52,7 +52,7 @@ const CODEX_ENV_TEMPLATE_LINES = [
     "# MILVUS_TOKEN = \"your-zilliz-token\"",
     CODEX_ENV_TEMPLATE_END,
 ] as const;
-const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: use search_codebase for plain-English behavior/concept discovery; then file_outline/call_graph/read_file for proof. Use exact ids/constants with operators. Reindex only on requires_reindex/hints.reindex; trust navigationFallback.";
+const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: use search_codebase for semantic ownership/context discovery, then file_outline/call_graph/read_file for proof. Use exact ids/constants with operators when known; verify inbound impact with rg/tests. Reindex only on requires_reindex/hints.reindex; trust navigationFallback.";
 const CODEX_GUIDANCE_HOOK_SCRIPT = [
     `msg=${JSON.stringify(CODEX_GUIDANCE_HOOK_MESSAGE)}`,
     'key=$(printf "%s" "$PWD" | sed "s#[^A-Za-z0-9_.-]#_#g" | cut -c1-120)',
@@ -70,6 +70,28 @@ const CODEX_GUIDANCE_HOOK_SCRIPT = [
     'printf "%s\\n" "$msg"',
 ].join("; ");
 const CODEX_GUIDANCE_HOOK_COMMAND = `sh -lc '${CODEX_GUIDANCE_HOOK_SCRIPT}'`;
+const CODEX_AGENT_INSTRUCTIONS = `# Satori MCP
+
+This project uses Satori MCP for semantic-first code exploration, freshness-aware navigation, and index lifecycle management.
+
+## Priority Order
+1. \`search_codebase\` - Start with plain-English behavior or ownership queries; narrow with \`lang:\`, \`path:\`, \`must:\`, and \`exclude:\`
+2. \`file_outline\` - lock exact symbol spans before reading or editing
+3. \`call_graph\` - inspect outbound relationships and available caller/callee context when supported
+4. \`read_file\` - open exact symbols or bounded line windows for final evidence
+5. \`manage_index\` - check status, create, sync, reindex, or clear only when explicitly needed
+
+## When To Use Satori
+- Use Satori primarily for semantic code exploration: finding behavioral owners, context-building, and understanding how a feature is implemented.
+- Prefer plain-English queries first when the task is about intent, policy, ownership, runtime behavior, or unfamiliar code.
+- Switch to exact identifiers, constants, warning codes, and path-scoped operators when narrowing or proving a candidate result.
+
+## Verification Rules
+- Treat \`navigationFallback\` as authoritative. Do not reconstruct spans from prose.
+- If any tool returns \`requires_reindex\` or \`hints.reindex\`, stop and run \`manage_index(action="reindex")\`; do not substitute \`sync\`.
+- Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with rg, tests, or direct references.
+- For ultra-fast exact literal lookup, local lexical search may still be faster; use Satori when semantic ownership or freshness-aware navigation matters.
+`;
 const OPENCODE_INSTRUCTIONS = `# Satori MCP
 
 This project uses Satori MCP for plain-English semantic code discovery, deterministic proof navigation, and index lifecycle management.
@@ -140,14 +162,15 @@ export interface InstallCommandResult {
 interface ClientTarget {
     client: ClientName;
     configPath: string;
-    companion: CompanionTarget;
+    companions: CompanionTarget[];
 }
 
 type CompanionTarget =
     | { kind: "skills"; path: string }
-    | { kind: "instructions"; path: string };
+    | { kind: "instructions"; path: string; instructions: string };
 
 interface CompanionMutation {
+    companion: CompanionTarget;
     changed: boolean;
     apply: () => void;
 }
@@ -155,7 +178,7 @@ interface CompanionMutation {
 interface PreparedMutation {
     target: ClientTarget;
     configChanged: boolean;
-    companionChanged: boolean;
+    companionMutations: CompanionMutation[];
     apply: () => void;
 }
 
@@ -188,26 +211,34 @@ function resolveClientTargets(homeDir: string): ClientTarget[] {
         {
             client: "codex",
             configPath: path.join(homeDir, ".codex", "config.toml"),
-            companion: {
-                kind: "skills",
-                path: path.join(homeDir, ".codex", "skills"),
-            },
+            companions: [
+                {
+                    kind: "skills",
+                    path: path.join(homeDir, ".codex", "skills"),
+                },
+                {
+                    kind: "instructions",
+                    path: path.join(homeDir, ".codex", "AGENTS.md"),
+                    instructions: CODEX_AGENT_INSTRUCTIONS,
+                },
+            ],
         },
         {
             client: "claude",
             configPath: path.join(homeDir, ".claude.json"),
-            companion: {
+            companions: [{
                 kind: "skills",
                 path: path.join(homeDir, ".claude", "skills"),
-            },
+            }],
         },
         {
             client: "opencode",
             configPath: path.join(homeDir, ".config", "opencode", "opencode.json"),
-            companion: {
+            companions: [{
                 kind: "instructions",
                 path: path.join(homeDir, ".config", "opencode", "AGENTS.md"),
-            },
+                instructions: OPENCODE_INSTRUCTIONS,
+            }],
         },
     ];
 }
@@ -931,18 +962,18 @@ function prepareSkillRemoval(skillsPath: string): FileMutation {
     };
 }
 
-function buildManagedInstructionsBlock(): string {
+function buildManagedInstructionsBlock(instructions: string): string {
     return [
         INSTRUCTIONS_BLOCK_START,
-        OPENCODE_INSTRUCTIONS.trim(),
+        instructions.trim(),
         INSTRUCTIONS_BLOCK_END,
         "",
     ].join("\n");
 }
 
-function prepareInstructionsInstall(filePath: string): FileMutation {
+function prepareInstructionsInstall(filePath: string, instructions: string): FileMutation {
     const current = readTextIfExists(filePath) ?? "";
-    const block = buildManagedInstructionsBlock();
+    const block = buildManagedInstructionsBlock(instructions);
     let next = current;
     if (current.includes(INSTRUCTIONS_BLOCK_START) && current.includes(INSTRUCTIONS_BLOCK_END)) {
         next = current.replace(
@@ -994,14 +1025,18 @@ function prepareCompanionMutation(
     command: InstallCommandInput,
     skillAssetRoot: string
 ): CompanionMutation {
-    if (companion.kind === "skills") {
-        return command.kind === "install"
+    const mutation = companion.kind === "skills"
+        ? (command.kind === "install"
             ? prepareSkillInstall(companion.path, skillAssetRoot)
-            : prepareSkillRemoval(companion.path);
-    }
-    return command.kind === "install"
-        ? prepareInstructionsInstall(companion.path)
+            : prepareSkillRemoval(companion.path))
+        : command.kind === "install"
+        ? prepareInstructionsInstall(companion.path, companion.instructions)
         : prepareInstructionsRemoval(companion.path);
+    return {
+        companion,
+        changed: mutation.changed,
+        apply: mutation.apply,
+    };
 }
 
 function prepareConfigMutation(
@@ -1031,15 +1066,19 @@ function prepareMutation(
     skillAssetRoot: string
 ): PreparedMutation {
     const configMutation = prepareConfigMutation(target, command, runtimeCommand);
-    const companionMutation = prepareCompanionMutation(target.companion, command, skillAssetRoot);
+    const companionMutations = target.companions.map((companion) => (
+        prepareCompanionMutation(companion, command, skillAssetRoot)
+    ));
 
     return {
         target,
         configChanged: configMutation.changed,
-        companionChanged: companionMutation.changed,
+        companionMutations,
         apply: () => {
             configMutation.apply();
-            companionMutation.apply();
+            for (const companionMutation of companionMutations) {
+                companionMutation.apply();
+            }
         },
     };
 }
@@ -1089,12 +1128,12 @@ export function executeInstallCommand(
         results: prepared.map((mutation) => ({
             client: mutation.target.client,
             configPath: mutation.target.configPath,
-            skillsPath: mutation.target.companion.kind === "skills" ? mutation.target.companion.path : undefined,
-            instructionsPath: mutation.target.companion.kind === "instructions" ? mutation.target.companion.path : undefined,
+            skillsPath: mutation.target.companions.find((companion) => companion.kind === "skills")?.path,
+            instructionsPath: mutation.target.companions.find((companion) => companion.kind === "instructions")?.path,
             configChanged: mutation.configChanged,
-            skillsChanged: mutation.target.companion.kind === "skills" ? mutation.companionChanged : false,
-            instructionsChanged: mutation.target.companion.kind === "instructions" ? mutation.companionChanged : false,
-            status: mutation.configChanged || mutation.companionChanged || launcherMutation.changed || profileMutation.changed ? "updated" : "unchanged",
+            skillsChanged: mutation.companionMutations.some((entry) => entry.companion.kind === "skills" && entry.changed),
+            instructionsChanged: mutation.companionMutations.some((entry) => entry.companion.kind === "instructions" && entry.changed),
+            status: mutation.configChanged || mutation.companionMutations.some((entry) => entry.changed) || launcherMutation.changed || profileMutation.changed ? "updated" : "unchanged",
             dryRun: command.dryRun,
         })),
     };

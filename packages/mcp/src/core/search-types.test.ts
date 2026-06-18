@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {
+    CallGraphHint,
     CallGraphResponseEnvelope,
     ReadFileAnnotatedResponseEnvelope,
     ReadFileOpenSymbolResponseEnvelope,
@@ -18,6 +19,24 @@ test("navigation response contracts include call_graph invalid symbol refs", () 
     assert.equal(payload.supported, false);
     assert.equal(payload.reason, "invalid_symbol_ref");
 });
+
+test("navigation response contracts expose precise current callGraphHint sidecar reasons", () => {
+    const missingRelationshipHint: CallGraphHint = {
+        supported: false,
+        reason: "missing_relationship_sidecar"
+    };
+    const incompatibleRelationshipHint: CallGraphHint = {
+        supported: false,
+        reason: "incompatible_relationship_sidecar"
+    };
+
+    assert.equal(missingRelationshipHint.reason, "missing_relationship_sidecar");
+    assert.equal(incompatibleRelationshipHint.reason, "incompatible_relationship_sidecar");
+});
+
+// @ts-expect-error missing_sidecar is a legacy CallGraphSidecarManager reason, not a current public CallGraphHint reason.
+const legacyMissingSidecarHint: CallGraphHint = { supported: false, reason: "missing_sidecar" };
+void legacyMissingSidecarHint;
 
 test("navigation response contracts include read_file open_symbol failures", () => {
     const payload: ReadFileOpenSymbolResponseEnvelope = {

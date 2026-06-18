@@ -868,7 +868,15 @@ export class ToolHandlers {
             depth: number;
             limit: number;
         },
-        reason: Extract<NonOkReason, "requires_reindex" | "partial_index_navigation_unavailable"> = "requires_reindex"
+        reason: Extract<
+            NonOkReason,
+            | "requires_reindex"
+            | "partial_index_navigation_unavailable"
+            | "missing_symbol_registry"
+            | "missing_relationship_sidecar"
+            | "incompatible_symbol_registry"
+            | "incompatible_relationship_sidecar"
+        > = "requires_reindex"
     ): CallGraphResponseEnvelope {
         const detailLine = detail ? `${detail}\n\n` : '';
         return {
@@ -6150,6 +6158,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 file: normalizedSymbolFile,
             });
             if (registryState.status !== 'ok') {
+                const reason = registryState.status === 'missing'
+                    ? 'missing_symbol_registry'
+                    : 'incompatible_symbol_registry';
                 const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
                     effectiveRoot,
                     `Symbol registry is ${registryState.status}: ${registryState.reason}`,
@@ -6159,7 +6170,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         direction,
                         depth,
                         limit
-                    }
+                    },
+                    reason
                 ), proofDebugHint);
                 return {
                     content: [{
@@ -6249,6 +6261,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 expectedSymbolRegistryManifestHash: registryState.manifestHash,
             });
             if (compatibility.relationships.status !== 'ok') {
+                const reason = compatibility.relationships.status === 'missing'
+                    ? 'missing_relationship_sidecar'
+                    : 'incompatible_relationship_sidecar';
                 const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
                     effectiveRoot,
                     `Relationship sidecar is ${compatibility.relationships.status}: ${compatibility.relationships.reason}`,
@@ -6258,7 +6273,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         direction,
                         depth,
                         limit
-                    }
+                    },
+                    reason
                 ), proofDebugHint);
                 return {
                     content: [{

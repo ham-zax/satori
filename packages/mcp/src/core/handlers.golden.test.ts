@@ -1,0 +1,747 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+    SYMBOL_REGISTRY_SCHEMA_VERSION,
+    buildSymbolRecordsForFile,
+    buildSymbolRegistry,
+    createSymbolInstanceId,
+    createSymbolKey,
+    resetSharedRuntimeNavigationStoreForTests,
+    resolveNavigationSidecarRoot,
+    writeRelationshipSidecar,
+    writeSymbolRegistrySidecar,
+} from '@zokizuan/satori-core';
+import type { RelationshipRecord, SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
+import { readFileTool } from '../tools/read_file.js';
+import { ToolHandlers } from './handlers.js';
+import { CapabilityResolver } from './capabilities.js';
+import { IndexFingerprint } from '../config.js';
+
+const RUNTIME_FINGERPRINT: IndexFingerprint = {
+    embeddingProvider: 'VoyageAI',
+    embeddingModel: 'voyage-4-large',
+    embeddingDimension: 1024,
+    vectorStoreProvider: 'Milvus',
+    schemaVersion: 'hybrid_v3'
+};
+
+const CAPABILITIES = new CapabilityResolver({
+    name: 'test',
+    version: '0.0.0',
+    encoderProvider: 'VoyageAI',
+    encoderModel: 'voyage-4-large',
+});
+
+type GoldenContext = {
+    repoPath: string;
+    stateRoot?: string;
+    symbols?: SymbolRecord[];
+};
+
+function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-golden-'));
+    const repoPath = path.join(tempDir, 'repo');
+    fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+    return fn(repoPath).finally(() => {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+}
+
+async function withTempStateRoot<T>(fn: (stateRoot: string) => Promise<T>): Promise<T> {
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-golden-state-'));
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    resetSharedRuntimeNavigationStoreForTests();
+    try {
+        return await fn(stateRoot);
+    } finally {
+        resetSharedRuntimeNavigationStoreForTests();
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+}
+
+function createFunctionSymbol(input: {
+    file: string;
+    name: string;
+    startLine: number;
+    endLine: number;
+    fileHash: string;
+    language?: string;
+    label?: string;
+    kind?: SymbolRecord['kind'];
+}): SymbolRecord {
+    const language = input.language || 'typescript';
+    const kind = input.kind || 'function';
+    const qualifiedName = input.name;
+    const parentQualifiedNamePath: string[] = [];
+    const symbolKey = createSymbolKey({
+        relativePath: input.file,
+        language,
+        kind,
+        qualifiedName,
+        parentQualifiedNamePath,
+    });
+    const span = { startLine: input.startLine, endLine: input.endLine };
+    return {
+        symbolKey,
+        symbolInstanceId: createSymbolInstanceId({
+            symbolKey,
+            fileHash: input.fileHash,
+            span,
+            extractorVersion: 'test-extractor-v1',
+        }),
+        language,
+        kind,
+        name: input.name,
+        qualifiedName,
+        label: input.label || `function ${input.name}()`,
+        file: input.file,
+        span,
+        parentQualifiedNamePath,
+        fileHash: input.fileHash,
+        extractorVersion: 'test-extractor-v1',
+    };
+}
+
+async function writeNavigationSidecars(input: {
+    stateRoot: string;
+    repoPath: string;
+    symbols: SymbolRecord[];
+    records?: RelationshipRecord[];
+    relationshipManifestHash?: string;
+}) {
+    const filesByPath = new Map<string, { hash: string; language: string; symbolCount: number }>();
+    for (const symbol of input.symbols) {
+        const existing = filesByPath.get(symbol.file);
+        if (existing) {
+            existing.symbolCount += 1;
+        } else {
+            filesByPath.set(symbol.file, {
+                hash: symbol.fileHash,
+                language: symbol.language,
+                symbolCount: 1,
+            });
+        }
+    }
+
+    const manifest: SymbolRegistryManifest = {
+        schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+        normalizedRootPath: input.repoPath,
+        rootFingerprint: 'test-root-fingerprint',
+        indexPolicyHash: 'test-policy',
+        languageRouterVersion: 'test-router-v1',
+        extractorVersion: 'test-extractor-v1',
+        relationshipVersion: 'test-relationships-v1',
+        builtAt: '2026-01-01T00:00:00.000Z',
+        files: [...filesByPath.entries()].map(([file, metadata]) => ({
+            path: file,
+            hash: metadata.hash,
+            language: metadata.language,
+            symbolCount: metadata.symbolCount,
+        })),
+    };
+
+    const registry = buildSymbolRegistry({ manifest, symbols: input.symbols });
+    const registryResult = await writeSymbolRegistrySidecar({
+        stateRoot: input.stateRoot,
+        registry,
+    });
+    await writeRelationshipSidecar({
+        stateRoot: input.stateRoot,
+        normalizedRootPath: input.repoPath,
+        symbolRegistryManifestHash: input.relationshipManifestHash || registryResult.manifestHash,
+        relationshipVersion: 'test-relationships-v1',
+        builtAt: '2026-01-01T00:00:00.000Z',
+        files: manifest.files,
+        records: input.records || [],
+    });
+    return { registry, manifestHash: registryResult.manifestHash };
+}
+
+async function writeSearchNavigationSidecars(input: {
+    stateRoot: string;
+    repoPath: string;
+    relativePath: string;
+    content: string;
+    chunks: Array<{
+        content: string;
+        startLine: number;
+        endLine: number;
+        symbolLabel: string;
+    }>;
+}) {
+    const fileHash = 'test-search-file-hash';
+    const symbols = buildSymbolRecordsForFile({
+        relativePath: input.relativePath,
+        language: 'typescript',
+        content: input.content,
+        fileHash,
+        extractorVersion: 'test-extractor-v1',
+        chunks: input.chunks.map((chunk) => ({
+            content: chunk.content,
+            metadata: {
+                startLine: chunk.startLine,
+                endLine: chunk.endLine,
+                language: 'typescript',
+                filePath: input.relativePath,
+                symbolLabel: chunk.symbolLabel,
+            },
+        })),
+    });
+    const { manifestHash } = await writeNavigationSidecars({
+        stateRoot: input.stateRoot,
+        repoPath: input.repoPath,
+        symbols,
+        records: [],
+    });
+    return { symbols, manifestHash, fileHash };
+}
+
+function createSnapshotManager(repoPath: string, info: Record<string, unknown> = { status: 'indexed' }) {
+    return {
+        getAllCodebases: () => [{ path: repoPath, info }],
+        getIndexedCodebases: () => [repoPath],
+        getIndexingCodebases: () => [],
+        getCodebaseInfo: () => info,
+        getCodebaseStatus: () => info.status || 'indexed',
+        getCodebaseCallGraphSidecar: () => undefined,
+        ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+        saveCodebaseSnapshot: () => undefined,
+    } as any;
+}
+
+function createHandlers(repoPath: string, searchResults: any[] = []) {
+    const context = {
+        getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+        getVectorStore: () => ({ listCollections: async () => [] }),
+        semanticSearch: async () => searchResults,
+    } as any;
+    const syncManager = {
+        ensureFreshness: async () => ({
+            mode: 'skipped_recent',
+            checkedAt: '2026-01-01T00:00:00.000Z',
+            thresholdMs: 180000,
+        }),
+        touchWatchedCodebase: async () => undefined,
+    } as any;
+
+    const handlers = new ToolHandlers(
+        context,
+        createSnapshotManager(repoPath),
+        syncManager,
+        RUNTIME_FINGERPRINT,
+        CAPABILITIES,
+        () => Date.parse('2026-01-01T01:00:00.000Z'),
+    );
+    (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
+    (handlers as any).validateCompletionProof = async () => ({ outcome: 'ok' });
+    return { handlers, snapshotManager: createSnapshotManager(repoPath), syncManager };
+}
+
+function parsePayload(response: { content?: Array<{ text?: string }> }): any {
+    return JSON.parse(response.content?.[0]?.text || '{}');
+}
+
+function symbolPlaceholder(symbol: SymbolRecord): string {
+    return `<symbol:${symbol.kind}:${symbol.name}>`;
+}
+
+function symbolKeyPlaceholder(symbol: SymbolRecord): string {
+    return `<symbol-key:${symbol.kind}:${symbol.name}>`;
+}
+
+function scrubGolden(value: unknown, context: GoldenContext): unknown {
+    if (Array.isArray(value)) {
+        return value.map((entry) => scrubGolden(entry, context));
+    }
+    if (value && typeof value === 'object') {
+        const result: Record<string, unknown> = {};
+        for (const [key, raw] of Object.entries(value)) {
+            if (key === 'score' && typeof raw === 'number') {
+                result[key] = '<score>';
+                continue;
+            }
+            result[key] = scrubGolden(raw, context);
+        }
+        return result;
+    }
+    if (typeof value !== 'string') {
+        return value;
+    }
+
+    let output = value;
+    output = output.replaceAll(context.repoPath, '<repo>');
+    if (context.stateRoot) {
+        output = output.replaceAll(context.stateRoot, '<state>');
+    }
+    for (const symbol of context.symbols || []) {
+        output = output.replaceAll(symbol.symbolInstanceId, symbolPlaceholder(symbol));
+        output = output.replaceAll(symbol.symbolKey, symbolKeyPlaceholder(symbol));
+    }
+    output = output.replace(/[a-f0-9]{64}/g, '<hash>');
+    return output;
+}
+
+test('golden MCP search_codebase grouped symbol result shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const relativePath = 'src/auth.ts';
+        const filePath = path.join(repoPath, relativePath);
+        const content = [
+            'function normalizeToken(token: string) {',
+            '  return token.trim();',
+            '}',
+            '',
+            'function validateSession(token: string) {',
+            '  return normalizeToken(token).length > 0;',
+            '}',
+            '',
+        ].join('\n');
+        fs.writeFileSync(filePath, content, 'utf8');
+        const { symbols, manifestHash, fileHash } = await writeSearchNavigationSidecars({
+            stateRoot,
+            repoPath,
+            relativePath,
+            content,
+            chunks: [
+                {
+                    content: 'function normalizeToken(token: string) {\n  return token.trim();\n}',
+                    startLine: 1,
+                    endLine: 3,
+                    symbolLabel: 'function normalizeToken(token: string)',
+                },
+                {
+                    content: 'function validateSession(token: string) {\n  return normalizeToken(token).length > 0;\n}',
+                    startLine: 5,
+                    endLine: 7,
+                    symbolLabel: 'function validateSession(token: string)',
+                },
+            ],
+        });
+        const normalizeSymbol = symbols.find((symbol) => symbol.name === 'normalizeToken');
+        const validateSymbol = symbols.find((symbol) => symbol.name === 'validateSession');
+        assert.ok(normalizeSymbol);
+        assert.ok(validateSymbol);
+        await writeRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: repoPath,
+            symbolRegistryManifestHash: manifestHash,
+            relationshipVersion: 'test-relationships-v1',
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: [{
+                path: relativePath,
+                hash: fileHash,
+                language: 'typescript',
+                symbolCount: symbols.length,
+            }],
+            records: [{
+                sourceKey: validateSymbol.symbolKey,
+                sourceInstanceId: validateSymbol.symbolInstanceId,
+                targetKey: normalizeSymbol.symbolKey,
+                targetInstanceId: normalizeSymbol.symbolInstanceId,
+                type: 'CALLS',
+                file: relativePath,
+                span: { startLine: 6, endLine: 6 },
+                confidence: 'high',
+            }],
+        });
+
+        const { handlers } = createHandlers(repoPath, [{
+            content: 'return normalizeToken(token).length > 0;',
+            relativePath,
+            startLine: 5,
+            endLine: 7,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: validateSymbol.label,
+            ownerSymbolKey: validateSymbol.symbolKey,
+            ownerSymbolInstanceId: validateSymbol.symbolInstanceId,
+            symbolKind: validateSymbol.kind,
+        }]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+
+        const payload = scrubGolden(parsePayload(response), {
+            repoPath,
+            stateRoot,
+            symbols,
+        });
+        assert.deepEqual(payload, {
+            status: 'ok',
+            path: '<repo>',
+            query: 'validate session',
+            scope: 'runtime',
+            groupBy: 'symbol',
+            limit: 5,
+            resultMode: 'grouped',
+            freshnessDecision: {
+                mode: 'skipped_recent',
+                checkedAt: '2026-01-01T00:00:00.000Z',
+                thresholdMs: 180000,
+            },
+            freshnessSummary: {
+                syncMode: 'skipped_recent',
+                lastSyncAt: null,
+                changedFileCount: 0,
+                gitDirtyFilesConsidered: false,
+                changedFilesBoostApplied: false,
+                changedFilesBoostSkippedForLargeChangeSet: false,
+            },
+            hints: {
+                version: 1,
+                navigation: {
+                    nextStep: 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.',
+                },
+            },
+            results: [{
+                kind: 'group',
+                groupId: '<symbol:function:validateSession>',
+                file: 'src/auth.ts',
+                span: { startLine: 5, endLine: 7 },
+                language: 'typescript',
+                symbolId: '<symbol:function:validateSession>',
+                symbolLabel: 'function validateSession(token: string)',
+                symbolKey: '<symbol-key:function:validateSession>',
+                symbolInstanceId: '<symbol:function:validateSession>',
+                symbolKind: 'function',
+                confidence: 'medium',
+                score: '<score>',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                stalenessBucket: 'fresh',
+                collapsedChunkCount: 1,
+                callGraphHint: {
+                    supported: true,
+                    validated: true,
+                    validatedAt: '2026-01-01T01:00:00.000Z',
+                    sidecarBuiltAt: '2026-01-01T00:00:00.000Z',
+                    symbolRef: {
+                        file: 'src/auth.ts',
+                        symbolId: '<symbol:function:validateSession>',
+                        symbolLabel: 'function validateSession(token: string)',
+                        span: { startLine: 5, endLine: 7 },
+                    },
+                },
+                nextActions: {
+                    openSymbol: {
+                        tool: 'read_file',
+                        args: {
+                            path: '<repo>/src/auth.ts',
+                            open_symbol: {
+                                symbolId: '<symbol:function:validateSession>',
+                                symbolLabel: 'function validateSession(token: string)',
+                            },
+                        },
+                    },
+                    callGraph: {
+                        tool: 'call_graph',
+                        args: {
+                            path: '<repo>',
+                            symbolRef: {
+                                file: 'src/auth.ts',
+                                symbolId: '<symbol:function:validateSession>',
+                                symbolLabel: 'function validateSession(token: string)',
+                                span: { startLine: 5, endLine: 7 },
+                            },
+                            depth: 1,
+                            limit: 20,
+                        },
+                        directions: ['callers', 'callees'],
+                    },
+                    outlineWindow: {
+                        tool: 'file_outline',
+                        args: {
+                            path: '<repo>',
+                            file: 'src/auth.ts',
+                            start_line: 5,
+                            end_line: 7,
+                            resolveMode: 'outline',
+                        },
+                    },
+                },
+                preview: 'return normalizeToken(token).length > 0;',
+            }],
+        });
+    }));
+});
+
+test('golden MCP file_outline ok shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const filePath = path.join(repoPath, 'src/runtime.ts');
+        fs.writeFileSync(filePath, 'export function run() {\n  return true;\n}\n', 'utf8');
+        const run = createFunctionSymbol({
+            file: 'src/runtime.ts',
+            name: 'run',
+            startLine: 1,
+            endLine: 3,
+            fileHash: 'hash-runtime',
+            label: 'function run()',
+        });
+        await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });
+        assert.deepEqual(payload, {
+            status: 'ok',
+            path: '<repo>',
+            file: 'src/runtime.ts',
+            outline: {
+                symbols: [{
+                    symbolId: '<symbol:function:run>',
+                    symbolLabel: 'function run()',
+                    span: { startLine: 1, endLine: 3 },
+                    callGraphHint: {
+                        supported: true,
+                        validated: true,
+                        validatedAt: '2026-01-01T01:00:00.000Z',
+                        sidecarBuiltAt: '2026-01-01T00:00:00.000Z',
+                        symbolRef: {
+                            file: 'src/runtime.ts',
+                            symbolId: '<symbol:function:run>',
+                            symbolLabel: 'function run()',
+                            span: { startLine: 1, endLine: 3 },
+                        },
+                    },
+                }],
+            },
+            hasMore: false,
+        });
+    }));
+});
+
+test('golden MCP file_outline missing registry requires_reindex shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, 'src/runtime.ts'), 'export function run() {}\n', 'utf8');
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            status: 'requires_reindex',
+            reason: 'requires_reindex',
+            path: '<repo>',
+            file: 'src/runtime.ts',
+            outline: null,
+            hasMore: false,
+            message: "symbol registry manifest is missing\n\nRelationship-backed navigation sidecars are missing or incompatible. Please run manage_index with {\"action\":\"reindex\",\"path\":\"<repo>\"}.",
+            hints: {
+                reindex: {
+                    tool: 'manage_index',
+                    args: { action: 'reindex', path: '<repo>' },
+                },
+            },
+        });
+    }));
+});
+
+test('golden MCP call_graph unsupported_language shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const filePath = path.join(repoPath, 'src/service.go');
+        fs.writeFileSync(filePath, 'package svc\n\nfunc add() int {\n  return 1\n}\n', 'utf8');
+        const add = createFunctionSymbol({
+            file: 'src/service.go',
+            name: 'add',
+            startLine: 3,
+            endLine: 5,
+            fileHash: 'hash-go',
+            language: 'go',
+            label: 'function add',
+        });
+        await writeNavigationSidecars({ stateRoot, repoPath, symbols: [add] });
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: { file: 'src/service.go', symbolId: add.symbolInstanceId },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [add] });
+        assert.deepEqual(payload, {
+            status: 'unsupported',
+            path: '<repo>',
+            symbolRef: {
+                file: 'src/service.go',
+                symbolId: '<symbol:function:add>',
+            },
+            supported: false,
+            reason: 'unsupported_language',
+            message: "Language 'go' does not support relationship-backed call graph traversal.",
+            nodes: [],
+            edges: [],
+            notes: [],
+            notesTruncated: false,
+            totalNoteCount: 0,
+            returnedNoteCount: 0,
+        });
+    }));
+});
+
+test('golden MCP call_graph missing relationship sidecar shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const run = createFunctionSymbol({
+            file: 'src/runtime.ts',
+            name: 'run',
+            startLine: 1,
+            endLine: 3,
+            fileHash: 'hash-runtime',
+            label: 'function run()',
+        });
+        await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
+        const navigationRoot = resolveNavigationSidecarRoot(stateRoot, repoPath);
+        await fs.promises.rm(path.join(navigationRoot, 'relationships'), { recursive: true, force: true });
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: { file: 'src/runtime.ts', symbolId: run.symbolInstanceId },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });
+        assert.deepEqual(payload, {
+            status: 'requires_reindex',
+            supported: false,
+            reason: 'requires_reindex',
+            path: '<repo>',
+            codebasePath: '<repo>',
+            symbolRef: { file: 'src/runtime.ts', symbolId: '<symbol:function:run>' },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+            nodes: [],
+            edges: [],
+            notes: [],
+            freshnessDecision: { mode: 'skipped_requires_reindex' },
+            message: "Relationship sidecar is missing: relationship manifest is missing\n\nThe index at '<repo>' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {\"action\":\"reindex\",\"path\":\"<repo>\"}.",
+            hints: {
+                reindex: {
+                    tool: 'manage_index',
+                    args: { action: 'reindex', path: '<repo>' },
+                },
+            },
+            compatibility: {
+                runtimeFingerprint: RUNTIME_FINGERPRINT,
+                statusAtCheck: 'indexed',
+            },
+        });
+    }));
+});
+
+test('golden MCP call_graph incompatible relationship sidecar shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const run = createFunctionSymbol({
+            file: 'src/runtime.ts',
+            name: 'run',
+            startLine: 1,
+            endLine: 3,
+            fileHash: 'hash-runtime',
+            label: 'function run()',
+        });
+        await writeNavigationSidecars({
+            stateRoot,
+            repoPath,
+            symbols: [run],
+            relationshipManifestHash: 'wrong-symbol-registry-manifest-hash',
+        });
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: { file: 'src/runtime.ts', symbolId: run.symbolInstanceId },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });
+        assert.deepEqual(payload, {
+            status: 'requires_reindex',
+            supported: false,
+            reason: 'requires_reindex',
+            path: '<repo>',
+            codebasePath: '<repo>',
+            symbolRef: { file: 'src/runtime.ts', symbolId: '<symbol:function:run>' },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+            nodes: [],
+            edges: [],
+            notes: [],
+            freshnessDecision: { mode: 'skipped_requires_reindex' },
+            message: "Relationship sidecar is incompatible: relationship manifest hash does not match symbol registry manifest hash\n\nThe index at '<repo>' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {\"action\":\"reindex\",\"path\":\"<repo>\"}.",
+            hints: {
+                reindex: {
+                    tool: 'manage_index',
+                    args: { action: 'reindex', path: '<repo>' },
+                },
+            },
+            compatibility: {
+                runtimeFingerprint: RUNTIME_FINGERPRINT,
+                statusAtCheck: 'indexed',
+            },
+        });
+    }));
+});
+
+test('golden MCP read_file open_symbol stale id shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const filePath = path.join(repoPath, 'src/runtime.ts');
+        fs.writeFileSync(filePath, 'export function run() {\n  return true;\n}\n', 'utf8');
+        const run = createFunctionSymbol({
+            file: 'src/runtime.ts',
+            name: 'run',
+            startLine: 1,
+            endLine: 3,
+            fileHash: 'hash-runtime',
+            label: 'function run()',
+        });
+        await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
+        const { handlers, snapshotManager, syncManager } = createHandlers(repoPath);
+
+        const response = await readFileTool.execute({
+            path: filePath,
+            open_symbol: { symbolId: 'sym_stale_runtime_run' },
+        }, {
+            readFileMaxLines: 1000,
+            snapshotManager,
+            syncManager,
+            toolHandlers: handlers,
+        } as any);
+
+        assert.equal(response.isError, true);
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });
+        assert.deepEqual(payload, {
+            status: 'not_found',
+            message: 'No exact symbol match found in file outline.',
+            file: 'src/runtime.ts',
+        });
+    }));
+});

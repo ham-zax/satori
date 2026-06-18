@@ -17,7 +17,7 @@ import {
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
 } from './sidecar';
-import type { RelationshipRecord, SymbolRegistryManifest } from './contracts';
+import type { RelationshipRecord, SymbolRecord, SymbolRegistryManifest } from './contracts';
 
 function manifest(files: SymbolRegistryManifest['files']): SymbolRegistryManifest {
     return {
@@ -40,6 +40,97 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
     } finally {
         await fs.promises.rm(dir, { recursive: true, force: true });
     }
+}
+
+async function readJsonFile<T>(filePath: string): Promise<T> {
+    return JSON.parse(await fs.promises.readFile(filePath, 'utf8')) as T;
+}
+
+async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+    await fs.promises.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+async function writeSingleSymbolRegistryFixture(stateRoot: string): Promise<{
+    symbol: SymbolRecord;
+    result: Awaited<ReturnType<typeof writeSymbolRegistrySidecar>>;
+    shardPath: string;
+}> {
+    const symbol = createSynthesizedFileSymbol({
+        relativePath: 'src/auth.ts',
+        language: 'typescript',
+        content: 'export const auth = true;\n',
+        fileHash: 'hash-auth',
+        extractorVersion: 'extractor-v1',
+    });
+    const registry = buildSymbolRegistry({
+        manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 }]),
+        symbols: [symbol],
+    });
+    const result = await writeSymbolRegistrySidecar({ stateRoot, registry });
+    const index = await readJsonFile<{ files: Array<{ path: string; shardPath: string }> }>(
+        path.join(result.rootPath, 'symbols', 'index.json')
+    );
+    const shardPath = path.join(
+        result.rootPath,
+        index.files.find((file) => file.path === 'src/auth.ts')?.shardPath || ''
+    );
+    return { symbol, result, shardPath };
+}
+
+async function writeSingleRelationshipFixture(stateRoot: string): Promise<{
+    registryResult: Awaited<ReturnType<typeof writeSymbolRegistrySidecar>>;
+    record: RelationshipRecord;
+    shardPath: string;
+}> {
+    const auth = createSynthesizedFileSymbol({
+        relativePath: 'src/auth.ts',
+        language: 'typescript',
+        content: 'export const auth = true;\n',
+        fileHash: 'hash-auth',
+        extractorVersion: 'extractor-v1',
+    });
+    const routes = createSynthesizedFileSymbol({
+        relativePath: 'src/routes.ts',
+        language: 'typescript',
+        content: 'export const routes = true;\n',
+        fileHash: 'hash-routes',
+        extractorVersion: 'extractor-v1',
+    });
+    const registry = buildSymbolRegistry({
+        manifest: manifest([
+            { path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 },
+            { path: 'src/routes.ts', hash: 'hash-routes', language: 'typescript', symbolCount: 1 },
+        ]),
+        symbols: [auth, routes],
+    });
+    const registryResult = await writeSymbolRegistrySidecar({ stateRoot, registry });
+    const record: RelationshipRecord = {
+        sourceKey: routes.symbolKey,
+        sourceInstanceId: routes.symbolInstanceId,
+        targetKey: auth.symbolKey,
+        targetInstanceId: auth.symbolInstanceId,
+        type: 'CALLS',
+        file: 'src/routes.ts',
+        span: { startLine: 1, endLine: 1 },
+        confidence: 'high',
+    };
+    await writeRelationshipSidecar({
+        stateRoot,
+        normalizedRootPath: '/repo',
+        symbolRegistryManifestHash: registryResult.manifestHash,
+        relationshipVersion: 'relationship-v1',
+        builtAt: '2026-06-17T00:00:00.000Z',
+        files: registry.manifest.files,
+        records: [record],
+    });
+    const byFileDir = path.join(registryResult.rootPath, 'relationships', 'by-file');
+    const shardFile = (await fs.promises.readdir(byFileDir)).find((file) => file.endsWith('.json'));
+    assert.ok(shardFile);
+    return {
+        registryResult,
+        record,
+        shardPath: path.join(byFileDir, shardFile),
+    };
 }
 
 test('resolveNavigationSidecarRoot is deterministic and rooted under navigation state', () => {
@@ -602,5 +693,142 @@ test('readSymbolRegistrySidecar reports missing and incompatible registry states
         const incompatible = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
         assert.equal(incompatible.status, 'incompatible');
         assert.match(incompatible.reason || '', /manifest/);
+    });
+});
+
+test('readSymbolRegistrySidecar rejects malformed symbol shard records', async () => {
+    const cases: Array<{
+        name: string;
+        mutate: (symbol: SymbolRecord) => unknown;
+    }> = [
+        {
+            name: 'missing symbolInstanceId',
+            mutate: (symbol) => {
+                const withoutInstanceId: Partial<SymbolRecord> = { ...symbol };
+                delete withoutInstanceId.symbolInstanceId;
+                return withoutInstanceId;
+            },
+        },
+        {
+            name: 'invalid span',
+            mutate: (symbol) => ({
+                ...symbol,
+                span: { startLine: 3, endLine: 2 },
+            }),
+        },
+    ];
+
+    for (const item of cases) {
+        await withTempDir(async (stateRoot) => {
+            const { symbol, shardPath } = await writeSingleSymbolRegistryFixture(stateRoot);
+            const shard = await readJsonFile<{ manifestHash: string; symbols: unknown[] }>(shardPath);
+            await writeJsonFile(shardPath, {
+                ...shard,
+                symbols: [item.mutate(symbol)],
+            });
+
+            const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+
+            assert.equal(loaded.status, 'incompatible', item.name);
+            assert.match(loaded.reason || '', /symbol registry shard record is invalid/);
+        });
+    }
+});
+
+test('readRelationshipSidecar rejects malformed relationship shard records', async () => {
+    const cases: Array<{
+        name: string;
+        mutate: (record: RelationshipRecord) => unknown;
+    }> = [
+        {
+            name: 'invalid relationship kind',
+            mutate: (record) => ({ ...record, type: 'INVOKES' }),
+        },
+        {
+            name: 'invalid confidence',
+            mutate: (record) => ({ ...record, confidence: 'certain' }),
+        },
+        {
+            name: 'invalid span',
+            mutate: (record) => ({
+                ...record,
+                span: { startLine: 4, endLine: 3 },
+            }),
+        },
+    ];
+
+    for (const item of cases) {
+        await withTempDir(async (stateRoot) => {
+            const { registryResult, record, shardPath } = await writeSingleRelationshipFixture(stateRoot);
+            const shard = await readJsonFile<{ manifestHash: string; relationships: unknown[] }>(shardPath);
+            await writeJsonFile(shardPath, {
+                ...shard,
+                relationships: [item.mutate(record)],
+            });
+
+            const loaded = await readRelationshipSidecar({
+                stateRoot,
+                normalizedRootPath: '/repo',
+                expectedSymbolRegistryManifestHash: registryResult.manifestHash,
+            });
+
+            assert.equal(loaded.status, 'incompatible', item.name);
+            assert.match(loaded.reason || '', /relationship shard record is invalid/);
+        });
+    }
+});
+
+test('sidecar readers tolerate unknown extra fields in valid shard records', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { symbol, shardPath: symbolShardPath } = await writeSingleSymbolRegistryFixture(stateRoot);
+        const symbolShard = await readJsonFile<{ manifestHash: string; symbols: unknown[] }>(symbolShardPath);
+        await writeJsonFile(symbolShardPath, {
+            ...symbolShard,
+            symbols: [{ ...symbol, extraContractField: 'ignored' }],
+        });
+
+        const loadedRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+
+        assert.equal(loadedRegistry.status, 'ok');
+        assert.equal(loadedRegistry.registry?.symbolsByInstanceId.has(symbol.symbolInstanceId), true);
+
+        const { registryResult, record, shardPath: relationshipShardPath } = await writeSingleRelationshipFixture(stateRoot);
+        const relationshipShard = await readJsonFile<{ manifestHash: string; relationships: unknown[] }>(relationshipShardPath);
+        await writeJsonFile(relationshipShardPath, {
+            ...relationshipShard,
+            relationships: [{ ...record, extraContractField: 'ignored' }],
+        });
+
+        const loadedRelationships = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: registryResult.manifestHash,
+        });
+
+        assert.equal(loadedRelationships.status, 'ok');
+        assert.equal(loadedRelationships.records?.length, 1);
+    });
+});
+
+test('writeSymbolRegistrySidecar keeps manifest hash stable across deterministic rewrites', async () => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 }]),
+            symbols: [symbol],
+        });
+
+        const first = await writeSymbolRegistrySidecar({ stateRoot, registry });
+        const second = await writeSymbolRegistrySidecar({ stateRoot, registry });
+
+        assert.equal(first.manifestHash, second.manifestHash);
+        assert.equal(first.fileShardCount, second.fileShardCount);
+        assert.equal(first.symbolCount, second.symbolCount);
     });
 });

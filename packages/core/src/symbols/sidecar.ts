@@ -383,6 +383,129 @@ function isSymbolIndexFile(value: unknown): value is SymbolIndexFile {
         && Array.isArray(record.files);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+    return typeof value === 'string' && value.length > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+    return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+    return Number.isInteger(value) && Number(value) >= 1;
+}
+
+function isOptionalNonEmptyString(value: unknown): boolean {
+    return value === undefined || isNonEmptyString(value);
+}
+
+function isSymbolSpan(value: unknown): boolean {
+    if (!isRecord(value)) {
+        return false;
+    }
+    if (!isPositiveInteger(value.startLine) || !isPositiveInteger(value.endLine)) {
+        return false;
+    }
+    if (value.endLine < value.startLine) {
+        return false;
+    }
+    for (const field of ['startByte', 'endByte', 'startColumn', 'endColumn']) {
+        if (value[field] !== undefined && !isNonNegativeInteger(value[field])) {
+            return false;
+        }
+    }
+    if (
+        typeof value.startByte === 'number'
+        && typeof value.endByte === 'number'
+        && value.endByte < value.startByte
+    ) {
+        return false;
+    }
+    if (
+        typeof value.startColumn === 'number'
+        && typeof value.endColumn === 'number'
+        && value.endColumn < value.startColumn
+    ) {
+        return false;
+    }
+    return true;
+}
+
+const VALID_SYMBOL_KINDS = new Set([
+    'file',
+    'module',
+    'namespace',
+    'class',
+    'interface',
+    'type',
+    'enum',
+    'trait',
+    'macro',
+    'function',
+    'method',
+    'property',
+    'component',
+    'hook',
+    'config',
+    'test',
+]);
+
+const VALID_RELATIONSHIP_TYPES = new Set([
+    'CALLS',
+    'IMPORTS',
+    'EXPORTS',
+    'EXTENDS',
+    'IMPLEMENTS',
+    'REFERENCES',
+    'TESTS',
+    'GENERATES',
+    'CONFIGURES',
+]);
+
+function isSymbolRecord(value: unknown): value is SymbolRecord {
+    if (!isRecord(value)) {
+        return false;
+    }
+    for (const field of [
+        'symbolKey',
+        'symbolInstanceId',
+        'language',
+        'name',
+        'qualifiedName',
+        'label',
+        'file',
+        'fileHash',
+        'extractorVersion',
+    ]) {
+        if (!isNonEmptyString(value[field])) {
+            return false;
+        }
+    }
+    if (!isNonEmptyString(value.kind) || !VALID_SYMBOL_KINDS.has(value.kind)) {
+        return false;
+    }
+    if (!isSymbolSpan(value.span)) {
+        return false;
+    }
+    if (!isOptionalNonEmptyString(value.parentKey)) {
+        return false;
+    }
+    if (!Array.isArray(value.parentQualifiedNamePath) || !value.parentQualifiedNamePath.every((item) => typeof item === 'string')) {
+        return false;
+    }
+    if (value.exported !== undefined && typeof value.exported !== 'boolean') {
+        return false;
+    }
+    if (value.ontologyTags !== undefined && (!Array.isArray(value.ontologyTags) || !value.ontologyTags.every(isNonEmptyString))) {
+        return false;
+    }
+    return true;
+}
+
 async function readJson(filePath: string): Promise<unknown> {
     return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
 }
@@ -446,14 +569,22 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
         for (const file of indexFile.files) {
             const shardPath = path.join(rootPath, file.shardPath);
             const shard = await readJson(shardPath) as { manifestHash?: unknown; symbols?: unknown };
-            if (shard.manifestHash !== manifestHash || !Array.isArray(shard.symbols)) {
+            const shardSymbols = shard.symbols;
+            if (shard.manifestHash !== manifestHash || !Array.isArray(shardSymbols)) {
                 return {
                     status: 'incompatible',
                     rootPath,
                     reason: `symbol registry shard is invalid for ${file.path}`,
                 };
             }
-            symbols.push(...(shard.symbols as SymbolRecord[]));
+            if (!shardSymbols.every((symbol) => isSymbolRecord(symbol) && symbol.file === file.path)) {
+                return {
+                    status: 'incompatible',
+                    rootPath,
+                    reason: `symbol registry shard record is invalid for ${file.path}`,
+                };
+            }
+            symbols.push(...(shardSymbols as SymbolRecord[]));
         }
         const registry = buildSymbolRegistry({ manifest, symbols });
         return {
@@ -473,14 +604,19 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
 }
 
 function isRelationshipRecord(value: unknown): value is RelationshipRecord {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    if (!isRecord(value)) {
         return false;
     }
-    const record = value as Record<string, unknown>;
-    return typeof record.sourceKey === 'string'
-        && typeof record.type === 'string'
-        && typeof record.file === 'string'
-        && (record.confidence === 'high' || record.confidence === 'medium' || record.confidence === 'low');
+    return isNonEmptyString(value.sourceKey)
+        && isNonEmptyString(value.type)
+        && VALID_RELATIONSHIP_TYPES.has(value.type)
+        && isNonEmptyString(value.file)
+        && isOptionalNonEmptyString(value.sourceInstanceId)
+        && isOptionalNonEmptyString(value.targetKey)
+        && isOptionalNonEmptyString(value.targetInstanceId)
+        && isOptionalNonEmptyString(value.targetPath)
+        && (value.span === undefined || isSymbolSpan(value.span))
+        && (value.confidence === 'high' || value.confidence === 'medium' || value.confidence === 'low');
 }
 
 export async function readRelationshipSidecar(input: ReadRelationshipSidecarInput): Promise<ReadRelationshipSidecarResult> {
@@ -557,11 +693,14 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                 };
             }
             for (const record of shardRecords) {
-                if (isRelationshipRecord(record)) {
-                    records.push(record);
-                } else {
-                    warnings.push(`RELATIONSHIP_RECORD_SKIPPED:${entry.name}`);
+                if (!isRelationshipRecord(record)) {
+                    return {
+                        status: 'incompatible',
+                        rootPath,
+                        reason: `relationship shard record is invalid for ${entry.name}`,
+                    };
                 }
+                records.push(record);
             }
         }
     } catch (error) {

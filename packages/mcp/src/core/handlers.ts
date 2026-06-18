@@ -590,7 +590,7 @@ export class ToolHandlers {
             action,
             path: codebasePath,
             status,
-            message: options.message || humanText,
+            message: options.message || this.buildCompactManageMessage(humanText),
             humanText,
         };
         if (options.reason) {
@@ -615,11 +615,28 @@ export class ToolHandlers {
         return envelope;
     }
 
+    private buildCompactManageMessage(humanText: string): string {
+        const firstLine = humanText
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find((line) => line.length > 0);
+        if (!firstLine) {
+            return "";
+        }
+        return firstLine.length > 240
+            ? `${firstLine.slice(0, 237)}...`
+            : firstLine;
+    }
+
+    private stringifyToolJson(payload: unknown): string {
+        return JSON.stringify(payload);
+    }
+
     private manageResponseFromEnvelope(envelope: ManageIndexResponseEnvelope): { content: Array<{ type: "text"; text: string }> } {
         return {
             content: [{
                 type: "text",
-                text: JSON.stringify(envelope, null, 2)
+                text: this.stringifyToolJson(envelope)
             }]
         };
     }
@@ -1221,7 +1238,7 @@ export class ToolHandlers {
         return {
             content: [{
                 type: "text",
-                text: JSON.stringify(this.buildRequiresReindexPayload(codebasePath, detail, searchContext), null, 2)
+                text: this.stringifyToolJson(this.buildRequiresReindexPayload(codebasePath, detail, searchContext))
             }]
         };
     }
@@ -6062,7 +6079,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 limit: input.limit
             }, 'Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file. Valid rankingMode: default|auto_changed_first.');
             return {
-                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                 isError: true,
             };
         }
@@ -6098,7 +6115,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit
                 }, `Path '${absolutePath}' does not exist. search_codebase requires an existing directory root or subdirectory.`, 'not_indexed', 'not_indexed');
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true
                 };
             }
@@ -6114,7 +6131,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit
                 }, `Path '${absolutePath}' is not a directory. search_codebase requires a directory root or subdirectory.`, 'not_indexed', 'not_indexed');
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true
                 };
             }
@@ -6133,7 +6150,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit
                 }) as unknown as SearchResponseEnvelope;
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     meta: { searchDiagnostics }
                 };
             }
@@ -6148,7 +6165,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit
                 });
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     meta: { searchDiagnostics }
                 };
             }
@@ -6174,7 +6191,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     results: []
                 };
                 return {
-                    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                     meta: { searchDiagnostics }
                 };
             }
@@ -6198,7 +6215,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     results: []
                 };
                 return {
-                    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                     meta: { searchDiagnostics }
                 };
             }
@@ -6217,7 +6234,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     trackedRootState.collectionName
                 ), trackedRootState.proofDebugHint);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     meta: { searchDiagnostics }
                 };
             }
@@ -6252,7 +6269,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             });
             if (freshnessBlockedPayload) {
                 return {
-                    content: [{ type: "text", text: JSON.stringify(freshnessBlockedPayload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(freshnessBlockedPayload) }],
                     meta: { searchDiagnostics }
                 };
             }
@@ -6512,7 +6529,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
                         await this.touchWatchedCodebase(effectiveRoot);
                         return {
-                            content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+                            content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                             meta: {
                                 searchDiagnostics: {
                                     ...searchDiagnostics,
@@ -6591,7 +6608,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             limit: input.limit
                         });
                         return {
-                            content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                            content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                             meta: {
                                 searchDiagnostics: {
                                     ...searchDiagnostics,
@@ -7028,7 +7045,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
                 await this.touchWatchedCodebase(effectiveRoot);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                     meta: { searchDiagnostics }
                 };
             }
@@ -7068,7 +7085,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         }
                     ) as unknown as SearchResponseEnvelope;
                     return {
-                        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                        content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                         meta: { searchDiagnostics }
                     };
                 } else if (registryState.status === 'incompatible') {
@@ -7298,7 +7315,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             await this.touchWatchedCodebase(effectiveRoot);
             return {
-                content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+                content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                 meta: { searchDiagnostics }
             };
         } catch (error) {
@@ -7313,7 +7330,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     limit: input.limit
                 });
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     meta: {
                         searchDiagnostics: {
                             tool: 'search_codebase',
@@ -7339,7 +7356,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 limit: input.limit
             }, `Unexpected search_codebase failure: ${errorMessage}`, 'not_ready');
             return {
-                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                 isError: true
             };
         }
@@ -7368,7 +7385,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     'not_indexed'
                 );
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true
                 };
             }
@@ -7383,7 +7400,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     'not_indexed'
                 );
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true
                 };
             }
@@ -7397,21 +7414,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     file: normalizedFile
                 }, trackedRootState.message);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                 };
             }
 
             if (trackedRootState.state === 'not_indexed') {
                 const payload = this.buildNotIndexedFileOutlinePayload(normalizedFile, absoluteRoot);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                 };
             }
 
             if (trackedRootState.state === 'indexing') {
                 const payload = this.buildNotReadyFileOutlinePayload(trackedRootState.codebasePath, normalizedFile, absoluteRoot);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                 };
             }
 
@@ -7421,7 +7438,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     reason: trackedRootState.reason
                 });
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                 };
             }
 
@@ -7433,7 +7450,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     trackedRootState.collectionName
                 ), trackedRootState.proofDebugHint);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                 };
             }
 
@@ -7449,7 +7466,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     'not_found'
                 );
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true
                 };
             }
@@ -7466,7 +7483,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     'partial_index_navigation_unavailable'
                 ), proofDebugHint);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                 };
             }
 
@@ -7480,7 +7497,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     message: `File '${normalizedFile}' does not exist under codebase root '${effectiveRoot}'.`
                 };
                 return {
-                    content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
                 };
             }
 
@@ -7495,7 +7512,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     message: `'${normalizedFile}' is not a file.`
                 };
                 return {
-                    content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
                 };
             }
 
@@ -7521,7 +7538,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             file: normalizedFile
                         }, `Symbol registry contains inconsistent file hashes for '${normalizedFile}'.`, 'incompatible_symbol_registry'), proofDebugHint);
                         return {
-                            content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                            content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                         };
                     }
                     if (fileFreshness.status === 'stale') {
@@ -7530,7 +7547,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             file: normalizedFile
                         }, `File '${normalizedFile}' has changed since the symbol registry snapshot was published.`), proofDebugHint);
                         return {
-                            content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                            content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                         };
                     }
 
@@ -7559,7 +7576,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     });
                     await this.touchWatchedCodebase(effectiveRoot);
                     return {
-                        content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
+                        content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
                     };
                 }
                 const languageStatus = this.getOutlineStatusForLanguage(normalizedFile);
@@ -7574,7 +7591,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         message: `File '${normalizedFile}' is not supported for sidecar outline. Supported extensions: ${OUTLINE_SUPPORTED_EXTENSIONS.join(', ')}.`
                     };
                     return {
-                        content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
+                        content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
                     };
                 }
 
@@ -7583,7 +7600,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     file: normalizedFile
                 }, `File '${normalizedFile}' is missing from the symbol registry for this snapshot.`, 'missing_symbol_registry'), proofDebugHint);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                 };
             }
 
@@ -7593,7 +7610,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     file: normalizedFile
                 }, `Symbol registry is incompatible: ${registryState.reason}`, 'incompatible_symbol_registry'), proofDebugHint);
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
                 };
             }
 
@@ -7608,7 +7625,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     message: `File '${normalizedFile}' is not supported for sidecar outline. Supported extensions: ${OUTLINE_SUPPORTED_EXTENSIONS.join(', ')}.`
                 };
                 return {
-                    content: [{ type: "text", text: JSON.stringify(this.withProofDebugHint(payload, proofDebugHint), null, 2) }]
+                    content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
                 };
             }
 
@@ -7617,7 +7634,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 file: normalizedFile
             }, registryState.reason, 'missing_symbol_registry'), proofDebugHint);
             return {
-                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                content: [{ type: "text", text: this.stringifyToolJson(payload) }]
             };
         } catch (error: any) {
             const payload = this.buildInvalidFileOutlineRequestPayload(
@@ -7627,7 +7644,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 'not_ready'
             );
             return {
-                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                 isError: true
             };
         }
@@ -7665,7 +7682,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             return {
                 content: [{
                     type: "text",
-                    text: JSON.stringify(payload, null, 2)
+                    text: this.stringifyToolJson(payload)
                 }],
                 isError: true
             };
@@ -7687,7 +7704,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     'not_indexed'
                 );
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true
                 };
             }
@@ -7707,7 +7724,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     'not_indexed'
                 );
                 return {
-                    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true
                 };
             }
@@ -7716,94 +7733,95 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
             if (trackedRootState.state === 'requires_reindex') {
+                const payload = this.buildRequiresReindexCallGraphPayload(
+                    trackedRootState.codebasePath,
+                    trackedRootState.message,
+                    {
+                        path: absolutePath,
+                        symbolRef,
+                        direction,
+                        depth,
+                        limit
+                    }
+                );
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(this.buildRequiresReindexCallGraphPayload(
-                            trackedRootState.codebasePath,
-                            trackedRootState.message,
-                            {
-                                path: absolutePath,
-                                symbolRef,
-                                direction,
-                                depth,
-                                limit
-                            }
-                        ), null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
 
             if (trackedRootState.state === 'indexing') {
+                const payload = this.buildNotReadyCallGraphPayload(trackedRootState.codebasePath, {
+                    path: absolutePath,
+                    symbolRef,
+                    direction,
+                    depth,
+                    limit
+                });
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(
-                            this.buildNotReadyCallGraphPayload(trackedRootState.codebasePath, {
-                                path: absolutePath,
-                                symbolRef,
-                                direction,
-                                depth,
-                                limit
-                            }),
-                            null,
-                            2
-                        )
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
 
             if (trackedRootState.state === 'not_indexed') {
+                const payload = this.buildNotIndexedCallGraphPayload({
+                    path: absolutePath,
+                    symbolRef,
+                    direction,
+                    depth,
+                    limit
+                });
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(this.buildNotIndexedCallGraphPayload({
-                            path: absolutePath,
-                            symbolRef,
-                            direction,
-                            depth,
-                            limit
-                        }), null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
 
             if (trackedRootState.state === 'stale_local') {
+                const payload = this.buildNotIndexedCallGraphPayload(
+                    {
+                        path: absolutePath,
+                        symbolRef,
+                        direction,
+                        depth,
+                        limit
+                    },
+                    {
+                        codebaseRoot: trackedRootState.codebasePath,
+                        reason: trackedRootState.reason
+                    }
+                );
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(this.buildNotIndexedCallGraphPayload(
-                            {
-                                path: absolutePath,
-                                symbolRef,
-                                direction,
-                                depth,
-                                limit
-                            },
-                            {
-                                codebaseRoot: trackedRootState.codebasePath,
-                                reason: trackedRootState.reason
-                            }
-                        ), null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
 
             if (trackedRootState.state === 'missing_collection') {
+                const payload = this.withProofDebugHint(this.buildMissingLocalCollectionCallGraphPayload(
+                    trackedRootState.codebasePath,
+                    {
+                        path: absolutePath,
+                        symbolRef,
+                        direction,
+                        depth,
+                        limit,
+                    },
+                    trackedRootState.collectionName
+                ), trackedRootState.proofDebugHint);
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(this.withProofDebugHint(this.buildMissingLocalCollectionCallGraphPayload(
-                            trackedRootState.codebasePath,
-                            {
-                                path: absolutePath,
-                                symbolRef,
-                                direction,
-                                depth,
-                                limit,
-                            },
-                            trackedRootState.collectionName
-                        ), trackedRootState.proofDebugHint), null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
@@ -7828,7 +7846,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(payload, null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
@@ -7857,7 +7875,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(payload, null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
@@ -7885,7 +7903,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(payload, null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
@@ -7908,7 +7926,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(payload, null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
@@ -7933,7 +7951,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     return {
                         content: [{
                             type: "text",
-                            text: JSON.stringify(payload, null, 2)
+                            text: this.stringifyToolJson(payload)
                         }]
                     };
                 }
@@ -7958,7 +7976,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     return {
                         content: [{
                             type: "text",
-                            text: JSON.stringify(payload, null, 2)
+                            text: this.stringifyToolJson(payload)
                         }]
                     };
                 }
@@ -7977,7 +7995,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     return {
                         content: [{
                             type: "text",
-                            text: JSON.stringify(payload, null, 2)
+                            text: this.stringifyToolJson(payload)
                         }]
                     };
                 }
@@ -8001,7 +8019,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(payload, null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
@@ -8029,7 +8047,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(payload, null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
@@ -8058,7 +8076,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 return {
                     content: [{
                         type: "text",
-                        text: JSON.stringify(payload, null, 2)
+                        text: this.stringifyToolJson(payload)
                     }]
                 };
             }
@@ -8074,24 +8092,25 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             return {
                 content: [{
                     type: "text",
-                    text: JSON.stringify(payload, null, 2)
+                    text: this.stringifyToolJson(payload)
                 }]
             };
         } catch (error: any) {
+            const payload = this.buildInvalidCallGraphRequestPayload(
+                {
+                    path: typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
+                    symbolRef: normalizedSymbolRef,
+                    direction,
+                    depth,
+                    limit,
+                },
+                `Unexpected call_graph failure: ${error?.message || error}`,
+                'not_ready'
+            );
             return {
                 content: [{
                     type: "text",
-                    text: JSON.stringify(this.buildInvalidCallGraphRequestPayload(
-                        {
-                            path: typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
-                            symbolRef: normalizedSymbolRef,
-                            direction,
-                            depth,
-                            limit,
-                        },
-                        `Unexpected call_graph failure: ${error?.message || error}`,
-                        'not_ready'
-                    ), null, 2)
+                    text: this.stringifyToolJson(payload)
                 }],
                 isError: true
             };

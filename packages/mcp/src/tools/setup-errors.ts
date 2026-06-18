@@ -12,6 +12,10 @@ import { MissingProviderConfigIssue, ToolResponse } from "./types.js";
 export { classifyVectorBackendError };
 export type { VectorBackendDiagnostic, VectorBackendDiagnosticCode };
 
+function stringifyToolJson(payload: unknown): string {
+    return JSON.stringify(payload);
+}
+
 export function isMissingProviderConfigIssue(value: unknown): value is MissingProviderConfigIssue {
     return Boolean(value)
         && typeof value === "object"
@@ -27,7 +31,7 @@ export function formatManageProviderConfigError(
     return {
         content: [{
             type: "text",
-            text: JSON.stringify({
+            text: stringifyToolJson({
                 tool: "manage_index",
                 version: 1,
                 action,
@@ -38,7 +42,7 @@ export function formatManageProviderConfigError(
                 message: issue.message,
                 humanText: issue.message,
                 hints: issue.hints,
-            }, null, 2)
+            })
         }]
     };
 }
@@ -51,7 +55,7 @@ export function formatManageVectorBackendError(
     return {
         content: [{
             type: "text",
-            text: JSON.stringify({
+            text: stringifyToolJson({
                 tool: "manage_index",
                 version: 1,
                 action,
@@ -62,7 +66,7 @@ export function formatManageVectorBackendError(
                 message: diagnostic.message,
                 humanText: diagnostic.message,
                 hints: diagnostic.hints,
-            }, null, 2)
+            })
         }]
     };
 }
@@ -81,7 +85,7 @@ export function formatSearchProviderConfigError(
     return {
         content: [{
             type: "text",
-            text: JSON.stringify({
+            text: stringifyToolJson({
                 status: "not_ready",
                 reason: "missing_provider_config",
                 code: issue.code,
@@ -95,7 +99,7 @@ export function formatSearchProviderConfigError(
                 message: issue.message,
                 hints: issue.hints,
                 results: [],
-            }, null, 2)
+            })
         }]
     };
 }
@@ -114,7 +118,7 @@ export function formatSearchVectorBackendError(
     return {
         content: [{
             type: "text",
-            text: JSON.stringify({
+            text: stringifyToolJson({
                 status: "not_ready",
                 reason: "vector_backend_unavailable",
                 code: diagnostic.code,
@@ -128,7 +132,7 @@ export function formatSearchVectorBackendError(
                 message: diagnostic.message,
                 hints: diagnostic.hints,
                 results: [],
-            }, null, 2)
+            })
         }]
     };
 }

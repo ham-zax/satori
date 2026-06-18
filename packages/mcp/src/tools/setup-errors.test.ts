@@ -40,6 +40,7 @@ test("formatSearchVectorBackendError returns a deterministic not_ready search en
     }, diagnostic);
     const payload = JSON.parse(response.content[0].text);
 
+    assert.doesNotMatch(response.content[0].text, /\n\s+"/);
     assert.equal(payload.status, "not_ready");
     assert.equal(payload.reason, "vector_backend_unavailable");
     assert.equal(payload.code, "VECTOR_BACKEND_CONNECTION_CLOSED");
@@ -58,6 +59,7 @@ test("formatManageVectorBackendError returns a deterministic manage_index envelo
     const response = formatManageVectorBackendError("sync", "/repo", diagnostic);
     const payload = JSON.parse(response.content[0].text);
 
+    assert.doesNotMatch(response.content[0].text, /\n\s+"/);
     assert.equal(payload.tool, "manage_index");
     assert.equal(payload.version, 1);
     assert.equal(payload.status, "error");

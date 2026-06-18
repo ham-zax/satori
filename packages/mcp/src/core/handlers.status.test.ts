@@ -68,6 +68,47 @@ test('handleGetIndexingStatus includes fingerprint diagnostics for requires_rein
     });
 });
 
+test('handleGetIndexingStatus keeps rich humanText but emits compact machine JSON and message', async () => {
+    await withTempRepo(async (repoPath) => {
+        const indexedFingerprint: IndexFingerprint = {
+            embeddingProvider: 'VoyageAI',
+            embeddingModel: 'voyage-4-lite',
+            embeddingDimension: 1024,
+            vectorStoreProvider: 'Milvus',
+            schemaVersion: 'dense_v3'
+        };
+
+        const context = {} as any;
+        const snapshotManager = {
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            getCodebaseStatus: () => 'requires_reindex',
+            getCodebaseInfo: () => ({
+                status: 'requires_reindex',
+                message: 'Legacy fingerprint mismatch.',
+                lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                indexFingerprint: indexedFingerprint,
+                fingerprintSource: 'verified',
+                reindexReason: 'fingerprint_mismatch'
+            })
+        } as any;
+        const syncManager = {} as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const rawText = response.content[0]?.text || '';
+        const payload = JSON.parse(rawText);
+
+        assert.doesNotMatch(rawText, /\n\s+"/);
+        assert.equal(payload.message.includes('\n'), false);
+        assert.ok(payload.humanText.length > payload.message.length);
+        assert.match(payload.message, /Legacy fingerprint mismatch/i);
+        assert.doesNotMatch(payload.message, /Runtime fingerprint/i);
+        assert.match(payload.humanText, /must be rebuilt/i);
+        assert.match(payload.humanText, /Runtime fingerprint: VoyageAI\/voyage-4-large\/1024\/Milvus\/hybrid_v3/i);
+        assert.match(payload.humanText, /Indexed fingerprint: VoyageAI\/voyage-4-lite\/1024\/Milvus\/dense_v3/i);
+    });
+});
+
 test('handleGetIndexingStatus includes fingerprint diagnostics when access gate blocks', async () => {
     await withTempRepo(async (repoPath) => {
         const indexedFingerprint: IndexFingerprint = {

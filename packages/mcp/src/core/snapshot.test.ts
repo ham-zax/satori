@@ -215,6 +215,123 @@ test('existing requires_reindex reason and custom message persist after save/loa
     });
 });
 
+test('snapshot merge lets newer searchable recovery replace older requires_reindex', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-recovered');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { dir, file } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+            formatVersion: 'v3',
+            codebases: {
+                [codebase]: {
+                    status: 'requires_reindex',
+                    reindexReason: 'navigation_recovery_failed',
+                    message: 'Older recovery failure.',
+                    lastUpdated: '2026-01-01T00:00:00.000Z',
+                    indexFingerprint: FINGERPRINT_A,
+                    fingerprintSource: 'verified'
+                }
+            },
+            lastUpdated: '2026-01-01T00:00:00.000Z'
+        }, null, 2));
+
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexed(codebase, {
+            indexedFiles: 4,
+            totalChunks: 12,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+        manager.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const info = reader.getCodebaseInfo(codebase);
+        assert.ok(info);
+        assert.equal(info.status, 'indexed');
+    });
+});
+
+test('snapshot merge lets newer requires_reindex replace older searchable state', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-blocked');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { dir, file } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+            formatVersion: 'v3',
+            codebases: {
+                [codebase]: {
+                    status: 'indexed',
+                    indexedFiles: 3,
+                    totalChunks: 9,
+                    indexStatus: 'completed',
+                    lastUpdated: '2026-01-01T00:00:00.000Z',
+                    indexFingerprint: FINGERPRINT_A,
+                    fingerprintSource: 'verified'
+                }
+            },
+            lastUpdated: '2026-01-01T00:00:00.000Z'
+        }, null, 2));
+
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseRequiresReindex(
+            codebase,
+            'navigation_recovery_failed',
+            'Newer recovery failure.'
+        );
+        manager.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const info = reader.getCodebaseInfo(codebase);
+        assert.ok(info);
+        assert.equal(info.status, 'requires_reindex');
+        if (info.status === 'requires_reindex') {
+            assert.equal(info.reindexReason, 'navigation_recovery_failed');
+        }
+    });
+});
+
+test('v3 snapshot load preserves missing tracked paths for cleanup', () => {
+    withTempHome((homeDir) => {
+        const missingCodebase = path.join(homeDir, 'repo-deleted-before-clear');
+        const { dir, file } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+            formatVersion: 'v3',
+            codebases: {
+                [missingCodebase]: {
+                    status: 'indexed',
+                    indexedFiles: 2,
+                    totalChunks: 6,
+                    indexStatus: 'completed',
+                    lastUpdated: '2026-01-01T00:00:00.000Z',
+                    indexFingerprint: FINGERPRINT_A,
+                    fingerprintSource: 'verified'
+                }
+            },
+            lastUpdated: '2026-01-01T00:00:00.000Z'
+        }, null, 2));
+
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.loadCodebaseSnapshot();
+
+        const info = manager.getCodebaseInfo(missingCodebase);
+        assert.ok(info);
+        assert.equal(info.status, 'indexed');
+        assert.deepEqual(manager.getIndexedCodebases(), [missingCodebase]);
+
+        manager.removeCodebaseCompletely(missingCodebase);
+        manager.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseInfo(missingCodebase), undefined);
+        assert.deepEqual(reader.getIndexedCodebases(), []);
+    });
+});
+
 test('missing fingerprint reason and message persist after transition save/load', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo-missing-fingerprint');
@@ -444,6 +561,32 @@ test('stale lock with dead pid is breakable', () => {
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(lock, JSON.stringify({ pid: 999_999, acquiredAt: new Date().toISOString() }));
         const staleDate = new Date(Date.now() - 60_000);
+        fs.utimesSync(lock, staleDate, staleDate);
+
+        const manager = new SnapshotManager(FINGERPRINT_A) as any;
+        assert.equal(manager.shouldBreakStaleLock(lock), true);
+    });
+});
+
+test('metadata-less stale lock is not breakable at normal stale threshold', () => {
+    withTempHome((homeDir) => {
+        const { dir, lock } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(lock, '');
+        const staleDate = new Date(Date.now() - 60_000);
+        fs.utimesSync(lock, staleDate, staleDate);
+
+        const manager = new SnapshotManager(FINGERPRINT_A) as any;
+        assert.equal(manager.shouldBreakStaleLock(lock), false);
+    });
+});
+
+test('metadata-less very stale lock is breakable', () => {
+    withTempHome((homeDir) => {
+        const { dir, lock } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(lock, '');
+        const staleDate = new Date(Date.now() - 6 * 60_000);
         fs.utimesSync(lock, staleDate, staleDate);
 
         const manager = new SnapshotManager(FINGERPRINT_A) as any;

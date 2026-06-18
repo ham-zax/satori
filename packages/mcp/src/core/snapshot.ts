@@ -87,6 +87,7 @@ export class SnapshotManager {
     private static readonly SNAPSHOT_LOCK_WAIT_MS = 2000;
     private static readonly SNAPSHOT_LOCK_RETRY_MS = 25;
     private static readonly SNAPSHOT_LOCK_STALE_MS = 30_000;
+    private static readonly SNAPSHOT_LOCK_METADATALESS_STALE_MS = 5 * 60_000;
     private static readonly INDEXING_STALE_MS = 10 * 60_000;
     private snapshotFilePath: string;
     private indexedCodebases: string[] = [];
@@ -241,6 +242,12 @@ export class SnapshotManager {
                     return localInfo;
                 }
             }
+            if (localStatus !== "indexing"
+                && diskStatus !== "indexing"
+                && Number.isFinite(localMs)
+                && Number.isFinite(diskMs)) {
+                return diskMs > localMs ? diskInfo : localInfo;
+            }
             return mergeClassRank(localClass) > mergeClassRank(diskClass) ? localInfo : diskInfo;
         }
 
@@ -287,6 +294,16 @@ export class SnapshotManager {
         }
     }
 
+    private isSnapshotLockMetadataLessStale(lockPath: string): boolean {
+        try {
+            const stats = fs.statSync(lockPath);
+            const ageMs = Date.now() - stats.mtimeMs;
+            return ageMs >= SnapshotManager.SNAPSHOT_LOCK_METADATALESS_STALE_MS;
+        } catch {
+            return false;
+        }
+    }
+
     private readLockMetadata(lockPath: string): { pid?: number } | null {
         try {
             const raw = fs.readFileSync(lockPath, "utf8");
@@ -320,7 +337,7 @@ export class SnapshotManager {
         }
         const metadata = this.readLockMetadata(lockPath);
         if (!metadata || metadata.pid === undefined) {
-            return true;
+            return this.isSnapshotLockMetadataLessStale(lockPath);
         }
         return !this.isPidAlive(metadata.pid);
     }
@@ -487,10 +504,6 @@ export class SnapshotManager {
     private mapFromV3Snapshot(snapshot: CodebaseSnapshotV3): Map<string, CodebaseInfo> {
         const map = new Map<string, CodebaseInfo>();
         for (const [codebasePath, rawInfo] of Object.entries(snapshot.codebases || {})) {
-            if (!fs.existsSync(codebasePath)) {
-                console.warn(`[SNAPSHOT] Codebase no longer exists, removing: ${codebasePath}`);
-                continue;
-            }
             const parsed = this.toCodebaseInfo(rawInfo, "v3", codebasePath);
             if (!parsed) {
                 continue;

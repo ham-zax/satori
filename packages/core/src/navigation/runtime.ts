@@ -31,6 +31,10 @@ type NavigationFallbackDecision = {
     reason: string;
 };
 
+type SQLiteServingGateDecision =
+    | { canServeSQLite: true }
+    | { canServeSQLite: false; reason: string };
+
 export interface RuntimeNavigationStoreOptions {
     servingStore?: NavigationStore;
     candidateStore?: NavigationStore;
@@ -129,6 +133,7 @@ export class RuntimeNavigationStore implements NavigationStore {
     private readonly parityValidator: typeof validateNavigationStoreParity;
     private readonly parityValidationByRoot = new Map<string, Promise<void>>();
     private readonly fallbackWarningByRoot = new Set<string>();
+    private readonly sqliteServingParityCache = new Set<string>();
 
     constructor(options: RuntimeNavigationStoreOptions = {}) {
         this.jsonStore = options.servingStore || options.primaryStore || new JsonNavigationStore();
@@ -187,11 +192,168 @@ export class RuntimeNavigationStore implements NavigationStore {
         );
     }
 
+    private sqliteServingParityCacheKey(input: NavigationStoreInput, parts: {
+        jsonRegistryManifestHash: string;
+        sqliteRegistryManifestHash: string;
+        jsonRelationshipManifest: string;
+        sqliteRelationshipManifest: string;
+    }): string {
+        return [
+            parityKey(input),
+            parts.jsonRegistryManifestHash,
+            parts.sqliteRegistryManifestHash,
+            parts.jsonRelationshipManifest,
+            parts.sqliteRelationshipManifest,
+        ].join('\0');
+    }
+
+    private async evaluateSQLiteServingGate(input: NavigationStoreInput): Promise<SQLiteServingGateDecision> {
+        let jsonRegistry: Awaited<ReturnType<NavigationStore['getManifest']>>;
+        try {
+            jsonRegistry = await this.jsonStore.getManifest(input);
+        } catch (error) {
+            return {
+                canServeSQLite: false,
+                reason: `canonical JSON registry check failed: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+
+        if (jsonRegistry.status !== 'ok') {
+            return {
+                canServeSQLite: false,
+                reason: `canonical JSON registry is unavailable: ${jsonRegistry.reason}`,
+            };
+        }
+
+        let jsonCompatibility: Awaited<ReturnType<NavigationStore['getCompatibilityState']>>;
+        try {
+            jsonCompatibility = await this.jsonStore.getCompatibilityState({
+                ...input,
+                expectedSymbolRegistryManifestHash: jsonRegistry.manifestHash,
+            });
+        } catch (error) {
+            return {
+                canServeSQLite: false,
+                reason: `canonical JSON compatibility check failed: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+        if (jsonCompatibility.registry.status !== 'ok') {
+            return {
+                canServeSQLite: false,
+                reason: `canonical JSON registry is unavailable: ${jsonCompatibility.registry.reason}`,
+            };
+        }
+        if (jsonCompatibility.relationships.status !== 'ok') {
+            return {
+                canServeSQLite: false,
+                reason: `canonical JSON relationships are unavailable: ${jsonCompatibility.relationships.reason}`,
+            };
+        }
+
+        let sqliteRegistry: Awaited<ReturnType<NavigationStore['getManifest']>>;
+        try {
+            sqliteRegistry = await this.sqliteStore.getManifest(input);
+        } catch (error) {
+            return {
+                canServeSQLite: false,
+                reason: `SQLite registry check failed: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+
+        if (sqliteRegistry.status !== 'ok') {
+            return {
+                canServeSQLite: false,
+                reason: `SQLite registry is unavailable: ${sqliteRegistry.reason}`,
+            };
+        }
+        if (sqliteRegistry.manifestHash !== jsonRegistry.manifestHash) {
+            return {
+                canServeSQLite: false,
+                reason: 'SQLite registry manifest hash does not match canonical JSON',
+            };
+        }
+
+        let sqliteCompatibility: Awaited<ReturnType<NavigationStore['getCompatibilityState']>>;
+        try {
+            sqliteCompatibility = await this.sqliteStore.getCompatibilityState({
+                ...input,
+                expectedSymbolRegistryManifestHash: jsonRegistry.manifestHash,
+            });
+        } catch (error) {
+            return {
+                canServeSQLite: false,
+                reason: `SQLite compatibility check failed: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+        if (sqliteCompatibility.registry.status !== 'ok') {
+            return {
+                canServeSQLite: false,
+                reason: `SQLite registry is unavailable: ${sqliteCompatibility.registry.reason}`,
+            };
+        }
+        if (sqliteCompatibility.relationships.status !== 'ok') {
+            return {
+                canServeSQLite: false,
+                reason: `SQLite relationships are unavailable: ${sqliteCompatibility.relationships.reason}`,
+            };
+        }
+
+        const jsonRelationshipManifest = JSON.stringify(jsonCompatibility.relationships.manifest);
+        const sqliteRelationshipManifest = JSON.stringify(sqliteCompatibility.relationships.manifest);
+        if (jsonRelationshipManifest !== sqliteRelationshipManifest) {
+            return {
+                canServeSQLite: false,
+                reason: 'SQLite relationship manifest does not match canonical JSON',
+            };
+        }
+
+        const cacheKey = this.sqliteServingParityCacheKey(input, {
+            jsonRegistryManifestHash: jsonRegistry.manifestHash,
+            sqliteRegistryManifestHash: sqliteRegistry.manifestHash,
+            jsonRelationshipManifest,
+            sqliteRelationshipManifest,
+        });
+        if (this.sqliteServingParityCache.has(cacheKey)) {
+            return { canServeSQLite: true };
+        }
+
+        try {
+            const parity = await this.parityValidator({
+                normalizedRootPath: input.normalizedRootPath,
+                stateRoot: input.stateRoot,
+                referenceStore: this.jsonStore,
+                candidateStore: this.sqliteStore,
+            });
+            if (!parity.ok) {
+                return {
+                    canServeSQLite: false,
+                    reason: `SQLite parity mismatch: ${parity.mismatches.join(', ')}`,
+                };
+            }
+        } catch (error) {
+            return {
+                canServeSQLite: false,
+                reason: `SQLite parity validation failed: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+
+        this.sqliteServingParityCache.add(cacheKey);
+        return { canServeSQLite: true };
+    }
+
     private async serve<T>(
         input: NavigationStoreInput,
         read: (store: NavigationStore) => Promise<T>,
         evaluateFallback: (result: T) => NavigationFallbackDecision | null,
     ): Promise<T> {
+        if (this.servingBackend === 'sqlite' && this.servingFallbackStore) {
+            const gate = await this.evaluateSQLiteServingGate(input);
+            if (!gate.canServeSQLite) {
+                this.warnServingFallback(input, gate.reason);
+                return read(this.servingFallbackStore);
+            }
+        }
+
         let result: T;
         try {
             result = await read(this.servingStore);

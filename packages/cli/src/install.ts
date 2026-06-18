@@ -57,7 +57,11 @@ const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: search_codebase -> file_outline
 const CODEX_GUIDANCE_HOOK_SCRIPT = [
     `msg=${JSON.stringify(CODEX_GUIDANCE_HOOK_MESSAGE)}`,
     'key=$(printf "%s" "$PWD" | sed "s#[^A-Za-z0-9_.-]#_#g" | cut -c1-120)',
-    'stamp="${XDG_RUNTIME_DIR:-/tmp}/satori-codex-guidance.${key:-global}"',
+    'uid=$(id -u 2>/dev/null || printf "user")',
+    'dir="${XDG_RUNTIME_DIR:-/tmp}/satori-codex-guidance.${uid}"',
+    'mkdir -p "$dir" 2>/dev/null || true',
+    'chmod 700 "$dir" 2>/dev/null || true',
+    'stamp="$dir/${key:-global}"',
     'now=$(date +%s)',
     'last=$(cat "$stamp" 2>/dev/null || printf "0")',
     'case "$last" in *[!0-9]*|"") last=0;; esac',

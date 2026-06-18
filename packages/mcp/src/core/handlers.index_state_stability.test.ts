@@ -101,6 +101,72 @@ test('handleSearchCode does not call cloud reconcile and keeps status ok when ma
     });
 });
 
+test('handleSearchCode warns when returning results from a partial limit_reached index', async () => {
+    await withTempRepo(async (repoPath) => {
+        const info = {
+            status: 'indexed',
+            indexStatus: 'limit_reached',
+            indexedFiles: 1,
+            totalChunks: 1,
+            lastUpdated: '2026-02-28T08:00:00.000Z'
+        };
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => baseSearchResult(),
+            getIndexCompletionMarker: async () => buildMarker(repoPath)
+        } as any;
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info }],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            getCodebaseInfo: () => info,
+            getCodebaseStatus: () => 'indexed'
+        } as any;
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: '2026-02-28T08:00:00.000Z',
+                thresholdMs: 180000
+            })
+        } as any;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, () => Date.parse('2026-02-28T08:01:00.000Z'));
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'run',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.ok(Array.isArray(payload.results));
+        assert.ok(payload.results.length > 0);
+        assert.ok(Array.isArray(payload.warnings));
+        assert.ok(payload.warnings.includes('SEARCH_PARTIAL_INDEX:limit_reached'));
+        assert.ok(payload.warnings.includes('SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE'));
+
+        const rawResponse = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'run',
+            scope: 'runtime',
+            resultMode: 'raw',
+            groupBy: 'symbol',
+            limit: 5
+        });
+        const rawPayload = JSON.parse(rawResponse.content[0]?.text || '{}');
+        assert.equal(rawPayload.status, 'ok');
+        assert.equal(rawPayload.resultMode, 'raw');
+        assert.ok(Array.isArray(rawPayload.results));
+        assert.ok(rawPayload.results.length > 0);
+        assert.ok(rawPayload.warnings.includes('SEARCH_PARTIAL_INDEX:limit_reached'));
+        assert.ok(rawPayload.warnings.includes('SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE'));
+    });
+});
+
 test('handleSearchCode returns stale-local not_indexed when completion marker is missing', async () => {
     await withTempRepo(async (repoPath) => {
         const context = {

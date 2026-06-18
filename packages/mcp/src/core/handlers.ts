@@ -126,6 +126,8 @@ const SEARCH_QUERY_STOPWORDS = new Set([
 ]);
 const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
 const PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL = 'Partial index/search data may exist, but navigation sidecars were not published because indexing stopped before completion.';
+const SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING = 'SEARCH_PARTIAL_INDEX:limit_reached';
+const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = 'SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE';
 const SEARCH_NAVIGATION_NEXT_STEP = 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.';
 const SEARCH_GROUP_PREVIEW_MAX_CHARS = 800;
 const SEARCH_AGENT_FIT_NEUTRAL = 1.0;
@@ -4755,6 +4757,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const searchableRoot = this.resolveTrackedRoot(absolutePath, ['indexed', 'sync_completed']);
             const indexingRoot = this.resolveTrackedRoot(absolutePath, ['indexing']);
             let effectiveRoot = searchableRoot?.path || absolutePath;
+            const partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot?.info)
+                ? [
+                    SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,
+                    SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,
+                ]
+                : [];
 
             if (!searchableRoot && indexingRoot) {
                 const payload = this.buildNotReadySearchPayload(indexingRoot.path, {
@@ -5158,7 +5166,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 );
             }
 
-            const searchWarnings = Array.from(searchWarningsSet);
+            const searchWarnings = [
+                ...Array.from(searchWarningsSet),
+                ...partialIndexSearchWarnings,
+            ];
             const dirtyFilesNotFreshened = observedChangedFilesState.available
                 && observedChangedFilesCount > 0
                 && freshnessDecision.mode !== 'synced'

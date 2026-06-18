@@ -193,6 +193,17 @@ type SearchCandidate = {
 
 type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'fallback';
 
+type TrackedLexicalSearchDebug = {
+    enabled: boolean;
+    trackedPathCount: number;
+    filesConsidered: number;
+    filesScanned: number;
+    bytesRead: number;
+    cappedByFiles: boolean;
+    cappedByBytes: boolean;
+    returnedResults: number;
+};
+
 type SearchOwnerResolution = {
     ownerSymbolKey?: string;
     ownerSymbolInstanceId?: string;
@@ -1749,20 +1760,40 @@ export class ToolHandlers {
         queryPlan: SearchQueryPlan;
         scope: SearchScope;
         limit: number;
-    }): any[] {
+    }): { results: any[]; debug: TrackedLexicalSearchDebug } {
+        const disabledDebug = (): TrackedLexicalSearchDebug => ({
+            enabled: false,
+            trackedPathCount: 0,
+            filesConsidered: 0,
+            filesScanned: 0,
+            bytesRead: 0,
+            cappedByFiles: false,
+            cappedByBytes: false,
+            returnedResults: 0,
+        });
         if (!this.shouldRunTrackedLexicalSearch(input)) {
-            return [];
+            return { results: [], debug: disabledDebug() };
         }
 
         const getTrackedRelativePaths = (this.context as any).getTrackedRelativePaths;
         if (typeof getTrackedRelativePaths !== 'function') {
-            return [];
+            return { results: [], debug: disabledDebug() };
         }
 
         const trackedRelativePaths = getTrackedRelativePaths.call(this.context, input.effectiveRoot);
         if (!Array.isArray(trackedRelativePaths) || trackedRelativePaths.length === 0) {
-            return [];
+            return { results: [], debug: disabledDebug() };
         }
+        const debug: TrackedLexicalSearchDebug = {
+            enabled: true,
+            trackedPathCount: trackedRelativePaths.length,
+            filesConsidered: 0,
+            filesScanned: 0,
+            bytesRead: 0,
+            cappedByFiles: false,
+            cappedByBytes: false,
+            returnedResults: 0,
+        };
 
         const normalizedExactPathFilters = new Set(
             input.parsedOperators.path
@@ -1803,9 +1834,15 @@ export class ToolHandlers {
         let filesScanned = 0;
 
         for (const relativePath of uniquePaths) {
-            if (filesScanned >= SEARCH_TRACKED_LEXICAL_MAX_FILES || bytesRead >= SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
+            if (filesScanned >= SEARCH_TRACKED_LEXICAL_MAX_FILES) {
+                debug.cappedByFiles = true;
                 break;
             }
+            if (bytesRead >= SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
+                debug.cappedByBytes = true;
+                break;
+            }
+            debug.filesConsidered += 1;
             if (!isLanguageCapabilitySupportedForFilename(relativePath, 'search')) {
                 continue;
             }
@@ -1841,6 +1878,9 @@ export class ToolHandlers {
                 continue;
             }
             if (!stat.isFile() || stat.size > SEARCH_TRACKED_LEXICAL_MAX_BYTES || bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
+                if (bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
+                    debug.cappedByBytes = true;
+                }
                 continue;
             }
 
@@ -1852,6 +1892,8 @@ export class ToolHandlers {
             }
             filesScanned += 1;
             bytesRead += stat.size;
+            debug.filesScanned = filesScanned;
+            debug.bytesRead = bytesRead;
 
             const lowerContent = content.toLowerCase();
             const quickMatch = lexicalTerms.length === 0
@@ -1919,7 +1961,7 @@ export class ToolHandlers {
             return a.startLine - b.startLine;
         });
 
-        return candidates.slice(0, Math.min(input.limit, SEARCH_TRACKED_LEXICAL_MAX_RESULTS)).map((candidate) => ({
+        const results = candidates.slice(0, Math.min(input.limit, SEARCH_TRACKED_LEXICAL_MAX_RESULTS)).map((candidate) => ({
             content: candidate.content,
             relativePath: candidate.relativePath,
             startLine: candidate.startLine,
@@ -1929,6 +1971,8 @@ export class ToolHandlers {
             backendScore: candidate.score,
             backendScoreKind: 'lexical_rank',
         }));
+        debug.returnedResults = results.length;
+        return { results, debug };
     }
 
     private findBestLivePathLexicalLineIndex(lines: string[], lexicalTerms: SearchLexicalTerm[]): number {
@@ -5654,6 +5698,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const expandedQuery = `${semanticQuery}\nimplementation runtime source entrypoint`;
             const maxAttempts = parsedOperators.must.length > 0 ? 1 + SEARCH_MUST_RETRY_ROUNDS : 1;
             let candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
+            let trackedLexicalDebug: TrackedLexicalSearchDebug | undefined;
             const operatorSummary = this.buildOperatorSummary(parsedOperators);
             let filterSummary: SearchFilterSummary = {
                 removedByScope: 0,
@@ -5856,15 +5901,16 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 for (const pass of successfulPasses) {
                     addPass(pass.results, pass.id, 1);
                 }
-                const trackedLexicalResults = this.buildTrackedLexicalSearchResults({
+                const trackedLexical = this.buildTrackedLexicalSearchResults({
                     effectiveRoot,
                     parsedOperators,
                     queryPlan,
                     scope: input.scope,
                     limit: candidateLimit,
                 });
-                if (trackedLexicalResults.length > 0) {
-                    addPass(trackedLexicalResults, 'lexical_files', 1);
+                trackedLexicalDebug = trackedLexical.debug;
+                if (trackedLexical.results.length > 0) {
+                    addPass(trackedLexical.results, 'lexical_files', 1);
                     passesUsed.add('lexical_files');
                 }
                 if (canSupplementLivePathEvidence) {
@@ -6074,6 +6120,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         backendScoreKinds: Array.from(backendScoreKinds).sort(),
                     },
                     rankingProvenance,
+                    ...(trackedLexicalDebug ? { trackedLexical: trackedLexicalDebug } : {}),
                     passesUsed: Array.from(passesUsed).sort(),
                     candidateLimit,
                     mustRetry: {

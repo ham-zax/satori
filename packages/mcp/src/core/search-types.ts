@@ -271,6 +271,16 @@ export interface SearchDebugHint {
         exactMatchPinningApplied: boolean;
         registryRepairGroupCount: number;
     };
+    trackedLexical?: {
+        enabled: boolean;
+        trackedPathCount: number;
+        filesConsidered: number;
+        filesScanned: number;
+        bytesRead: number;
+        cappedByFiles: boolean;
+        cappedByBytes: boolean;
+        returnedResults: number;
+    };
     passesUsed: string[];
     candidateLimit: number;
     mustRetry: {

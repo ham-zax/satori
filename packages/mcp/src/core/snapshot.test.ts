@@ -496,6 +496,39 @@ test('saveCodebaseSnapshot honors explicit removals via tombstones', () => {
     });
 });
 
+test('refreshFromDiskIfChanged reloads persisted snapshot entries from another process', () => {
+    withTempHome((homeDir) => {
+        const codebaseA = path.join(homeDir, 'repo-a');
+        const codebaseB = path.join(homeDir, 'repo-b');
+        fs.mkdirSync(codebaseA, { recursive: true });
+        fs.mkdirSync(codebaseB, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setCodebaseIndexed(codebaseA, {
+            indexedFiles: 3,
+            totalChunks: 8,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.deepEqual(reader.getAllCodebases().map((entry) => entry.path), [codebaseA]);
+
+        const otherProcess = new SnapshotManager(FINGERPRINT_A);
+        otherProcess.loadCodebaseSnapshot();
+        otherProcess.setCodebaseRequiresReindex(codebaseB, 'missing_fingerprint', 'other process update');
+        otherProcess.saveCodebaseSnapshot();
+
+        const refreshed = reader.refreshFromDiskIfChanged();
+        assert.equal(refreshed, true);
+
+        const all = reader.getAllCodebases().map((entry) => entry.path).sort();
+        assert.deepEqual(all, [codebaseA, codebaseB].sort());
+        assert.equal(reader.getCodebaseInfo(codebaseB)?.status, 'requires_reindex');
+    });
+});
+
 test('setCodebaseSyncCompleted respects explicit fingerprintSource override', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo-sync');

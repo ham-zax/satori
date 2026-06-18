@@ -77,11 +77,21 @@ function toReadFileSearchableStatus(status: unknown): ReadFileSearchableStatus |
     return undefined;
 }
 
+function refreshSnapshotState(ctx: ToolContext): void {
+    const snapshotManager = ctx.snapshotManager as unknown as {
+        refreshFromDiskIfChanged?: () => boolean;
+    };
+    if (typeof snapshotManager.refreshFromDiskIfChanged === 'function') {
+        snapshotManager.refreshFromDiskIfChanged();
+    }
+}
+
 function collectCodebaseCandidatesForFile(
     absolutePath: string,
     ctx: ToolContext,
     allowedStatuses: ReadonlySet<ReadFileSearchableStatus>
 ): ReadFileCodebaseCandidate[] {
+    refreshSnapshotState(ctx);
     const allCodebases = typeof ctx.snapshotManager?.getAllCodebases === "function"
         ? ctx.snapshotManager.getAllCodebases()
         : [];
@@ -160,6 +170,7 @@ async function touchResolvedCodebaseRoot(absolutePath: string, ctx: ToolContext)
 }
 
 function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): ReadFileIndexingBlock | undefined {
+    refreshSnapshotState(ctx);
     const allCodebases = typeof ctx.snapshotManager?.getAllCodebases === "function"
         ? ctx.snapshotManager.getAllCodebases()
         : [];

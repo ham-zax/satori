@@ -299,7 +299,7 @@ test("runCli uninstall supports dry-run without writing files", async () => {
     }
 });
 
-test("runCli waits for manage_index create until status reaches terminal indexed state", async () => {
+test("runCli returns the initial manage_index create kickoff response without polling status", async () => {
     const io = captureIo();
 
     const exitCode = await runCli([
@@ -320,11 +320,12 @@ test("runCli waits for manage_index create until status reaches terminal indexed
 
     const { stdout } = io.read();
     assert.equal(exitCode, 0);
-    assert.equal(stdout.includes("fully indexed"), true);
-    assert.equal(stdout.includes("polls=3"), true);
+    assert.equal(stdout.includes("started indexing"), true);
+    assert.equal(stdout.includes("fully indexed"), false);
+    assert.equal(stdout.includes("polls=3"), false);
 });
 
-test("runCli enforces minimum poll timeout for manage_index create/reindex under low call-timeout overrides", async () => {
+test("runCli does not wait on manage_index create/reindex under low call-timeout overrides", async () => {
     const io = captureIo();
 
     const exitCode = await runCli([
@@ -346,8 +347,9 @@ test("runCli enforces minimum poll timeout for manage_index create/reindex under
     const { stdout, stderr } = io.read();
     assert.equal(exitCode, 0);
     assert.equal(stderr.includes("E_CALL_TIMEOUT"), false);
-    assert.equal(stdout.includes("fully indexed"), true);
-    assert.equal(stdout.includes("polls=3"), true);
+    assert.equal(stdout.includes("started indexing"), true);
+    assert.equal(stdout.includes("fully indexed"), false);
+    assert.equal(stdout.includes("polls=3"), false);
 });
 
 test("runCli emits deterministic JSON error payload for tool-call timeout instead of empty stdout", async () => {

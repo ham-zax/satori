@@ -98,6 +98,7 @@ export class SnapshotManager {
     private pendingRemovals: Set<string> = new Set();
     private pendingTombstoneRemovals: Set<string> = new Set();
     private isDirty = false;
+    private lastLoadedSnapshotStateToken: string | null = null;
     private runtimeFingerprint: IndexFingerprint;
 
     constructor(runtimeFingerprint: IndexFingerprint) {
@@ -185,6 +186,28 @@ export class SnapshotManager {
 
     private snapshotLockPath(): string {
         return `${this.snapshotFilePath}.lock`;
+    }
+
+    private readSnapshotStateToken(): string | null {
+        try {
+            if (!fs.existsSync(this.snapshotFilePath)) {
+                return null;
+            }
+            const stats = fs.statSync(this.snapshotFilePath, { bigint: true });
+            return [
+                stats.dev.toString(),
+                stats.ino.toString(),
+                stats.size.toString(),
+                stats.mtimeNs.toString(),
+                stats.ctimeNs.toString()
+            ].join(":");
+        } catch {
+            return null;
+        }
+    }
+
+    private rememberCurrentSnapshotStateToken(): void {
+        this.lastLoadedSnapshotStateToken = this.readSnapshotStateToken();
     }
 
     private parseTimestampMs(value: unknown): number {
@@ -700,6 +723,10 @@ export class SnapshotManager {
             this.isDirty = false;
             if (!fs.existsSync(this.snapshotFilePath)) {
                 console.log('[SNAPSHOT] Snapshot file does not exist. Starting with empty codebase list.');
+                this.codebaseInfoMap.clear();
+                this.clearTombstones.clear();
+                this.refreshDerivedState();
+                this.lastLoadedSnapshotStateToken = null;
                 return;
             }
 
@@ -730,6 +757,8 @@ export class SnapshotManager {
             if (shouldPersist) {
                 this.isDirty = true;
                 this.saveCodebaseSnapshot(true);
+            } else {
+                this.rememberCurrentSnapshotStateToken();
             }
         } catch (error: any) {
             this.quarantineCorruptSnapshot(error);
@@ -739,6 +768,7 @@ export class SnapshotManager {
             this.pendingTombstoneRemovals.clear();
             this.refreshDerivedState();
             this.isDirty = false;
+            this.lastLoadedSnapshotStateToken = this.readSnapshotStateToken();
         }
     }
 
@@ -781,6 +811,7 @@ export class SnapshotManager {
             this.pendingTombstoneRemovals.clear();
             this.isDirty = false;
             this.refreshDerivedState();
+            this.rememberCurrentSnapshotStateToken();
 
             console.log(`[SNAPSHOT] Snapshot saved in v3 format. Indexed: ${this.indexedCodebases.length}, Indexing: ${this.indexingCodebases.size}, Failed: ${this.getFailedCodebases().length}, RequiresReindex: ${this.getCodebasesRequiringReindex().length}`);
         } catch (error: any) {
@@ -797,6 +828,20 @@ export class SnapshotManager {
                 this.releaseSnapshotLock(lockHandle);
             }
         }
+    }
+
+    public refreshFromDiskIfChanged(): boolean {
+        if (this.isDirty || this.pendingRemovals.size > 0 || this.pendingTombstoneRemovals.size > 0) {
+            return false;
+        }
+
+        const currentStateToken = this.readSnapshotStateToken();
+        if (currentStateToken === this.lastLoadedSnapshotStateToken) {
+            return false;
+        }
+
+        this.loadCodebaseSnapshot();
+        return true;
     }
 
     public getIndexedCodebases(): string[] {

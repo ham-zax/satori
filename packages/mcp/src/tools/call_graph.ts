@@ -21,7 +21,7 @@ const callGraphInputSchema = z.object({
 
 export const callGraphTool: McpTool = {
     name: 'call_graph',
-    description: () => 'Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. On symbol-owned indexes, call_graph uses compatible relationship sidecars for conservative CALLS v0 traversal and upgrades low-confidence cross-file calls only when current IMPORTS/EXPORTS evidence deterministically supports the target symbol.',
+    description: () => 'Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. On symbol-owned indexes, call_graph uses compatible relationship sidecars for conservative CALLS v0 traversal and upgrades low-confidence cross-file calls only when current IMPORTS/EXPORTS evidence deterministically supports the target symbol. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report the counts returned in that response, not whole-sidecar totals for the indexed codebase.',
     inputSchemaZod: () => callGraphInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const normalizedArgs = (args && typeof args === 'object')

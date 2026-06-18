@@ -5,6 +5,36 @@ import os from 'node:os';
 import path from 'node:path';
 import { readFileTool } from './read_file.js';
 import { ToolContext } from './types.js';
+import { ToolHandlers } from '../core/handlers.js';
+import { CapabilityResolver } from '../core/capabilities.js';
+import { IndexFingerprint } from '../config.js';
+
+const RUNTIME_FINGERPRINT: IndexFingerprint = {
+    embeddingProvider: 'VoyageAI',
+    embeddingModel: 'voyage-4-large',
+    embeddingDimension: 1024,
+    vectorStoreProvider: 'Milvus',
+    schemaVersion: 'hybrid_v3'
+};
+
+const CAPABILITIES = new CapabilityResolver({
+    name: 'test',
+    version: '0.0.0',
+    encoderProvider: 'VoyageAI',
+    encoderModel: 'voyage-4-large',
+});
+
+function buildMarker(repoPath: string, fingerprint: IndexFingerprint = RUNTIME_FINGERPRINT) {
+    return {
+        kind: 'satori_index_completion_v1',
+        codebasePath: repoPath,
+        fingerprint,
+        indexedFiles: 4,
+        totalChunks: 8,
+        completedAt: '2026-02-28T08:00:00.000Z',
+        runId: 'run_test'
+    };
+}
 
 function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> | T {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-read-file-test-'));
@@ -101,6 +131,36 @@ test('read_file touches the resolved indexed codebase root on successful reads',
 
         assert.equal(response.isError, undefined);
         assert.deepEqual(touched, [repoPath]);
+    });
+});
+
+test('read_file refreshes snapshot state before resolving indexed roots', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const filePath = path.join(repoPath, 'src', 'small.ts');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'a\nb\nc\n', 'utf8');
+
+        let refreshCalls = 0;
+        const response = await runReadFile(
+            { path: filePath },
+            1000,
+            {
+                snapshotManager: {
+                    refreshFromDiskIfChanged: () => {
+                        refreshCalls += 1;
+                        return false;
+                    },
+                    getAllCodebases: () => [{
+                        path: repoPath,
+                        info: { status: 'indexed' }
+                    }]
+                } as any,
+            }
+        );
+
+        assert.equal(response.isError, undefined);
+        assert.ok(refreshCalls >= 1);
     });
 });
 
@@ -656,6 +716,64 @@ test('read_file open_symbol returns requires_reindex for stale symbolInstanceId 
         assert.equal(payload.status, 'requires_reindex');
         assert.equal(payload.hints.reindex.tool, 'manage_index');
         assert.deepEqual(payload.hints.reindex.args, { action: 'reindex', path: repoPath });
+    });
+});
+
+test('read_file open_symbol returns not_indexed when delegated exact navigation finds missing vector collection readiness', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        const codebaseInfo = {
+            status: 'indexed',
+            lastUpdated: '2026-02-28T08:00:00.000Z',
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified'
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            getCodebaseInfo: () => codebaseInfo,
+            getCodebaseStatus: () => 'indexed',
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            getCodebaseCallGraphSidecar: () => undefined,
+            removeCodebaseCompletely: () => undefined,
+            saveCodebaseSnapshot: () => undefined
+        } as any;
+        const syncManager = {
+            unwatchCodebase: async () => undefined
+        } as any;
+        const handlerContext = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({
+                hasCollection: async () => false
+            }),
+            resolveCollectionName: () => 'satori_repo_missing_collection',
+            getIndexCompletionMarker: async () => buildMarker(repoPath)
+        } as any;
+        const toolHandlers = new ToolHandlers(handlerContext, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance'
+            }
+        }, 1000, {
+            snapshotManager,
+            syncManager,
+            toolHandlers
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'not_indexed');
+        assert.match(payload.message, /vector collection is missing from the configured vector backend/i);
+        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
     });
 });
 

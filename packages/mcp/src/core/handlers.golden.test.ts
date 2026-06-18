@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRecordsForFile,
@@ -16,6 +17,7 @@ import {
 } from '@zokizuan/satori-core';
 import type { RelationshipRecord, SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
 import { readFileTool } from '../tools/read_file.js';
+import type { ToolContext } from '../tools/types.js';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
@@ -109,6 +111,10 @@ function createFunctionSymbol(input: {
         fileHash: input.fileHash,
         extractorVersion: 'test-extractor-v1',
     };
+}
+
+function sha256Content(content: string): string {
+    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
 async function writeNavigationSidecars(input: {
@@ -244,6 +250,24 @@ function createHandlers(repoPath: string, searchResults: any[] = []) {
     (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
     (handlers as any).validateCompletionProof = async () => ({ outcome: 'ok' });
     return { handlers, snapshotManager: createSnapshotManager(repoPath), syncManager };
+}
+
+function createReadFileToolContext(input: {
+    handlers: ToolHandlers;
+    snapshotManager: ToolContext['snapshotManager'];
+    syncManager: ToolContext['syncManager'];
+    readFileMaxLines?: number;
+}): ToolContext {
+    return {
+        context: {} as ToolContext['context'],
+        snapshotManager: input.snapshotManager,
+        syncManager: input.syncManager,
+        capabilities: CAPABILITIES,
+        reranker: null,
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        toolHandlers: input.handlers,
+        readFileMaxLines: input.readFileMaxLines ?? 1000,
+    };
 }
 
 function parsePayload(response: { content?: Array<{ text?: string }> }): any {
@@ -557,6 +581,48 @@ test('golden MCP file_outline missing registry requires_reindex shape', async ()
     }));
 });
 
+test('golden MCP file_outline unsupported language shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, 'src/notes.txt'), 'plain text notes\n', 'utf8');
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/notes.txt',
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            status: 'unsupported',
+            path: '<repo>',
+            file: 'src/notes.txt',
+            outline: null,
+            hasMore: false,
+            message: "File 'src/notes.txt' is not supported for sidecar outline. Supported extensions: .cjs, .cts, .go, .js, .jsx, .mjs, .mts, .py, .rs, .ts, .tsx.",
+        });
+    }));
+});
+
+test('golden MCP call_graph invalid symbol ref shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+        });
+
+        assert.equal(response.isError, true);
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            supported: false,
+            reason: 'invalid_symbol_ref',
+            hints: {
+                message: 'symbolRef with { file, symbolId } is required.',
+            },
+        });
+    }));
+});
+
 test('golden MCP call_graph unsupported_language shape', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const filePath = path.join(repoPath, 'src/service.go');
@@ -592,6 +658,52 @@ test('golden MCP call_graph unsupported_language shape', async () => {
             supported: false,
             reason: 'unsupported_language',
             message: "Language 'go' does not support relationship-backed call graph traversal.",
+            nodes: [],
+            edges: [],
+            notes: [],
+            notesTruncated: false,
+            totalNoteCount: 0,
+            returnedNoteCount: 0,
+        });
+    }));
+});
+
+test('golden MCP call_graph stale symbol id shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const originalContent = 'export function run() {\n  return true;\n}\n';
+        const filePath = path.join(repoPath, 'src/runtime.ts');
+        fs.writeFileSync(filePath, originalContent, 'utf8');
+        const run = createFunctionSymbol({
+            file: 'src/runtime.ts',
+            name: 'run',
+            startLine: 1,
+            endLine: 3,
+            fileHash: sha256Content(originalContent),
+            label: 'function run()',
+        });
+        await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
+        fs.writeFileSync(filePath, 'export function run() {\n  return false;\n}\n', 'utf8');
+        const { handlers } = createHandlers(repoPath);
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: { file: 'src/runtime.ts', symbolId: run.symbolInstanceId },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });
+        assert.deepEqual(payload, {
+            status: 'not_found',
+            path: '<repo>',
+            symbolRef: { file: 'src/runtime.ts', symbolId: '<symbol:function:run>' },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+            supported: false,
+            reason: 'stale_symbol_ref',
+            message: "Symbol reference for 'src/runtime.ts' is stale relative to the current file contents. Refresh the index before using exact call graph navigation.",
             nodes: [],
             edges: [],
             notes: [],
@@ -711,6 +823,40 @@ test('golden MCP call_graph incompatible relationship sidecar shape', async () =
     }));
 });
 
+test('golden MCP read_file open_symbol success shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const filePath = path.join(repoPath, 'src/runtime.ts');
+        fs.writeFileSync(filePath, 'export function run() {\n  return true;\n}\n', 'utf8');
+        const run = createFunctionSymbol({
+            file: 'src/runtime.ts',
+            name: 'run',
+            startLine: 1,
+            endLine: 3,
+            fileHash: 'hash-runtime',
+            label: 'function run()',
+        });
+        await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
+        const { handlers, snapshotManager, syncManager } = createHandlers(repoPath);
+
+        const response = await readFileTool.execute({
+            path: filePath,
+            open_symbol: { symbolId: run.symbolInstanceId },
+        }, createReadFileToolContext({
+            handlers,
+            snapshotManager,
+            syncManager,
+        }));
+
+        const payload = scrubGolden(response, { repoPath, stateRoot, symbols: [run] });
+        assert.deepEqual(payload, {
+            content: [{
+                type: 'text',
+                text: 'export function run() {\n  return true;\n}',
+            }],
+        });
+    }));
+});
+
 test('golden MCP read_file open_symbol stale id shape', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const filePath = path.join(repoPath, 'src/runtime.ts');
@@ -729,12 +875,11 @@ test('golden MCP read_file open_symbol stale id shape', async () => {
         const response = await readFileTool.execute({
             path: filePath,
             open_symbol: { symbolId: 'sym_stale_runtime_run' },
-        }, {
-            readFileMaxLines: 1000,
+        }, createReadFileToolContext({
+            handlers,
             snapshotManager,
             syncManager,
-            toolHandlers: handlers,
-        } as any);
+        }));
 
         assert.equal(response.isError, true);
         const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });

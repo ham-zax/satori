@@ -697,7 +697,7 @@ test('handleFileOutline relationship-backed callGraphHint works end to end with 
     }));
 });
 
-test('handleFileOutline relationship-backed callGraphHint works end to end with call_graph through explicit sqlite backend after JSON sidecars are removed', async () => {
+test('handleFileOutline explicit sqlite backend does not serve navigation after JSON sidecars are removed', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const alpha = createTestSymbol({
             file: 'src/runtime.ts',
@@ -761,38 +761,48 @@ test('handleFileOutline relationship-backed callGraphHint works end to end with 
         );
         (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
-        const outlineResponse = await handlers.handleFileOutline({
-            path: repoPath,
-            file: 'src/runtime.ts'
-        });
+        const warnings: string[] = [];
+        const previousWarn = console.warn;
+        console.warn = (message?: unknown, ...args: unknown[]) => {
+            warnings.push([message, ...args].map((entry) => String(entry)).join(' '));
+        };
+        try {
+            const outlineResponse = await handlers.handleFileOutline({
+                path: repoPath,
+                file: 'src/runtime.ts'
+            });
 
-        const outlinePayload = JSON.parse(outlineResponse.content[0]?.text || '{}');
-        const symbolRef = outlinePayload.outline.symbols[0].callGraphHint.symbolRef;
-        assert.equal(outlinePayload.outline.symbols[0].callGraphHint.supported, true);
-        assert.equal(symbolRef.symbolId, alpha.symbolInstanceId);
+            const outlinePayload = JSON.parse(outlineResponse.content[0]?.text || '{}');
+            assert.equal(outlinePayload.status, 'requires_reindex');
+            assert.equal(outlinePayload.outline, null);
+            assert.match(outlinePayload.message, /symbol registry manifest is missing/);
+            assert.equal(warnings.length, 1);
+            assert.match(warnings[0] || '', /SQLite backend fallback to JSON/);
+            assert.match(warnings[0] || '', /canonical JSON registry is unavailable/);
 
-        const callGraphResponse = await handlers.handleCallGraph({
-            path: repoPath,
-            symbolRef,
-            direction: 'callees',
-            depth: 2,
-            limit: 20,
-        });
+            const callGraphResponse = await handlers.handleCallGraph({
+                path: repoPath,
+                symbolRef: {
+                    file: 'src/runtime.ts',
+                    symbolId: alpha.symbolInstanceId,
+                    symbolLabel: alpha.symbolLabel,
+                },
+                direction: 'callees',
+                depth: 2,
+                limit: 20,
+            });
 
-        const callGraphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
-        assert.equal(callGraphPayload.status, 'ok');
-        assert.equal(callGraphPayload.supported, true);
-        assert.deepEqual(callGraphPayload.nodes.map((node: { symbolId: string }) => node.symbolId), [
-            alpha.symbolInstanceId,
-            beta.symbolInstanceId,
-        ]);
-        assert.equal(callGraphPayload.edges.length, 1);
-        assert.equal(callGraphPayload.edges[0].srcSymbolId, alpha.symbolInstanceId);
-        assert.equal(callGraphPayload.edges[0].dstSymbolId, beta.symbolInstanceId);
+            const callGraphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
+            assert.equal(callGraphPayload.status, 'requires_reindex');
+            assert.equal(callGraphPayload.supported, false);
+            assert.match(callGraphPayload.message, /symbol registry manifest is missing/);
+        } finally {
+            console.warn = previousWarn;
+        }
     }));
 });
 
-test('handleFileOutline relationship-backed callGraphHint works through the env-selected shared sqlite runtime store after JSON sidecars are removed', async () => {
+test('handleFileOutline env-selected sqlite backend does not serve navigation after JSON sidecars are removed', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const alpha = createTestSymbol({
             file: 'src/runtime.ts',
@@ -848,34 +858,44 @@ test('handleFileOutline relationship-backed callGraphHint works through the env-
             const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
             (handlers as any).syncIndexedCodebasesFromCloud = async () => undefined;
 
-            const outlineResponse = await handlers.handleFileOutline({
-                path: repoPath,
-                file: 'src/runtime.ts'
-            });
+            const warnings: string[] = [];
+            const previousWarn = console.warn;
+            console.warn = (message?: unknown, ...args: unknown[]) => {
+                warnings.push([message, ...args].map((entry) => String(entry)).join(' '));
+            };
+            try {
+                const outlineResponse = await handlers.handleFileOutline({
+                    path: repoPath,
+                    file: 'src/runtime.ts'
+                });
 
-            const outlinePayload = JSON.parse(outlineResponse.content[0]?.text || '{}');
-            const symbolRef = outlinePayload.outline.symbols[0].callGraphHint.symbolRef;
-            assert.equal(outlinePayload.outline.symbols[0].callGraphHint.supported, true);
-            assert.equal(symbolRef.symbolId, alpha.symbolInstanceId);
+                const outlinePayload = JSON.parse(outlineResponse.content[0]?.text || '{}');
+                assert.equal(outlinePayload.status, 'requires_reindex');
+                assert.equal(outlinePayload.outline, null);
+                assert.match(outlinePayload.message, /symbol registry manifest is missing/);
+                assert.equal(warnings.length, 1);
+                assert.match(warnings[0] || '', /SQLite backend fallback to JSON/);
+                assert.match(warnings[0] || '', /canonical JSON registry is unavailable/);
 
-            const callGraphResponse = await handlers.handleCallGraph({
-                path: repoPath,
-                symbolRef,
-                direction: 'callees',
-                depth: 2,
-                limit: 20,
-            });
+                const callGraphResponse = await handlers.handleCallGraph({
+                    path: repoPath,
+                    symbolRef: {
+                        file: 'src/runtime.ts',
+                        symbolId: alpha.symbolInstanceId,
+                        symbolLabel: alpha.symbolLabel,
+                    },
+                    direction: 'callees',
+                    depth: 2,
+                    limit: 20,
+                });
 
-            const callGraphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
-            assert.equal(callGraphPayload.status, 'ok');
-            assert.equal(callGraphPayload.supported, true);
-            assert.deepEqual(callGraphPayload.nodes.map((node: { symbolId: string }) => node.symbolId), [
-                alpha.symbolInstanceId,
-                beta.symbolInstanceId,
-            ]);
-            assert.equal(callGraphPayload.edges.length, 1);
-            assert.equal(callGraphPayload.edges[0].srcSymbolId, alpha.symbolInstanceId);
-            assert.equal(callGraphPayload.edges[0].dstSymbolId, beta.symbolInstanceId);
+                const callGraphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
+                assert.equal(callGraphPayload.status, 'requires_reindex');
+                assert.equal(callGraphPayload.supported, false);
+                assert.match(callGraphPayload.message, /symbol registry manifest is missing/);
+            } finally {
+                console.warn = previousWarn;
+            }
         });
     }));
 });

@@ -143,6 +143,8 @@ Manage index lifecycle operations (create/reindex/sync/status/clear) for a codeb
 
 Unified semantic search with runtime-first defaults (start with scope="runtime"), grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Use debug:true for explainability payloads, and rely on response hints for remediation (.satoriignore noise handling, navigation fallback, reindex guidance).
 
+Search note: `search_codebase` can add a bounded tracked-file lexical recovery pass for high-precision queries such as exact identifiers, exact path filters, and quoted literal phrases when semantic retrieval under-delivers.
+
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `path` | string | yes |  | ABSOLUTE path to an indexed codebase or subdirectory. |

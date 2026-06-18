@@ -1014,6 +1014,56 @@ test('handleSearchCode supplements exact warning-code retrieval from tracked lex
     });
 });
 
+test('handleSearchCode supplements quoted exact literal retrieval from tracked lexical evidence when semantic search misses it', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'packages/mcp/src/core/handlers.ts';
+        fs.mkdirSync(path.join(repoPath, 'packages/mcp/src/core'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, relativePath),
+            [
+                'export async function handleSearchCode() {',
+                '  return "partial index search warning";',
+                '}',
+            ].join('\n'),
+            'utf8'
+        );
+
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'private buildReindexHint(codebasePath: string) { return { tool: "manage_index" }; }',
+                relativePath: 'packages/mcp/src/core/helpers.ts',
+                startLine: 1,
+                endLine: 3,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_build_reindex_hint',
+                symbolLabel: 'method buildReindexHint(codebasePath: string)',
+            },
+        ]);
+
+        (handlers as any).context.getTrackedRelativePaths = () => [relativePath];
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: '"partial index search warning"',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results[0].file, relativePath);
+        assert.match(payload.results[0].preview, /partial index search warning/i);
+        assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
+        assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
+        assert.equal(payload.hints?.debugSearch?.queryIntent?.reasons?.includes('quoted_literal_query'), true);
+    });
+});
+
 test('sortGroupedSearchResults preserves exactMatchPinned provenance when exact pinning changes the grouped winner', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, []);

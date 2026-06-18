@@ -565,7 +565,7 @@ test('golden MCP file_outline missing registry requires_reindex shape', async ()
         const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
         assert.deepEqual(payload, {
             status: 'requires_reindex',
-            reason: 'requires_reindex',
+            reason: 'missing_symbol_registry',
             path: '<repo>',
             file: 'src/runtime.ts',
             outline: null,
@@ -594,6 +594,7 @@ test('golden MCP file_outline unsupported language shape', async () => {
         const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
         assert.deepEqual(payload, {
             status: 'unsupported',
+            reason: 'unsupported_language',
             path: '<repo>',
             file: 'src/notes.txt',
             outline: null,
@@ -885,6 +886,7 @@ test('golden MCP read_file open_symbol stale id shape', async () => {
         const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });
         assert.deepEqual(payload, {
             status: 'not_found',
+            reason: 'missing_symbol',
             message: 'No exact symbol match found in file outline.',
             file: 'src/runtime.ts',
         });

@@ -186,6 +186,82 @@ test('navigation recovery failure reason and message persist after save/load', (
     });
 });
 
+test('existing requires_reindex reason and custom message persist after save/load', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-existing-reindex');
+        fs.mkdirSync(codebase, { recursive: true });
+        const message = 'Snapshot was intentionally blocked before process restart.';
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setCodebaseRequiresReindex(codebase, 'missing_fingerprint', message);
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+
+        const info = reader.getCodebaseInfo(codebase);
+        assert.ok(info);
+        if (info.status !== 'requires_reindex') {
+            assert.fail(`Expected requires_reindex, received ${info.status}`);
+        }
+        assert.equal(info.reindexReason, 'missing_fingerprint');
+        assert.equal(info.message, message);
+
+        const gate = reader.ensureFingerprintCompatibilityOnAccess(codebase);
+        assert.equal(gate.allowed, false);
+        assert.equal(gate.changed, false);
+        assert.equal(gate.reason, 'missing_fingerprint');
+        assert.equal(gate.message, message);
+    });
+});
+
+test('missing fingerprint reason and message persist after transition save/load', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-missing-fingerprint');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { dir, file } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+            formatVersion: 'v3',
+            codebases: {
+                [codebase]: {
+                    status: 'indexed',
+                    indexedFiles: 3,
+                    totalChunks: 9,
+                    indexStatus: 'completed',
+                    lastUpdated: new Date().toISOString()
+                }
+            },
+            lastUpdated: new Date().toISOString()
+        }, null, 2));
+
+        const transitioningReader = new SnapshotManager(FINGERPRINT_A);
+        transitioningReader.loadCodebaseSnapshot();
+        const transition = transitioningReader.ensureFingerprintCompatibilityOnAccess(codebase);
+        assert.equal(transition.allowed, false);
+        assert.equal(transition.changed, true);
+        assert.equal(transition.reason, 'missing_fingerprint');
+        assert.match(transition.message || '', /no fingerprint metadata/);
+        transitioningReader.saveCodebaseSnapshot();
+
+        const persistedReader = new SnapshotManager(FINGERPRINT_A);
+        persistedReader.loadCodebaseSnapshot();
+        const persistedGate = persistedReader.ensureFingerprintCompatibilityOnAccess(codebase);
+        assert.equal(persistedGate.allowed, false);
+        assert.equal(persistedGate.changed, false);
+        assert.equal(persistedGate.reason, 'missing_fingerprint');
+        assert.equal(persistedGate.message, transition.message);
+
+        const info = persistedReader.getCodebaseInfo(codebase);
+        assert.ok(info);
+        if (info.status !== 'requires_reindex') {
+            assert.fail(`Expected requires_reindex, received ${info.status}`);
+        }
+        assert.equal(info.reindexReason, 'missing_fingerprint');
+        assert.equal(info.message, transition.message);
+    });
+});
+
 test('limit_reached index status persists after save/load', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo-limit-reached');

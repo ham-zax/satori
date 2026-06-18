@@ -629,7 +629,7 @@ test('golden MCP call_graph missing relationship sidecar shape', async () => {
         assert.deepEqual(payload, {
             status: 'requires_reindex',
             supported: false,
-            reason: 'requires_reindex',
+            reason: 'missing_relationship_sidecar',
             path: '<repo>',
             codebasePath: '<repo>',
             symbolRef: { file: 'src/runtime.ts', symbolId: '<symbol:function:run>' },
@@ -685,7 +685,7 @@ test('golden MCP call_graph incompatible relationship sidecar shape', async () =
         assert.deepEqual(payload, {
             status: 'requires_reindex',
             supported: false,
-            reason: 'requires_reindex',
+            reason: 'incompatible_relationship_sidecar',
             path: '<repo>',
             codebasePath: '<repo>',
             symbolRef: { file: 'src/runtime.ts', symbolId: '<symbol:function:run>' },

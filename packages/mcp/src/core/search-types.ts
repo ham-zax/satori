@@ -31,7 +31,6 @@ export type CallGraphHint =
         reason:
             | "missing_symbol"
             | "unsupported_language"
-            | "missing_sidecar"
             | "stale_symbol_ref"
             | "missing_symbol_registry"
             | "missing_relationship_sidecar"
@@ -344,6 +343,10 @@ export type NonOkReason =
     | "requires_reindex"
     | "partial_index_navigation_unavailable"
     | "not_indexed"
+    | "missing_symbol_registry"
+    | "missing_relationship_sidecar"
+    | "incompatible_symbol_registry"
+    | "incompatible_relationship_sidecar"
     | "missing_provider_config"
     | "vector_backend_unavailable";
 

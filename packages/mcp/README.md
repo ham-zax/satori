@@ -69,6 +69,8 @@ Important defaults:
 - `read_file` is bounded and can return continuation hints.
 - `requires_reindex` means reindex first, then retry the original call.
 - `manage_index action="clear"` is destructive and should be explicit.
+- After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, restart all Satori MCP clients before running `manage_index create`, `reindex`, `sync`, or `clear`.
+- Satori records live runtime owners in `~/.satori/runtime/owners.json` and blocks those index mutations with `status="blocked"` / `reason="runtime_owner_conflict"` if another live Satori MCP runtime has a different fingerprint, package version, or config identity. MCP tools do not kill processes or ask interactive cleanup questions.
 
 ## Navigation Sidecars
 

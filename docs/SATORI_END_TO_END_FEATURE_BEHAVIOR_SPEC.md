@@ -154,10 +154,12 @@ Warnings/hints:
 - Vector backend failures return structured `status=error`, `reason=vector_backend_unavailable`, stable diagnostic code, and remediation in `hints.backend`.
 - `create` path resolves and can return "already indexed" guidance.
 - `reindex` preflight can emit deterministic warnings (`REINDEX_UNNECESSARY_IGNORE_ONLY`, `REINDEX_PREFLIGHT_UNKNOWN`, `IGNORE_POLICY_PROBE_FAILED`).
+- Runtime-owner conflicts return `status=blocked`, `reason=runtime_owner_conflict`, and `hints.runtimeOwners` / `hints.nextStep`. This blocks `create`, `reindex`, `sync`, and `clear` when another live Satori MCP runtime has a different runtime fingerprint, Satori package version, or normalized config identity.
 
 Determinism:
 - Action dispatch deterministic switch.
 - Fingerprint gate deterministic via snapshot/runtime fingerprint comparison.
+- Index mutations are gated by the runtime owner registry at `~/.satori/runtime/owners.json`; owner records are written with a lock and atomic rename, dead/stale owners are pruned, and live PID validation uses process identity evidence rather than PID alone.
 - Reindex preflight outcomes are deterministic and bounded:
   - `reindex_required`
   - `reindex_unnecessary_ignore_only` (blocked unless `allowUnnecessaryReindex=true`)
@@ -175,6 +177,9 @@ Behavior:
 - Observability: structured manage envelope with stable statuses/reasons/warnings + human guidance text.
 - Determinism: fixed action routing and gate checks.
 - Performance: `create/reindex` background indexing; `sync` incremental; `status` read-mostly (but can mutate on fingerprint gate).
+
+Operational rule:
+- After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or Satori runtime version, restart all Satori MCP clients before index mutation. MCP tools do not terminate processes; cleanup is operator-owned outside the MCP tool surface.
 
 ### 3) `search_codebase`
 Purpose: unified semantic retrieval with deterministic filtering/grouping/ranking/freshness.

@@ -1411,6 +1411,8 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
           <p>
             <code>manage_index</code> handles create, sync, reindex, status,
             and clear with explicit destructive-action semantics.
+            Mutations are blocked if another live Satori runtime has a
+            different fingerprint, version, or config identity.
           </p>
         </article>
       </div>
@@ -1653,6 +1655,18 @@ score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc</c
             </p>
             <pre><code>manage_index({ action: "reindex", path: &lt;hints.reindex.args.path&gt; })
 // then retry the original tool call</code></pre>
+          </div>
+        </details>
+        <details>
+          <summary>Runtime Owner Conflict</summary>
+          <div class="details-body">
+            <p>
+              If <code>manage_index</code> returns
+              <code>reason="runtime_owner_conflict"</code>, restart all Satori
+              MCP clients so only one runtime fingerprint/config identity is
+              active, then retry the mutation. Satori MCP tools do not kill
+              processes or ask interactive cleanup questions.
+            </p>
           </div>
         </details>
         <details>

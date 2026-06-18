@@ -114,6 +114,11 @@ import {
     shouldAttemptExactRegistryLookup,
     type ExactRegistryLookupDebug,
 } from "./search/exact-registry.js";
+import type {
+    RuntimeOwnerMutationAction,
+    RuntimeOwnerMutationGate,
+    RuntimeOwnerMutationGateResult,
+} from "./runtime-owner.js";
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -449,7 +454,8 @@ export class ToolHandlers {
         callGraphManager?: CallGraphSidecarManager,
         reranker?: VoyageAIReranker | null,
         gitignoreForceReloadEveryN: number = SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N,
-        navigationStore: NavigationStore = createRuntimeNavigationStore()
+        navigationStore: NavigationStore = createRuntimeNavigationStore(),
+        private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null = null
     ) {
         this.context = context;
         this.snapshotManager = snapshotManager;
@@ -648,6 +654,36 @@ export class ToolHandlers {
             code: diagnostic.code,
             message: diagnostic.message,
             hints: diagnostic.hints
+        });
+    }
+
+    private async buildRuntimeOwnerConflictResponseIfBlocked(
+        action: RuntimeOwnerMutationAction,
+        codebasePath: string
+    ): Promise<{ content: Array<{ type: "text"; text: string }> } | null> {
+        if (!this.runtimeOwnerGate) {
+            return null;
+        }
+        const result = await this.runtimeOwnerGate.checkMutation(action, codebasePath);
+        if (!result.blocked) {
+            return null;
+        }
+        return this.buildRuntimeOwnerConflictResponse(action, codebasePath, result);
+    }
+
+    private buildRuntimeOwnerConflictResponse(
+        action: RuntimeOwnerMutationAction,
+        codebasePath: string,
+        result: RuntimeOwnerMutationGateResult
+    ): { content: Array<{ type: "text"; text: string }> } {
+        const message = result.message
+            || "Index mutation is blocked because multiple Satori runtimes with different fingerprints/configs are active.";
+        return this.manageResponse(action, codebasePath, "blocked", message, {
+            reason: "runtime_owner_conflict",
+            hints: {
+                runtimeOwners: result.conflictingOwners || [],
+                nextStep: "Restart all Satori MCP clients or run the CLI runtime-owner cleanup command, then retry.",
+            }
         });
     }
 
@@ -5510,6 +5546,11 @@ Agent instructions:
                 );
             }
 
+            const runtimeOwnerConflict = await this.buildRuntimeOwnerConflictResponseIfBlocked(manageAction, absolutePath);
+            if (runtimeOwnerConflict) {
+                return runtimeOwnerConflict;
+            }
+
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);
 
             // Check if already indexing
@@ -5924,6 +5965,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             allowUnnecessaryReindex
         } = args;
         const absolutePath = ensureAbsolutePath(codebasePath);
+        const runtimeOwnerConflict = await this.buildRuntimeOwnerConflictResponseIfBlocked("reindex", absolutePath);
+        if (runtimeOwnerConflict) {
+            return runtimeOwnerConflict;
+        }
         const preflight = this.evaluateReindexPreflight(absolutePath);
 
         if (preflight.outcome === 'reindex_unnecessary_ignore_only' && allowUnnecessaryReindex !== true) {
@@ -8056,7 +8101,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 if (!stat.isDirectory()) {
                     return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
                 }
+            }
 
+            const runtimeOwnerConflict = await this.buildRuntimeOwnerConflictResponseIfBlocked("clear", absolutePath);
+            if (runtimeOwnerConflict) {
+                return runtimeOwnerConflict;
+            }
+
+            if (pathExists) {
                 await this.recoverStaleIndexingStateIfNeeded(absolutePath);
             }
 
@@ -8375,6 +8427,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
                 return this.manageResponse("sync", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
+            }
+
+            const runtimeOwnerConflict = await this.buildRuntimeOwnerConflictResponseIfBlocked("sync", absolutePath);
+            if (runtimeOwnerConflict) {
+                return runtimeOwnerConflict;
             }
 
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);

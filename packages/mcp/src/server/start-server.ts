@@ -19,6 +19,10 @@ import { SyncManager } from "../core/sync.js";
 import { ToolHandlers } from "../core/handlers.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { decideInterruptedIndexingRecovery } from "../core/indexing-recovery.js";
+import {
+    RuntimeOwnerRegistry,
+    buildRuntimeOwnerIdentityFromConfig,
+} from "../core/runtime-owner.js";
 import { ToolContext } from "../tools/types.js";
 import { getMcpToolList, toolRegistry } from "../tools/registry.js";
 import { createLocalOnlyContext, ProviderRuntime, resolveConfiguredEmbeddingDimension } from "./provider-runtime.js";
@@ -105,6 +109,7 @@ class ContextMcpServer {
     private watchDebounceMs: number;
     private callGraphManager: CallGraphSidecarManager;
     private providerRuntime: ProviderRuntime;
+    private runtimeOwnerRegistry: RuntimeOwnerRegistry;
     private runMode: ServerRunMode;
     private protocolStdin?: Readable;
     private protocolStdout?: Writable;
@@ -133,6 +138,18 @@ class ContextMcpServer {
         this.watchSyncEnabled = config.watchSyncEnabled === true;
         this.watchDebounceMs = Math.max(1, config.watchDebounceMs ?? 5000);
         console.log(`[FINGERPRINT] Runtime index fingerprint: ${JSON.stringify(this.runtimeFingerprint)}`);
+        this.runtimeOwnerRegistry = new RuntimeOwnerRegistry({
+            identity: buildRuntimeOwnerIdentityFromConfig({
+                config,
+                runtimeFingerprint: this.runtimeFingerprint,
+            }),
+        });
+        try {
+            this.runtimeOwnerRegistry.registerCurrentOwner();
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`[RUNTIME-OWNER] Failed to register current Satori runtime owner; index mutations will fail closed until the owner registry is writable: ${message}`);
+        }
 
         this.snapshotManager = new SnapshotManager(this.runtimeFingerprint);
         this.callGraphManager = new CallGraphSidecarManager(this.runtimeFingerprint);
@@ -149,7 +166,10 @@ class ContextMcpServer {
             this.capabilities,
             () => Date.now(),
             this.callGraphManager,
-            null
+            null,
+            undefined,
+            undefined,
+            this.runtimeOwnerRegistry
         );
         this.providerRuntime = new ProviderRuntime({
             config,
@@ -160,6 +180,7 @@ class ContextMcpServer {
             watchSyncEnabled: this.watchSyncEnabled,
             watchDebounceMs: this.watchDebounceMs,
             callGraphManager: this.callGraphManager,
+            runtimeOwnerGate: this.runtimeOwnerRegistry,
         });
         this.toolContext = {
             context: localContext,
@@ -274,6 +295,7 @@ class ContextMcpServer {
         this.syncManager.stopBackgroundSync();
         await this.syncManager.stopWatcherMode();
         await this.providerRuntime.shutdown();
+        this.runtimeOwnerRegistry.unregisterCurrentOwner();
     }
 }
 

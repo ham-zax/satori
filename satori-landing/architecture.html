@@ -1163,7 +1163,7 @@
               <div class="tool-card">
                 <h3><code>manage_index</code></h3>
                 <p>Creates, syncs, reindexes, checks status, clears, and handles force-reindex recovery paths.</p>
-                <p class="refusal">Refuses destructive ambiguity: clear is explicit and backend timeouts preserve local state.</p>
+                <p class="refusal">Refuses destructive ambiguity: clear is explicit, backend timeouts preserve local state, and mixed live runtime owners block mutation.</p>
               </div>
             </div>
           </article>
@@ -1442,11 +1442,11 @@
             </p>
           </article>
           <article class="card">
-            <h3>Cloud Repair</h3>
+            <h3>No Passive Cloud Repair</h3>
             <p>
-              Remote collections repair local ready state only with valid
-              completion marker proof, matching codebase path, and matching
-              runtime fingerprint.
+              Remote collection existence is not readiness proof. Missing or
+              incompatible local readiness is recovered only through explicit
+              create or reindex flows with matching completion proof.
             </p>
           </article>
           <article class="card">

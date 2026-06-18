@@ -73,7 +73,7 @@ It also installs the MCP server once under `~/.satori/mcp-runtime/`, writes a st
 
 Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
 
-Restart the MCP client after changing config.
+Restart every Satori MCP client after changing runtime config. In particular, after changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, stop old clients before running `manage_index create`, `reindex`, `sync`, or `clear`. Satori records live runtime owners under `~/.satori/runtime/owners.json` and blocks index mutations with `status="blocked"` / `reason="runtime_owner_conflict"` when multiple live Satori runtimes with different fingerprints/configs are active.
 
 For Codex, `satori-cli install --client codex --install-guidance-hook` also installs a marked `SessionStart` reminder that prints the Satori tool workflow. The hook is guidance-only, suppresses duplicate startup prints for the same working directory, and does not run indexing, search, or provider-backed work.
 
@@ -93,6 +93,8 @@ read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
 ```
 
 If any tool returns `requires_reindex`, run the hinted `manage_index action="reindex"` call first, then retry the original tool call. Use `manage_index action="sync"` for ordinary file or ignore-rule convergence.
+
+If `manage_index` returns `reason="runtime_owner_conflict"`, restart all Satori MCP clients so only one runtime identity is active, then retry the mutation. MCP tools never kill processes or ask interactive cleanup questions.
 
 ## Runtime Setup
 

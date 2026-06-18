@@ -310,7 +310,7 @@ test("install adds opt-in managed Codex guidance hook and preserves user hooks",
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("# >>> satori-cli managed codex guidance hook start >>>"), true);
         assert.equal(content.includes("# <<< satori-cli managed codex guidance hook end <<<"), true);
-        assert.equal(content.includes("Satori MCP: search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
+        assert.equal(content.includes("Satori MCP: use search_codebase for plain-English behavior/concept discovery"), true);
         assert.equal(content.includes("satori-codex-guidance"), true);
         assert.equal(extractCodexGuidanceCommand(content).startsWith("sh -lc "), true);
         assert.equal(content.includes('command = \'echo "user hook"\''), true);
@@ -334,9 +334,9 @@ test("managed Codex guidance hook command suppresses duplicate prints per workin
         }, installOptions(homeDir));
 
         const command = extractCodexGuidanceCommand(readFile(path.join(homeDir, ".codex", "config.toml")));
-        assert.match(runGuidanceCommand(command, repoA, runtimeDir), /Satori MCP: search_codebase/);
+        assert.match(runGuidanceCommand(command, repoA, runtimeDir), /Satori MCP: use search_codebase for plain-English behavior\/concept discovery/);
         assert.equal(runGuidanceCommand(command, repoA, runtimeDir), "");
-        assert.match(runGuidanceCommand(command, repoB, runtimeDir), /Satori MCP: search_codebase/);
+        assert.match(runGuidanceCommand(command, repoB, runtimeDir), /Satori MCP: use search_codebase for plain-English behavior\/concept discovery/);
 
         const uid = execFileSync("id", ["-u"], { encoding: "utf8" }).trim();
         const stampDir = path.join(runtimeDir, `satori-codex-guidance.${uid}`);
@@ -374,7 +374,7 @@ test("install replaces existing managed Codex guidance hook", () => {
 
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("old satori guidance"), false);
-        assert.equal(content.includes("Satori MCP: search_codebase -> file_outline -> call_graph -> read_file(open_symbol)"), true);
+        assert.equal(content.includes("Satori MCP: use search_codebase for plain-English behavior/concept discovery"), true);
         assert.equal(content.includes("satori-codex-guidance"), true);
         assert.equal(content.match(/satori-cli managed codex guidance hook start/g)?.length, 1);
     });

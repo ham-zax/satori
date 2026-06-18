@@ -1047,7 +1047,7 @@
       <h2>Repo-aware retrieval for MCP coding agents.</h2>
       <p>
         Install once, index a repo, and give your agent a deterministic path
-        from intent search to symbol-owned results, exact reads,
+        from plain-English intent search to symbol-owned results, exact reads,
         caller/callee context, and explicit stale-index recovery.
       </p>
       <div class="hero-terminal" role="group" aria-labelledby="hero-install-label">
@@ -1074,9 +1074,9 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
     <section class="section">
       <h3>Search Is Not Repo Understanding</h3>
       <p class="section-intro">
-        AI agents can grep files. Real repos need more: exact symbols, runnable
-        next steps, callers, callees, freshness checks, and bounded evidence
-        before an edit.
+        AI agents can grep files. Real repos need more: behavior-level
+        discovery, exact symbols, runnable next steps, callers, callees,
+        freshness checks, and bounded evidence before an edit.
       </p>
       <div class="grid">
         <article class="card">
@@ -1137,9 +1137,9 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
         <article class="card">
           <h4>With Satori</h4>
           <p>
-            The agent asks the repo, follows returned next actions, reads the
-            exact implementation span, and checks caller/callee context before
-            proposing an edit.
+            The agent asks a plain-English behavior question, follows returned
+            next actions, reads the exact implementation span, and checks
+            caller/callee context before proposing an edit.
           </p>
         </article>
       </div>
@@ -1147,7 +1147,7 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
         <div class="step">
           <strong>1. Find relevant code</strong>
           <p>
-            Natural-language search over indexed code returns grouped results,
+            Plain-English search over indexed code returns grouped results,
             warnings, freshness state, and runnable next actions.
           </p>
         </div>
@@ -1356,9 +1356,10 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
         <article class="card">
           <h4>Find relevant code</h4>
           <p>
-            <code>search_codebase</code> searches by intent, exact identifiers,
-            and exact terms with runtime, docs, or mixed scope, then returns
-            grouped results with navigation hints and next actions.
+            <code>search_codebase</code> searches by plain-English intent,
+            exact identifiers, and exact terms with runtime, docs, or mixed
+            scope, then returns grouped results with navigation hints and next
+            actions.
           </p>
         </article>
         <article class="card">

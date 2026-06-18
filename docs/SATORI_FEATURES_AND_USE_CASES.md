@@ -98,7 +98,7 @@ Use cases:
 
 ### 3. Natural-Language Intent Queries
 
-Satori is optimized for intent-level questions rather than exact symbol names.
+Satori is optimized for intent-level questions rather than exact symbol names. The intended workflow is semantic discovery first, then deterministic proof through exact symbols, spans, call graph context, or navigation fallbacks.
 
 Examples:
 

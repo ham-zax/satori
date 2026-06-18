@@ -82,7 +82,7 @@ For Codex, `satori-cli install --client codex --install-guidance-hook` also inst
 1. Run the CLI installer and `doctor`.
 2. Restart your MCP client.
 3. Index one absolute repository path.
-4. Search, outline, graph, and read exact spans before edits.
+4. Search with plain-English intent, then outline, graph, and read exact spans before edits.
 
 ```text
 manage_index action="create" path="/absolute/path/to/repo"
@@ -214,7 +214,7 @@ Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish ac
 |---|---|
 | `list_codebases` | See indexed roots and their lifecycle buckets |
 | `manage_index` | Create, sync, reindex, inspect status, or explicitly clear indexes |
-| `search_codebase` | Runtime-first semantic search with operators, grouping, freshness, and navigation hints |
+| `search_codebase` | Runtime-first plain-English semantic discovery with exact operators, grouping, freshness, and navigation hints |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing |
 | `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` when relationship-backed navigation is ready |
 | `read_file` | Read bounded files, ranges, annotations, or exact symbol spans |

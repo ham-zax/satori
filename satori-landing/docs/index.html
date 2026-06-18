@@ -725,8 +725,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
           <div class="step">
             <strong>3 Search</strong>
             <p>
-              Run
-              <code>search_codebase path="/absolute/path/to/repo" query="authentication flow"</code>.
+              Run a plain-English behavior query, for example
+              <code>search_codebase path="/absolute/path/to/repo" query="where is authentication flow enforced"</code>.
               Defaults are <code>scope=runtime</code>,
               <code>resultMode=grouped</code>, and
               <code>groupBy=symbol</code>.
@@ -745,18 +745,19 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
       <section class="section" id="workflow">
         <h2>Search Workflow</h2>
         <p class="lede">
-          The default agent path is intentionally narrow. Search groups
-          evidence by owner symbols, outline locks deterministic spans, call
-          graph adds nearby context when supported, and exact reads provide edit
-          context.
+          The default agent path starts with plain-English discovery, then
+          narrows to proof. Search groups evidence by owner symbols, outline
+          locks deterministic spans, call graph adds nearby context when
+          supported, and exact reads provide edit context.
         </p>
         <div class="workflow">
           <div class="step">
             <strong>1 Search</strong>
             <p>
-              Use <code>search_codebase</code> with the user requested path.
-              Default scope is runtime, grouped by symbol, with changed-file
-              awareness when the repository supports it.
+              Use <code>search_codebase</code> with the user requested path and
+              a behavior or concept query. Default scope is runtime, grouped by
+              symbol, with changed-file awareness when the repository supports
+              it.
             </p>
           </div>
           <div class="step">

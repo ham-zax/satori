@@ -109,6 +109,11 @@ import {
 import type {
     VectorBackendDiagnostic
 } from "./backend-diagnostics.js";
+import {
+    findExactRegistryMatch,
+    shouldAttemptExactRegistryLookup,
+    type ExactRegistryLookupDebug,
+} from "./search/exact-registry.js";
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -192,6 +197,19 @@ type SearchCandidate = {
 };
 
 type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'fallback';
+
+type SearchPhaseTimingKey =
+    | 'prepareRead'
+    | 'ensureFreshness'
+    | 'exactRegistry'
+    | 'semanticSearch'
+    | 'trackedLexical'
+    | 'rerank'
+    | 'registryLoad'
+    | 'grouping'
+    | 'navigationValidation';
+
+type SearchPhaseTimings = Record<SearchPhaseTimingKey, number>;
 
 type TrackedLexicalSearchDebug = {
     enabled: boolean;
@@ -445,6 +463,42 @@ export class ToolHandlers {
         this.gitignoreForceReloadEveryN = Math.max(1, Math.trunc(gitignoreForceReloadEveryN));
         this.navigationStore = navigationStore;
         console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`);
+    }
+
+    private createSearchPhaseTimings(): SearchPhaseTimings {
+        return {
+            prepareRead: 0,
+            ensureFreshness: 0,
+            exactRegistry: 0,
+            semanticSearch: 0,
+            trackedLexical: 0,
+            rerank: 0,
+            registryLoad: 0,
+            grouping: 0,
+            navigationValidation: 0,
+        };
+    }
+
+    private searchPhaseNowMs(): number {
+        return Date.now();
+    }
+
+    private addSearchPhaseTiming(timings: SearchPhaseTimings, phase: SearchPhaseTimingKey, startedAtMs: number): void {
+        const elapsed = Math.max(0, this.searchPhaseNowMs() - startedAtMs);
+        timings[phase] += elapsed;
+    }
+
+    private async measureSearchPhase<T>(
+        timings: SearchPhaseTimings,
+        phase: SearchPhaseTimingKey,
+        fn: () => Promise<T>
+    ): Promise<T> {
+        const startedAtMs = this.searchPhaseNowMs();
+        try {
+            return await fn();
+        } finally {
+            this.addSearchPhaseTiming(timings, phase, startedAtMs);
+        }
     }
 
     private buildReindexInstruction(codebasePath: string, detail?: string): string {
@@ -1987,9 +2041,13 @@ export class ToolHandlers {
     private shouldRunTrackedLexicalSearch(input: {
         parsedOperators: ParsedSearchOperators;
         queryPlan: SearchQueryPlan;
+        exactRegistryFallback: boolean;
     }): boolean {
         if (input.queryPlan.lexicalTerms.length === 0 && input.queryPlan.quotedLiteralPhrases.length === 0) {
             return false;
+        }
+        if (input.exactRegistryFallback) {
+            return true;
         }
         if (input.parsedOperators.path.some((pattern) => {
             const normalized = this.normalizeRelativePathForIgnoreCheck(pattern);
@@ -2000,10 +2058,11 @@ export class ToolHandlers {
         if (input.queryPlan.quotedLiteralPhrases.length > 0) {
             return true;
         }
-        return input.queryPlan.intent === 'identifier'
-            || input.queryPlan.referenceSeeking
-            || input.queryPlan.implementationSeeking
-            || input.queryPlan.writerSeeking;
+        const semanticQuery = input.queryPlan.semanticQuery.trim();
+        if (/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,}\b/.test(semanticQuery)) {
+            return true;
+        }
+        return /\b[A-Z][A-Z0-9_]*(?:WARNING|ERROR|CODE|STATUS|REASON)[A-Z0-9_]*\b/.test(semanticQuery);
     }
 
     private buildTrackedLexicalSearchResults(input: {
@@ -2012,6 +2071,7 @@ export class ToolHandlers {
         queryPlan: SearchQueryPlan;
         scope: SearchScope;
         limit: number;
+        exactRegistryFallback: boolean;
     }): { results: any[]; debug: TrackedLexicalSearchDebug } {
         const disabledDebug = (): TrackedLexicalSearchDebug => ({
             enabled: false,
@@ -3007,6 +3067,29 @@ export class ToolHandlers {
         return false;
     }
 
+    private buildSearchPathMatcher(patterns: string[]): (relativePath: string) => boolean {
+        if (patterns.length === 0) {
+            return () => false;
+        }
+        const matchers: Array<ReturnType<typeof ignore>> = [];
+        for (const pattern of patterns) {
+            try {
+                const matcher = ignore();
+                matcher.add(pattern);
+                matchers.push(matcher);
+            } catch {
+                continue;
+            }
+        }
+        if (matchers.length === 0) {
+            return () => false;
+        }
+        return (relativePath: string): boolean => {
+            const normalizedPath = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+            return matchers.some((matcher) => matcher.ignores(normalizedPath));
+        };
+    }
+
     private tokenMatchesAnyField(token: string, fields: string[]): boolean {
         for (const field of fields) {
             if (field.includes(token)) {
@@ -3038,6 +3121,56 @@ export class ToolHandlers {
             rerankerPresent,
             enabled: enabledByPolicy && rerankerPresent && !skippedByScopeDocs && !skippedByIdentifierIntent,
             exactMatchPinningEnabled: plan.exactMatchPinningEnabled,
+        };
+    }
+
+    private buildExactRegistrySymbolFilter(input: {
+        scope: SearchScope;
+        parsedOperators: ParsedSearchOperators;
+    }): (symbol: SymbolRecord) => boolean {
+        const includePathMatcher = this.buildSearchPathMatcher(input.parsedOperators.path);
+        const excludePathMatcher = this.buildSearchPathMatcher(input.parsedOperators.excludePath);
+        return (symbol: SymbolRecord): boolean => {
+            const relativePath = this.normalizeRelativePathForIgnoreCheck(symbol.file);
+            if (!relativePath) {
+                return false;
+            }
+            const category = this.classifyPathCategory(relativePath);
+            if (!this.shouldIncludeCategoryInScope(input.scope, category)) {
+                return false;
+            }
+            const languageValue = symbol.language.toLowerCase();
+            if (input.parsedOperators.lang.length > 0 && !input.parsedOperators.lang.includes(languageValue)) {
+                return false;
+            }
+            if (input.parsedOperators.path.length > 0 && !includePathMatcher(relativePath)) {
+                return false;
+            }
+            if (input.parsedOperators.excludePath.length > 0 && excludePathMatcher(relativePath)) {
+                return false;
+            }
+            const fields = [
+                symbol.label,
+                relativePath,
+                symbol.name,
+                symbol.qualifiedName,
+                ...symbol.parentQualifiedNamePath,
+            ];
+            if (!input.parsedOperators.must.every((token) => this.tokenMatchesAnyField(token, fields))) {
+                return false;
+            }
+            return !input.parsedOperators.exclude.some((token) => this.tokenMatchesAnyField(token, fields));
+        };
+    }
+
+    private buildUnavailableExactRegistryDebug(reason: string): ExactRegistryLookupDebug {
+        return {
+            attempted: true,
+            status: 'miss',
+            reason: 'registry_unavailable',
+            inspectedSymbolCount: 0,
+            filteredSymbolCount: 0,
+            registryUnavailableReason: reason,
         };
     }
 
@@ -3591,6 +3724,98 @@ export class ToolHandlers {
             rerankAdjusted: candidate.rerankAdjusted,
             exactMatchPinned: candidate.exactMatchPinned,
             ownerRepairApplied: ownerSource === 'registry_repair',
+        };
+    }
+
+    private buildExactRegistryGroupResult(input: {
+        codebaseRoot: string;
+        symbol: SymbolRecord;
+        indexedAt: string | null;
+        callGraphNavigationState: {
+            relationshipReady: boolean;
+            relationshipBuiltAt?: string;
+            relationshipUnavailableReason?: CallGraphUnavailableReason;
+        };
+        sidecarReadyForOutline: boolean;
+        debug: boolean;
+    }): SearchGroupResult & { __exactLexicalMatch: boolean } {
+        const span: SearchSpan = {
+            startLine: input.symbol.span.startLine,
+            endLine: input.symbol.span.endLine,
+        };
+        const callGraphHint = this.buildSearchGroupCallGraphHint({
+            file: input.symbol.file,
+            language: input.symbol.language,
+            span,
+            symbolLabel: input.symbol.label,
+            ownerSymbolInstanceId: input.symbol.symbolInstanceId,
+            registrySymbol: input.symbol,
+            registryLoaded: true,
+            navigationState: input.callGraphNavigationState,
+        });
+        const navigationFallback = this.buildNavigationFallback(
+            input.codebaseRoot,
+            input.symbol.file,
+            span,
+            callGraphHint,
+            input.sidecarReadyForOutline
+        );
+        const nextActions = this.buildSearchNextActions(
+            input.codebaseRoot,
+            input.symbol.file,
+            span,
+            callGraphHint,
+            input.sidecarReadyForOutline
+        );
+        const preview = [
+            input.symbol.label,
+            input.symbol.qualifiedName !== input.symbol.label ? input.symbol.qualifiedName : '',
+        ].filter(Boolean).join('\n');
+
+        return {
+            kind: "group",
+            groupId: input.symbol.symbolInstanceId,
+            file: input.symbol.file,
+            span,
+            language: input.symbol.language,
+            symbolId: input.symbol.symbolInstanceId,
+            symbolLabel: input.symbol.label,
+            symbolKey: input.symbol.symbolKey,
+            symbolInstanceId: input.symbol.symbolInstanceId,
+            symbolKind: input.symbol.kind,
+            confidence: 'high',
+            score: 1,
+            indexedAt: input.indexedAt,
+            stalenessBucket: this.getStalenessBucket(input.indexedAt || undefined),
+            collapsedChunkCount: 1,
+            callGraphHint,
+            ...(navigationFallback ? { navigationFallback } : {}),
+            ...(nextActions ? { nextActions } : {}),
+            preview: truncateContent(preview, SEARCH_GROUP_PREVIEW_MAX_CHARS),
+            __exactLexicalMatch: true,
+            ...(input.debug ? {
+                debug: {
+                    representativeChunkCount: 1,
+                    pathCategory: this.classifyPathCategory(input.symbol.file),
+                    pathMultiplier: 1,
+                    topChunkScore: 1,
+                    lexicalScore: 1,
+                    changedFilesMultiplier: 1,
+                    agentFitMultiplier: 1,
+                    agentFitReason: 'exact_registry',
+                    matchesMust: true,
+                    exactLexicalMatch: true,
+                    provenance: {
+                        retrievalPasses: ['exact_registry'],
+                        backendScoreKinds: [],
+                        semanticCandidate: false,
+                        lexicalCandidate: false,
+                        rerankAdjusted: false,
+                        exactMatchPinned: false,
+                        ownerRepairApplied: false,
+                    },
+                }
+            } : {})
         };
     }
 
@@ -5790,9 +6015,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             rerankerAttempted: false,
             rerankerUsed: false,
         };
+        const phaseTimings = this.createSearchPhaseTimings();
         let proofDebugHint: CompletionProbeDebugHint | undefined;
 
         try {
+            const prepareReadStartedAtMs = this.searchPhaseNowMs();
             const absolutePath = ensureAbsolutePath(input.path);
             if (!fs.existsSync(absolutePath)) {
                 const payload = this.buildInvalidSearchRequestPayload({
@@ -5828,6 +6055,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             trackCodebasePath(absolutePath);
 
             const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
+            this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
             if (trackedRootState.state === 'requires_reindex') {
                 const payload = this.buildRequiresReindexPayload(trackedRootState.codebasePath, trackedRootState.message, {
                     path: absolutePath,
@@ -5941,7 +6169,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${searchableRoot.path}'`);
             }
 
-            const freshnessDecision = await this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000);
+            const freshnessDecision = await this.measureSearchPhase(
+                phaseTimings,
+                'ensureFreshness',
+                () => this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000)
+            );
             searchDiagnostics.freshnessMode = freshnessDecision.mode;
             const freshnessBlockedPayload = this.buildFreshnessBlockedSearchPayload(effectiveRoot, freshnessDecision, {
                 path: absolutePath,
@@ -6023,16 +6255,225 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 exactMatchPinningApplied: false,
                 registryRepairGroupCount: 0,
             };
+            let exactRegistryDebug: ExactRegistryLookupDebug | undefined;
+            let searchSymbolRegistry: SymbolRegistry | undefined;
+            let searchSymbolRegistryManifestHash: string | undefined;
+            let searchSymbolRegistryUnavailableReason: CallGraphUnavailableReason | undefined;
+            let exactRegistryFallbackForTrackedLexical = false;
+
+            const hasExactPathFilter = parsedOperators.path.some((pattern) => {
+                const normalized = this.normalizeRelativePathForIgnoreCheck(pattern);
+                return Boolean(normalized && this.isExactSearchPathFilter(normalized));
+            });
+            const exactRegistryEligible = input.resultMode === 'grouped'
+                && input.groupBy === 'symbol'
+                && shouldAttemptExactRegistryLookup({
+                    semanticQuery,
+                    intent: queryPlan.intent,
+                    lexicalTerms: queryPlan.lexicalTerms.map((term) => term.value),
+                    quotedLiteralPhrases: queryPlan.quotedLiteralPhrases,
+                    hasExactPathFilter,
+                });
+
+            if (exactRegistryEligible) {
+                exactRegistryFallbackForTrackedLexical = true;
+                const registryState = await this.measureSearchPhase(
+                    phaseTimings,
+                    'registryLoad',
+                    () => this.navigationStore.getManifest({ normalizedRootPath: effectiveRoot })
+                );
+                if (registryState.status === 'ok') {
+                    searchSymbolRegistry = registryState.registry;
+                    searchSymbolRegistryManifestHash = registryState.manifestHash;
+                    const exactRegistryMatch = await this.measureSearchPhase(phaseTimings, 'exactRegistry', async () => findExactRegistryMatch({
+                        registry: registryState.registry,
+                        semanticQuery,
+                        intent: queryPlan.intent,
+                        lexicalTerms: queryPlan.lexicalTerms.map((term) => term.value),
+                        quotedLiteralPhrases: queryPlan.quotedLiteralPhrases,
+                        operators: {
+                            path: [...parsedOperators.path],
+                        },
+                        filterSymbol: this.buildExactRegistrySymbolFilter({
+                            scope: input.scope,
+                            parsedOperators,
+                        }),
+                    }));
+                    exactRegistryDebug = exactRegistryMatch.debug;
+
+                    if (exactRegistryMatch.status === 'hit') {
+                        passesUsed.add('exact_registry');
+                        const callGraphNavigationState = await this.measureSearchPhase(
+                            phaseTimings,
+                            'navigationValidation',
+                            () => this.loadRegistryValidatedCallGraphSidecar({
+                                codebaseRoot: effectiveRoot,
+                                registryManifestHash: registryState.manifestHash,
+                            })
+                        );
+                        const searchWarnings = [
+                            ...partialIndexSearchWarnings,
+                        ];
+                        if (callGraphNavigationState.warning) {
+                            searchWarnings.push(`SEARCH_${callGraphNavigationState.warning}`);
+                        }
+                        if (dirtyFilesNotFreshened) {
+                            searchWarnings.push(WARNING_CODES.SEARCH_DIRTY_WORKTREE_NOT_SYNCED);
+                        }
+                        if (changedFilesBoostSkippedForLargeChangeSet) {
+                            searchWarnings.push(WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED);
+                        }
+                        const finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
+                        const exactGroupingStartedAtMs = this.searchPhaseNowMs();
+                        const exactGroup = this.buildExactRegistryGroupResult({
+                            codebaseRoot: effectiveRoot,
+                            symbol: exactRegistryMatch.symbol,
+                            indexedAt: registryState.registry.manifest.builtAt || null,
+                            callGraphNavigationState,
+                            sidecarReadyForOutline: true,
+                            debug: Boolean(input.debug),
+                        });
+                        this.addSearchPhaseTiming(phaseTimings, 'grouping', exactGroupingStartedAtMs);
+                        const visibleGroupedResults = [exactGroup];
+                        const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file), input.scope);
+                        const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, visibleGroupedResults.map((result) => ({
+                            file: result.file,
+                            span: result.span,
+                        })));
+                        const responseHints: Record<string, unknown> = {
+                            version: 1 as const,
+                            navigation: { nextStep: SEARCH_NAVIGATION_NEXT_STEP },
+                        };
+                        if (noiseMitigationHint) {
+                            responseHints.noiseMitigation = noiseMitigationHint;
+                        }
+                        if (generatedArtifactsHint) {
+                            responseHints.verification = {
+                                generatedArtifacts: generatedArtifactsHint,
+                            };
+                        }
+                        if (input.debug) {
+                            const rerankDecision = this.resolveRerankDecision(input.scope, queryPlan);
+                            responseHints.debugSearch = {
+                                queryIntent: {
+                                    classification: queryPlan.intent,
+                                    confidence: queryPlan.confidence,
+                                    reasons: [...queryPlan.reasons],
+                                    lexicalTerms: queryPlan.lexicalTerms.map((term) => term.value),
+                                    semanticQuery,
+                                },
+                                retrieval: {
+                                    mode: queryPlan.retrievalMode,
+                                    scorePolicyKind: queryPlan.scorePolicyKind,
+                                    backendScoreKinds: [],
+                                },
+                                rankingProvenance: {
+                                    ...rankingProvenance,
+                                    semanticPassesUsed: [],
+                                    lexicalPassesUsed: [],
+                                    livePathSupplementUsed: false,
+                                    lexicalFileScanUsed: false,
+                                    rerankApplied: false,
+                                    exactMatchPinningApplied: false,
+                                    registryRepairGroupCount: 0,
+                                },
+                                exactRegistry: exactRegistryDebug,
+                                phaseTimingsMs: phaseTimings,
+                                passesUsed: Array.from(passesUsed).sort(),
+                                candidateLimit,
+                                mustRetry: {
+                                    attempts: 0,
+                                    maxAttempts,
+                                    applied: parsedOperators.must.length > 0,
+                                    satisfied: true,
+                                    finalCount: 1,
+                                },
+                                operatorSummary,
+                                filterSummary,
+                                changedFilesBoost: {
+                                    enabled: input.rankingMode === 'auto_changed_first',
+                                    applied: false,
+                                    available: changedFilesState.available,
+                                    changedCount: changedFilesCount,
+                                    maxChangedFilesForBoost: SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
+                                    skippedForLargeChangeSet: changedFilesBoostSkippedForLargeChangeSet,
+                                    multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
+                                    boostedCandidates: 0,
+                                },
+                                ...(debugChangedFilesState ? {
+                                    changedCode: this.buildChangedCodeDebug(effectiveRoot, debugChangedFilesState),
+                                } : {}),
+                                rerank: {
+                                    enabledByPolicy: rerankDecision.enabledByPolicy,
+                                    skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
+                                    skippedByIdentifierIntent: rerankDecision.skippedByIdentifierIntent,
+                                    capabilityPresent: rerankDecision.capabilityPresent,
+                                    rerankerPresent: rerankDecision.rerankerPresent,
+                                    enabled: false,
+                                    attempted: false,
+                                    applied: false,
+                                    exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
+                                    exactMatchPinningApplied: false,
+                                    candidatesIn: 1,
+                                    candidatesReranked: 0,
+                                    topK: SEARCH_RERANK_TOP_K,
+                                    rankK: SEARCH_RERANK_RRF_K,
+                                    weight: SEARCH_RERANK_WEIGHT,
+                                    docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
+                                    docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+                                },
+                            } satisfies SearchDebugHint;
+                        }
+                        if (proofDebugHint) {
+                            responseHints.debugProofCheck = proofDebugHint;
+                        }
+
+                        const envelope: SearchResponseEnvelope = {
+                            status: "ok",
+                            path: absolutePath,
+                            query: input.query,
+                            scope: input.scope,
+                            groupBy: input.groupBy,
+                            limit: input.limit,
+                            resultMode: "grouped",
+                            freshnessDecision,
+                            freshnessSummary,
+                            ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
+                            hints: responseHints,
+                            results: visibleGroupedResults.map(({ __exactLexicalMatch: _exactLexicalMatch, ...result }) => result)
+                        };
+
+                        await this.touchWatchedCodebase(effectiveRoot);
+                        return {
+                            content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+                            meta: {
+                                searchDiagnostics: {
+                                    ...searchDiagnostics,
+                                    resultsBeforeFilter: exactRegistryMatch.debug.inspectedSymbolCount,
+                                    resultsAfterFilter: 1,
+                                    searchPassCount: 0,
+                                    searchPassSuccessCount: 0,
+                                    searchPassFailureCount: 0,
+                                }
+                            }
+                        };
+                    }
+                } else {
+                    exactRegistryDebug = this.buildUnavailableExactRegistryDebug(registryState.reason);
+                }
+            }
 
             for (let attempt = 0; attempt < maxAttempts; attempt++) {
                 attemptsUsed = attempt + 1;
-                const passDescriptors = [
+                const passDescriptors: Array<{ id: 'primary' | 'expanded'; query: string }> = [
                     { id: 'primary', query: semanticQuery },
-                    { id: 'expanded', query: expandedQuery },
-                ] as const;
+                ];
+                if (!exactRegistryEligible) {
+                    passDescriptors.push({ id: 'expanded', query: expandedQuery });
+                }
                 searchDiagnostics.searchPassCount += passDescriptors.length;
 
-                const passSettled = await Promise.allSettled(passDescriptors.map(async (pass) => {
+                const passSettled = await this.measureSearchPhase(phaseTimings, 'semanticSearch', () => Promise.allSettled(passDescriptors.map(async (pass) => {
                     const passId = pass.id as 'primary' | 'expanded';
                     if (this.shouldForceSearchPassFailure(passId)) {
                         throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${passId}`);
@@ -6047,7 +6488,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         retrievalMode: queryPlan.retrievalMode,
                         scorePolicy
                     });
-                }));
+                })));
 
                 const successfulPasses: Array<{ id: string; results: any[] }> = [];
                 let vectorBackendDiagnostic: VectorBackendDiagnostic | null = null;
@@ -6173,13 +6614,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 for (const pass of successfulPasses) {
                     addPass(pass.results, pass.id, 1);
                 }
-                const trackedLexical = this.buildTrackedLexicalSearchResults({
+                const trackedLexical = await this.measureSearchPhase(phaseTimings, 'trackedLexical', async () => this.buildTrackedLexicalSearchResults({
                     effectiveRoot,
                     parsedOperators,
                     queryPlan,
                     scope: input.scope,
                     limit: candidateLimit,
-                });
+                    exactRegistryFallback: exactRegistryFallbackForTrackedLexical,
+                }));
                 trackedLexicalDebug = trackedLexical.debug;
                 if (trackedLexical.results.length > 0) {
                     addPass(trackedLexical.results, 'lexical_files', 1);
@@ -6312,11 +6754,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     const rerankDocuments = rerankSlice.map((candidate) => this.buildRerankDocument(candidate.result));
                     let rerankResults: Array<{ index: number }> = [];
                     try {
-                        rerankResults = await this.reranker.rerank(semanticQuery, rerankDocuments, {
+                        rerankResults = await this.measureSearchPhase(phaseTimings, 'rerank', () => this.reranker!.rerank(semanticQuery, rerankDocuments, {
                             topK: rerankCount,
                             truncation: true,
                             returnDocuments: false
-                        });
+                        }));
                     } catch {
                         rerankerFailurePhase = 'api_call';
                         throw new Error('reranker_api_call_failed');
@@ -6393,6 +6835,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     },
                     rankingProvenance,
                     ...(trackedLexicalDebug ? { trackedLexical: trackedLexicalDebug } : {}),
+                    ...(exactRegistryDebug ? { exactRegistry: exactRegistryDebug } : {}),
+                    phaseTimingsMs: phaseTimings,
                     passesUsed: Array.from(passesUsed).sort(),
                     candidateLimit,
                     mustRetry: {
@@ -6532,11 +6976,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const needsRegistryRepair = input.groupBy === 'symbol'
                 && scored.some((candidate) => !candidate.result.ownerSymbolKey || !candidate.result.ownerSymbolInstanceId);
-            let searchSymbolRegistry: SymbolRegistry | undefined;
-            let searchSymbolRegistryManifestHash: string | undefined;
-            let searchSymbolRegistryUnavailableReason: CallGraphUnavailableReason | undefined;
-            if (input.groupBy === 'symbol') {
-                const registryState = await this.navigationStore.getManifest({ normalizedRootPath: effectiveRoot });
+            if (input.groupBy === 'symbol' && !searchSymbolRegistry) {
+                const registryState = await this.measureSearchPhase(
+                    phaseTimings,
+                    'registryLoad',
+                    () => this.navigationStore.getManifest({ normalizedRootPath: effectiveRoot })
+                );
                 if (registryState.status === 'ok') {
                     searchSymbolRegistry = registryState.registry;
                     searchSymbolRegistryManifestHash = registryState.manifestHash;
@@ -6566,6 +7011,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
             }
 
+            const groupingStartedAtMs = this.searchPhaseNowMs();
             const groups = new Map<string, GroupAccumulator>();
             for (const candidate of scored) {
                 const result = candidate.result;
@@ -6604,17 +7050,23 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     existing.chunks.push(candidate);
                 }
             }
+            this.addSearchPhaseTiming(phaseTimings, 'grouping', groupingStartedAtMs);
 
-            const callGraphNavigationState = await this.loadRegistryValidatedCallGraphSidecar({
-                codebaseRoot: effectiveRoot,
-                registryManifestHash: searchSymbolRegistryManifestHash,
-                registryUnavailableReason: searchSymbolRegistryUnavailableReason,
-            });
+            const callGraphNavigationState = await this.measureSearchPhase(
+                phaseTimings,
+                'navigationValidation',
+                () => this.loadRegistryValidatedCallGraphSidecar({
+                    codebaseRoot: effectiveRoot,
+                    registryManifestHash: searchSymbolRegistryManifestHash,
+                    registryUnavailableReason: searchSymbolRegistryUnavailableReason,
+                })
+            );
             if (callGraphNavigationState.warning) {
                 searchWarnings.push(`SEARCH_${callGraphNavigationState.warning}`);
                 finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
             }
             const sidecarReadyForOutline = Boolean(searchSymbolRegistryManifestHash);
+            const groupingResultsStartedAtMs = this.searchPhaseNowMs();
             const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
             for (const group of groups.values()) {
                 exactMatchPinningApplied = this.sortSearchCandidates(group.chunks, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
@@ -6722,6 +7174,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     } : {})
                 });
             }
+            this.addSearchPhaseTiming(phaseTimings, 'grouping', groupingResultsStartedAtMs);
 
             const rankedGroupedResults = (queryPlan.referenceSeeking || queryPlan.intent === 'identifier')
                 ? this.collapseDuplicateDeclarationGroups(groupedResults)

@@ -16,7 +16,7 @@ import {
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
 } from '@zokizuan/satori-core';
-import type { SymbolRegistryManifest } from '@zokizuan/satori-core';
+import type { SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -144,6 +144,74 @@ async function writeSearchSymbolRegistry(input: {
     });
 
     return symbols;
+}
+
+async function writeSearchSymbolRegistryForFiles(input: {
+    repoPath: string;
+    files: Array<{
+        relativePath: string;
+        content: string;
+        language?: string;
+        chunks: Array<{
+            content: string;
+            startLine: number;
+            endLine: number;
+            symbolLabel?: string;
+            breadcrumbs?: string[];
+        }>;
+        extractedSymbols?: Parameters<typeof buildSymbolRecordsForFile>[0]['extractedSymbols'];
+    }>;
+}) {
+    const allSymbols: SymbolRecord[] = [];
+    const manifestFiles: SymbolRegistryManifest['files'] = [];
+    for (const file of input.files) {
+        const fileHash = `test-search-file-hash-${file.relativePath}`;
+        const language = file.language || 'typescript';
+        const symbols = buildSymbolRecordsForFile({
+            relativePath: file.relativePath,
+            language,
+            content: file.content,
+            fileHash,
+            extractorVersion: 'test-extractor-v1',
+            chunks: file.chunks.map((chunk) => ({
+                content: chunk.content,
+                metadata: {
+                    startLine: chunk.startLine,
+                    endLine: chunk.endLine,
+                    language,
+                    filePath: file.relativePath,
+                    ...(chunk.symbolLabel ? { symbolLabel: chunk.symbolLabel } : {}),
+                    ...(chunk.breadcrumbs ? { breadcrumbs: chunk.breadcrumbs } : {}),
+                },
+            })),
+            extractedSymbols: file.extractedSymbols,
+        });
+        allSymbols.push(...symbols);
+        manifestFiles.push({
+            path: file.relativePath,
+            hash: fileHash,
+            language,
+            symbolCount: symbols.length,
+        });
+    }
+
+    const manifest: SymbolRegistryManifest = {
+        schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+        normalizedRootPath: input.repoPath,
+        rootFingerprint: 'test-root-fingerprint',
+        indexPolicyHash: 'test-policy',
+        languageRouterVersion: 'test-router-v1',
+        extractorVersion: 'test-extractor-v1',
+        relationshipVersion: 'test-relationships-v1',
+        builtAt: '2026-01-01T00:00:00.000Z',
+        files: manifestFiles,
+    };
+
+    await writeSymbolRegistrySidecar({
+        registry: buildSymbolRegistry({ manifest, symbols: allSymbols }),
+    });
+
+    return allSymbols;
 }
 
 async function writeSearchRelationshipSidecar(input: {
@@ -1064,6 +1132,451 @@ test('handleSearchCode supplements quoted exact literal retrieval from tracked l
     });
 });
 
+test('handleSearchCode exact registry fast path returns a grouped symbol without semantic search, tracked lexical, or rerank', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'packages/mcp/src/core/handlers.ts';
+            const content = [
+                'export class ToolHandlers {',
+                '  async prepareTrackedRootForRead(path: string) {',
+                '    return path;',
+                '  }',
+                '}',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'packages/mcp/src/core'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            const symbols = await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{
+                    content: 'async prepareTrackedRootForRead(path: string) { return path; }',
+                    startLine: 2,
+                    endLine: 4,
+                    symbolLabel: 'method prepareTrackedRootForRead(path: string)',
+                    breadcrumbs: ['class ToolHandlers', 'method prepareTrackedRootForRead(path: string)'],
+                }],
+            });
+            const owner = symbols.find((symbol) => symbol.name === 'prepareTrackedRootForRead');
+            assert.ok(owner);
+
+            let semanticSearchCalls = 0;
+            let rerankCalls = 0;
+            const handlers = createHandlers(repoPath, [], {
+                rerank: async () => {
+                    rerankCalls += 1;
+                    return [];
+                }
+            });
+            (handlers as any).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                throw new Error('semanticSearch should not run for exact registry hits');
+            };
+            (handlers as any).context.getTrackedRelativePaths = () => {
+                throw new Error('tracked lexical scan should not run for exact registry hits');
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'prepareTrackedRootForRead',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls, 0);
+            assert.equal(rerankCalls, 0);
+            assert.equal(payload.results.length, 1);
+            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('exact_registry'), true);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('exact_registry'), true);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), false);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.status, 'hit');
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.matchedSymbolInstanceId, owner.symbolInstanceId);
+            const phaseTimings = payload.hints?.debugSearch?.phaseTimingsMs || {};
+            for (const phase of ['prepareRead', 'ensureFreshness', 'exactRegistry', 'semanticSearch', 'trackedLexical', 'rerank', 'registryLoad', 'grouping', 'navigationValidation']) {
+                assert.equal(typeof phaseTimings[phase], 'number');
+            }
+            assert.equal(phaseTimings.semanticSearch, 0);
+            assert.equal(phaseTimings.trackedLexical, 0);
+            assert.equal(phaseTimings.rerank, 0);
+        });
+    });
+});
+
+test('handleSearchCode does not shortcut vague one-word semantic queries through exact registry', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/runtime.ts';
+            const content = 'export function runtime() { return true; }';
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{
+                    content,
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function runtime()',
+                }],
+            });
+
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            (handlers as any).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                return [];
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'runtime',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls, 2);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry, undefined);
+            assert.equal(payload.hints?.debugSearch?.phaseTimingsMs?.exactRegistry, 0);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('primary'), true);
+        });
+    });
+});
+
+test('handleSearchCode explains exact registry fallback when the symbol registry is unavailable', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, 'src/runtime.ts'), 'export function prepareTrackedRootForRead() { return true; }', 'utf8');
+
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            (handlers as any).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                return [];
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'prepareTrackedRootForRead',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls, 1);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.attempted, true);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.status, 'miss');
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.reason, 'registry_unavailable');
+            assert.equal(typeof payload.hints?.debugSearch?.exactRegistry?.registryUnavailableReason, 'string');
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('primary'), true);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('expanded'), false);
+        });
+    });
+});
+
+test('handleSearchCode exact registry fast path uses normal runtime scope filtering for registry candidates', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'docs/runtime.ts';
+            const content = 'export function prepareTrackedRootForRead() { return true; }';
+            fs.mkdirSync(path.join(repoPath, 'docs'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{
+                    content,
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function prepareTrackedRootForRead()',
+                }],
+            });
+
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            (handlers as any).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                return [];
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'prepareTrackedRootForRead',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls, 1);
+            assert.equal(payload.results.length, 0);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.status, 'miss');
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.filteredSymbolCount, 0);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('expanded'), false);
+        });
+    });
+});
+
+test('handleSearchCode exact registry fast path limits path-scoped lookup to the requested file', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const targetPath = 'packages/mcp/src/core/handlers.ts';
+            const otherPath = 'packages/mcp/src/core/other.ts';
+            fs.mkdirSync(path.join(repoPath, 'packages/mcp/src/core'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, targetPath), [
+                'export function prepareTrackedRootForRead() {',
+                '  return "target";',
+                '}',
+            ].join('\n'), 'utf8');
+            fs.writeFileSync(path.join(repoPath, otherPath), [
+                'export function prepareTrackedRootForRead() {',
+                '  return "other";',
+                '}',
+            ].join('\n'), 'utf8');
+            const symbols = await writeSearchSymbolRegistryForFiles({
+                repoPath,
+                files: [{
+                    relativePath: targetPath,
+                    content: fs.readFileSync(path.join(repoPath, targetPath), 'utf8'),
+                    chunks: [{
+                        content: 'export function prepareTrackedRootForRead() { return "target"; }',
+                        startLine: 1,
+                        endLine: 3,
+                        symbolLabel: 'function prepareTrackedRootForRead()',
+                    }],
+                }, {
+                    relativePath: otherPath,
+                    content: fs.readFileSync(path.join(repoPath, otherPath), 'utf8'),
+                    chunks: [{
+                        content: 'export function prepareTrackedRootForRead() { return "other"; }',
+                        startLine: 1,
+                        endLine: 3,
+                        symbolLabel: 'function prepareTrackedRootForRead()',
+                    }],
+                }],
+            });
+            const targetSymbols = symbols.filter((symbol) => symbol.file === targetPath);
+            const owner = targetSymbols.find((symbol) => symbol.name === 'prepareTrackedRootForRead');
+            assert.ok(owner);
+
+            const handlers = createHandlers(repoPath, []);
+            (handlers as any).context.semanticSearch = async () => {
+                throw new Error('semanticSearch should not run for path-scoped exact registry hits');
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: `path:${targetPath} prepareTrackedRootForRead`,
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].file, targetPath);
+            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.candidateSet, 'path_exact_file');
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.inspectedSymbolCount, targetSymbols.length);
+        });
+    });
+});
+
+test('handleSearchCode exact registry miss still allows bounded tracked lexical recovery', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            const registryPath = 'src/unrelated.ts';
+            const lexicalPath = 'src/constants.ts';
+            const registryContent = 'export function unrelatedSymbol() { return true; }';
+            const lexicalContent = 'export const missingExactIdentifier = true;';
+            fs.writeFileSync(path.join(repoPath, registryPath), registryContent, 'utf8');
+            fs.writeFileSync(path.join(repoPath, lexicalPath), lexicalContent, 'utf8');
+            await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath: registryPath,
+                content: registryContent,
+                chunks: [{
+                    content: registryContent,
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function unrelatedSymbol()',
+                }],
+            });
+
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            (handlers as any).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                return [];
+            };
+            (handlers as any).context.getTrackedRelativePaths = () => [lexicalPath];
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'missingExactIdentifier',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls, 1);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.status, 'miss');
+            assert.equal(payload.hints?.debugSearch?.trackedLexical?.enabled, true);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('expanded'), false);
+            assert.equal(payload.results[0].file, lexicalPath);
+            assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
+        });
+    });
+});
+
+test('handleSearchCode exact symbolInstanceId fast path only uses current registry ids', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/runtime.ts';
+            const content = 'export function cli_entry_point() { return true; }';
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            const symbols = await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                language: 'typescript',
+                chunks: [{
+                    content,
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function cli_entry_point()',
+                }],
+            });
+            const owner = symbols.find((symbol) => symbol.name === 'cli_entry_point');
+            assert.ok(owner);
+
+            const handlers = createHandlers(repoPath, []);
+            (handlers as any).context.semanticSearch = async () => {
+                throw new Error('semanticSearch should not run for exact symbolInstanceId hits');
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: owner.symbolInstanceId,
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.reason, 'symbol_instance_id');
+        });
+    });
+});
+
+test('handleSearchCode ambiguous exact registry lookup falls back to existing semantic search path', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, 'src/stack.ts'), 'export function runTask() { return "stack"; }', 'utf8');
+            fs.writeFileSync(path.join(repoPath, 'src/builder.ts'), 'export function runTask() { return "builder"; }', 'utf8');
+            await writeSearchSymbolRegistryForFiles({
+                repoPath,
+                files: [{
+                    relativePath: 'src/stack.ts',
+                    content: fs.readFileSync(path.join(repoPath, 'src/stack.ts'), 'utf8'),
+                    chunks: [{
+                        content: 'export function runTask() { return "stack"; }',
+                        startLine: 1,
+                        endLine: 1,
+                        symbolLabel: 'function runTask()',
+                    }],
+                }, {
+                    relativePath: 'src/builder.ts',
+                    content: fs.readFileSync(path.join(repoPath, 'src/builder.ts'), 'utf8'),
+                    chunks: [{
+                        content: 'export function runTask() { return "builder"; }',
+                        startLine: 1,
+                        endLine: 1,
+                        symbolLabel: 'function runTask()',
+                    }],
+                }],
+            });
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, [{
+                content: 'export function runTask() { return "stack"; }',
+                relativePath: 'src/stack.ts',
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'legacy_runTask',
+                symbolLabel: 'function runTask()',
+            }]);
+            (handlers as any).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                return [{
+                    content: 'export function runTask() { return "stack"; }',
+                    relativePath: 'src/stack.ts',
+                    startLine: 1,
+                    endLine: 1,
+                    language: 'typescript',
+                    score: 0.99,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'legacy_runTask',
+                    symbolLabel: 'function runTask()',
+                }];
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'runTask',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls, 1);
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.status, 'ambiguous');
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('primary'), true);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('expanded'), false);
+        });
+    });
+});
+
 test('sortGroupedSearchResults preserves exactMatchPinned provenance when exact pinning changes the grouped winner', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, []);
@@ -1179,7 +1692,7 @@ test('handleSearchCode debug exposes tracked lexical scan caps when the bounded 
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
-            query: 'where is trackedneedle emitted',
+            query: 'where is TRACKED_NEEDLE emitted',
             scope: 'runtime',
             resultMode: 'grouped',
             groupBy: 'symbol',
@@ -1271,7 +1784,7 @@ test('handleSearchCode ignores tracked lexical paths that resolve outside the re
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
-            query: 'endColumn',
+            query: 'path:src/path-scoped.test.ts endColumn',
             scope: 'runtime',
             resultMode: 'grouped',
             groupBy: 'symbol',

@@ -281,6 +281,28 @@ export interface SearchDebugHint {
         cappedByBytes: boolean;
         returnedResults: number;
     };
+    exactRegistry?: {
+        attempted: boolean;
+        status: "hit" | "miss" | "ambiguous" | "not_applicable";
+        reason: string;
+        candidateSet?: "path_exact_file" | "registry_all";
+        inspectedSymbolCount: number;
+        filteredSymbolCount: number;
+        ambiguousCount?: number;
+        matchedSymbolInstanceId?: string;
+        registryUnavailableReason?: string;
+    };
+    phaseTimingsMs?: {
+        prepareRead: number;
+        ensureFreshness: number;
+        exactRegistry: number;
+        semanticSearch: number;
+        trackedLexical: number;
+        rerank: number;
+        registryLoad: number;
+        grouping: number;
+        navigationValidation: number;
+    };
     passesUsed: string[];
     candidateLimit: number;
     mustRetry: {

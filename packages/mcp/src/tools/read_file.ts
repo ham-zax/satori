@@ -352,6 +352,7 @@ export const readFileTool: McpTool = {
                     if (parsedOutline?.status !== "ok") {
                         const payload: ReadFileOpenSymbolResponseEnvelope = {
                             status: parsedOutline?.status || "not_found",
+                            ...(typeof parsedOutline?.reason === "string" ? { reason: parsedOutline.reason } : {}),
                             message: parsedOutline?.message || "Failed to resolve open_symbol request.",
                             file: relativeFile,
                             ...(parsedOutline?.outline ? { matches: parsedOutline.outline.symbols } : {}),

@@ -3219,6 +3219,82 @@ export class ToolHandlers {
         };
     }
 
+    private buildStaleSymbolRefFileOutlinePayload(
+        codebasePath: string,
+        input: FileOutlineInput,
+        detail?: string
+    ): FileOutlineResponseEnvelope {
+        const detailLine = detail ? `${detail}\n\n` : '';
+        return {
+            status: 'requires_reindex',
+            reason: 'stale_symbol_ref',
+            path: codebasePath,
+            file: input.file,
+            outline: null,
+            hasMore: false,
+            message: `${detailLine}Symbol navigation for '${input.file}' is stale relative to the current file contents. Refresh the index before using exact symbol navigation.`,
+            hints: {
+                reindex: this.buildReindexHint(codebasePath)
+            }
+        };
+    }
+
+    private isSha256HexHash(value: unknown): value is string {
+        return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+    }
+
+    private getRegistryFileFreshness(input: {
+        symbols: SymbolRecord[];
+        absoluteFile: string;
+    }): { status: 'fresh' | 'stale' | 'unknown' | 'inconsistent'; registryHash?: string; currentHash?: string } {
+        const hashes = Array.from(new Set(input.symbols.map((symbol) => symbol.fileHash).filter(Boolean)));
+        if (hashes.length === 0 || hashes.some((hash) => !this.isSha256HexHash(hash))) {
+            return { status: 'unknown' };
+        }
+        if (hashes.length !== 1) {
+            return { status: 'inconsistent' };
+        }
+
+        const registryHash = hashes[0];
+        const currentHash = crypto
+            .createHash('sha256')
+            .update(fs.readFileSync(input.absoluteFile, 'utf8'), 'utf8')
+            .digest('hex');
+        return currentHash === registryHash
+            ? { status: 'fresh', registryHash, currentHash }
+            : { status: 'stale', registryHash, currentHash };
+    }
+
+    private buildStaleSymbolRefCallGraphPayload(input: {
+        codebaseRoot: string;
+        context: {
+            path: string;
+            symbolRef: CallGraphSymbolRef;
+            direction: CallGraphDirection;
+            depth: number;
+            limit: number;
+        };
+        message: string;
+    }): CallGraphResponseEnvelope {
+        return {
+            status: 'not_found',
+            path: input.codebaseRoot,
+            symbolRef: input.context.symbolRef,
+            direction: input.context.direction,
+            depth: input.context.depth,
+            limit: input.context.limit,
+            supported: false,
+            reason: 'stale_symbol_ref',
+            message: input.message,
+            nodes: [],
+            edges: [],
+            notes: [],
+            notesTruncated: false,
+            totalNoteCount: 0,
+            returnedNoteCount: 0,
+        };
+    }
+
     private getOutlineStatusForLanguage(relativeFilePath: string): FileOutlineStatus {
         if (this.isFileOutlineLanguageSupported(relativeFilePath)) {
             return 'ok';
@@ -5872,6 +5948,29 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             if (registryState.status === 'ok') {
                 const registrySymbols = registryState.symbols;
                 if (registrySymbols.length > 0) {
+                    const fileFreshness = this.getRegistryFileFreshness({
+                        symbols: registrySymbols,
+                        absoluteFile,
+                    });
+                    if (fileFreshness.status === 'inconsistent') {
+                        const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
+                            ...args,
+                            file: normalizedFile
+                        }, `Symbol registry contains inconsistent file hashes for '${normalizedFile}'.`, 'incompatible_symbol_registry'), proofDebugHint);
+                        return {
+                            content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                        };
+                    }
+                    if (fileFreshness.status === 'stale') {
+                        const payload = this.withProofDebugHint(this.buildStaleSymbolRefFileOutlinePayload(effectiveRoot, {
+                            ...args,
+                            file: normalizedFile
+                        }, `File '${normalizedFile}' has changed since the symbol registry snapshot was published.`), proofDebugHint);
+                        return {
+                            content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+                        };
+                    }
+
                     const relationshipGraph = await this.loadRegistryValidatedCallGraphSidecar({
                         codebaseRoot: effectiveRoot,
                         registryManifestHash: registryState.manifestHash,
@@ -6244,6 +6343,75 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             const resolvedSymbol = exactRegistrySymbols[0];
+            const absoluteSymbolFile = path.resolve(effectiveRoot, normalizedSymbolFile);
+            const relativeSymbolFile = path.relative(effectiveRoot, absoluteSymbolFile);
+            const symbolFileInsideRoot = !relativeSymbolFile.startsWith('..') && !path.isAbsolute(relativeSymbolFile);
+            if (!symbolFileInsideRoot || !fs.existsSync(absoluteSymbolFile) || !fs.statSync(absoluteSymbolFile).isFile()) {
+                if (exactRegistrySymbols.some((symbol) => this.isSha256HexHash(symbol.fileHash))) {
+                    const payload = this.withProofDebugHint(this.buildStaleSymbolRefCallGraphPayload({
+                        codebaseRoot: effectiveRoot,
+                        context: {
+                            path: absolutePath,
+                            symbolRef,
+                            direction,
+                            depth,
+                            limit,
+                        },
+                        message: `Symbol reference points at '${normalizedSymbolFile}', but the current file is unavailable. Refresh the index before using exact call graph navigation.`,
+                    }), proofDebugHint);
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify(payload, null, 2)
+                        }]
+                    };
+                }
+            } else {
+                const fileFreshness = this.getRegistryFileFreshness({
+                    symbols: exactRegistrySymbols,
+                    absoluteFile: absoluteSymbolFile,
+                });
+                if (fileFreshness.status === 'inconsistent') {
+                    const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
+                        effectiveRoot,
+                        `Symbol registry contains inconsistent file hashes for '${normalizedSymbolFile}'.`,
+                        {
+                            path: absolutePath,
+                            symbolRef,
+                            direction,
+                            depth,
+                            limit
+                        },
+                        'incompatible_symbol_registry'
+                    ), proofDebugHint);
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify(payload, null, 2)
+                        }]
+                    };
+                }
+                if (fileFreshness.status === 'stale') {
+                    const payload = this.withProofDebugHint(this.buildStaleSymbolRefCallGraphPayload({
+                        codebaseRoot: effectiveRoot,
+                        context: {
+                            path: absolutePath,
+                            symbolRef,
+                            direction,
+                            depth,
+                            limit,
+                        },
+                        message: `Symbol reference for '${normalizedSymbolFile}' is stale relative to the current file contents. Refresh the index before using exact call graph navigation.`,
+                    }), proofDebugHint);
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify(payload, null, 2)
+                        }]
+                    };
+                }
+            }
+
             if (!this.isCallGraphLanguageSupported(resolvedSymbol.language, resolvedSymbol.file)) {
                 const payload = this.withProofDebugHint({
                     status: 'unsupported' as const,

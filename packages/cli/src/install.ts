@@ -53,7 +53,20 @@ const CODEX_ENV_TEMPLATE_LINES = [
     "# MILVUS_TOKEN = \"your-zilliz-token\"",
     CODEX_ENV_TEMPLATE_END,
 ] as const;
-const CODEX_GUIDANCE_HOOK_COMMAND = 'printf "%s\\n" "Satori MCP: prefer search_codebase -> file_outline -> call_graph -> read_file(open_symbol) for code discovery. If unindexed, use manage_index(action=\\"create\\", path=<repo>). If requires_reindex or hints.reindex appears, run manage_index(action=\\"reindex\\", path=<hinted path>). Treat navigationFallback as authoritative."';
+const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: search_codebase -> file_outline -> call_graph -> read_file(open_symbol); reindex on requires_reindex/hints.reindex; trust navigationFallback.";
+const CODEX_GUIDANCE_HOOK_SCRIPT = [
+    `msg=${JSON.stringify(CODEX_GUIDANCE_HOOK_MESSAGE)}`,
+    'key=$(printf "%s" "$PWD" | sed "s#[^A-Za-z0-9_.-]#_#g" | cut -c1-120)',
+    'stamp="${XDG_RUNTIME_DIR:-/tmp}/satori-codex-guidance.${key:-global}"',
+    'now=$(date +%s)',
+    'last=$(cat "$stamp" 2>/dev/null || printf "0")',
+    'case "$last" in *[!0-9]*|"") last=0;; esac',
+    'if [ $((now - last)) -lt 10 ]; then exit 0; fi',
+    'umask 077',
+    'printf "%s" "$now" > "$stamp" 2>/dev/null || true',
+    'printf "%s\\n" "$msg"',
+].join("; ");
+const CODEX_GUIDANCE_HOOK_COMMAND = `sh -lc '${CODEX_GUIDANCE_HOOK_SCRIPT}'`;
 const OPENCODE_INSTRUCTIONS = `# Satori MCP
 
 This project uses Satori MCP for semantic code search, deterministic navigation, and index lifecycle management.

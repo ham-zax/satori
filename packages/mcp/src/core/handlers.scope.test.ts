@@ -98,6 +98,7 @@ async function writeSearchSymbolRegistry(input: {
         symbolLabel?: string;
         breadcrumbs?: string[];
     }>;
+    extractedSymbols?: Parameters<typeof buildSymbolRecordsForFile>[0]['extractedSymbols'];
 }) {
     const fileHash = 'test-search-file-hash';
     const language = input.language || 'typescript';
@@ -118,6 +119,7 @@ async function writeSearchSymbolRegistry(input: {
                 ...(chunk.breadcrumbs ? { breadcrumbs: chunk.breadcrumbs } : {}),
             },
         })),
+        extractedSymbols: input.extractedSymbols,
     });
     const manifest: SymbolRegistryManifest = {
         schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
@@ -179,6 +181,7 @@ async function writeSearchNavigationSidecars(input: {
         symbolLabel?: string;
         breadcrumbs?: string[];
     }>;
+    extractedSymbols?: Parameters<typeof buildSymbolRecordsForFile>[0]['extractedSymbols'];
 }) {
     const fileHash = 'test-search-file-hash';
     const language = input.language || 'typescript';
@@ -199,6 +202,7 @@ async function writeSearchNavigationSidecars(input: {
                 ...(chunk.breadcrumbs ? { breadcrumbs: chunk.breadcrumbs } : {}),
             },
         })),
+        extractedSymbols: input.extractedSymbols,
     });
     const manifest: SymbolRegistryManifest = {
         schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
@@ -835,6 +839,376 @@ test('handleSearchCode grouped symbol mode repairs legacy chunks from compatible
             assert.equal(payload.results[0].callGraphHint.supported, true);
             assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, owner.symbolInstanceId);
             assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'registry_repair');
+        });
+    });
+});
+
+test('handleSearchCode ranks exact warning-code emission above tests and generic helpers', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: "assert.ok(payload.warnings.includes('SEARCH_PARTIAL_INDEX:limit_reached'));",
+                relativePath: 'packages/mcp/src/core/handlers.index_state_stability.test.ts',
+                startLine: 149,
+                endLine: 150,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_partial_warning_test',
+                symbolLabel: 'function semanticSearch()',
+            },
+            {
+                content: [
+                    'const partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot?.info)',
+                    '  ? [',
+                    '      SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,',
+                    '      SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,',
+                    '    ]',
+                    '  : [];',
+                ].join('\n'),
+                relativePath: 'packages/mcp/src/core/handlers.ts',
+                startLine: 4983,
+                endLine: 4989,
+                language: 'typescript',
+                score: 0.45,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_handle_search_code',
+                symbolLabel: 'async method handleSearchCode(args: any)',
+            },
+            {
+                content: 'private buildReindexHint(codebasePath: string) { return { tool: "manage_index" }; }',
+                relativePath: 'packages/mcp/src/core/handlers.ts',
+                startLine: 428,
+                endLine: 432,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_build_reindex_hint',
+                symbolLabel: 'method buildReindexHint(codebasePath: string)',
+            },
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is SEARCH_PARTIAL_INDEX emitted',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results[0].file, 'packages/mcp/src/core/handlers.ts');
+        assert.equal(payload.results[0].symbolLabel, 'async method handleSearchCode(args: any)');
+        assert.notEqual(payload.results[0].file, 'packages/mcp/src/core/handlers.index_state_stability.test.ts');
+        assert.notEqual(payload.results[0].symbolLabel, 'method buildReindexHint(codebasePath: string)');
+        assert.equal(payload.hints?.debugSearch?.queryIntent?.reasons.includes('writer_seeking_query'), true);
+    });
+});
+
+test('handleSearchCode ranks natural-language emitted warning site above generic reindex helper', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'private buildReindexHint(codebasePath: string) { return { tool: "manage_index" }; }',
+                relativePath: 'packages/mcp/src/core/handlers.ts',
+                startLine: 428,
+                endLine: 432,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_build_reindex_hint',
+                symbolLabel: 'method buildReindexHint(codebasePath: string)',
+            },
+            {
+                content: [
+                    'const partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot?.info)',
+                    '  ? [',
+                    '      SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,',
+                    '      SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,',
+                    '    ]',
+                    '  : [];',
+                ].join('\n'),
+                relativePath: 'packages/mcp/src/core/handlers.ts',
+                startLine: 4983,
+                endLine: 4989,
+                language: 'typescript',
+                score: 0.40,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_handle_search_code',
+                symbolLabel: 'async method handleSearchCode(args: any)',
+            },
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is partial index search warning emitted',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results[0].symbolLabel, 'async method handleSearchCode(args: any)');
+        assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
+        assert.equal(payload.results[1].symbolLabel, 'method buildReindexHint(codebasePath: string)');
+    });
+});
+
+test('handleSearchCode repairs symbol-only file-owner results to tighter outline symbols with strong evidence', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/stack.rs';
+            const content = [
+                'pub struct Stack { value: i32 }',
+                '',
+                'impl Stack {',
+                '  pub fn new() -> Self { Stack { value: 0 } }',
+                '  pub fn push(&mut self, value: i32) { self.value = value; }',
+                '}',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            const { symbols } = await writeSearchNavigationSidecars({
+                repoPath,
+                relativePath,
+                content,
+                language: 'rust',
+                chunks: [{ content, startLine: 1, endLine: 6 }],
+                extractedSymbols: [
+                    { kind: 'type', name: 'Stack', label: 'type Stack', qualifiedName: 'Stack', span: { startLine: 1, endLine: 1 } },
+                    { kind: 'method', name: 'new', label: 'method new', qualifiedName: 'Stack.new', parentQualifiedNamePath: ['type Stack'], span: { startLine: 4, endLine: 4 } },
+                    { kind: 'method', name: 'push', label: 'method push', qualifiedName: 'Stack.push', parentQualifiedNamePath: ['type Stack'], span: { startLine: 5, endLine: 5 } },
+                ],
+            });
+            const fileOwner = symbols.find((symbol) => symbol.kind === 'file');
+            const push = symbols.find((symbol) => symbol.kind === 'method' && symbol.name === 'push');
+            assert.ok(fileOwner);
+            assert.ok(push);
+            const handlers = createHandlers(repoPath, [{
+                content,
+                relativePath,
+                startLine: 1,
+                endLine: 6,
+                language: 'rust',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_stack_file_chunk',
+                symbolKind: 'file',
+                ownerSymbolKey: fileOwner.symbolKey,
+                ownerSymbolInstanceId: fileOwner.symbolInstanceId,
+            }]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'push Stack',
+                scope: 'mixed',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 3,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].symbolInstanceId, push.symbolInstanceId);
+            assert.equal(payload.results[0].symbolKind, 'method');
+            assert.equal(payload.results[0].callGraphHint.supported, false);
+            assert.equal(payload.results[0].callGraphHint.reason, 'unsupported_language');
+            assert.equal(payload.results[0].navigationFallback.fileOutlineWindow.args.file, relativePath);
+            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'registry_repair');
+        });
+    });
+});
+
+test('handleSearchCode does not repair file-owner chunks to arbitrary nested methods for broad type queries', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/stack.rs';
+            const content = [
+                'pub struct Stack { value: i32 }',
+                '',
+                'impl Stack {',
+                '  pub fn new() -> Self { Stack { value: 0 } }',
+                '  pub fn push(&mut self, value: i32) { self.value = value; }',
+                '}',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            const { symbols } = await writeSearchNavigationSidecars({
+                repoPath,
+                relativePath,
+                content,
+                language: 'rust',
+                chunks: [{ content, startLine: 1, endLine: 6 }],
+                extractedSymbols: [
+                    { kind: 'type', name: 'Stack', label: 'type Stack', qualifiedName: 'Stack', span: { startLine: 1, endLine: 1 } },
+                    { kind: 'method', name: 'new', label: 'method new', qualifiedName: 'Stack.new', parentQualifiedNamePath: ['type Stack'], span: { startLine: 4, endLine: 4 } },
+                    { kind: 'method', name: 'push', label: 'method push', qualifiedName: 'Stack.push', parentQualifiedNamePath: ['type Stack'], span: { startLine: 5, endLine: 5 } },
+                ],
+            });
+            const fileOwner = symbols.find((symbol) => symbol.kind === 'file');
+            const stack = symbols.find((symbol) => symbol.kind === 'type' && symbol.name === 'Stack');
+            assert.ok(fileOwner);
+            assert.ok(stack);
+            const handlers = createHandlers(repoPath, [{
+                content,
+                relativePath,
+                startLine: 1,
+                endLine: 6,
+                language: 'rust',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_stack_file_chunk',
+                symbolKind: 'file',
+                ownerSymbolKey: fileOwner.symbolKey,
+                ownerSymbolInstanceId: fileOwner.symbolInstanceId,
+            }]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'Stack',
+                scope: 'mixed',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 3,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].symbolInstanceId, stack.symbolInstanceId);
+            assert.equal(payload.results[0].symbolKind, 'type');
+            assert.notEqual(payload.results[0].symbolLabel, 'method new');
+            assert.notEqual(payload.results[0].symbolLabel, 'method push');
+        });
+    });
+});
+
+test('handleSearchCode does not repair ambiguous broad file-owner matches to executable methods', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/warnings.ts';
+            const content = [
+                'export function warningLogin() {',
+                '  return "login warning";',
+                '}',
+                '',
+                'export function warningLogout() {',
+                '  return "logout warning";',
+                '}',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            const { symbols } = await writeSearchNavigationSidecars({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{ content, startLine: 1, endLine: 7 }],
+                extractedSymbols: [
+                    { kind: 'function', name: 'warningLogin', label: 'function warningLogin()', qualifiedName: 'warningLogin', span: { startLine: 1, endLine: 3 } },
+                    { kind: 'function', name: 'warningLogout', label: 'function warningLogout()', qualifiedName: 'warningLogout', span: { startLine: 5, endLine: 7 } },
+                ],
+            });
+            const fileOwner = symbols.find((symbol) => symbol.kind === 'file');
+            assert.ok(fileOwner);
+            const handlers = createHandlers(repoPath, [{
+                content,
+                relativePath,
+                startLine: 1,
+                endLine: 7,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_warning_file_chunk',
+                symbolKind: 'file',
+                ownerSymbolKey: fileOwner.symbolKey,
+                ownerSymbolInstanceId: fileOwner.symbolInstanceId,
+            }]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'warning',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 3,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].symbolInstanceId, fileOwner.symbolInstanceId);
+            assert.equal(payload.results[0].symbolKind, 'file');
+            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'owner_metadata');
+        });
+    });
+});
+
+test('handleSearchCode does not emit method graph hints from weak graph-capable file-owner repair', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/runtime.ts';
+            const content = [
+                'export function emitLogin() {',
+                '  return "warning";',
+                '}',
+                '',
+                'export function emitLogout() {',
+                '  return "done";',
+                '}',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            const { symbols } = await writeSearchNavigationSidecars({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{ content, startLine: 1, endLine: 7 }],
+                extractedSymbols: [
+                    { kind: 'function', name: 'emitLogin', label: 'function emitLogin()', qualifiedName: 'emitLogin', span: { startLine: 1, endLine: 3 } },
+                    { kind: 'function', name: 'emitLogout', label: 'function emitLogout()', qualifiedName: 'emitLogout', span: { startLine: 5, endLine: 7 } },
+                ],
+            });
+            const fileOwner = symbols.find((symbol) => symbol.kind === 'file');
+            const emitLogin = symbols.find((symbol) => symbol.kind === 'function' && symbol.name === 'emitLogin');
+            assert.ok(fileOwner);
+            assert.ok(emitLogin);
+            const handlers = createHandlers(repoPath, [{
+                content,
+                relativePath,
+                startLine: 1,
+                endLine: 7,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_runtime_file_chunk',
+                symbolKind: 'file',
+                ownerSymbolKey: fileOwner.symbolKey,
+                ownerSymbolInstanceId: fileOwner.symbolInstanceId,
+            }]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'warning',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 3,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].symbolInstanceId, fileOwner.symbolInstanceId);
+            assert.equal(payload.results[0].symbolKind, 'file');
+            assert.notEqual(payload.results[0].callGraphHint?.symbolRef?.symbolId, emitLogin.symbolInstanceId);
+            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'owner_metadata');
         });
     });
 });

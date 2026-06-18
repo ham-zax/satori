@@ -45,7 +45,7 @@ Profile behavior:
 
 All profiles still honor ignore rules and hard-deny secrets, lockfiles, binaries, generated output, bundles, source maps, logs, snapshots, and database dumps.
 
-`--install-guidance-hook` is Codex-only. It adds a marked `SessionStart` reminder hook to `~/.codex/config.toml` that prints the Satori discovery workflow; it does not run indexing, search, or provider-backed work.
+`--install-guidance-hook` is Codex-only. It adds a marked `SessionStart` reminder hook to `~/.codex/config.toml` that prints the Satori discovery workflow, suppresses duplicate startup prints for the same working directory, and does not run indexing, search, or provider-backed work.
 
 Typical first run:
 

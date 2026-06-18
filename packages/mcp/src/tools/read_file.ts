@@ -4,6 +4,11 @@ import { z } from "zod";
 import { isLanguageCapabilitySupportedForExtension } from "@zokizuan/satori-core";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { ensureAbsolutePath } from "../utils.js";
+import type {
+    ReadFileAnnotatedOutlineStatus,
+    ReadFileAnnotatedResponseEnvelope,
+    ReadFileOpenSymbolResponseEnvelope,
+} from "../core/search-types.js";
 
 const readFileInputSchema = z.object({
     path: z.string().min(1).describe("ABSOLUTE path to the file."),
@@ -319,16 +324,17 @@ export const readFileTool: McpTool = {
                         : undefined;
                     if (!resolvedRoot || !relativeFile) {
                         const nextSteps = buildRootDiscoveryNextSteps(absolutePath, ctx);
+                        const payload: ReadFileOpenSymbolResponseEnvelope = {
+                            status: "requires_reindex",
+                            message: "Cannot resolve codebase root for open_symbol. Resolve the indexed repo root first via list_codebases/manage_index status, then reindex that root and retry.",
+                            hints: {
+                                nextSteps
+                            }
+                        };
                         return {
                             content: [{
                                 type: "text",
-                                text: JSON.stringify({
-                                    status: "requires_reindex",
-                                    message: "Cannot resolve codebase root for open_symbol. Resolve the indexed repo root first via list_codebases/manage_index status, then reindex that root and retry.",
-                                    hints: {
-                                        nextSteps
-                                    }
-                                }, null, 2)
+                                text: JSON.stringify(payload, null, 2)
                             }],
                             isError: true
                         };
@@ -344,17 +350,18 @@ export const readFileTool: McpTool = {
                     });
                     const parsedOutline = JSON.parse(outlineResponse.content?.[0]?.text || "{}");
                     if (parsedOutline?.status !== "ok") {
+                        const payload: ReadFileOpenSymbolResponseEnvelope = {
+                            status: parsedOutline?.status || "not_found",
+                            message: parsedOutline?.message || "Failed to resolve open_symbol request.",
+                            file: relativeFile,
+                            ...(parsedOutline?.outline ? { matches: parsedOutline.outline.symbols } : {}),
+                            ...(parsedOutline?.warnings ? { warnings: parsedOutline.warnings } : {}),
+                            ...(parsedOutline?.hints ? { hints: parsedOutline.hints } : {})
+                        };
                         return {
                             content: [{
                                 type: "text",
-                                text: JSON.stringify({
-                                    status: parsedOutline?.status || "not_found",
-                                    message: parsedOutline?.message || "Failed to resolve open_symbol request.",
-                                    file: relativeFile,
-                                    ...(parsedOutline?.outline ? { matches: parsedOutline.outline.symbols } : {}),
-                                    ...(parsedOutline?.warnings ? { warnings: parsedOutline.warnings } : {}),
-                                    ...(parsedOutline?.hints ? { hints: parsedOutline.hints } : {})
-                                }, null, 2)
+                                text: JSON.stringify(payload, null, 2)
                             }],
                             isError: true
                         };
@@ -400,7 +407,7 @@ export const readFileTool: McpTool = {
             const relativeFile = resolvedRoot
                 ? normalizeRelativePath(path.relative(resolvedRoot, absolutePath))
                 : undefined;
-            let outlineStatus: "ok" | "requires_reindex" | "unsupported" | "ambiguous" = supportedByExtension ? "requires_reindex" : "unsupported";
+            let outlineStatus: ReadFileAnnotatedOutlineStatus = supportedByExtension ? "requires_reindex" : "unsupported";
             let outline: { symbols: unknown[] } | null = null;
             let hasMore = false;
             let warnings: string[] | undefined;
@@ -442,19 +449,20 @@ export const readFileTool: McpTool = {
                 }
             }
 
+            const payload: ReadFileAnnotatedResponseEnvelope = {
+                path: absolutePath,
+                mode: "annotated",
+                content: contentWithHint,
+                outlineStatus,
+                outline,
+                hasMore,
+                ...(warnings && warnings.length > 0 ? { warnings } : {}),
+                ...(hints ? { hints } : {})
+            };
             return {
                 content: [{
                     type: "text",
-                    text: JSON.stringify({
-                        path: absolutePath,
-                        mode: "annotated",
-                        content: contentWithHint,
-                        outlineStatus,
-                        outline,
-                        hasMore,
-                        ...(warnings && warnings.length > 0 ? { warnings } : {}),
-                        ...(hints ? { hints } : {})
-                    }, null, 2)
+                    text: JSON.stringify(payload, null, 2)
                 }]
             };
         } catch (error: any) {

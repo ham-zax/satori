@@ -113,6 +113,109 @@ test('fingerprint mismatch transitions searchable entry to requires_reindex', ()
     });
 });
 
+test('fingerprint mismatch reason and message persist after transition save/load', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-persisted-mismatch');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setCodebaseIndexed(codebase, {
+            indexedFiles: 3,
+            totalChunks: 12,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+        writer.saveCodebaseSnapshot();
+
+        const transitioningReader = new SnapshotManager(FINGERPRINT_B);
+        transitioningReader.loadCodebaseSnapshot();
+        const transition = transitioningReader.ensureFingerprintCompatibilityOnAccess(codebase);
+        assert.equal(transition.allowed, false);
+        assert.equal(transition.changed, true);
+        assert.equal(transition.reason, 'fingerprint_mismatch');
+        assert.match(transition.message || '', /Index fingerprint mismatch/);
+        transitioningReader.saveCodebaseSnapshot();
+
+        const persistedReader = new SnapshotManager(FINGERPRINT_B);
+        persistedReader.loadCodebaseSnapshot();
+        const persistedGate = persistedReader.ensureFingerprintCompatibilityOnAccess(codebase);
+        assert.equal(persistedGate.allowed, false);
+        assert.equal(persistedGate.changed, false);
+        assert.equal(persistedGate.reason, 'fingerprint_mismatch');
+        assert.equal(persistedGate.message, transition.message);
+
+        const persistedInfo = persistedReader.getCodebaseInfo(codebase);
+        assert.ok(persistedInfo);
+        if (persistedInfo.status !== 'requires_reindex') {
+            assert.fail(`Expected requires_reindex, received ${persistedInfo.status}`);
+        }
+        assert.equal(persistedInfo.reindexReason, 'fingerprint_mismatch');
+        assert.equal(persistedInfo.message, transition.message);
+    });
+});
+
+test('navigation recovery failure reason and message persist after save/load', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-navigation-recovery');
+        fs.mkdirSync(codebase, { recursive: true });
+        const message = 'Navigation recovery failed after ignore-rule reconciliation; full reindex is required.';
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setCodebaseIndexed(codebase, {
+            indexedFiles: 4,
+            totalChunks: 16,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+        writer.setCodebaseRequiresReindex(codebase, 'navigation_recovery_failed', message);
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const info = reader.getCodebaseInfo(codebase);
+        assert.ok(info);
+        if (info.status !== 'requires_reindex') {
+            assert.fail(`Expected requires_reindex, received ${info.status}`);
+        }
+        assert.equal(info.reindexReason, 'navigation_recovery_failed');
+        assert.equal(info.message, message);
+
+        const gate = reader.ensureFingerprintCompatibilityOnAccess(codebase);
+        assert.equal(gate.allowed, false);
+        assert.equal(gate.changed, false);
+        assert.equal(gate.reason, 'navigation_recovery_failed');
+        assert.equal(gate.message, message);
+    });
+});
+
+test('limit_reached index status persists after save/load', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-limit-reached');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setCodebaseIndexed(codebase, {
+            indexedFiles: 25,
+            totalChunks: 100,
+            status: 'limit_reached'
+        }, FINGERPRINT_A, 'verified');
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const info = reader.getCodebaseInfo(codebase);
+        assert.ok(info);
+        if (info.status !== 'indexed') {
+            assert.fail(`Expected indexed, received ${info.status}`);
+        }
+        assert.equal(info.indexStatus, 'limit_reached');
+        assert.equal(info.indexedFiles, 25);
+        assert.equal(info.totalChunks, 100);
+
+        const gate = reader.ensureFingerprintCompatibilityOnAccess(codebase);
+        assert.equal(gate.allowed, true);
+        assert.equal(gate.changed, false);
+    });
+});
+
 test('legacy schemaVersion v2 fingerprint transitions entry to requires_reindex under v3 runtime', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo');

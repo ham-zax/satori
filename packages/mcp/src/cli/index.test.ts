@@ -161,11 +161,15 @@ test("runCli treats structured non-ok envelope as tool error even when isError=f
         callTimeoutMs: 10000,
     });
 
-    const { stderr } = io.read();
+    const { stdout, stderr } = io.read();
     assert.equal(exitCode, 1);
     assert.equal(stderr.includes("E_TOOL_ERROR"), true);
     assert.equal(stderr.includes("status=not_ready"), true);
     assert.equal(stderr.includes("reason=indexing"), true);
+    const wrapped = JSON.parse(stdout);
+    const compactEnvelope = wrapped.content[0].text;
+    assert.equal(compactEnvelope, "{\"status\":\"not_ready\",\"reason\":\"indexing\"}");
+    assert.doesNotMatch(compactEnvelope, /\n\s+"/);
 });
 
 test("runCli install updates config without starting an MCP session", async () => {

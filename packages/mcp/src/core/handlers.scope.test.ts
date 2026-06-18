@@ -1186,12 +1186,16 @@ test('handleSearchCode exact registry fast path returns a grouped symbol without
                 debug: true,
             });
 
-            const payload = JSON.parse(response.content[0]?.text || '{}');
+            const rawText = response.content[0]?.text || '{}';
+            const payload = JSON.parse(rawText);
             assert.equal(payload.status, 'ok');
+            assert.doesNotMatch(rawText, /\n\s+"/);
             assert.equal(semanticSearchCalls, 0);
             assert.equal(rerankCalls, 0);
             assert.equal(payload.results.length, 1);
             assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(typeof payload.results[0].callGraphHint?.supported, 'boolean');
+            assert.equal(payload.results[0].nextActions?.openSymbol?.tool, 'read_file');
             assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('exact_registry'), true);
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('exact_registry'), true);
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), false);

@@ -23,7 +23,7 @@ import type { CodeChunk, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-c
 import { CapabilityResolver } from "./capabilities.js";
 import { SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
-import { SyncManager } from "./sync.js";
+import { SyncManager, type FreshnessDecision } from "./sync.js";
 import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint } from "../config.js";
 import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
@@ -944,6 +944,78 @@ export class ToolHandlers {
             indexing: this.buildIndexingMetadata(codebasePath),
             results: []
         } as SearchResponseEnvelope;
+    }
+
+    private buildFreshnessBlockedSearchPayload(
+        codebasePath: string,
+        freshnessDecision: FreshnessDecision,
+        searchContext: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        }
+    ): SearchResponseEnvelope | null {
+        if (freshnessDecision.mode === 'skipped_requires_reindex') {
+            const detail = freshnessDecision.errorMessage
+                ? `Search blocked because this codebase requires reindex (${freshnessDecision.errorMessage}).`
+                : 'Search blocked because this codebase requires reindex.';
+            const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
+            return {
+                ...payload,
+                freshnessDecision
+            };
+        }
+
+        if (freshnessDecision.mode === 'skipped_missing_path') {
+            return {
+                status: "not_indexed",
+                reason: "not_indexed",
+                codebasePath,
+                path: searchContext.path,
+                query: searchContext.query,
+                scope: searchContext.scope,
+                groupBy: searchContext.groupBy,
+                resultMode: searchContext.resultMode,
+                limit: searchContext.limit,
+                freshnessDecision,
+                message: `Indexed codebase path '${codebasePath}' no longer exists. Search cannot serve stale vector results for this path.`,
+                hints: {
+                    create: this.buildCreateHint(searchContext.path)
+                },
+                results: []
+            } as SearchResponseEnvelope;
+        }
+
+        if (freshnessDecision.mode === 'ignore_reload_failed') {
+            const fallbackLine = freshnessDecision.fallbackSyncExecuted
+                ? ' Fallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
+                : '';
+            const detail = `Search blocked because ignore-rule reconciliation failed (${freshnessDecision.errorMessage || 'unknown_ignore_reload_error'}).${fallbackLine}`;
+            const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
+            return {
+                ...payload,
+                freshnessDecision
+            };
+        }
+
+        if (freshnessDecision.mode === 'coalesced'
+            && typeof freshnessDecision.errorMessage === 'string'
+            && freshnessDecision.errorMessage.trim().length > 0) {
+            const fallbackLine = freshnessDecision.fallbackSyncExecuted
+                ? ' Fallback incremental sync was executed, but freshness still could not be proven.'
+                : '';
+            const detail = `Search blocked because coalesced in-flight sync failed (${freshnessDecision.errorMessage}).${fallbackLine}`;
+            const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
+            return {
+                ...payload,
+                freshnessDecision
+            };
+        }
+
+        return null;
     }
 
     private buildVectorBackendSearchPayload(
@@ -5313,6 +5385,20 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 });
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                    meta: { searchDiagnostics }
+                };
+            }
+            const freshnessBlockedPayload = this.buildFreshnessBlockedSearchPayload(effectiveRoot, freshnessDecision, {
+                path: absolutePath,
+                query: input.query,
+                scope: input.scope,
+                groupBy: input.groupBy,
+                resultMode: input.resultMode,
+                limit: input.limit
+            });
+            if (freshnessBlockedPayload) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify(freshnessBlockedPayload, null, 2) }],
                     meta: { searchDiagnostics }
                 };
             }

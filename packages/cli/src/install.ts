@@ -53,7 +53,7 @@ const CODEX_ENV_TEMPLATE_LINES = [
     "# MILVUS_TOKEN = \"your-zilliz-token\"",
     CODEX_ENV_TEMPLATE_END,
 ] as const;
-const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: search_codebase -> file_outline -> call_graph -> read_file(open_symbol); reindex on requires_reindex/hints.reindex; trust navigationFallback.";
+const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: use search_codebase for plain-English behavior/concept discovery; then file_outline/call_graph/read_file for proof. Use exact ids/constants with operators. Reindex only on requires_reindex/hints.reindex; trust navigationFallback.";
 const CODEX_GUIDANCE_HOOK_SCRIPT = [
     `msg=${JSON.stringify(CODEX_GUIDANCE_HOOK_MESSAGE)}`,
     'key=$(printf "%s" "$PWD" | sed "s#[^A-Za-z0-9_.-]#_#g" | cut -c1-120)',
@@ -73,17 +73,18 @@ const CODEX_GUIDANCE_HOOK_SCRIPT = [
 const CODEX_GUIDANCE_HOOK_COMMAND = `sh -lc '${CODEX_GUIDANCE_HOOK_SCRIPT}'`;
 const OPENCODE_INSTRUCTIONS = `# Satori MCP
 
-This project uses Satori MCP for semantic code search, deterministic navigation, and index lifecycle management.
+This project uses Satori MCP for plain-English semantic code discovery, deterministic proof navigation, and index lifecycle management.
 
 ## Priority Order
-1. \`search_codebase\` - find candidate code by behavior, concept, or symbol
+1. \`search_codebase\` - start with behavior/concept queries; use exact identifiers or constants when known
 2. \`file_outline\` - lock exact symbol spans before reading or editing
 3. \`call_graph\` - inspect callers and callees when supported
 4. \`read_file\` - open exact spans or fallback windows
 5. \`manage_index\` - create, sync, reindex, or inspect index status
 
 ## Rules
-- Prefer Satori tools before grep/glob for code discovery.
+- Prefer Satori for semantic code discovery before grep/glob.
+- Start with plain-English behavior questions; switch to exact ids, constants, and operators for proof.
 - If a tool returns \`requires_reindex\`, run \`manage_index(action="reindex")\` and retry the original call.
 - Treat \`navigationFallback\` as authoritative when call graph is unavailable.
 - Read the relevant implementation and call sites before editing behavior.

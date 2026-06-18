@@ -1132,7 +1132,7 @@
               </div>
               <div class="tool-card">
                 <h3><code>search_codebase</code></h3>
-                <p>Finds relevant code with scoped semantic search, exact identifier lookup, symbol-owned grouping, freshness checks, and navigation hints.</p>
+                <p>Finds relevant code from plain-English behavior queries, exact identifier lookup, symbol-owned grouping, freshness checks, and navigation hints.</p>
                 <p class="refusal">Refuses stale or unsafe context when index gates require attention.</p>
               </div>
             </div>
@@ -1362,7 +1362,7 @@
           lifecycle operations are verified before local state is discarded.
         </p>
         <div class="pipeline-line">
-          Query -> search -> owner symbol -> exact reads -> freshness check -> agent guidance
+          Plain-English query -> semantic search -> owner symbol -> exact reads -> freshness check -> agent guidance
         </div>
         <div class="grid-2">
           <article class="card">
@@ -1469,7 +1469,7 @@
         <div class="flow-list">
           <div class="flow-step">
             <strong>Agent asks for the relevant implementation</strong>
-            <p><code>search_codebase</code> returns exact identifier hits or ranked code groups with freshness state and navigation hints.</p>
+            <p><code>search_codebase</code> returns ranked behavior matches or exact identifier hits with freshness state and navigation hints.</p>
           </div>
           <div class="flow-step">
             <strong>Agent opens the exact symbol</strong>

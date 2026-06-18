@@ -5,7 +5,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 ## Outline of Discovered Behaviors (Complete)
 - Server boot lifecycle is split into a bootstrap entrypoint (`index.ts`) and server factory (`start-server.ts`), with run-mode gates for startup loops.
 - Canonical architecture path: Core sync state + vector store + sidecar + MCP handlers + 6 MCP tools.
-- North-star agent path: `search_codebase -> file_outline -> call_graph -> read_file(open_symbol)` with `navigationFallback` when graph is unavailable.
+- North-star agent path: plain-English `search_codebase` discovery first, then `file_outline -> call_graph -> read_file(open_symbol)` for deterministic proof with `navigationFallback` when graph is unavailable.
 - Exactly six MCP tools are exposed via registry: `list_codebases`, `manage_index`, `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - `satori-cli` is a shell client of the same six MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
 - `satori-cli` also ships CLI-only `install` and `uninstall` commands for supported clients; these commands run before MCP session startup and do not widen the six-tool surface.

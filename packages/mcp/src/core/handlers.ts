@@ -3470,6 +3470,7 @@ export class ToolHandlers {
             if (exactMatches.length === 0) {
                 return {
                     status: 'not_found',
+                    reason: 'missing_symbol',
                     path: input.codebaseRoot,
                     file: input.file,
                     outline: null,
@@ -6003,6 +6004,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 if (languageStatus !== 'ok') {
                     const payload: FileOutlineResponseEnvelope = {
                         status: 'unsupported',
+                        reason: 'unsupported_language',
                         path: effectiveRoot,
                         file: normalizedFile,
                         outline: null,
@@ -6017,7 +6019,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
                     ...args,
                     file: normalizedFile
-                }, `File '${normalizedFile}' is missing from the symbol registry for this snapshot.`), proofDebugHint);
+                }, `File '${normalizedFile}' is missing from the symbol registry for this snapshot.`, 'missing_symbol_registry'), proofDebugHint);
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
                 };
@@ -6027,7 +6029,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
                     ...args,
                     file: normalizedFile
-                }, `Symbol registry is incompatible: ${registryState.reason}`), proofDebugHint);
+                }, `Symbol registry is incompatible: ${registryState.reason}`, 'incompatible_symbol_registry'), proofDebugHint);
                 return {
                     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
                 };
@@ -6036,6 +6038,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             if (this.getOutlineStatusForLanguage(normalizedFile) !== 'ok') {
                 const payload: FileOutlineResponseEnvelope = {
                     status: 'unsupported',
+                    reason: 'unsupported_language',
                     path: effectiveRoot,
                     file: normalizedFile,
                     outline: null,
@@ -6050,7 +6053,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
                 ...args,
                 file: normalizedFile
-            }, registryState.reason), proofDebugHint);
+            }, registryState.reason, 'missing_symbol_registry'), proofDebugHint);
             return {
                 content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
             };

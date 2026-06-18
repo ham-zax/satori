@@ -214,7 +214,7 @@ test('handleFileOutline returns requires_reindex when sidecar metadata is missin
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'requires_reindex');
-        assert.equal(payload.reason, 'requires_reindex');
+        assert.equal(payload.reason, 'missing_symbol_registry');
         assert.equal(payload.file, 'src/runtime.ts');
         assert.equal(payload.hints.reindex.args.path, repoPath);
     });
@@ -253,7 +253,7 @@ test('handleFileOutline returns requires_reindex, not unsupported, for Go/Rust w
             const payload = JSON.parse(response.content[0]?.text || '{}');
 
             assert.equal(payload.status, 'requires_reindex');
-            assert.equal(payload.reason, 'requires_reindex');
+            assert.equal(payload.reason, 'missing_symbol_registry');
             assert.equal(payload.file, file);
             assert.notEqual(payload.status, 'unsupported');
             assert.equal(payload.hints.reindex.args.path, repoPath);

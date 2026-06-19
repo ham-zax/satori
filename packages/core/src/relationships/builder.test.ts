@@ -19,12 +19,14 @@ function createSymbol(input: {
     startLine: number;
     endLine: number;
     fileHash: string;
+    language?: string;
     parentQualifiedNamePath?: string[];
 }): SymbolRecord {
     const parentQualifiedNamePath = input.parentQualifiedNamePath || [];
+    const language = input.language || 'typescript';
     const symbolKey = createSymbolKey({
         relativePath: input.file,
-        language: 'typescript',
+        language,
         kind: input.kind,
         qualifiedName: input.qualifiedName,
         parentQualifiedNamePath,
@@ -38,7 +40,7 @@ function createSymbol(input: {
             span,
             extractorVersion: 'test-extractor-v1',
         }),
-        language: 'typescript',
+        language,
         kind: input.kind,
         name: input.name,
         qualifiedName: input.qualifiedName,
@@ -470,6 +472,127 @@ test('buildRelationshipsForRegistry creates conservative IMPORTS and EXPORTS fil
             file: 'src/routes.ts',
             line: 4,
             confidence: 'low',
+        },
+    ]);
+});
+
+test('buildRelationshipsForRegistry creates Python IMPORTS and top-level EXPORTS for relative module calls', () => {
+    const telemetryContent = [
+        'def build_entry_telemetry():',
+        '    return None',
+    ].join('\n');
+    const phasesContent = [
+        'from .telemetry import build_entry_telemetry',
+        '',
+        'def _attach_entry_telemetry():',
+        '    return build_entry_telemetry()',
+    ].join('\n');
+    const telemetryFile = createSynthesizedFileSymbol({
+        relativePath: 'src/telemetry.py',
+        language: 'python',
+        content: telemetryContent,
+        fileHash: 'hash-telemetry',
+        extractorVersion: 'test-extractor-v1',
+    });
+    const phasesFile = createSynthesizedFileSymbol({
+        relativePath: 'src/phases.py',
+        language: 'python',
+        content: phasesContent,
+        fileHash: 'hash-phases',
+        extractorVersion: 'test-extractor-v1',
+    });
+    const buildEntryTelemetry = createSymbol({
+        file: 'src/telemetry.py',
+        kind: 'function',
+        name: 'build_entry_telemetry',
+        qualifiedName: 'build_entry_telemetry',
+        label: 'function build_entry_telemetry()',
+        startLine: 1,
+        endLine: 2,
+        fileHash: 'hash-telemetry',
+        language: 'python',
+    });
+    const attachEntryTelemetry = createSymbol({
+        file: 'src/phases.py',
+        kind: 'function',
+        name: '_attach_entry_telemetry',
+        qualifiedName: '_attach_entry_telemetry',
+        label: 'function _attach_entry_telemetry()',
+        startLine: 3,
+        endLine: 4,
+        fileHash: 'hash-phases',
+        language: 'python',
+    });
+    const registry = buildSymbolRegistry({
+        manifest: {
+            schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+            normalizedRootPath: '/repo',
+            rootFingerprint: 'root-fingerprint',
+            indexPolicyHash: 'policy-hash',
+            languageRouterVersion: 'router-v1',
+            extractorVersion: 'test-extractor-v1',
+            relationshipVersion: 'relationship-v1',
+            builtAt: '2026-06-17T00:00:00.000Z',
+            files: [
+                { path: 'src/phases.py', hash: 'hash-phases', language: 'python', symbolCount: 2 },
+                { path: 'src/telemetry.py', hash: 'hash-telemetry', language: 'python', symbolCount: 2 },
+            ],
+        },
+        symbols: [phasesFile, attachEntryTelemetry, telemetryFile, buildEntryTelemetry],
+    });
+
+    const records = buildRelationshipsForRegistry({
+        registry,
+        contentByFile: new Map([
+            ['src/phases.py', phasesContent],
+            ['src/telemetry.py', telemetryContent],
+        ]),
+    });
+
+    assert.deepEqual(records.map((record) => ({
+        type: record.type,
+        source: record.sourceInstanceId,
+        target: record.targetInstanceId,
+        targetPath: record.targetPath,
+        file: record.file,
+        line: record.span?.startLine,
+        confidence: record.confidence,
+    })), [
+        {
+            type: 'IMPORTS',
+            source: phasesFile.symbolInstanceId,
+            target: telemetryFile.symbolInstanceId,
+            targetPath: 'src/telemetry.py',
+            file: 'src/phases.py',
+            line: 1,
+            confidence: 'high',
+        },
+        {
+            type: 'EXPORTS',
+            source: phasesFile.symbolInstanceId,
+            target: attachEntryTelemetry.symbolInstanceId,
+            targetPath: undefined,
+            file: 'src/phases.py',
+            line: 3,
+            confidence: 'high',
+        },
+        {
+            type: 'CALLS',
+            source: attachEntryTelemetry.symbolInstanceId,
+            target: buildEntryTelemetry.symbolInstanceId,
+            targetPath: undefined,
+            file: 'src/phases.py',
+            line: 4,
+            confidence: 'low',
+        },
+        {
+            type: 'EXPORTS',
+            source: telemetryFile.symbolInstanceId,
+            target: buildEntryTelemetry.symbolInstanceId,
+            targetPath: undefined,
+            file: 'src/telemetry.py',
+            line: 1,
+            confidence: 'high',
         },
     ]);
 });

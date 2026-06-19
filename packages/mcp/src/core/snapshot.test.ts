@@ -6,6 +6,16 @@ import path from 'node:path';
 import { SnapshotManager } from './snapshot.js';
 import { IndexFingerprint } from '../config.js';
 
+type SnapshotPrivateAccess = {
+    shouldBreakStaleLock(lockPath: string): boolean;
+    sleepSync(ms: number): boolean;
+    acquireSnapshotLock(): { fd: number; path: string } | null;
+    refreshDerivedState(): void;
+};
+type SnapshotDirtyView = { isDirty: boolean };
+type IndexedInfoView = { indexedFiles?: number; ignoreRulesVersion?: number };
+type IndexingInfoView = { indexingPercentage?: number };
+
 const FINGERPRINT_A: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
@@ -603,7 +613,7 @@ test('setIndexedFileCount updates snapshot entry immutably', () => {
         assert.ok(after);
         assert.equal(after?.status, 'indexed');
         assert.equal(after?.indexedFiles, 9);
-        assert.equal((before as any).indexedFiles, 4);
+        assert.equal((before as IndexedInfoView).indexedFiles, 4);
         assert.notEqual(before, after);
     });
 });
@@ -616,8 +626,8 @@ test('stale lock with live pid is not breakable', () => {
         const staleDate = new Date(Date.now() - 60_000);
         fs.utimesSync(lock, staleDate, staleDate);
 
-        const manager = new SnapshotManager(FINGERPRINT_A) as any;
-        assert.equal(manager.shouldBreakStaleLock(lock), false);
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        assert.equal((manager as unknown as SnapshotPrivateAccess).shouldBreakStaleLock(lock), false);
     });
 });
 
@@ -629,8 +639,8 @@ test('stale lock with dead pid is breakable', () => {
         const staleDate = new Date(Date.now() - 60_000);
         fs.utimesSync(lock, staleDate, staleDate);
 
-        const manager = new SnapshotManager(FINGERPRINT_A) as any;
-        assert.equal(manager.shouldBreakStaleLock(lock), true);
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        assert.equal((manager as unknown as SnapshotPrivateAccess).shouldBreakStaleLock(lock), true);
     });
 });
 
@@ -642,8 +652,8 @@ test('metadata-less stale lock is not breakable at normal stale threshold', () =
         const staleDate = new Date(Date.now() - 60_000);
         fs.utimesSync(lock, staleDate, staleDate);
 
-        const manager = new SnapshotManager(FINGERPRINT_A) as any;
-        assert.equal(manager.shouldBreakStaleLock(lock), false);
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        assert.equal((manager as unknown as SnapshotPrivateAccess).shouldBreakStaleLock(lock), false);
     });
 });
 
@@ -655,8 +665,8 @@ test('metadata-less very stale lock is breakable', () => {
         const staleDate = new Date(Date.now() - 6 * 60_000);
         fs.utimesSync(lock, staleDate, staleDate);
 
-        const manager = new SnapshotManager(FINGERPRINT_A) as any;
-        assert.equal(manager.shouldBreakStaleLock(lock), true);
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        assert.equal((manager as unknown as SnapshotPrivateAccess).shouldBreakStaleLock(lock), true);
     });
 });
 
@@ -667,7 +677,7 @@ test('lock retry exits without spin when sleep path is unavailable', () => {
         fs.writeFileSync(file, JSON.stringify({ formatVersion: 'v3', codebases: {}, lastUpdated: new Date().toISOString() }));
         fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
 
-        const manager = new SnapshotManager(FINGERPRINT_A) as any;
+        const manager = new SnapshotManager(FINGERPRINT_A) as unknown as SnapshotPrivateAccess;
         let sleepCalls = 0;
         manager.sleepSync = () => {
             sleepCalls += 1;
@@ -688,7 +698,7 @@ test('stale-lock break path exits cleanly when wait path is unavailable', () => 
         const staleDate = new Date(Date.now() - 60_000);
         fs.utimesSync(lock, staleDate, staleDate);
 
-        const manager = new SnapshotManager(FINGERPRINT_A) as any;
+        const manager = new SnapshotManager(FINGERPRINT_A) as unknown as SnapshotPrivateAccess;
         let sleepCalls = 0;
         manager.sleepSync = () => {
             sleepCalls += 1;
@@ -732,7 +742,7 @@ test('stale indexing entry does not outrank fresh lower progress indexing state'
         const info = reader.getCodebaseInfo(codebase);
         assert.ok(info);
         assert.equal(info?.status, 'indexing');
-        assert.equal((info as any).indexingPercentage, 0);
+        assert.equal((info as IndexingInfoView).indexingPercentage, 0);
     });
 });
 
@@ -758,7 +768,7 @@ test('merge precedence keeps local indexing over newer searchable disk state', (
         const info = reader.getCodebaseInfo(codebase);
         assert.ok(info);
         assert.equal(info?.status, 'indexing');
-        assert.equal((info as any).indexingPercentage, 80);
+        assert.equal((info as IndexingInfoView).indexingPercentage, 80);
     });
 });
 
@@ -918,7 +928,7 @@ test('loadCodebaseSnapshot does not force-save clean v3 snapshots', () => {
         }, FINGERPRINT_A, 'verified');
         writer.saveCodebaseSnapshot();
 
-        const loader = new SnapshotManager(FINGERPRINT_A) as any;
+        const loader = new SnapshotManager(FINGERPRINT_A);
         loader.saveCodebaseSnapshot = () => {
             throw new Error('unexpected save for clean v3 load');
         };
@@ -950,7 +960,7 @@ test('loadCodebaseSnapshot triggers persistence for migrated v2 snapshot', () =>
             lastUpdated: new Date().toISOString()
         }, null, 2));
 
-        const loader = new SnapshotManager(FINGERPRINT_A) as any;
+        const loader = new SnapshotManager(FINGERPRINT_A);
         let persisted = false;
         loader.saveCodebaseSnapshot = (forceWrite = false) => {
             persisted = forceWrite === true;
@@ -1016,7 +1026,7 @@ test('metadata-only setters skip derived-state refresh and keep derived fields',
         const codebase = path.join(homeDir, 'repo-meta');
         fs.mkdirSync(codebase, { recursive: true });
 
-        const manager = new SnapshotManager(FINGERPRINT_A) as any;
+        const manager = new SnapshotManager(FINGERPRINT_A);
         manager.setCodebaseIndexed(codebase, {
             indexedFiles: 6,
             totalChunks: 15,
@@ -1024,7 +1034,7 @@ test('metadata-only setters skip derived-state refresh and keep derived fields',
         }, FINGERPRINT_A, 'verified');
 
         let refreshCalls = 0;
-        manager.refreshDerivedState = () => {
+        (manager as unknown as SnapshotPrivateAccess).refreshDerivedState = () => {
             refreshCalls += 1;
         };
 
@@ -1044,7 +1054,7 @@ test('metadata-only setters skip derived-state refresh and keep derived fields',
         const info = manager.getCodebaseInfo(codebase);
         assert.ok(info);
         assert.equal(info?.status, 'indexed');
-        assert.equal((info as any).indexedFiles, 6);
+        assert.equal((info as IndexedInfoView).indexedFiles, 6);
         assert.equal(refreshCalls, 0);
     });
 });
@@ -1136,7 +1146,7 @@ test('negative ignore rules version is rejected', () => {
 
         const info = manager.getCodebaseInfo(codebase);
         assert.ok(info);
-        assert.equal((info as any).ignoreRulesVersion, 3);
+        assert.equal((info as IndexedInfoView).ignoreRulesVersion, 3);
     });
 });
 
@@ -1148,14 +1158,14 @@ test('dirty flag remains true when save is skipped due to lock contention', () =
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
 
-        const manager = new SnapshotManager(FINGERPRINT_A) as any;
+        const manager = new SnapshotManager(FINGERPRINT_A);
         manager.setCodebaseIndexed(codebase, {
             indexedFiles: 1,
             totalChunks: 1,
             status: 'completed'
         }, FINGERPRINT_A, 'verified');
-        manager.sleepSync = () => false;
+        (manager as unknown as SnapshotPrivateAccess).sleepSync = () => false;
         manager.saveCodebaseSnapshot();
-        assert.equal(manager.isDirty, true);
+        assert.equal((manager as unknown as SnapshotDirtyView).isDirty, true);
     });
 });

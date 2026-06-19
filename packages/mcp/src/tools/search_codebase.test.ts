@@ -23,16 +23,19 @@ function buildConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfi
 function captureTelemetry(run: () => Promise<void>): Promise<string[]> {
     const lines: string[] = [];
     const originalWrite = process.stderr.write.bind(process.stderr);
-    (process.stderr.write as any) = (chunk: any, ...args: any[]) => {
+    process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
         const text = String(chunk);
         if (text.includes('[TELEMETRY]')) {
             lines.push(text.trim());
         }
-        return originalWrite(chunk, ...args);
-    };
+        return originalWrite(
+            chunk as string,
+            ...(args as [NodeJS.BufferEncoding?, ((err?: Error) => void)?])
+        );
+    }) as typeof process.stderr.write;
 
     return run().finally(() => {
-        (process.stderr.write as any) = originalWrite;
+        process.stderr.write = originalWrite as typeof process.stderr.write;
     }).then(() => lines);
 }
 

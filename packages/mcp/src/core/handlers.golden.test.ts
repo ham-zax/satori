@@ -43,6 +43,25 @@ type GoldenContext = {
     symbols?: SymbolRecord[];
 };
 
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type ToolTextResponse = { content?: Array<{ text?: string }> };
+type SearchFixtureResult = {
+    content: string;
+    relativePath: string;
+    startLine: number;
+    endLine: number;
+    language: string;
+    score: number;
+    indexedAt: string;
+    symbolId: string;
+    symbolLabel: string;
+};
+type TestableToolHandlers = ToolHandlers & {
+    validateCompletionProof(repoPath: string): Promise<{ outcome: 'ok' }>;
+};
+
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-golden-'));
     const repoPath = path.join(tempDir, 'repo');
@@ -211,7 +230,7 @@ async function writeSearchNavigationSidecars(input: {
     return { symbols, manifestHash, fileHash };
 }
 
-function createSnapshotManager(repoPath: string, info: Record<string, unknown> = { status: 'indexed' }) {
+function createSnapshotManager(repoPath: string, info: Record<string, unknown> = { status: 'indexed' }): HandlerSnapshotManager {
     return {
         getAllCodebases: () => [{ path: repoPath, info }],
         getIndexedCodebases: () => [repoPath],
@@ -221,15 +240,15 @@ function createSnapshotManager(repoPath: string, info: Record<string, unknown> =
         getCodebaseCallGraphSidecar: () => undefined,
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
         saveCodebaseSnapshot: () => undefined,
-    } as any;
+    } as unknown as HandlerSnapshotManager;
 }
 
-function createHandlers(repoPath: string, searchResults: any[] = []) {
+function createHandlers(repoPath: string, searchResults: SearchFixtureResult[] = []) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         getVectorStore: () => ({ listCollections: async () => [] }),
         semanticSearch: async () => searchResults,
-    } as any;
+    } as unknown as HandlerContext;
     const syncManager = {
         ensureFreshness: async () => ({
             mode: 'skipped_recent',
@@ -237,18 +256,19 @@ function createHandlers(repoPath: string, searchResults: any[] = []) {
             thresholdMs: 180000,
         }),
         touchWatchedCodebase: async () => undefined,
-    } as any;
+    } as unknown as HandlerSyncManager;
 
+    const snapshotManager = createSnapshotManager(repoPath);
     const handlers = new ToolHandlers(
         context,
-        createSnapshotManager(repoPath),
+        snapshotManager,
         syncManager,
         RUNTIME_FINGERPRINT,
         CAPABILITIES,
         () => Date.parse('2026-01-01T01:00:00.000Z'),
     );
-    (handlers as any).validateCompletionProof = async () => ({ outcome: 'ok' });
-    return { handlers, snapshotManager: createSnapshotManager(repoPath), syncManager };
+    (handlers as unknown as TestableToolHandlers).validateCompletionProof = async () => ({ outcome: 'ok' });
+    return { handlers, snapshotManager, syncManager };
 }
 
 function createFailedIndexHandlers(repoPath: string) {
@@ -264,7 +284,7 @@ function createFailedIndexHandlers(repoPath: string) {
         semanticSearch: async () => {
             throw new Error('semanticSearch should not run for failed indexes');
         },
-    } as any;
+    } as unknown as HandlerContext;
     const snapshotManager = {
         getAllCodebases: () => [{ path: repoPath, info: failedInfo }],
         getIndexedCodebases: () => [],
@@ -274,13 +294,13 @@ function createFailedIndexHandlers(repoPath: string) {
         getCodebaseCallGraphSidecar: () => undefined,
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
         saveCodebaseSnapshot: () => undefined,
-    } as any;
+    } as unknown as HandlerSnapshotManager;
     const syncManager = {
         ensureFreshness: async () => {
             throw new Error('ensureFreshness should not run for failed indexes');
         },
         touchWatchedCodebase: async () => undefined,
-    } as any;
+    } as unknown as HandlerSyncManager;
 
     return {
         handlers: new ToolHandlers(
@@ -314,7 +334,7 @@ function createReadFileToolContext(input: {
     };
 }
 
-function parsePayload(response: { content?: Array<{ text?: string }> }): any {
+function parsePayload(response: ToolTextResponse): unknown {
     return JSON.parse(response.content?.[0]?.text || '{}');
 }
 

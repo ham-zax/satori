@@ -22,6 +22,28 @@ const CAPABILITIES = new CapabilityResolver({
     encoderModel: 'voyage-4-large',
 });
 
+type SearchFixtureResult = {
+    content: string;
+    relativePath: string;
+    startLine: number;
+    endLine: number;
+    language: string;
+    score: number;
+    indexedAt: string;
+    symbolId: string;
+    symbolLabel: string;
+};
+
+type SearchResultView = {
+    file?: string;
+    groupId?: string;
+};
+
+type SearchPayloadView = {
+    status?: string;
+    results: SearchResultView[];
+};
+
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-eval-'));
     const repoPath = path.join(tempDir, 'repo');
@@ -31,18 +53,18 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     });
 }
 
-function createHandlers(repoPath: string, searchResults: any[]) {
+function createHandlers(repoPath: string, searchResults: SearchFixtureResult[]) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         semanticSearch: async (_root: string, _query: string, topK: number) => searchResults.slice(0, topK)
-    } as any;
+    } as unknown as ConstructorParameters<typeof ToolHandlers>[0];
 
     const snapshotManager = {
         getAllCodebases: () => [],
         getIndexedCodebases: () => [repoPath],
         getIndexingCodebases: () => [],
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-    } as any;
+    } as unknown as ConstructorParameters<typeof ToolHandlers>[1];
 
     const syncManager = {
         ensureFreshness: async () => ({
@@ -50,13 +72,13 @@ function createHandlers(repoPath: string, searchResults: any[]) {
             checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
             thresholdMs: 180000
         })
-    } as any;
+    } as unknown as ConstructorParameters<typeof ToolHandlers>[2];
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, () => Date.parse('2026-01-01T01:00:00.000Z'));
     return handlers;
 }
 
-const FIXTURE_RESULTS = [
+const FIXTURE_RESULTS: SearchFixtureResult[] = [
     {
         content: 'export const runtimeAuth = true;',
         relativePath: 'src/auth/runtime.ts',
@@ -137,9 +159,9 @@ test('search eval matrix invariants hold for runtime/docs scope and deterministi
                 path: repoPath,
                 ...row.args
             });
-            const payload = JSON.parse(response.content[0]?.text || '{}');
+            const payload = JSON.parse(response.content[0]?.text || '{}') as SearchPayloadView;
             assert.equal(payload.status, 'ok', row.name);
-            const files = payload.results.map((result: any) => result.file);
+            const files = payload.results.map((result) => result.file);
             for (const includeFile of row.expectedIn) {
                 assert.equal(files.includes(includeFile), true, `${row.name} expected file '${includeFile}'`);
             }
@@ -165,10 +187,10 @@ test('search eval matrix invariants hold for runtime/docs scope and deterministi
             limit: 5
         });
 
-        const firstPayload = JSON.parse(first.content[0]?.text || '{}');
-        const secondPayload = JSON.parse(second.content[0]?.text || '{}');
-        const firstOrder = firstPayload.results.map((result: any) => `${result.groupId}:${result.file}`);
-        const secondOrder = secondPayload.results.map((result: any) => `${result.groupId}:${result.file}`);
+        const firstPayload = JSON.parse(first.content[0]?.text || '{}') as SearchPayloadView;
+        const secondPayload = JSON.parse(second.content[0]?.text || '{}') as SearchPayloadView;
+        const firstOrder = firstPayload.results.map((result) => `${result.groupId}:${result.file}`);
+        const secondOrder = secondPayload.results.map((result) => `${result.groupId}:${result.file}`);
         assert.deepEqual(firstOrder, secondOrder);
     });
 });

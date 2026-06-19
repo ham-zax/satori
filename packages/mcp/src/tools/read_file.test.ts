@@ -9,6 +9,7 @@ import { ToolContext } from './types.js';
 import { ToolHandlers } from '../core/handlers.js';
 import { CapabilityResolver } from '../core/capabilities.js';
 import { IndexFingerprint } from '../config.js';
+import type { FileOutlineInput } from '../core/search-types.js';
 import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRecordsForFile,
@@ -16,6 +17,11 @@ import {
     writeSymbolRegistrySidecar,
 } from '@zokizuan/satori-core';
 import type { SymbolRegistryManifest } from '@zokizuan/satori-core';
+
+type SnapshotManagerLike = ToolContext['snapshotManager'];
+type SyncManagerLike = ToolContext['syncManager'];
+type ToolHandlersLike = ToolContext['toolHandlers'];
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -148,12 +154,12 @@ test('read_file touches the resolved indexed codebase root on successful reads',
                         path: repoPath,
                         info: { status: 'indexed' }
                     }]
-                } as any,
+                } as unknown as SnapshotManagerLike,
                 syncManager: {
                     touchWatchedCodebase: async (codebasePath: string) => {
                         touched.push(codebasePath);
                     }
-                } as any
+                } as unknown as SyncManagerLike
             }
         );
 
@@ -183,7 +189,7 @@ test('read_file refreshes snapshot state before resolving indexed roots', async 
                         path: repoPath,
                         info: { status: 'indexed' }
                     }]
-                } as any,
+                } as unknown as SnapshotManagerLike,
             }
         );
 
@@ -206,7 +212,7 @@ test('read_file does not touch watcher state when no indexed codebase root resol
                     touchWatchedCodebase: async (codebasePath: string) => {
                         touched.push(codebasePath);
                     }
-                } as any
+                } as unknown as SyncManagerLike
             }
         );
 
@@ -302,7 +308,7 @@ test('read_file returns not_ready envelope when parent codebase is indexing', as
                         lastUpdated: '2026-02-27T23:57:03.000Z'
                     }
                 }]
-            } as any
+            } as unknown as SnapshotManagerLike
         });
 
         assert.equal(response.isError, undefined);
@@ -333,7 +339,7 @@ test('read_file annotated mode returns content and outline metadata when outline
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as any,
+            } as unknown as SnapshotManagerLike,
             toolHandlers: {
                 handleFileOutline: async () => ({
                     content: [{
@@ -360,7 +366,7 @@ test('read_file annotated mode returns content and outline metadata when outline
                         })
                     }]
                 })
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         const payload = JSON.parse(response.content[0].text);
@@ -383,7 +389,7 @@ test('read_file annotated mode degrades gracefully when outline is unavailable',
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => []
-            } as any
+            } as unknown as SnapshotManagerLike
         });
 
         const payload = JSON.parse(response.content[0].text);
@@ -408,7 +414,7 @@ test('read_file annotated mode treats JavaScript files as outline-capable', asyn
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => []
-            } as any
+            } as unknown as SnapshotManagerLike
         });
 
         const payload = JSON.parse(response.content[0].text);
@@ -432,7 +438,7 @@ test('read_file annotated mode treats Go and Rust files as outline-capable', asy
             }, 1000, {
                 snapshotManager: {
                     getAllCodebases: () => []
-                } as any
+                } as unknown as SnapshotManagerLike
             });
 
             const payload = JSON.parse(response.content[0].text);
@@ -459,9 +465,9 @@ test('read_file open_symbol treats symbolId as canonical symbolInstanceId on exa
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as any,
+            } as unknown as SnapshotManagerLike,
             toolHandlers: {
-                handleFileOutline: async (args: any) => {
+                handleFileOutline: async (args: FileOutlineInput) => {
                     assert.equal(args.resolveMode, 'exact');
                     assert.equal(args.symbolIdExact, 'sym_runtime_instance');
                     return {
@@ -487,7 +493,7 @@ test('read_file open_symbol treats symbolId as canonical symbolInstanceId on exa
                         }]
                     };
                 }
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         assert.equal(response.isError, undefined);
@@ -579,13 +585,13 @@ test('read_file open_symbol opens source-repaired Python multiline function span
             getCodebaseInfo: (codebasePath: string) => codebasePath === repoPath ? codebaseInfo : undefined,
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             saveCodebaseSnapshot: () => undefined,
-        } as any;
+        } as unknown as SnapshotManagerLike;
         const handlers = new ToolHandlers(
             {
                 getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            } as any,
+            } as unknown as HandlerContext,
             snapshotManager,
-            {} as any,
+            {} as unknown as SyncManagerLike,
             RUNTIME_FINGERPRINT,
             CAPABILITIES
         );
@@ -598,7 +604,7 @@ test('read_file open_symbol opens source-repaired Python multiline function span
         }, 1000, {
             snapshotManager,
             syncManager: {},
-            toolHandlers: handlers as any,
+            toolHandlers: handlers,
         });
 
         assert.equal(response.isError, undefined);
@@ -625,9 +631,9 @@ test('read_file open_symbol opens a Go symbol by symbolInstanceId through exact 
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as any,
+            } as unknown as SnapshotManagerLike,
             toolHandlers: {
-                handleFileOutline: async (args: any) => {
+                handleFileOutline: async (args: FileOutlineInput) => {
                     assert.equal(args.resolveMode, 'exact');
                     assert.equal(args.symbolIdExact, 'go_add_instance');
                     return {
@@ -653,7 +659,7 @@ test('read_file open_symbol opens a Go symbol by symbolInstanceId through exact 
                         }]
                     };
                 }
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         assert.equal(response.isError, undefined);

@@ -25,6 +25,14 @@ const CAPABILITIES = new CapabilityResolver({
     encoderModel: 'voyage-4-large',
 });
 
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type ToolTextResponse = { content?: Array<{ text?: string }> };
+type TestableToolHandlers = ToolHandlers & {
+    startBackgroundIndexing(codebasePath: string, forceReindex: boolean, writeCollectionName?: string): void | Promise<void>;
+};
+
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-manage-preflight-'));
     const repoPath = path.join(tempDir, 'repo');
@@ -38,7 +46,7 @@ function initGitRepo(repoPath: string): void {
     execFileSync('git', ['init', repoPath], { stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
-function parseManageEnvelope(response: any): ManageIndexResponseEnvelope {
+function parseManageEnvelope(response: ToolTextResponse): ManageIndexResponseEnvelope {
     const payload = response?.content?.[0]?.text;
     assert.equal(typeof payload, 'string');
     return JSON.parse(payload) as ManageIndexResponseEnvelope;
@@ -69,7 +77,7 @@ function createHandlers(
         addCustomExtensions: () => undefined,
         addCustomIgnorePatterns: () => undefined,
         clearIndex: async () => undefined,
-    } as any;
+    } as unknown as HandlerContext;
 
     const snapshotManager = {
         getAllCodebases: () => [],
@@ -81,15 +89,15 @@ function createHandlers(
         removeCodebaseCompletely: () => undefined,
         setCodebaseIndexing: () => undefined,
         saveCodebaseSnapshot: () => undefined,
-    } as any;
+    } as unknown as HandlerSnapshotManager;
 
     const syncManager = {
         unregisterCodebaseWatcher: async () => undefined,
         getWatchDebounceMs: () => 2000
-    } as any;
+    } as unknown as HandlerSyncManager;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-    (handlers as any).startBackgroundIndexing = () => undefined;
+    (handlers as unknown as TestableToolHandlers).startBackgroundIndexing = () => undefined;
     return handlers;
 }
 

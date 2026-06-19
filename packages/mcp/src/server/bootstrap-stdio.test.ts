@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { installBootstrapStdioSafety } from "./bootstrap-stdio.js";
+import { WritableStdoutLike } from "./stdio-safety.js";
 
 test("installBootstrapStdioSafety guards mcp stdout without blocking captured protocol writer", () => {
     const stdoutWrites: string[] = [];
     const stderrWrites: string[] = [];
-    const fakeStdout: Record<string, any> = {
+    const fakeStdout: WritableStdoutLike = {
         write(chunk: unknown) {
             stdoutWrites.push(String(chunk));
             return true;

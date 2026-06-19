@@ -9,6 +9,31 @@ import { IndexFingerprint } from '../config.js';
 import type { ManageIndexResponseEnvelope } from './manage-types.js';
 import type { RuntimeOwnerMutationGate } from './runtime-owner.js';
 
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type ToolTextResponse = { content?: Array<{ text?: string }> };
+type MutationCounters = {
+    collectionLimitCalls?: number;
+    setIndexingCalls?: number;
+    ensureFreshnessCalls?: number;
+    clearIndexCalls?: number;
+};
+type RuntimeOwnerHint = Array<{ pid?: number }>;
+type BackendHint = { nextSteps: string[] };
+type RuntimeMismatchHint = { indexedFingerprint?: string };
+type IndexingInfo = { status: 'indexing'; indexingPercentage: number; lastUpdated: string };
+type IndexFailedInfo = { status: 'indexfailed'; errorMessage: string; lastAttemptedPercentage?: number; lastUpdated: string };
+type IndexedInfo = {
+    status: 'indexed';
+    indexedFiles: number;
+    totalChunks: number;
+    indexStatus: 'completed';
+    indexFingerprint?: IndexFingerprint;
+    fingerprintSource?: 'verified';
+    lastUpdated: string;
+};
+
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
@@ -37,7 +62,7 @@ function createHandlers(repoPath: string): ToolHandlers {
     const context = {
         clearIndex: async () => undefined,
         reindexByChange: async () => ({ added: 0, removed: 0, modified: 0 })
-    } as any;
+    } as unknown as HandlerContext;
 
     const snapshotManager = {
         getAllCodebases: () => [{ path: repoPath, info: { status: 'indexing' } }],
@@ -51,17 +76,17 @@ function createHandlers(repoPath: string): ToolHandlers {
         }),
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
         saveCodebaseSnapshot: () => undefined
-    } as any;
+    } as unknown as HandlerSnapshotManager;
 
     const syncManager = {
         getWatchDebounceMs: () => 120000
-    } as any;
+    } as unknown as HandlerSyncManager;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
     return handlers;
 }
 
-function parseManageEnvelope(response: any): ManageIndexResponseEnvelope {
+function parseManageEnvelope(response: ToolTextResponse): ManageIndexResponseEnvelope {
     const payload = response?.content?.[0]?.text;
     assert.equal(typeof payload, 'string');
     return JSON.parse(payload) as ManageIndexResponseEnvelope;
@@ -106,12 +131,7 @@ function runtimeOwnerConflictGate(): RuntimeOwnerMutationGate {
     };
 }
 
-function createMutationReadyHandlers(repoPath: string, gate: RuntimeOwnerMutationGate, counters: {
-    collectionLimitCalls?: number;
-    setIndexingCalls?: number;
-    ensureFreshnessCalls?: number;
-    clearIndexCalls?: number;
-}): ToolHandlers {
+function createMutationReadyHandlers(repoPath: string, gate: RuntimeOwnerMutationGate, counters: MutationCounters): ToolHandlers {
     const context = {
         getVectorStore: () => ({
             checkCollectionLimit: async () => {
@@ -123,7 +143,7 @@ function createMutationReadyHandlers(repoPath: string, gate: RuntimeOwnerMutatio
             counters.clearIndexCalls = (counters.clearIndexCalls ?? 0) + 1;
         },
         resolveCollectionName: () => 'test_collection',
-    } as any;
+    } as unknown as HandlerContext;
 
     const snapshotManager = {
         getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
@@ -144,7 +164,7 @@ function createMutationReadyHandlers(repoPath: string, gate: RuntimeOwnerMutatio
             counters.setIndexingCalls = (counters.setIndexingCalls ?? 0) + 1;
         },
         markCodebaseCleared: () => undefined,
-    } as any;
+    } as unknown as HandlerSnapshotManager;
 
     const syncManager = {
         getWatchDebounceMs: () => 2000,
@@ -153,7 +173,7 @@ function createMutationReadyHandlers(repoPath: string, gate: RuntimeOwnerMutatio
             return { mode: 'synced', checkedAt: new Date().toISOString(), thresholdMs: 0, stats: { added: 0, removed: 0, modified: 0 } };
         },
         unwatchCodebase: async () => undefined,
-    } as any;
+    } as unknown as HandlerSyncManager;
 
     return new ToolHandlers(
         context,
@@ -181,7 +201,7 @@ test('handleIndexCodebase returns blocked manage message with status hint and re
 
 test('handleIndexCodebase blocks create before mutation when runtime owners conflict', async () => {
     await withTempRepo(async (repoPath) => {
-        const counters = {};
+        const counters: MutationCounters = {};
         const handlers = createMutationReadyHandlers(repoPath, runtimeOwnerConflictGate(), counters);
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
@@ -191,16 +211,16 @@ test('handleIndexCodebase blocks create before mutation when runtime owners conf
         assert.equal(envelope.status, 'blocked');
         assert.equal(envelope.reason, 'runtime_owner_conflict');
         assert.match(envelope.humanText, /multiple Satori runtimes/i);
-        assert.equal((envelope.hints?.runtimeOwners as any[])?.[0]?.pid, 4242);
+        assert.equal((envelope.hints?.runtimeOwners as RuntimeOwnerHint | undefined)?.[0]?.pid, 4242);
         assert.match(String(envelope.hints?.nextStep), /Restart all Satori MCP clients/i);
-        assert.equal((counters as any).collectionLimitCalls ?? 0, 0);
-        assert.equal((counters as any).setIndexingCalls ?? 0, 0);
+        assert.equal(counters.collectionLimitCalls ?? 0, 0);
+        assert.equal(counters.setIndexingCalls ?? 0, 0);
     });
 });
 
 test('handleReindexCodebase blocks before preflight and force cleanup when runtime owners conflict', async () => {
     await withTempRepo(async (repoPath) => {
-        const counters = {};
+        const counters: MutationCounters = {};
         const handlers = createMutationReadyHandlers(repoPath, runtimeOwnerConflictGate(), counters);
 
         const response = await handlers.handleReindexCodebase({ path: repoPath });
@@ -209,8 +229,8 @@ test('handleReindexCodebase blocks before preflight and force cleanup when runti
         assert.equal(envelope.action, 'reindex');
         assert.equal(envelope.status, 'blocked');
         assert.equal(envelope.reason, 'runtime_owner_conflict');
-        assert.equal((counters as any).collectionLimitCalls ?? 0, 0);
-        assert.equal((counters as any).setIndexingCalls ?? 0, 0);
+        assert.equal(counters.collectionLimitCalls ?? 0, 0);
+        assert.equal(counters.setIndexingCalls ?? 0, 0);
     });
 });
 
@@ -225,7 +245,7 @@ test('handleSyncCodebase returns blocked manage message with status hint and ret
 
 test('handleSyncCodebase blocks before freshness mutation when runtime owners conflict', async () => {
     await withTempRepo(async (repoPath) => {
-        const counters = {};
+        const counters: MutationCounters = {};
         const handlers = createMutationReadyHandlers(repoPath, runtimeOwnerConflictGate(), counters);
 
         const response = await handlers.handleSyncCodebase({ path: repoPath });
@@ -234,7 +254,7 @@ test('handleSyncCodebase blocks before freshness mutation when runtime owners co
         assert.equal(envelope.action, 'sync');
         assert.equal(envelope.status, 'blocked');
         assert.equal(envelope.reason, 'runtime_owner_conflict');
-        assert.equal((counters as any).ensureFreshnessCalls ?? 0, 0);
+        assert.equal(counters.ensureFreshnessCalls ?? 0, 0);
     });
 });
 
@@ -249,7 +269,7 @@ test('handleClearIndex returns blocked manage message with status hint and retry
 
 test('handleClearIndex blocks before destructive clear when runtime owners conflict', async () => {
     await withTempRepo(async (repoPath) => {
-        const counters = {};
+        const counters: MutationCounters = {};
         const handlers = createMutationReadyHandlers(repoPath, runtimeOwnerConflictGate(), counters);
 
         const response = await handlers.handleClearIndex({ path: repoPath });
@@ -258,7 +278,7 @@ test('handleClearIndex blocks before destructive clear when runtime owners confl
         assert.equal(envelope.action, 'clear');
         assert.equal(envelope.status, 'blocked');
         assert.equal(envelope.reason, 'runtime_owner_conflict');
-        assert.equal((counters as any).clearIndexCalls ?? 0, 0);
+        assert.equal(counters.clearIndexCalls ?? 0, 0);
     });
 });
 
@@ -282,7 +302,7 @@ test('handleGetIndexingStatus does not consult runtime owner mutation gate', asy
 
 test('handleSyncCodebase returns vector backend diagnostics when freshness sync hits stopped cluster', async () => {
     await withTempRepo(async (repoPath) => {
-        const context = {} as any;
+        const context = {} as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
@@ -292,14 +312,14 @@ test('handleSyncCodebase returns vector backend diagnostics when freshness sync 
             getCodebaseInfo: () => ({ status: 'indexed' }),
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => {
                 throw new Error('16 UNAUTHENTICATED: The action is unavailable under current cluster status STOPPED.');
             },
             getWatchDebounceMs: () => 2000
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
@@ -310,14 +330,15 @@ test('handleSyncCodebase returns vector backend diagnostics when freshness sync 
         assert.equal(envelope.status, 'error');
         assert.equal(envelope.reason, 'vector_backend_unavailable');
         assert.equal(envelope.code, 'ZILLIZ_CLUSTER_STOPPED');
-        const backendHint = envelope.hints?.backend as any;
+        const backendHint = envelope.hints?.backend as BackendHint | undefined;
+        assert.ok(backendHint);
         assert.match(backendHint.nextSteps.join(' '), /Resume the Zilliz Cloud cluster/);
     });
 });
 
 test('handleGetIndexingStatus recovers stale indexing state to failed when completion marker is missing', async () => {
     await withTempRepo(async (repoPath) => {
-        let currentInfo: any = {
+        let currentInfo: IndexingInfo | IndexFailedInfo = {
             status: 'indexing',
             indexingPercentage: 98,
             lastUpdated: '2026-02-27T23:57:03.000Z'
@@ -331,7 +352,7 @@ test('handleGetIndexingStatus recovers stale indexing state to failed when compl
                 markerCalls += 1;
                 return null;
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
@@ -351,9 +372,9 @@ test('handleGetIndexingStatus recovers stale indexing state to failed when compl
             },
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             saveCodebaseSnapshot: () => { saveCalls += 1; }
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const syncManager = { getWatchDebounceMs: () => 2000 } as any;
+        const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
@@ -375,7 +396,7 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
             ...RUNTIME_FINGERPRINT,
             embeddingModel: 'voyage-code-3'
         };
-        let currentInfo: any = {
+        let currentInfo: IndexingInfo | IndexedInfo = {
             status: 'indexing',
             indexingPercentage: 0,
             lastUpdated: '2026-02-27T23:57:03.000Z'
@@ -397,7 +418,7 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
                     runId: 'run_test'
                 };
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
@@ -406,7 +427,7 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
             getCodebaseStatus: () => currentInfo.status,
             getCodebaseInfo: () => currentInfo,
             getIndexingProgress: () => currentInfo.status === 'indexing' ? currentInfo.indexingPercentage : undefined,
-            setCodebaseIndexed: (_path: string, stats: any, indexFingerprint: IndexFingerprint) => {
+            setCodebaseIndexed: (_path: string, stats: { indexedFiles: number; totalChunks: number }, indexFingerprint: IndexFingerprint) => {
                 setIndexedCalls += 1;
                 currentInfo = {
                     status: 'indexed',
@@ -430,9 +451,9 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
                 return { allowed: true, changed: false };
             },
             saveCodebaseSnapshot: () => { saveCalls += 1; }
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const syncManager = { getWatchDebounceMs: () => 2000 } as any;
+        const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
@@ -444,7 +465,7 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
         assert.equal(setIndexedCalls, 1);
         assert.equal(saveCalls, 1);
         assert.match(envelope.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
-        assert.equal((envelope.hints?.runtimeMismatch as any)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3');
+        assert.equal((envelope.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3');
     });
 });
 
@@ -458,7 +479,7 @@ test('recent indexing state does not trigger stale-index recovery probes', async
                 markerCalls += 1;
                 return null;
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexing' } }],
@@ -473,9 +494,9 @@ test('recent indexing state does not trigger stale-index recovery probes', async
             getIndexingProgress: () => 37,
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const syncManager = { getWatchDebounceMs: () => 2000 } as any;
+        const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
@@ -496,7 +517,7 @@ test('handleSyncCodebase routes through ensureFreshness and does not call raw re
                 rawReindexCalls += 1;
                 return { added: 9, removed: 9, modified: 9, changedFiles: [] };
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
@@ -512,7 +533,7 @@ test('handleSyncCodebase routes through ensureFreshness and does not call raw re
             }),
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             getWatchDebounceMs: () => 2000,
@@ -526,7 +547,7 @@ test('handleSyncCodebase routes through ensureFreshness and does not call raw re
                     stats: { added: 1, removed: 0, modified: 1 }
                 };
             }
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSyncCodebase({ path: repoPath });
@@ -545,7 +566,7 @@ test('handleSyncCodebase routes through ensureFreshness and does not call raw re
 
 test('handleSyncCodebase surfaces ignore reconcile failure from ensureFreshness', async () => {
     await withTempRepo(async (repoPath) => {
-        const context = {} as any;
+        const context = {} as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
@@ -561,7 +582,7 @@ test('handleSyncCodebase surfaces ignore reconcile failure from ensureFreshness'
             }),
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             getWatchDebounceMs: () => 2000,
@@ -572,7 +593,7 @@ test('handleSyncCodebase surfaces ignore reconcile failure from ensureFreshness'
                 errorMessage: 'ignore_reload_failed',
                 fallbackSyncExecuted: true
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSyncCodebase({ path: repoPath });
@@ -587,7 +608,7 @@ test('handleSyncCodebase surfaces ignore reconcile failure from ensureFreshness'
 
 test('handleSyncCodebase surfaces coalesced in-flight reconcile failure from ensureFreshness', async () => {
     await withTempRepo(async (repoPath) => {
-        const context = {} as any;
+        const context = {} as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
@@ -603,7 +624,7 @@ test('handleSyncCodebase surfaces coalesced in-flight reconcile failure from ens
             }),
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             getWatchDebounceMs: () => 2000,
@@ -614,7 +635,7 @@ test('handleSyncCodebase surfaces coalesced in-flight reconcile failure from ens
                 errorMessage: 'ignore_reload_failed',
                 fallbackSyncExecuted: true
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSyncCodebase({ path: repoPath });

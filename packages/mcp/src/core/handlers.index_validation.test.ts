@@ -26,6 +26,17 @@ const CAPABILITIES = new CapabilityResolver({
 });
 
 type BackendProvider = 'zilliz' | 'milvus';
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type ToolTextResponse = { content?: Array<{ text?: string }> };
+type BackendHintView = {
+    retryable?: boolean;
+    nextSteps?: string[];
+};
+type TestableToolHandlers = ToolHandlers & {
+    startBackgroundIndexing(codebasePath: string, forceReindex: boolean, writeCollectionName?: string): void | Promise<void>;
+};
 
 interface ValidationHarnessOptions {
     checkCollectionLimitImpl: () => Promise<boolean>;
@@ -106,7 +117,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         addCustomExtensions: () => undefined,
         addCustomIgnorePatterns: () => undefined,
         clearIndex: async () => undefined,
-    } as any;
+    } as unknown as HandlerContext;
 
     const snapshotManager = {
         getIndexingCodebases: () => [],
@@ -123,18 +134,18 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
             snapshotEvents.saved += 1;
         },
         getAllCodebases: () => snapshotCodebases,
-    } as any;
+    } as unknown as HandlerSnapshotManager;
 
     const syncManager = {
         unregisterCodebaseWatcher: async () => undefined,
-    } as any;
+    } as unknown as HandlerSyncManager;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-    (handlers as any).startBackgroundIndexing = async () => undefined;
+    (handlers as unknown as TestableToolHandlers).startBackgroundIndexing = async () => undefined;
     return { handlers, droppedCollections, snapshotEvents };
 }
 
-function parseManageEnvelope(response: any): ManageIndexResponseEnvelope {
+function parseManageEnvelope(response: ToolTextResponse): ManageIndexResponseEnvelope {
     const payload = response?.content?.[0]?.text;
     assert.equal(typeof payload, 'string');
     return JSON.parse(payload) as ManageIndexResponseEnvelope;
@@ -357,7 +368,7 @@ test('handleIndexCodebase force reindex stages into a new generation without eag
             },
         });
         let startedArgs: [string, boolean, string | undefined] | null = null;
-        (handlers as any).startBackgroundIndexing = async (
+        (handlers as unknown as TestableToolHandlers).startBackgroundIndexing = async (
             codebasePath: string,
             forceReindex: boolean,
             stagedCollectionName?: string
@@ -457,8 +468,8 @@ test('handleIndexCodebase returns vector backend diagnostics for Zilliz validati
         assert.equal(envelope.status, 'error');
         assert.equal(envelope.reason, 'vector_backend_unavailable');
         assert.equal(envelope.code, 'VECTOR_BACKEND_AUTH_FAILED');
-        const backendHint = envelope.hints?.backend as any;
-        assert.equal(backendHint.retryable, false);
+        const backendHint = envelope.hints?.backend as BackendHintView | undefined;
+        assert.equal(backendHint?.retryable, false);
         assert.match(envelope.humanText, /Vector backend authentication failed/i);
     });
 });
@@ -477,8 +488,8 @@ test('handleIndexCodebase returns vector backend diagnostics for stopped Zilliz 
         assert.equal(envelope.status, 'error');
         assert.equal(envelope.reason, 'vector_backend_unavailable');
         assert.equal(envelope.code, 'ZILLIZ_CLUSTER_STOPPED');
-        const backendHint = envelope.hints?.backend as any;
-        assert.match(backendHint.nextSteps.join(' '), /Resume the Zilliz Cloud cluster/);
+        const backendHint = envelope.hints?.backend as BackendHintView | undefined;
+        assert.match((backendHint?.nextSteps || []).join(' '), /Resume the Zilliz Cloud cluster/);
         assert.deepEqual(snapshotEvents.removed, []);
         assert.deepEqual(snapshotEvents.indexing, []);
     });
@@ -498,8 +509,8 @@ test('handleIndexCodebase create validation timeout returns vector diagnostics a
         assert.equal(envelope.status, 'error');
         assert.equal(envelope.reason, 'vector_backend_unavailable');
         assert.equal(envelope.code, 'VECTOR_BACKEND_TIMEOUT');
-        const backendHint = envelope.hints?.backend as any;
-        assert.equal(backendHint.retryable, true);
+        const backendHint = envelope.hints?.backend as BackendHintView | undefined;
+        assert.equal(backendHint?.retryable, true);
         assert.match(envelope.humanText, /Vector backend request timed out/i);
         assert.deepEqual(snapshotEvents.removed, []);
         assert.deepEqual(snapshotEvents.indexing, []);

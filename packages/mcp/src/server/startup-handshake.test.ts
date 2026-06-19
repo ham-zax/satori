@@ -6,8 +6,29 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 
 type InProcessSession = {
-    request: (method: string, params?: Record<string, unknown>) => Promise<any>;
+    request: (method: string, params?: Record<string, unknown>) => Promise<JsonRpcResponse>;
     close: () => Promise<void>;
+};
+
+type JsonRpcResponse = {
+    id?: unknown;
+    error?: unknown;
+    result?: {
+        content?: Array<{ type?: string; text?: string }>;
+        tools?: Array<{ name: string }>;
+    };
+};
+
+type ToolPayload = Record<string, unknown> & {
+    status?: string;
+    reason?: string;
+    code?: string;
+    results?: unknown[];
+    hints?: {
+        setup?: {
+            missingEnv?: unknown;
+        };
+    };
 };
 
 type SessionEnvResult = {
@@ -56,7 +77,7 @@ function restoreProviderEnv(saved: Record<string, string | undefined>): void {
 async function createSession(): Promise<InProcessSession> {
     const stdin = new PassThrough();
     const stdout = new PassThrough();
-    const pending = new Map<number, (response: any) => void>();
+    const pending = new Map<number, (response: JsonRpcResponse) => void>();
     let nextId = 1;
     let stdoutBuffer = "";
 
@@ -69,7 +90,7 @@ async function createSession(): Promise<InProcessSession> {
             if (!raw) {
                 continue;
             }
-            const response = JSON.parse(raw);
+            const response = JSON.parse(raw) as JsonRpcResponse;
             if (typeof response.id === "number") {
                 pending.get(response.id)?.(response);
                 pending.delete(response.id);
@@ -86,9 +107,9 @@ async function createSession(): Promise<InProcessSession> {
     });
     assert.ok(server);
 
-    const request = async (method: string, params: Record<string, unknown> = {}): Promise<any> => {
+    const request = async (method: string, params: Record<string, unknown> = {}): Promise<JsonRpcResponse> => {
         const id = nextId++;
-        const responsePromise = new Promise<any>((resolve, reject) => {
+        const responsePromise = new Promise<JsonRpcResponse>((resolve, reject) => {
             const timeout = setTimeout(() => {
                 reject(new Error(`Timed out waiting for response id=${id}`));
             }, 1000);
@@ -146,7 +167,7 @@ async function withProviderEnvSession(
         error: console.error,
     };
     const logs: string[] = [];
-    const capture = (...args: any[]) => {
+    const capture = (...args: unknown[]) => {
         logs.push(args.map((value) => typeof value === "string" ? value : JSON.stringify(value)).join(" "));
     };
     process.env.HOME = homeDir;
@@ -181,18 +202,22 @@ async function withEmptyEnvSession(run: (session: InProcessSession, tempDir: str
     });
 }
 
-function parseToolPayload(response: any): any {
+function parseToolPayload(response: JsonRpcResponse): ToolPayload {
     assert.equal(response.error, undefined);
-    const text = response.result?.content?.find((item: any) => item?.type === "text")?.text;
+    const text = response.result?.content?.find((item) => item?.type === "text")?.text;
     assert.equal(typeof text, "string");
-    return JSON.parse(text);
+    return JSON.parse(text) as ToolPayload;
+}
+
+function toolNames(response: JsonRpcResponse): string[] {
+    return (response.result?.tools || []).map((tool) => tool.name).sort();
 }
 
 test("empty provider env still handshakes and lists exactly the six MCP tools", async () => {
     await withEmptyEnvSession(async (session) => {
         const response = await session.request("tools/list");
         assert.equal(response.error, undefined);
-        const names = (response.result?.tools || []).map((tool: any) => tool.name).sort();
+        const names = toolNames(response);
         assert.deepEqual(names, [...EXPECTED_TOOLS].sort());
     });
 });
@@ -205,7 +230,7 @@ test("configured provider env does not instantiate embedding or Milvus during st
     }, async ({ session, logs }) => {
         const response = await session.request("tools/list");
         assert.equal(response.error, undefined);
-        const names = (response.result?.tools || []).map((tool: any) => tool.name).sort();
+        const names = toolNames(response);
         assert.deepEqual(names, [...EXPECTED_TOOLS].sort());
 
         const joinedLogs = logs.join("\n");
@@ -251,10 +276,10 @@ test("manage_index create returns MISSING_PROVIDER_CONFIG with empty provider en
         assert.equal(payload.status, "error");
         assert.equal(payload.reason, "missing_provider_config");
         assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
-        assert.deepEqual(payload.hints.setup.missingEnv, ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"]);
+        assert.deepEqual(payload.hints?.setup?.missingEnv, ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"]);
 
         const toolsAfterError = await session.request("tools/list");
-        assert.deepEqual((toolsAfterError.result?.tools || []).map((tool: any) => tool.name).sort(), [...EXPECTED_TOOLS].sort());
+        assert.deepEqual(toolNames(toolsAfterError), [...EXPECTED_TOOLS].sort());
     });
 });
 
@@ -276,6 +301,6 @@ test("search_codebase returns MISSING_PROVIDER_CONFIG with empty provider env", 
         assert.equal(payload.reason, "missing_provider_config");
         assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
         assert.deepEqual(payload.results, []);
-        assert.deepEqual(payload.hints.setup.missingEnv, ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"]);
+        assert.deepEqual(payload.hints?.setup?.missingEnv, ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"]);
     });
 });

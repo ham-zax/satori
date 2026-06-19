@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installCliStdoutRedirect, installConsoleToStderrPatch } from "./stdio-safety.js";
+import { installCliStdoutRedirect, installConsoleToStderrPatch, WritableStdoutLike } from "./stdio-safety.js";
 
 test("installConsoleToStderrPatch routes console output to stderr writer", () => {
     const writes: string[] = [];
@@ -57,7 +57,10 @@ test("installCliStdoutRedirect blocks writes quietly in drop mode", () => {
     const stderrWrites: string[] = [];
     const privateWrites: string[] = [];
 
-    const fakeStdout: Record<string, any> = {
+    const fakeStdout: WritableStdoutLike & {
+        _write(chunk: unknown): void;
+        _writev(chunks: unknown): void;
+    } = {
         write(chunk: unknown, encoding?: unknown) {
             writes.push({ chunk, encoding });
             return true;
@@ -107,7 +110,7 @@ test("installCliStdoutRedirect blocks writes quietly in drop mode", () => {
 
 test("installCliStdoutRedirect emits deterministic markers in redirect mode", () => {
     const stderrWrites: string[] = [];
-    const fakeStdout: Record<string, any> = {
+    const fakeStdout: WritableStdoutLike = {
         write() {
             return true;
         }

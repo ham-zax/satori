@@ -1,6 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { IndexCompletionMarkerDocument } from "@zokizuan/satori-core";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import { SnapshotManager } from "../core/snapshot.js";
 import { SyncManager } from "../core/sync.js";
 import { ToolHandlers } from "../core/handlers.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
+import { getCompletionMarkerReader } from "../core/completion-proof.js";
 import { decideInterruptedIndexingRecovery } from "../core/indexing-recovery.js";
 import {
     RuntimeOwnerRegistry,
@@ -46,6 +48,10 @@ interface StartupLifecycleDependencies {
     verifyCloudState: () => Promise<void>;
     onVerifyCloudStateError: (error: unknown) => void;
     syncManager: StartupLifecycleSyncManager;
+}
+
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
 }
 
 export async function runPostConnectStartupLifecycle(
@@ -91,8 +97,8 @@ function migrateLegacyStateDir(): void {
         fs.cpSync(legacyDir, newDir, { recursive: true, force: false, errorOnExist: true });
         fs.rmSync(legacyDir, { recursive: true, force: true });
         console.log(`[MIGRATION] Copied legacy state directory '${legacyDir}' -> '${newDir}' and removed source`);
-    } catch (copyError: any) {
-        console.error(`[MIGRATION] Failed to migrate '${legacyDir}' -> '${newDir}':`, copyError?.message || copyError);
+    } catch (copyError) {
+        console.error(`[MIGRATION] Failed to migrate '${legacyDir}' -> '${newDir}':`, errorMessage(copyError));
     }
 }
 
@@ -220,16 +226,20 @@ class ContextMcpServer {
         const indexingCodebases = toolContext.snapshotManager.getIndexingCodebases();
         let promotedCount = 0;
         let failedCount = 0;
+        const getIndexCompletionMarker = getCompletionMarkerReader(toolContext.context);
 
         for (const codebasePath of indexingCodebases) {
-            const marker = typeof (toolContext.context as any).getIndexCompletionMarker === "function"
-                ? await (toolContext.context as any).getIndexCompletionMarker(codebasePath)
+            const marker = getIndexCompletionMarker
+                ? await getIndexCompletionMarker(codebasePath) as IndexCompletionMarkerDocument | null
                 : null;
             const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
             if (decision.action === "promote_indexed") {
-                toolContext.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, this.runtimeFingerprint, "verified");
+                toolContext.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified");
                 promotedCount++;
-                console.log(`[STARTUP] Recovered interrupted indexing from marker: ${codebasePath} -> indexed`);
+                const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
+                    ? "indexed (fingerprint recovered from marker; current runtime differs)"
+                    : "indexed";
+                console.log(`[STARTUP] Recovered interrupted indexing from marker: ${codebasePath} -> ${recoveryMode}`);
                 continue;
             }
             toolContext.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message);

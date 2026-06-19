@@ -4,16 +4,17 @@ import { IndexFingerprint } from '../config.js';
 export type InterruptedIndexingRecoveryDecision =
     | {
         action: 'promote_indexed';
-        reason: 'valid_marker';
+        reason: 'valid_marker' | 'valid_marker_runtime_mismatch';
         stats: {
             indexedFiles: number;
             totalChunks: number;
             status: 'completed';
         };
+        indexFingerprint: IndexFingerprint;
     }
     | {
         action: 'mark_failed';
-        reason: 'missing_marker' | 'fingerprint_mismatch' | 'invalid_marker_payload';
+        reason: 'missing_marker' | 'invalid_marker_payload';
         message: string;
     };
 
@@ -39,6 +40,18 @@ function hasValidMarkerPayload(marker: IndexCompletionMarkerDocument): boolean {
         && marker.runId.length > 0;
 }
 
+function normalizeMarkerFingerprint(
+    fingerprint: IndexCompletionMarkerDocument['fingerprint']
+): IndexFingerprint {
+    return {
+        embeddingProvider: fingerprint.embeddingProvider as IndexFingerprint['embeddingProvider'],
+        embeddingModel: fingerprint.embeddingModel,
+        embeddingDimension: Number(fingerprint.embeddingDimension),
+        vectorStoreProvider: fingerprint.vectorStoreProvider as IndexFingerprint['vectorStoreProvider'],
+        schemaVersion: fingerprint.schemaVersion as IndexFingerprint['schemaVersion'],
+    };
+}
+
 export function decideInterruptedIndexingRecovery(
     marker: IndexCompletionMarkerDocument | null,
     runtimeFingerprint: IndexFingerprint
@@ -61,15 +74,21 @@ export function decideInterruptedIndexingRecovery(
 
     if (!fingerprintsMatch(marker.fingerprint, runtimeFingerprint)) {
         return {
-            action: 'mark_failed',
-            reason: 'fingerprint_mismatch',
-            message: 'Interrupted indexing marker fingerprint does not match runtime fingerprint.'
+            action: 'promote_indexed',
+            reason: 'valid_marker_runtime_mismatch',
+            indexFingerprint: normalizeMarkerFingerprint(marker.fingerprint),
+            stats: {
+                indexedFiles: Number(marker.indexedFiles),
+                totalChunks: Number(marker.totalChunks),
+                status: 'completed'
+            }
         };
     }
 
     return {
         action: 'promote_indexed',
         reason: 'valid_marker',
+        indexFingerprint: normalizeMarkerFingerprint(marker.fingerprint),
         stats: {
             indexedFiles: Number(marker.indexedFiles),
             totalChunks: Number(marker.totalChunks),

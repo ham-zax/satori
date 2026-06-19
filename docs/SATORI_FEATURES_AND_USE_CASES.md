@@ -80,6 +80,8 @@ This fits the most common agent need: find the production behavior first, while 
 
 For exact identifier-style lookups, `search_codebase` can use a current compatible symbol registry before vector search. A unique exact registry hit returns a grouped symbol result without semantic search, tracked lexical scanning, or rerank. Missing, unavailable, or ambiguous registry state falls back without guessing.
 
+Search responses are action-oriented JSON envelopes. Grouped results can include a top-level `recommendedNextAction`, result-level `recommendedNextAction`, `capabilities` for open/graph/semantic confidence, structured `warnings[]` with actions, and executable `fallbacks`/`navigationFallback` so agents can move from discovery to proof without inventing spans.
+
 Supported scopes:
 
 - `runtime`: includes source/runtime code, top-level `scripts/**`, and test evidence; tests are demoted unless test intent is explicit.
@@ -1203,7 +1205,7 @@ Grouped result metadata can include:
 
 - stable `groupId`,
 - nullable `symbolId`,
-- nullable `symbolLabel`,
+- non-empty `symbolLabel`,
 - `collapsedChunkCount`,
 - aggregated `indexedAtMax`,
 - `stalenessBucket`,

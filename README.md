@@ -73,7 +73,7 @@ It also installs the MCP server once under `~/.satori/mcp-runtime/`, writes a st
 
 Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
 
-For Codex, the installer also writes a marked Satori guidance block to `~/.codex/AGENTS.md` by default. That block positions Satori as semantic-first code exploration: start with `search_codebase` for behavior/ownership context, then narrow with `file_outline`, `call_graph`, and `read_file` for proof.
+For Codex, the installer also writes a marked Satori guidance block to `~/.codex/AGENTS.md` by default. That block positions Satori as semantic-first code exploration: start with `search_codebase` for behavior/ownership context, prefer `recommendedNextAction` when present, then narrow with `file_outline`, `call_graph`, and `read_file` for proof.
 
 Restart every Satori MCP client after changing runtime config. In particular, after changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, stop old clients before running `manage_index create`, `reindex`, `sync`, or `clear`. Satori records live runtime owners under `~/.satori/runtime/owners.json` and blocks index mutations with `status="blocked"` / `reason="runtime_owner_conflict"` when multiple live Satori runtimes with different fingerprints/configs are active.
 
@@ -216,7 +216,7 @@ Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish ac
 |---|---|
 | `list_codebases` | See indexed roots and their lifecycle buckets |
 | `manage_index` | Create, sync, reindex, inspect status, or explicitly clear indexes |
-| `search_codebase` | Runtime-first plain-English semantic discovery with exact operators, grouping, freshness, and navigation hints |
+| `search_codebase` | Runtime-first plain-English semantic discovery with exact operators, grouping, freshness, structured warnings, recommended actions, and navigation hints |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing |
 | `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` when relationship-backed navigation is ready |
 | `read_file` | Read bounded files, ranges, annotations, or exact symbol spans |

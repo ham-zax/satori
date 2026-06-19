@@ -2,6 +2,12 @@
 
 All notable changes to this repository are documented in this file.
 
+## Unreleased
+
+### Changed
+- Updated `search_codebase` JSON envelopes with structured warning details, recommended next actions, per-result capability confidence, fallbacks, and compact debug summaries for agent decision-making.
+- Updated Satori installer guidance, packaged skills, docs, and landing pages to prefer semantic ownership discovery first, then follow recommended actions and deterministic proof navigation.
+
 ## [2026-06-13] Release Dependency Hardening
 
 ### Release Versions

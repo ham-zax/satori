@@ -28,6 +28,23 @@ export type CompletionProofValidationResult = {
 
 export type CompletionMarkerReader = (codebasePath: string) => Promise<unknown>;
 
+type CompletionMarkerProvider = {
+    getIndexCompletionMarker: CompletionMarkerReader;
+};
+
+function isCompletionMarkerProvider(value: unknown): value is CompletionMarkerProvider {
+    return typeof value === "object"
+        && value !== null
+        && typeof (value as { getIndexCompletionMarker?: unknown }).getIndexCompletionMarker === "function";
+}
+
+export function getCompletionMarkerReader(value: unknown): CompletionMarkerReader | undefined {
+    if (!isCompletionMarkerProvider(value)) {
+        return undefined;
+    }
+    return value.getIndexCompletionMarker.bind(value);
+}
+
 function trimTrailingSeparators(inputPath: string): string {
     const normalized = path.normalize(inputPath);
     const parsedRoot = path.parse(normalized).root;

@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { ContentEmbedding, GoogleGenAI } from '@google/genai';
 import { Embedding, EmbeddingVector } from './base-embedding';
 
 export interface GeminiEmbeddingConfig {
@@ -97,7 +97,7 @@ export class GeminiEmbedding extends Embedding {
                 throw new Error('Gemini API returned invalid response');
             }
 
-            return response.embeddings.map((embedding: any) => {
+            return response.embeddings.map((embedding: ContentEmbedding) => {
                 if (!embedding.values) {
                     throw new Error('Gemini API returned invalid embedding data');
                 }

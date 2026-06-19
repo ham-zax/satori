@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { classifyVectorBackendError, isMissingProviderConfigIssue } from "./setup-errors.js";
-import { validateCompletionProof } from "../core/completion-proof.js";
+import { getCompletionMarkerReader, validateCompletionProof } from "../core/completion-proof.js";
 
 const listCodebasesInputSchema = z.object({}).strict();
 const comparePathAsc = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -61,9 +61,7 @@ export const listCodebasesTool: McpTool = {
             proof: await validateCompletionProof({
                 codebasePath: entry.path,
                 runtimeFingerprint: proofContext.runtimeFingerprint,
-                getIndexCompletionMarker: typeof (proofContext.context as any)?.getIndexCompletionMarker === "function"
-                    ? (markerPath) => (proofContext.context as any).getIndexCompletionMarker(markerPath)
-                    : undefined
+                getIndexCompletionMarker: getCompletionMarkerReader(proofContext.context)
             })
         })));
 

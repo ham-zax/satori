@@ -1,5 +1,7 @@
 import { envManager } from '../utils/env-manager';
 
+type JsonRecord = Record<string, unknown>;
+
 export interface ZillizConfig {
     baseUrl?: string;
     token?: string;
@@ -92,6 +94,26 @@ export interface ErrorResponse {
     message: string;
 }
 
+function isRecord(value: unknown): value is JsonRecord {
+    return typeof value === 'object' && value !== null;
+}
+
+function errorMessage(error: unknown): string {
+    if (typeof error === 'string') {
+        return error;
+    }
+
+    if (error instanceof Error) {
+        return error.message;
+    }
+
+    if (isRecord(error) && typeof error.message === 'string') {
+        return error.message;
+    }
+
+    return String(error);
+}
+
 /**
  * Zilliz Cloud cluster manager
  * For managing Zilliz Cloud projects and clusters
@@ -114,7 +136,7 @@ export class ClusterManager {
     /**
      * Generic method for sending HTTP requests
      */
-    private async makeRequest<T>(endpoint: string, method: 'GET' | 'POST' = 'GET', data?: any): Promise<T> {
+    private async makeRequest<T>(endpoint: string, method: 'GET' | 'POST' = 'GET', data?: unknown): Promise<T> {
         const url = `${this.baseUrl}${endpoint}`;
 
         const headers: Record<string, string> = {
@@ -140,8 +162,10 @@ export class ClusterManager {
                 let errorMessage: string;
 
                 try {
-                    const errorJson = JSON.parse(errorText);
-                    errorMessage = errorJson.message || `HTTP ${response.status}: ${response.statusText}`;
+                    const errorJson: unknown = JSON.parse(errorText);
+                    errorMessage = isRecord(errorJson) && typeof errorJson.message === 'string'
+                        ? errorJson.message
+                        : `HTTP ${response.status}: ${response.statusText}`;
                 } catch {
                     errorMessage = `HTTP ${response.status}: ${response.statusText}`;
                 }
@@ -151,10 +175,10 @@ export class ClusterManager {
 
             const result = await response.json();
             return result as T;
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Log the original error for more details, especially for fetch errors
             console.error('[ZillizUtils] ❌ Original error in makeRequest:', error);
-            throw new Error(`Zilliz API request failed: ${error.message}`);
+            throw new Error(`Zilliz API request failed: ${errorMessage(error)}`);
         }
     }
 
@@ -254,10 +278,10 @@ export class ClusterManager {
 
                 // Wait before next poll
                 await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
-            } catch (error: any) {
+            } catch (error: unknown) {
                 // If it's a describe cluster error, continue polling
                 // The cluster might not be immediately available for describe
-                if (error.message.includes('Failed to describe cluster')) {
+                if (errorMessage(error).includes('Failed to describe cluster')) {
                     await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
                     continue;
                 }
@@ -311,8 +335,8 @@ export class ClusterManager {
                 console.log(`[ZillizUtils] ✅ Created new cluster: ${createResponse.clusterId}`);
                 return createResponse.clusterDetails.connectAddress;
             }
-        } catch (error: any) {
-            throw new Error(`Failed to get address from token: ${error.message}`);
+        } catch (error: unknown) {
+            throw new Error(`Failed to get address from token: ${errorMessage(error)}`);
         }
     }
 }

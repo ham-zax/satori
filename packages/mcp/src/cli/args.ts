@@ -39,6 +39,23 @@ export type InstallProfile = "default" | "minimal" | "all-text";
 const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "install", "uninstall"]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
+interface WrapperJsonSchema {
+    type?: string;
+    enum?: unknown[];
+    items?: unknown;
+    properties?: Record<string, unknown>;
+    required?: unknown;
+    oneOf?: unknown;
+    anyOf?: unknown;
+    allOf?: unknown;
+    $ref?: unknown;
+    patternProperties?: unknown;
+}
+
+function isWrapperJsonSchema(value: unknown): value is WrapperJsonSchema {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function parsePositiveInteger(value: string, flagName: string): number {
     const parsed = Number.parseInt(value, 10);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -361,8 +378,8 @@ function isPrimitiveEnum(enumValues: unknown[]): boolean {
     });
 }
 
-function unsupportedSchemaReason(schema: any): string | null {
-    if (!schema || typeof schema !== "object") {
+function unsupportedSchemaReason(schema: unknown): string | null {
+    if (!isWrapperJsonSchema(schema)) {
         return "schema is not an object";
     }
     if ("oneOf" in schema) {
@@ -387,7 +404,7 @@ function unsupportedSchemaReason(schema: any): string | null {
 
     if (schema.type === "array") {
         const itemSchema = schema.items;
-        if (!itemSchema || typeof itemSchema !== "object") {
+        if (!isWrapperJsonSchema(itemSchema)) {
             return "array items schema is missing";
         }
         const itemReason = unsupportedSchemaReason(itemSchema);
@@ -436,7 +453,7 @@ function parseEnumValue(raw: string, enumValues: unknown[]): unknown {
     throw new CliError("E_USAGE", `Value '${raw}' is not in enum [${enumValues.map(String).join(", ")}].`, 2);
 }
 
-function parsePrimitive(schema: any, raw: string): unknown {
+function parsePrimitive(schema: WrapperJsonSchema, raw: string): unknown {
     if (Array.isArray(schema.enum)) {
         return parseEnumValue(raw, schema.enum);
     }
@@ -470,11 +487,11 @@ export function parseWrapperArgumentsFromSchema(
     inputSchema: unknown,
     wrapperArgs: string[]
 ): Record<string, unknown> {
-    if (!inputSchema || typeof inputSchema !== "object") {
+    if (!isWrapperJsonSchema(inputSchema)) {
         throw new CliError("E_SCHEMA_UNSUPPORTED", `${toolName} schema is missing or invalid. Use --args-json/--args-file.`, 2);
     }
 
-    const schema = inputSchema as Record<string, any>;
+    const schema = inputSchema;
     const rootReason = unsupportedSchemaReason(schema);
     if (rootReason) {
         throw new CliError("E_SCHEMA_UNSUPPORTED", `${toolName} schema unsupported (${rootReason}). Use --args-json/--args-file.`, 2);
@@ -490,9 +507,16 @@ export function parseWrapperArgumentsFromSchema(
         : [];
 
     const normalizedToCanonical = new Map<string, string>();
-    const propertySchemas = new Map<string, any>();
+    const propertySchemas = new Map<string, WrapperJsonSchema>();
 
     for (const [propertyName, propertySchema] of Object.entries(properties)) {
+        if (!isWrapperJsonSchema(propertySchema)) {
+            throw new CliError(
+                "E_SCHEMA_UNSUPPORTED",
+                `${toolName}.${propertyName} uses unsupported schema (schema is not an object). Use --args-json/--args-file.`,
+                2
+            );
+        }
         const unsupportedReason = unsupportedSchemaReason(propertySchema);
         if (unsupportedReason) {
             throw new CliError(
@@ -522,7 +546,10 @@ export function parseWrapperArgumentsFromSchema(
             throw new CliError("E_USAGE", `Unknown flag '${token}' for tool '${toolName}'.`, 2);
         }
 
-        const propertySchema = propertySchemas.get(canonicalName) as any;
+        const propertySchema = propertySchemas.get(canonicalName);
+        if (!propertySchema) {
+            throw new CliError("E_SCHEMA_UNSUPPORTED", `${toolName}.${canonicalName} schema is missing. Use --args-json/--args-file.`, 2);
+        }
         if (isJsonFlag) {
             const next = wrapperArgs[i + 1];
             if (!next) {
@@ -543,6 +570,9 @@ export function parseWrapperArgumentsFromSchema(
                 throw new CliError("E_USAGE", `Missing value for ${token}.`, 2);
             }
             const itemSchema = propertySchema.items;
+            if (!isWrapperJsonSchema(itemSchema)) {
+                throw new CliError("E_SCHEMA_UNSUPPORTED", `${toolName}.${canonicalName} array items schema is missing. Use --args-json/--args-file.`, 2);
+            }
             const parsedValue = parsePrimitive(itemSchema, next);
             const existing = parsed[canonicalName];
             if (!Array.isArray(existing)) {

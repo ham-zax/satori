@@ -1,4 +1,14 @@
-import { MilvusClient, DataType, MetricType, FunctionType, LoadState, hybridtsToUnixtime } from '@zilliz/milvus2-sdk-node';
+import {
+    MilvusClient,
+    DataType,
+    MetricType,
+    FunctionType,
+    LoadState,
+    hybridtsToUnixtime,
+    type HybridSearchReq,
+    type QueryReq,
+    type SearchSimpleReq,
+} from '@zilliz/milvus2-sdk-node';
 import {
     VectorDocument,
     SearchOptions,
@@ -9,9 +19,53 @@ import {
     HybridSearchResult,
     CollectionDetails,
     VectorStoreBackendInfo,
+    VectorDocumentMetadata,
+    VectorRecord,
 } from './types';
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
+
+type MilvusResultRow = {
+    id?: unknown;
+    content?: unknown;
+    relativePath?: unknown;
+    startLine?: unknown;
+    endLine?: unknown;
+    fileExtension?: unknown;
+    metadata?: unknown;
+    score?: unknown;
+    distance?: unknown;
+};
+
+type MilvusCollectionListPayload = {
+    data?: Array<{ name?: unknown; timestamp?: unknown }>;
+    collection_names?: unknown;
+    collections?: unknown;
+};
+
+type MilvusHybridSearchSingleRequest = {
+    data: number[] | string;
+    anns_field: string;
+    params: VectorRecord;
+    limit: number;
+    expr?: string;
+};
+
+type MilvusHybridSearchParams = {
+    collection_name: string;
+    data: MilvusHybridSearchSingleRequest[];
+    limit: number;
+    rerank: {
+        strategy: string;
+        params: VectorRecord;
+    };
+    output_fields: string[];
+    expr?: string;
+};
+
+type HybridVectorDocument = VectorDocument & {
+    sparse_vector: never[];
+};
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -19,6 +73,89 @@ const COLLECTION_LIMIT_PATTERNS = [
     /too many collections/i,
     /quota.*collection/i,
 ];
+
+function isRecord(value: unknown): value is VectorRecord {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown, fallback: string = ''): string {
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+    }
+
+    return fallback;
+}
+
+function numberValue(value: unknown, fallback: number = 0): number {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+
+    if (typeof value === 'string' && value.trim().length > 0) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+
+    return fallback;
+}
+
+function parseMetadata(value: unknown): VectorDocumentMetadata {
+    if (isRecord(value)) {
+        return value;
+    }
+
+    if (typeof value !== 'string' || value.length === 0) {
+        return {};
+    }
+
+    try {
+        const parsed: unknown = JSON.parse(value);
+        return isRecord(parsed) ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function toVectorSearchResult(row: MilvusResultRow, vector: number[]): VectorSearchResult {
+    return {
+        document: {
+            id: stringValue(row.id),
+            vector,
+            content: stringValue(row.content),
+            relativePath: stringValue(row.relativePath),
+            startLine: numberValue(row.startLine),
+            endLine: numberValue(row.endLine),
+            fileExtension: stringValue(row.fileExtension),
+            metadata: parseMetadata(row.metadata),
+        },
+        score: numberValue(row.score),
+    };
+}
+
+function toHybridSearchResult(row: MilvusResultRow): HybridSearchResult {
+    const document: HybridVectorDocument = {
+        id: stringValue(row.id),
+        content: stringValue(row.content),
+        vector: [],
+        sparse_vector: [],
+        relativePath: stringValue(row.relativePath),
+        startLine: numberValue(row.startLine),
+        endLine: numberValue(row.endLine),
+        fileExtension: stringValue(row.fileExtension),
+        metadata: parseMetadata(row.metadata),
+    };
+
+    return {
+        document,
+        score: numberValue(row.score),
+    };
+}
 
 function collectErrorText(
     value: unknown,
@@ -45,7 +182,7 @@ function collectErrorText(
 
     if (value instanceof Error) {
         collectErrorText(value.message, output, visited, depth + 1);
-        collectErrorText((value as any).cause, output, visited, depth + 1);
+        collectErrorText((value as Error & { cause?: unknown }).cause, output, visited, depth + 1);
         return;
     }
 
@@ -458,13 +595,13 @@ export class MilvusVectorDatabase implements VectorDatabase {
         }
 
         const result = await this.client.showCollections();
-        const payload = result as any;
+        const payload = result as unknown as MilvusCollectionListPayload;
 
         if (Array.isArray(payload?.data)) {
             return payload.data
-                .map((entry: any) => {
-                    const name = typeof entry?.name === 'string' ? entry.name : '';
-                    const rawTimestamp = entry?.timestamp;
+                .map((entry) => {
+                    const name = stringValue(entry.name);
+                    const rawTimestamp = entry.timestamp;
                     let createdAt: string | undefined;
 
                     if (rawTimestamp !== null && rawTimestamp !== undefined && rawTimestamp !== '') {
@@ -539,7 +676,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             throw new Error('MilvusClient is not initialized after ensureInitialized().');
         }
 
-        const searchParams: any = {
+        const searchParams: SearchSimpleReq = {
             collection_name: collectionName,
             data: [queryVector],
             limit: options?.topK || 10,
@@ -557,20 +694,9 @@ export class MilvusVectorDatabase implements VectorDatabase {
             return [];
         }
 
-        return searchResult.results
-            .map((result: any) => ({
-            document: {
-                id: result.id,
-                vector: queryVector,
-                content: result.content,
-                relativePath: result.relativePath,
-                startLine: result.startLine,
-                endLine: result.endLine,
-                fileExtension: result.fileExtension,
-                metadata: JSON.parse(result.metadata || '{}'),
-            },
-            score: result.score,
-        }))
+        const resultRows = searchResult.results as unknown as MilvusResultRow[];
+        return resultRows
+            .map((result) => toVectorSearchResult(result, queryVector))
             .filter((result: VectorSearchResult) => options?.threshold === undefined || result.score >= options.threshold);
     }
 
@@ -588,7 +714,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
         });
     }
 
-    async query(collectionName: string, filter: string, outputFields: string[], limit?: number): Promise<Record<string, any>[]> {
+    async query(collectionName: string, filter: string, outputFields: string[], limit?: number): Promise<VectorRecord[]> {
         await this.ensureInitialized();
         await this.ensureLoaded(collectionName);
 
@@ -597,7 +723,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
         }
 
         try {
-            const queryParams: any = {
+            const queryParams: QueryReq = {
                 collection_name: collectionName,
                 filter: filter,
                 output_fields: outputFields,
@@ -617,7 +743,9 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 throw new Error(`Failed to query Milvus: ${result.status.reason}`);
             }
 
-            return result.data || [];
+            return Array.isArray(result.data)
+                ? result.data.filter(isRecord)
+                : [];
         } catch (error) {
             console.error(`[MilvusDB] ❌ Failed to query collection '${collectionName}':`, error);
             throw error;
@@ -788,17 +916,17 @@ export class MilvusVectorDatabase implements VectorDatabase {
             console.log(`[MilvusDB] 🔍 Preparing hybrid search for collection: ${collectionName}`);
 
             // Prepare search requests in the correct Milvus format
-            const search_param_1 = {
-                data: Array.isArray(searchRequests[0].data) ? searchRequests[0].data : [searchRequests[0].data],
+            const search_param_1: MilvusHybridSearchSingleRequest = {
+                data: searchRequests[0].data,
                 anns_field: searchRequests[0].anns_field, // "vector"
-                param: searchRequests[0].param, // {"nprobe": 10}
+                params: searchRequests[0].param, // {"nprobe": 10}
                 limit: searchRequests[0].limit
             };
 
-            const search_param_2 = {
+            const search_param_2: MilvusHybridSearchSingleRequest = {
                 data: searchRequests[1].data, // query text for sparse search
                 anns_field: searchRequests[1].anns_field, // "sparse_vector"
-                param: searchRequests[1].param, // {"drop_ratio_search": 0.2}
+                params: searchRequests[1].param, // {"drop_ratio_search": 0.2}
                 limit: searchRequests[1].limit
             };
 
@@ -812,20 +940,20 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
             console.log(`[MilvusDB] 🔍 Dense search params:`, JSON.stringify({
                 anns_field: search_param_1.anns_field,
-                param: search_param_1.param,
+                params: search_param_1.params,
                 limit: search_param_1.limit,
-                data_length: Array.isArray(search_param_1.data[0]) ? search_param_1.data[0].length : 'N/A'
+                data_length: Array.isArray(search_param_1.data) ? search_param_1.data.length : 'N/A'
             }, null, 2));
             console.log(`[MilvusDB] 🔍 Sparse search params:`, JSON.stringify({
                 anns_field: search_param_2.anns_field,
-                param: search_param_2.param,
+                params: search_param_2.params,
                 limit: search_param_2.limit,
                 query_text: typeof search_param_2.data === 'string' ? search_param_2.data.substring(0, 50) + '...' : 'N/A'
             }, null, 2));
             console.log(`[MilvusDB] 🔍 Rerank strategy:`, JSON.stringify(rerank_strategy, null, 2));
 
             // Execute hybrid search using the correct client.search format
-            const searchParams: any = {
+            const searchParams: MilvusHybridSearchParams = {
                 collection_name: collectionName,
                 data: [search_param_1, search_param_2],
                 limit: options?.limit || searchRequests[0]?.limit || 10,
@@ -846,7 +974,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 expr: searchParams.expr
             }, null, 2));
 
-            const searchResult = await this.client.search(searchParams);
+            const searchResult = await this.client.search(searchParams as unknown as HybridSearchReq);
 
             console.log(`[MilvusDB] 🔍 Search executed, processing results...`);
 
@@ -858,21 +986,9 @@ export class MilvusVectorDatabase implements VectorDatabase {
             console.log(`[MilvusDB] ✅ Found ${searchResult.results.length} results from hybrid search`);
 
             // Transform results to HybridSearchResult format
-            return searchResult.results
-                .map((result: any) => ({
-                document: {
-                    id: result.id,
-                    content: result.content,
-                    vector: [],
-                    sparse_vector: [],
-                    relativePath: result.relativePath,
-                    startLine: result.startLine,
-                    endLine: result.endLine,
-                    fileExtension: result.fileExtension,
-                    metadata: JSON.parse(result.metadata || '{}'),
-                },
-                score: result.score,
-            }))
+            const resultRows = searchResult.results as unknown as MilvusResultRow[];
+            return resultRows
+                .map(toHybridSearchResult)
                 .filter((result: HybridSearchResult) => options?.threshold === undefined || result.score >= options.threshold);
 
         } catch (error) {
@@ -915,7 +1031,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             await this.client.createCollection(createCollectionParams);
             await deleteCollectionWithVerification(this, collectionName);
             return true;
-        } catch (error: any) {
+        } catch (error: unknown) {
             const errorMessage = stringifyMilvusError(error);
             if (isCollectionLimitErrorMessage(errorMessage)) {
                 // Return false for collection limit exceeded

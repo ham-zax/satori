@@ -48,6 +48,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
 }
 
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+    if (!isRecord(error)) {
+        return undefined;
+    }
+    return typeof error.code === "string" ? error.code : undefined;
+}
+
 function stableSerialize(value: unknown): string {
     return JSON.stringify(value, (_key, nestedValue) => {
         if (Array.isArray(nestedValue)) {
@@ -301,8 +312,8 @@ export class SnapshotManager {
             const waitArray = new Int32Array(waitBuffer);
             Atomics.wait(waitArray, 0, 0, ms);
             return true;
-        } catch (error: any) {
-            console.warn(`[SNAPSHOT] Atomics.wait unavailable for lock retry; aborting wait path (${error?.message || error}).`);
+        } catch (error) {
+            console.warn(`[SNAPSHOT] Atomics.wait unavailable for lock retry; aborting wait path (${errorMessage(error)}).`);
             return false;
         }
     }
@@ -378,8 +389,8 @@ export class SnapshotManager {
                 };
                 fs.writeFileSync(fd, JSON.stringify(metadata));
                 return { fd, path: lockPath };
-            } catch (error: any) {
-                if (error?.code !== "EEXIST") {
+            } catch (error) {
+                if (errorCode(error) !== "EEXIST") {
                     throw error;
                 }
 
@@ -607,8 +618,8 @@ export class SnapshotManager {
             }
             console.warn("[SNAPSHOT] Persisted snapshot format is malformed; merge will proceed from local in-memory state only.");
             return new Map();
-        } catch (error: any) {
-            console.warn("[SNAPSHOT] Unable to read persisted snapshot for merge:", error?.message || error);
+        } catch (error) {
+            console.warn("[SNAPSHOT] Unable to read persisted snapshot for merge:", errorMessage(error));
             return new Map();
         }
     }
@@ -624,8 +635,8 @@ export class SnapshotManager {
             if (this.isV3Format(snapshot)) {
                 return this.tombstoneMapFromV3Snapshot(snapshot);
             }
-        } catch (error: any) {
-            console.warn("[SNAPSHOT] Unable to read persisted clear tombstones for merge:", error?.message || error);
+        } catch (error) {
+            console.warn("[SNAPSHOT] Unable to read persisted clear tombstones for merge:", errorMessage(error));
         }
         return new Map();
     }
@@ -698,15 +709,15 @@ export class SnapshotManager {
                 try {
                     fs.copyFileSync(this.snapshotFilePath, quarantinePath);
                     console.warn(`[SNAPSHOT] Lock unavailable; copied corrupt snapshot to ${quarantinePath}`);
-                } catch (copyError: any) {
-                    console.error(`[SNAPSHOT] Failed to preserve corrupt snapshot copy: ${copyError?.message || copyError}`);
+                } catch (copyError) {
+                    console.error(`[SNAPSHOT] Failed to preserve corrupt snapshot copy: ${errorMessage(copyError)}`);
                 }
                 return;
             }
             fs.renameSync(this.snapshotFilePath, quarantinePath);
             console.warn(`[SNAPSHOT] Quarantined corrupt snapshot to ${quarantinePath}`);
-        } catch (quarantineError: any) {
-            console.error(`[SNAPSHOT] Failed to quarantine corrupt snapshot: ${quarantineError?.message || quarantineError}`);
+        } catch (quarantineError) {
+            console.error(`[SNAPSHOT] Failed to quarantine corrupt snapshot: ${errorMessage(quarantineError)}`);
         } finally {
             if (lockHandle) {
                 this.releaseSnapshotLock(lockHandle);
@@ -760,7 +771,7 @@ export class SnapshotManager {
             } else {
                 this.rememberCurrentSnapshotStateToken();
             }
-        } catch (error: any) {
+        } catch (error) {
             this.quarantineCorruptSnapshot(error);
             this.codebaseInfoMap.clear();
             this.clearTombstones.clear();
@@ -814,7 +825,7 @@ export class SnapshotManager {
             this.rememberCurrentSnapshotStateToken();
 
             console.log(`[SNAPSHOT] Snapshot saved in v3 format. Indexed: ${this.indexedCodebases.length}, Indexing: ${this.indexingCodebases.size}, Failed: ${this.getFailedCodebases().length}, RequiresReindex: ${this.getCodebasesRequiringReindex().length}`);
-        } catch (error: any) {
+        } catch (error) {
             console.error('[SNAPSHOT] Error saving snapshot:', error);
         } finally {
             if (tempSnapshotPath && fs.existsSync(tempSnapshotPath)) {

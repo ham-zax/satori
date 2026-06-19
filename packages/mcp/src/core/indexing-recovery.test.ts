@@ -35,6 +35,7 @@ test('decideInterruptedIndexingRecovery promotes to indexed when marker proof is
         totalChunks: 728,
         status: 'completed'
     });
+    assert.deepEqual(decision.indexFingerprint, RUNTIME_FINGERPRINT);
 });
 
 test('decideInterruptedIndexingRecovery marks failed when completion marker is missing', () => {
@@ -45,18 +46,24 @@ test('decideInterruptedIndexingRecovery marks failed when completion marker is m
     assert.match(decision.message, /without completion marker/i);
 });
 
-test('decideInterruptedIndexingRecovery marks failed when marker fingerprint mismatches runtime', () => {
+test('decideInterruptedIndexingRecovery promotes indexed state when marker fingerprint mismatches runtime', () => {
+    const mismatchedFingerprint: IndexFingerprint = {
+        ...RUNTIME_FINGERPRINT,
+        embeddingDimension: 512
+    };
     const decision = decideInterruptedIndexingRecovery(
         buildMarker({
-            fingerprint: {
-                ...RUNTIME_FINGERPRINT,
-                embeddingDimension: 512
-            }
+            fingerprint: mismatchedFingerprint
         }),
         RUNTIME_FINGERPRINT
     );
 
-    assert.equal(decision.action, 'mark_failed');
-    assert.equal(decision.reason, 'fingerprint_mismatch');
-    assert.match(decision.message, /fingerprint/i);
+    assert.equal(decision.action, 'promote_indexed');
+    assert.equal(decision.reason, 'valid_marker_runtime_mismatch');
+    assert.deepEqual(decision.stats, {
+        indexedFiles: 169,
+        totalChunks: 728,
+        status: 'completed'
+    });
+    assert.deepEqual(decision.indexFingerprint, mismatchedFingerprint);
 });

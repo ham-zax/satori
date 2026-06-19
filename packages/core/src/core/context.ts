@@ -93,6 +93,7 @@ export class Context {
     private runtimeCustomIgnorePatterns: string[];
     private ignoreStateByCollection: Map<string, CodebaseIgnoreState>;
     private synchronizers = new Map<string, FileSynchronizer>();
+    private writeCollectionOverrides = new Map<string, string>();
     private symbolRegistryStateRoot?: string;
 
     constructor(config: ContextConfig = {}) {
@@ -277,7 +278,7 @@ export class Context {
      * Returns the number of file paths processed for deletion.
      */
     async deleteIndexedPathsByRelativePaths(codebasePath: string, relativePaths: string[]): Promise<number> {
-        const collectionName = this.resolveCollectionName(codebasePath);
+        const collectionName = await this.getActiveIndexedCollectionName(codebasePath) || this.getWriteCollectionName(codebasePath);
         const uniquePaths = Array.from(new Set(this.normalizeRelativePathsForCodebase(codebasePath, relativePaths)));
 
         for (const relativePath of uniquePaths) {
@@ -306,6 +307,241 @@ export class Context {
         const hash = crypto.createHash('md5').update(canonicalPath).digest('hex');
         const prefix = isHybrid === true ? 'hybrid_code_chunks' : 'code_chunks';
         return `${prefix}_${hash.substring(0, 8)}`;
+    }
+
+    private buildCollectionFamilies(codebasePath: string): {
+        canonicalRoot: string;
+        hash: string;
+        activeFamilyName: string;
+        alternateFamilyName: string;
+    } {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const hash = crypto.createHash('md5').update(canonicalRoot).digest('hex').substring(0, 8);
+        const activeFamilyName = this.resolveCollectionName(codebasePath);
+        const alternateFamilyName = activeFamilyName.startsWith('hybrid_code_chunks_')
+            ? `code_chunks_${hash}`
+            : `hybrid_code_chunks_${hash}`;
+        return {
+            canonicalRoot,
+            hash,
+            activeFamilyName,
+            alternateFamilyName,
+        };
+    }
+
+    private isRelatedCollectionName(collectionName: string, familyName: string): boolean {
+        return collectionName === familyName || collectionName.startsWith(`${familyName}__gen_`);
+    }
+
+    private getWriteCollectionName(codebasePath: string): string {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        return this.writeCollectionOverrides.get(canonicalRoot) || this.resolveCollectionName(codebasePath);
+    }
+
+    private async listRelatedCollectionNames(codebasePath: string): Promise<string[]> {
+        const { activeFamilyName, alternateFamilyName } = this.buildCollectionFamilies(codebasePath);
+
+        try {
+            const collectionNames = await this.vectorDatabase.listCollections();
+            return collectionNames
+                .filter((collectionName) =>
+                    this.isRelatedCollectionName(collectionName, activeFamilyName)
+                    || this.isRelatedCollectionName(collectionName, alternateFamilyName)
+                )
+                .sort((left, right) => left.localeCompare(right));
+        } catch {
+            const fallbackNames = [activeFamilyName, alternateFamilyName];
+            const existingNames: string[] = [];
+            for (const familyName of fallbackNames) {
+                try {
+                    if (await this.vectorDatabase.hasCollection(familyName)) {
+                        existingNames.push(familyName);
+                    }
+                } catch {
+                    continue;
+                }
+            }
+            return existingNames.sort((left, right) => left.localeCompare(right));
+        }
+    }
+
+    private parseCompletionMarker(
+        codebasePath: string,
+        rawMetadata: unknown
+    ): IndexCompletionMarkerDocument | null {
+        const parsed = (() => {
+            if (typeof rawMetadata === 'string') {
+                try {
+                    return JSON.parse(rawMetadata) as Partial<IndexCompletionMarkerDocument>;
+                } catch {
+                    return null;
+                }
+            }
+            if (rawMetadata && typeof rawMetadata === 'object') {
+                return rawMetadata as Partial<IndexCompletionMarkerDocument>;
+            }
+            return null;
+        })();
+
+        if (!parsed || parsed.kind !== 'satori_index_completion_v1') {
+            return null;
+        }
+        if (typeof parsed.codebasePath !== 'string' || typeof parsed.runId !== 'string') {
+            return null;
+        }
+        if (!parsed.fingerprint || typeof parsed.fingerprint !== 'object') {
+            return null;
+        }
+
+        const indexedFiles = Number(parsed.indexedFiles);
+        const totalChunks = Number(parsed.totalChunks);
+        if (!Number.isFinite(indexedFiles) || !Number.isFinite(totalChunks)) {
+            return null;
+        }
+        if (typeof parsed.completedAt !== 'string' || Number.isNaN(Date.parse(parsed.completedAt))) {
+            return null;
+        }
+
+        const parsedCodebasePath = this.canonicalizeCodebasePath(parsed.codebasePath);
+        const expectedCodebasePath = this.canonicalizeCodebasePath(codebasePath);
+        if (parsedCodebasePath !== expectedCodebasePath) {
+            return null;
+        }
+
+        return {
+            kind: 'satori_index_completion_v1',
+            codebasePath: parsedCodebasePath,
+            fingerprint: parsed.fingerprint as IndexCompletionFingerprint,
+            indexedFiles,
+            totalChunks,
+            completedAt: parsed.completedAt,
+            runId: parsed.runId,
+        };
+    }
+
+    private async resolveCompletionMarkerForCollection(
+        codebasePath: string,
+        collectionName: string
+    ): Promise<IndexCompletionMarkerDocument | null> {
+        const rows = await this.queryCompletionMarkerRows(collectionName);
+        for (const row of rows) {
+            const marker = this.parseCompletionMarker(codebasePath, row?.metadata);
+            if (marker) {
+                return marker;
+            }
+        }
+        return null;
+    }
+
+    private async collectionHasIndexedPayload(
+        collectionName: string,
+        marker: IndexCompletionMarkerDocument
+    ): Promise<boolean> {
+        if (marker.totalChunks <= 0) {
+            return true;
+        }
+
+        const rows = await this.vectorDatabase.query(collectionName, '', ['id'], 8);
+        return rows.some((row) => {
+            const id = typeof row?.id === 'string' ? row.id : '';
+            return id !== INDEX_COMPLETION_MARKER_DOC_ID;
+        });
+    }
+
+    private async resolveActiveIndexedCollection(
+        codebasePath: string
+    ): Promise<{ collectionName: string; marker: IndexCompletionMarkerDocument } | null> {
+        const {
+            activeFamilyName,
+            alternateFamilyName,
+        } = this.buildCollectionFamilies(codebasePath);
+        const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
+
+        const candidates: Array<{
+            collectionName: string;
+            marker: IndexCompletionMarkerDocument;
+            familyPriority: number;
+        }> = [];
+
+        for (const collectionName of familyCollectionNames) {
+            const marker = await this.resolveCompletionMarkerForCollection(codebasePath, collectionName);
+            if (!marker) {
+                continue;
+            }
+            if (!(await this.collectionHasIndexedPayload(collectionName, marker))) {
+                continue;
+            }
+
+            const familyPriority = this.isRelatedCollectionName(collectionName, activeFamilyName)
+                ? 0
+                : this.isRelatedCollectionName(collectionName, alternateFamilyName)
+                    ? 1
+                    : 2;
+            candidates.push({ collectionName, marker, familyPriority });
+        }
+
+        if (candidates.length === 0) {
+            return null;
+        }
+
+        candidates.sort((left, right) => {
+            if (left.familyPriority !== right.familyPriority) {
+                return left.familyPriority - right.familyPriority;
+            }
+
+            const leftCompletedAt = Date.parse(left.marker.completedAt);
+            const rightCompletedAt = Date.parse(right.marker.completedAt);
+            if (leftCompletedAt !== rightCompletedAt) {
+                return rightCompletedAt - leftCompletedAt;
+            }
+
+            return left.collectionName.localeCompare(right.collectionName);
+        });
+
+        const [selected] = candidates;
+        return selected
+            ? { collectionName: selected.collectionName, marker: selected.marker }
+            : null;
+    }
+
+    public resolveStagedCollectionName(codebasePath: string, generationId: string): string {
+        const normalizedGenerationId = generationId
+            .trim()
+            .replace(/[^a-zA-Z0-9_-]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        if (normalizedGenerationId.length === 0) {
+            throw new Error('generationId must contain at least one alphanumeric character.');
+        }
+        return `${this.resolveCollectionName(codebasePath)}__gen_${normalizedGenerationId}`;
+    }
+
+    public setWriteCollectionOverride(codebasePath: string, collectionName: string | null): void {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        if (!collectionName || collectionName.trim().length === 0) {
+            this.writeCollectionOverrides.delete(canonicalRoot);
+            return;
+        }
+        this.writeCollectionOverrides.set(canonicalRoot, collectionName.trim());
+    }
+
+    public async getActiveIndexedCollectionName(codebasePath: string): Promise<string | null> {
+        const active = await this.resolveActiveIndexedCollection(codebasePath);
+        return active?.collectionName || null;
+    }
+
+    public async pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string): Promise<string[]> {
+        const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
+        const droppedCollections: string[] = [];
+
+        for (const collectionName of familyCollectionNames) {
+            if (collectionName === keepCollectionName) {
+                continue;
+            }
+            await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
+            droppedCollections.push(collectionName);
+        }
+
+        return droppedCollections.sort((left, right) => left.localeCompare(right));
     }
 
     /**
@@ -403,8 +639,8 @@ export class Context {
         navigationRecovery?: 'rebuilt' | 'failed';
     }> {
         this.loadIndexProfileForCodebase(codebasePath);
-        const collectionName = this.resolveCollectionName(codebasePath);
-        const synchronizer = this.synchronizers.get(collectionName);
+        const synchronizerKey = this.resolveCollectionName(codebasePath);
+        const synchronizer = this.synchronizers.get(synchronizerKey);
 
         if (!synchronizer) {
             // Load project-specific ignore patterns before creating FileSynchronizer
@@ -417,14 +653,22 @@ export class Context {
                 this.getIndexedExtensionsForCodebase(codebasePath)
             );
             await newSynchronizer.initialize();
-            this.synchronizers.set(collectionName, newSynchronizer);
+            this.synchronizers.set(synchronizerKey, newSynchronizer);
         }
 
-        const currentSynchronizer = this.synchronizers.get(collectionName)!;
-        const collectionExists = await this.vectorDatabase.hasCollection(collectionName);
+        const currentSynchronizer = this.synchronizers.get(synchronizerKey)!;
+        const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
+        let collectionName = activeCollectionName;
+        if (!collectionName) {
+            const fallbackCollectionName = this.resolveCollectionName(codebasePath);
+            if (await this.vectorDatabase.hasCollection(fallbackCollectionName)) {
+                collectionName = fallbackCollectionName;
+            }
+        }
+        const collectionExists = collectionName !== null;
 
         if (!collectionExists) {
-            console.warn(`[Context] ⚠️  Collection '${collectionName}' is missing. Rebuilding full index before incremental sync resumes.`);
+            console.warn(`[Context] ⚠️  No proven collection exists for '${codebasePath}'. Rebuilding full index before incremental sync resumes.`);
             const changedFiles = this.normalizeRelativePathsForCodebase(codebasePath, await this.getCodeFiles(codebasePath));
             if (changedFiles.length === 0) {
                 progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
@@ -439,6 +683,10 @@ export class Context {
                 changedFiles
             };
         }
+        if (!collectionName) {
+            throw new Error(`Expected an indexed collection for '${codebasePath}' after sync preflight.`);
+        }
+        const targetCollectionName = collectionName;
 
         progressCallback?.({ phase: 'Checking for file changes...', current: 0, total: 100, percentage: 0 });
         const { added, removed, modified } = await currentSynchronizer.checkForChanges();
@@ -469,13 +717,13 @@ export class Context {
         try {
             // Handle removed files
             for (const file of removed) {
-                await this.deleteFileChunks(collectionName, file);
+                await this.deleteFileChunks(targetCollectionName, file);
                 updateProgress(`Removed ${file}`);
             }
 
             // Handle modified files
             for (const file of modified) {
-                await this.deleteFileChunks(collectionName, file);
+                await this.deleteFileChunks(targetCollectionName, file);
                 updateProgress(`Deleted old chunks for ${file}`);
             }
 
@@ -618,13 +866,19 @@ export class Context {
             return normalized.length > 0 ? normalized : undefined;
         };
 
-        const collectionName = this.resolveCollectionName(codebasePath);
+        const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
+        let collectionName = activeCollectionName;
+        if (!collectionName) {
+            const fallbackCollectionName = this.resolveCollectionName(codebasePath);
+            if (await this.vectorDatabase.hasCollection(fallbackCollectionName)) {
+                collectionName = fallbackCollectionName;
+            }
+        }
         console.log(`[Context] 🔍 Using collection: ${collectionName}`);
 
         // Check if collection exists and has data
-        const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
-        if (!hasCollection) {
-            console.log(`[Context] ⚠️  Collection '${collectionName}' does not exist. Please index the codebase first.`);
+        if (!collectionName) {
+            console.log(`[Context] ⚠️  No proven collection exists for '${codebasePath}'. Please index the codebase first.`);
             return [];
         }
 
@@ -805,7 +1059,7 @@ export class Context {
         return `(${filterExpr}) and (${markerExclusion})`;
     }
 
-    private async queryCompletionMarkerRows(collectionName: string): Promise<Record<string, any>[]> {
+    private async queryCompletionMarkerRows(collectionName: string): Promise<Array<Record<string, unknown>>> {
         return this.vectorDatabase.query(
             collectionName,
             `id == "${INDEX_COMPLETION_MARKER_DOC_ID}"`,
@@ -815,9 +1069,21 @@ export class Context {
     }
 
     async clearIndexCompletionMarker(codebasePath: string): Promise<void> {
-        const collectionName = this.resolveCollectionName(codebasePath);
+        const collectionName = this.getWriteCollectionName(codebasePath);
         const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
         if (!hasCollection) {
+            const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
+            if (!activeCollectionName) {
+                return;
+            }
+            const activeRows = await this.queryCompletionMarkerRows(activeCollectionName);
+            const activeMarkerIds = activeRows
+                .map((row) => (typeof row.id === 'string' ? row.id : ''))
+                .filter((id) => id.length > 0);
+            if (activeMarkerIds.length === 0) {
+                return;
+            }
+            await this.vectorDatabase.delete(activeCollectionName, Array.from(new Set(activeMarkerIds)));
             return;
         }
 
@@ -832,7 +1098,7 @@ export class Context {
     }
 
     async writeIndexCompletionMarker(codebasePath: string, marker: IndexCompletionMarkerDocument): Promise<void> {
-        const collectionName = this.resolveCollectionName(codebasePath);
+        const collectionName = this.getWriteCollectionName(codebasePath);
         const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
         if (!hasCollection) {
             throw new Error(`Cannot write completion marker: collection '${collectionName}' does not exist.`);
@@ -860,52 +1126,8 @@ export class Context {
     }
 
     async getIndexCompletionMarker(codebasePath: string): Promise<IndexCompletionMarkerDocument | null> {
-        const collectionName = this.resolveCollectionName(codebasePath);
-        const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
-        if (!hasCollection) {
-            return null;
-        }
-
-        const rows = await this.queryCompletionMarkerRows(collectionName);
-        for (const row of rows) {
-            const rawMetadata = row?.metadata;
-            if (typeof rawMetadata !== 'string') {
-                continue;
-            }
-            try {
-                const parsed = JSON.parse(rawMetadata) as Partial<IndexCompletionMarkerDocument>;
-                if (parsed?.kind !== 'satori_index_completion_v1') {
-                    continue;
-                }
-                if (typeof parsed.codebasePath !== 'string' || typeof parsed.runId !== 'string') {
-                    continue;
-                }
-                if (!parsed.fingerprint || typeof parsed.fingerprint !== 'object') {
-                    continue;
-                }
-                const indexedFiles = Number(parsed.indexedFiles);
-                const totalChunks = Number(parsed.totalChunks);
-                if (!Number.isFinite(indexedFiles) || !Number.isFinite(totalChunks)) {
-                    continue;
-                }
-                if (typeof parsed.completedAt !== 'string' || Number.isNaN(Date.parse(parsed.completedAt))) {
-                    continue;
-                }
-                return {
-                    kind: 'satori_index_completion_v1',
-                    codebasePath: parsed.codebasePath,
-                    fingerprint: parsed.fingerprint as IndexCompletionFingerprint,
-                    indexedFiles,
-                    totalChunks,
-                    completedAt: parsed.completedAt,
-                    runId: parsed.runId,
-                };
-            } catch {
-                continue;
-            }
-        }
-
-        return null;
+        const active = await this.resolveActiveIndexedCollection(codebasePath);
+        return active?.marker || null;
     }
 
     /**
@@ -914,8 +1136,7 @@ export class Context {
      * @returns Whether index exists
      */
     async hasIndexedCollection(codebasePath: string): Promise<boolean> {
-        const collectionName = this.resolveCollectionName(codebasePath);
-        return await this.vectorDatabase.hasCollection(collectionName);
+        return (await this.resolveActiveIndexedCollection(codebasePath)) !== null;
     }
 
     /**
@@ -931,12 +1152,9 @@ export class Context {
 
         progressCallback?.({ phase: 'Checking existing index...', current: 0, total: 100, percentage: 0 });
 
-        const collectionName = this.resolveCollectionName(codebasePath);
-        const collectionExists = await this.vectorDatabase.hasCollection(collectionName);
-
         progressCallback?.({ phase: 'Removing index data...', current: 50, total: 100, percentage: 50 });
 
-        if (collectionExists) {
+        for (const collectionName of await this.listRelatedCollectionNames(codebasePath)) {
             await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
         }
 
@@ -944,9 +1162,12 @@ export class Context {
 
         // Delete snapshot file
         await FileSynchronizer.deleteSnapshot(codebasePath);
-        this.synchronizers.delete(collectionName);
-        this.ignoreStateByCollection.delete(collectionName);
-        this.indexProfilesByCodebase.delete(this.canonicalizeCodebasePath(codebasePath));
+        const familyCollectionName = this.resolveCollectionName(codebasePath);
+        this.synchronizers.delete(familyCollectionName);
+        this.ignoreStateByCollection.delete(familyCollectionName);
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.writeCollectionOverrides.delete(canonicalRoot);
+        this.indexProfilesByCodebase.delete(canonicalRoot);
 
         progressCallback?.({ phase: 'Index cleared', current: 100, total: 100, percentage: 100 });
         console.log('[Context] ✅ Index data cleaned');
@@ -1152,7 +1373,7 @@ export class Context {
         const isHybrid = this.getIsHybrid();
         const collectionType = isHybrid === true ? 'hybrid vector' : 'vector';
         console.log(`[Context] 🔧 Preparing ${collectionType} collection for codebase: ${codebasePath}${forceReindex ? ' (FORCE REINDEX)' : ''}`);
-        const collectionName = this.resolveCollectionName(codebasePath);
+        const collectionName = this.getWriteCollectionName(codebasePath);
 
         // Check if collection already exists
         const collectionExists = await this.vectorDatabase.hasCollection(collectionName);
@@ -1630,7 +1851,7 @@ export class Context {
             });
 
             // Store to vector database
-            await this.vectorDatabase.insertHybrid(this.resolveCollectionName(codebasePath), documents);
+            await this.vectorDatabase.insertHybrid(this.getWriteCollectionName(codebasePath), documents);
         } else {
             // Create regular vector documents
             const documents: VectorDocument[] = chunks.map((chunk, index) => {
@@ -1664,7 +1885,7 @@ export class Context {
             });
 
             // Store to vector database
-            await this.vectorDatabase.insert(this.resolveCollectionName(codebasePath), documents);
+            await this.vectorDatabase.insert(this.getWriteCollectionName(codebasePath), documents);
         }
     }
 

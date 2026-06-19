@@ -62,10 +62,12 @@ export interface CallGraphTestReference {
 }
 
 export interface CallGraphNote {
-    type: 'unresolved_edge' | 'dynamic_edge' | 'missing_symbol_metadata';
+    type: 'unresolved_edge' | 'dynamic_edge' | 'missing_symbol_metadata' | 'suppressed_edge';
     file: string;
     startLine: number;
     symbolId?: string;
+    symbolLabel?: string;
+    confidence?: number;
     detail: string;
 }
 

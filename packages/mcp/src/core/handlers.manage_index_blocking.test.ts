@@ -369,6 +369,85 @@ test('handleGetIndexingStatus recovers stale indexing state to failed when compl
     });
 });
 
+test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reindex with restart guidance', async () => {
+    await withTempRepo(async (repoPath) => {
+        const indexedFingerprint: IndexFingerprint = {
+            ...RUNTIME_FINGERPRINT,
+            embeddingModel: 'voyage-code-3'
+        };
+        let currentInfo: any = {
+            status: 'indexing',
+            indexingPercentage: 0,
+            lastUpdated: '2026-02-27T23:57:03.000Z'
+        };
+        let markerCalls = 0;
+        let setIndexedCalls = 0;
+        let saveCalls = 0;
+
+        const context = {
+            getIndexCompletionMarker: async () => {
+                markerCalls += 1;
+                return {
+                    kind: 'satori_index_completion_v1',
+                    codebasePath: repoPath,
+                    fingerprint: indexedFingerprint,
+                    indexedFiles: 169,
+                    totalChunks: 728,
+                    completedAt: '2026-02-27T23:57:10.000Z',
+                    runId: 'run_test'
+                };
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
+            getIndexingCodebases: () => currentInfo.status === 'indexing' ? [repoPath] : [],
+            getIndexedCodebases: () => currentInfo.status === 'indexed' ? [repoPath] : [],
+            getCodebaseStatus: () => currentInfo.status,
+            getCodebaseInfo: () => currentInfo,
+            getIndexingProgress: () => currentInfo.status === 'indexing' ? currentInfo.indexingPercentage : undefined,
+            setCodebaseIndexed: (_path: string, stats: any, indexFingerprint: IndexFingerprint) => {
+                setIndexedCalls += 1;
+                currentInfo = {
+                    status: 'indexed',
+                    indexedFiles: stats.indexedFiles,
+                    totalChunks: stats.totalChunks,
+                    indexStatus: 'completed',
+                    indexFingerprint,
+                    fingerprintSource: 'verified',
+                    lastUpdated: new Date().toISOString()
+                };
+            },
+            ensureFingerprintCompatibilityOnAccess: () => {
+                if (currentInfo.status === 'indexed') {
+                    return {
+                        allowed: false,
+                        changed: false,
+                        reason: 'fingerprint_mismatch',
+                        message: `Index fingerprint mismatch. Indexed with ${indexedFingerprint.embeddingProvider}/${indexedFingerprint.embeddingModel}/${indexedFingerprint.embeddingDimension}/${indexedFingerprint.vectorStoreProvider}/${indexedFingerprint.schemaVersion}, current runtime is ${RUNTIME_FINGERPRINT.embeddingProvider}/${RUNTIME_FINGERPRINT.embeddingModel}/${RUNTIME_FINGERPRINT.embeddingDimension}/${RUNTIME_FINGERPRINT.vectorStoreProvider}/${RUNTIME_FINGERPRINT.schemaVersion}.`
+                    };
+                }
+                return { allowed: true, changed: false };
+            },
+            saveCodebaseSnapshot: () => { saveCalls += 1; }
+        } as any;
+
+        const syncManager = { getWatchDebounceMs: () => 2000 } as any;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'requires_reindex');
+        assert.equal(envelope.reason, 'requires_reindex');
+        assert.equal(markerCalls, 1);
+        assert.equal(setIndexedCalls, 1);
+        assert.equal(saveCalls, 1);
+        assert.match(envelope.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
+        assert.equal((envelope.hints?.runtimeMismatch as any)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3');
+    });
+});
+
 test('recent indexing state does not trigger stale-index recovery probes', async () => {
     await withTempRepo(async (repoPath) => {
         const recent = new Date().toISOString();

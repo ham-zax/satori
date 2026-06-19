@@ -101,6 +101,8 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         },
         getVectorStore: () => vectorStore,
         resolveCollectionName,
+        resolveStagedCollectionName: (codebasePath: string, generationId: string) =>
+            `${resolveCollectionName(codebasePath)}__gen_${generationId}`,
         addCustomExtensions: () => undefined,
         addCustomIgnorePatterns: () => undefined,
         clearIndex: async () => undefined,
@@ -333,7 +335,7 @@ test('handleIndexCodebase keeps local state when explicit zillizDropCollection r
     });
 });
 
-test('handleIndexCodebase force reindex drops all prior collections for the same codebase hash', async () => {
+test('handleIndexCodebase force reindex stages into a new generation without eager cleanup', async () => {
     await withTempRepo(async (repoPath) => {
         const resolvedCollection = resolveCollectionName(repoPath);
         const hash = resolvedCollection.split('_').pop()!;
@@ -341,7 +343,7 @@ test('handleIndexCodebase force reindex drops all prior collections for the same
         const modernCollection = `hybrid_code_chunks_${hash}`;
         const existingCollections = new Set<string>([legacyCollection, modernCollection]);
 
-        const { handlers, droppedCollections } = createHandlersForValidation({
+        const { handlers, droppedCollections, snapshotEvents } = createHandlersForValidation({
             backendProvider: 'zilliz',
             checkCollectionLimitImpl: async () => true,
             collectionDetails: [
@@ -354,6 +356,14 @@ test('handleIndexCodebase force reindex drops all prior collections for the same
                 existingCollections.delete(collectionName);
             },
         });
+        let startedArgs: [string, boolean, string | undefined] | null = null;
+        (handlers as any).startBackgroundIndexing = async (
+            codebasePath: string,
+            forceReindex: boolean,
+            stagedCollectionName?: string
+        ) => {
+            startedArgs = [codebasePath, forceReindex, stagedCollectionName];
+        };
 
         const response = await handlers.handleIndexCodebase({
             path: repoPath,
@@ -362,13 +372,16 @@ test('handleIndexCodebase force reindex drops all prior collections for the same
 
         const envelope = parseManageEnvelope(response);
         assert.equal(envelope.status, 'ok');
-        const text = envelope.humanText;
-        assert.match(text, /Force reindex cleanup dropped 2 prior collection\(s\)/i);
-        assert.deepEqual(new Set(droppedCollections), new Set([legacyCollection, modernCollection]));
+        assert.match(envelope.humanText, /Started background indexing/i);
+        assert.ok(startedArgs);
+        assert.deepEqual(startedArgs?.slice(0, 2), [repoPath, true]);
+        assert.match(String(startedArgs?.[2] || ''), new RegExp(`^${modernCollection}__gen_run_`));
+        assert.deepEqual(droppedCollections, []);
+        assert.deepEqual(snapshotEvents.removed, []);
     });
 });
 
-test('handleIndexCodebase force reindex preserves local state when remote cleanup times out', async () => {
+test('handleIndexCodebase force reindex does not attempt remote cleanup before staged kickoff', async () => {
     await withTempRepo(async (repoPath) => {
         const resolvedCollection = resolveCollectionName(repoPath);
         const hash = resolvedCollection.split('_').pop()!;
@@ -385,10 +398,7 @@ test('handleIndexCodebase force reindex preserves local state when remote cleanu
             ],
             hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
             dropCollectionImpl: async (collectionName) => {
-                if (collectionName === modernCollection) {
-                    throw new Error('4 DEADLINE_EXCEEDED: Deadline exceeded after 15.005s');
-                }
-                existingCollections.delete(collectionName);
+                throw new Error(`dropCollection should not be called during staged kickoff (${collectionName})`);
             },
         });
 
@@ -398,13 +408,11 @@ test('handleIndexCodebase force reindex preserves local state when remote cleanu
         });
 
         const envelope = parseManageEnvelope(response);
-        assert.equal(envelope.status, 'error');
-        assert.match(envelope.humanText, /Force reindex cleanup failed before local state changes/i);
-        assert.match(envelope.humanText, /DEADLINE_EXCEEDED/i);
-        assert.ok(droppedCollections.includes(legacyCollection));
-        assert.ok(droppedCollections.includes(modernCollection));
+        assert.equal(envelope.status, 'ok');
+        assert.match(envelope.humanText, /Started background indexing/i);
+        assert.deepEqual(droppedCollections, []);
         assert.deepEqual(snapshotEvents.removed, []);
-        assert.deepEqual(snapshotEvents.indexing, []);
+        assert.deepEqual(snapshotEvents.indexing, [repoPath]);
     });
 });
 

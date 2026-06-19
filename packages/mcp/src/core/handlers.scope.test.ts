@@ -611,8 +611,9 @@ test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph f
         const result = payload.results[0];
         assert.equal(result.callGraphHint.supported, false);
         assert.equal(result.callGraphHint.reason, 'unsupported_language');
-        assert.equal(result.nextActions, undefined);
-        assert.equal(result.navigationFallback.readSpan.tool, 'read_file');
+        assert.equal(result.nextActions?.openSymbol?.tool, 'read_file');
+        assert.equal(result.nextActions?.callGraph, undefined);
+        assert.equal(result.navigationFallback, undefined);
     }));
 });
 
@@ -672,8 +673,9 @@ test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph f
         const result = payload.results[0];
         assert.equal(result.callGraphHint.supported, false);
         assert.equal(result.callGraphHint.reason, 'unsupported_language');
-        assert.equal(result.nextActions, undefined);
-        assert.equal(result.navigationFallback.readSpan.tool, 'read_file');
+        assert.equal(result.nextActions?.openSymbol?.tool, 'read_file');
+        assert.equal(result.nextActions?.callGraph, undefined);
+        assert.equal(result.navigationFallback, undefined);
     }));
 });
 
@@ -1935,7 +1937,9 @@ test('handleSearchCode repairs symbol-only file-owner results to tighter outline
             assert.equal(payload.results[0].symbolKind, 'method');
             assert.equal(payload.results[0].callGraphHint.supported, false);
             assert.equal(payload.results[0].callGraphHint.reason, 'unsupported_language');
-            assert.equal(payload.results[0].navigationFallback.fileOutlineWindow.args.file, relativePath);
+            assert.equal(payload.results[0].nextActions?.openSymbol?.tool, 'read_file');
+            assert.equal(payload.results[0].nextActions?.callGraph, undefined);
+            assert.equal(payload.results[0].navigationFallback, undefined);
             assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'registry_repair');
         });
     });
@@ -2199,6 +2203,14 @@ test('handleSearchCode grouped symbol mode disables call graph hints when relati
             assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
             assert.equal(payload.results[0].callGraphHint.supported, false);
             assert.equal(payload.results[0].callGraphHint.reason, 'incompatible_relationship_sidecar');
+            assert.equal(payload.results[0].nextActions?.openSymbol?.tool, 'read_file');
+            assert.equal(payload.results[0].nextActions?.openSymbol?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].nextActions?.callGraph, undefined);
+            assert.equal(payload.results[0].navigationFallback, undefined);
+            assert.equal(payload.results[0].recommendedNextAction?.tool, 'read_file');
+            assert.equal(payload.results[0].recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.recommendedNextAction?.tool, 'read_file');
+            assert.equal(payload.recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
             assert.ok(warningCodes(payload).includes('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
         });
     });
@@ -2258,6 +2270,11 @@ test('handleSearchCode grouped symbol mode does not require registry when owner 
             assert.equal(payload.results[0].collapsedChunkCount, 2);
             assert.equal(payload.results[0].symbolKey, 'owner_auth_login_key');
             assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'owner_metadata');
+            assert.equal(payload.results[0].nextActions, undefined);
+            assert.equal(payload.results[0].navigationFallback, undefined);
+            assert.equal(payload.results[0].recommendedNextAction, undefined);
+            assert.equal(payload.results[0].fallbacks, undefined);
+            assert.equal(payload.recommendedNextAction, undefined);
         });
     });
 });
@@ -2390,7 +2407,7 @@ test('handleSearchCode grouped output includes compact nextActions for supported
                 end_line: 6
             }
         });
-        assert.equal(payload.hints?.navigation?.nextStep, 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.');
+        assert.equal(payload.hints?.navigation?.nextStep, 'Use recommendedNextAction when present. Call call_graph only when nextActions.callGraph is present and callGraphHint.supported=true.');
     });
 });
 
@@ -2580,6 +2597,10 @@ test('handleSearchCode repairs registry-owned Python multiline spans before expo
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results[0].span.startLine, 4);
         assert.equal(payload.results[0].span.endLine, 15);
+        assert.equal(payload.results[0].previewSpan.startLine, 2);
+        assert.equal(payload.results[0].previewSpan.endLine, 9);
+        assert.equal(payload.results[0].symbolSpan.startLine, 4);
+        assert.equal(payload.results[0].symbolSpan.endLine, 15);
         assert.equal(payload.results[0].callGraphHint.symbolRef.span.startLine, 4);
         assert.equal(payload.results[0].callGraphHint.symbolRef.span.endLine, 15);
         assert.equal(payload.results[0].nextActions.openSymbol.args.open_symbol.symbolId, owner.symbolInstanceId);
@@ -2746,6 +2767,8 @@ test('handleSearchCode downgrades stale search symbol refs to navigation fallbac
 
         assert.equal(result.callGraphHint.supported, false);
         assert.equal(result.callGraphHint.reason, 'missing_symbol');
+        assert.deepEqual(result.previewSpan, { startLine: 3, endLine: 6 });
+        assert.equal(result.symbolSpan, undefined);
         assert.equal(result.nextActions, undefined);
         assert.deepEqual(result.navigationFallback.readSpan, {
             tool: 'read_file',
@@ -3654,6 +3677,7 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
             CAPABILITIES_NO_RERANK,
             () => Date.parse('2026-01-01T01:00:00.000Z')
         );
+        (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -4585,6 +4609,143 @@ test('handleSearchCode ranks script runtime owners above package installability 
         assert.equal(payload.results[0].file, 'scripts/check-version-freshness.mjs');
         assert.equal(payload.results[0].debug?.pathCategory, 'scriptRuntime');
         assert.equal(payload.results[0].debug?.agentFitReason, 'script_implementation');
+    });
+});
+
+test('handleSearchCode boosts exact phase/path anchors for broad semantic queries', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: [
+                    'def build_pair_relationship_object(pair):',
+                    '    readiness = measure_runtime_readiness(pair)',
+                    '    return {"relationship": pair, "admission": readiness}',
+                ].join('\n'),
+                relativePath: 'scripts/ops/phase6m_pair_relationship_object.py',
+                startLine: 568,
+                endLine: 590,
+                language: 'python',
+                score: 0.31445,
+                backendScore: 0.31445,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_phase6m_pair_relationship_object',
+                symbolLabel: 'function build_pair_relationship_object('
+            },
+            {
+                content: [
+                    'def build_phase6av_independent_descriptor_target(pair):',
+                    '    observation_source = load_phase6p_relationship_observation_source(pair)',
+                    '    readiness = evaluate_runtime_pair_relationship_readiness(pair)',
+                    '    return admit_descriptor_target(pair, observation_source, readiness)',
+                ].join('\n'),
+                relativePath: 'scripts/ops/phase6p_pair_relationship_observation_source.py',
+                startLine: 4909,
+                endLine: 4960,
+                language: 'python',
+                score: 0.27803,
+                backendScore: 0.27803,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_phase6p_descriptor_target',
+                symbolLabel: 'function build_phase6av_independent_descriptor_target('
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'phase6p relationship observation source runtime pair relationship readiness admission',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'scripts/ops/phase6p_pair_relationship_observation_source.py');
+        assert.equal(payload.results[1].file, 'scripts/ops/phase6m_pair_relationship_object.py');
+        assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
+        assert.equal(payload.hints?.debugSearch?.queryIntent?.classification, 'mixed');
+    });
+});
+
+test('handleSearchCode demotes sibling structural-anchor near misses below a neutral parallel control', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: [
+                    'def build_phase6av_independent_descriptor_target(pair):',
+                    '    observation_source = load_phase6p_relationship_observation_source(pair)',
+                    '    readiness = evaluate_runtime_pair_relationship_readiness(pair)',
+                    '    return admit_pair_relationship_runtime_admission(pair, observation_source, readiness)',
+                ].join('\n'),
+                relativePath: 'scripts/ops/phase6p_pair_relationship_observation_source.py',
+                startLine: 4909,
+                endLine: 4960,
+                language: 'python',
+                score: 0.27803,
+                backendScore: 0.27803,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_phase6p_descriptor_target',
+                symbolLabel: 'function build_phase6av_independent_descriptor_target('
+            },
+            {
+                content: [
+                    'def build_phase6m_independent_descriptor_target(pair):',
+                    '    observation_source = load_phase6m_relationship_observation_source(pair)',
+                    '    readiness = evaluate_runtime_pair_relationship_readiness(pair)',
+                    '    return admit_pair_relationship_runtime_admission(pair, observation_source, readiness)',
+                ].join('\n'),
+                relativePath: 'scripts/ops/phase6m_pair_relationship_observation_source.py',
+                startLine: 4909,
+                endLine: 4960,
+                language: 'python',
+                score: 0.27803,
+                backendScore: 0.27803,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_phase6m_descriptor_target',
+                symbolLabel: 'function build_phase6m_independent_descriptor_target('
+            },
+            {
+                content: [
+                    'def build_independent_descriptor_target_runtime_admission(pair):',
+                    '    observation_source = load_relationship_observation_source(pair)',
+                    '    readiness = evaluate_runtime_pair_relationship_readiness(pair)',
+                    '    return admit_pair_relationship_runtime_admission(pair, observation_source, readiness)',
+                ].join('\n'),
+                relativePath: 'scripts/ops/pair_relationship_observation_source_runtime_admission.py',
+                startLine: 4909,
+                endLine: 4960,
+                language: 'python',
+                score: 0.27803,
+                backendScore: 0.27803,
+                backendScoreKind: 'rrf_fusion',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_parallel_runtime_admission_target',
+                symbolLabel: 'function build_independent_descriptor_target_runtime_admission('
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'phase6p relationship observation source runtime pair relationship readiness admission',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].file, 'scripts/ops/phase6p_pair_relationship_observation_source.py');
+        assert.equal(payload.results[1].file, 'scripts/ops/pair_relationship_observation_source_runtime_admission.py');
+        assert.equal(payload.results[2].file, 'scripts/ops/phase6m_pair_relationship_observation_source.py');
+        assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
+        assert.equal(payload.results[1].debug?.lexicalScore > payload.results[2].debug?.lexicalScore, true);
+        assert.equal(payload.hints?.debugSearch?.queryIntent?.classification, 'mixed');
     });
 });
 
@@ -6126,6 +6287,8 @@ test('handleSearchCode grouped fallback emits stable hash groupId and unsupporte
         assert.equal(firstPayload.results[0].groupId, secondPayload.results[0].groupId);
         assert.equal(firstPayload.results[0].callGraphHint.supported, false);
         assert.equal(firstPayload.results[0].callGraphHint.reason, 'missing_symbol');
+        assert.deepEqual(firstPayload.results[0].previewSpan, { startLine: 42, endLine: 45 });
+        assert.equal(firstPayload.results[0].symbolSpan, undefined);
         assert.equal(firstPayload.results[0].navigationFallback.message, 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.');
         assert.equal(firstPayload.results[0].navigationFallback.context.codebaseRoot, repoPath);
         assert.equal(firstPayload.results[0].navigationFallback.context.relativeFile, 'src/runtime.ts');
@@ -6876,6 +7039,7 @@ async function runSearchFreshnessDecisionCase(
         reason?: string;
         semanticSearchCalls: number;
         messageIncludes?: string;
+        completionProofCalls?: number;
     }
 ): Promise<any> {
     let semanticSearchCalls = 0;
@@ -6940,7 +7104,7 @@ async function runSearchFreshnessDecisionCase(
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(ensureFreshnessCalls, 1);
-        assert.equal(completionProofCalls, 1);
+        assert.equal(completionProofCalls, expected.completionProofCalls ?? 1);
         assert.equal(semanticSearchCalls, expected.semanticSearchCalls);
         assert.equal(payload.status, expected.status);
         if (expected.reason) {
@@ -7031,7 +7195,8 @@ test('handleSearchCode allows successful coalesced freshness reuse', async () =>
         thresholdMs: 180000
     }, {
         status: 'ok',
-        semanticSearchCalls: 2
+        semanticSearchCalls: 2,
+        completionProofCalls: 2
     });
 
     assert.equal(payload.results.length, 1);
@@ -7080,6 +7245,63 @@ test('handleSearchCode not_indexed payload includes stable reason code', async (
         assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
         assert.equal(payload.recommendedNextAction?.args?.action, 'create');
         assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
+    });
+});
+
+test('handleSearchCode failed-index payload preserves failure diagnostics', async () => {
+    await withTempRepo(async (repoPath) => {
+        const failedInfo = {
+            status: 'indexfailed',
+            errorMessage: 'Interrupted indexing detected without completion marker proof.',
+            lastAttemptedPercentage: 0,
+            lastUpdated: '2026-06-19T12:15:18.574Z'
+        };
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                throw new Error('semanticSearch should not run for failed indexes');
+            }
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: failedInfo }],
+            getCodebaseInfo: () => failedInfo,
+            getCodebaseStatus: () => 'indexfailed',
+            getIndexedCodebases: () => [],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => {
+                throw new Error('ensureFreshness should not run for failed indexes');
+            }
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-06-19T12:20:00.000Z'));
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'index_failed');
+        assert.equal(payload.codebasePath, repoPath);
+        assert.match(payload.message, /Interrupted indexing detected without completion marker proof/i);
+        assert.match(payload.message, /0\.0%/);
+        assert.equal(payload.indexingFailure?.errorMessage, failedInfo.errorMessage);
+        assert.equal(payload.indexingFailure?.lastAttemptedPercentage, 0);
+        assert.equal(payload.indexingFailure?.lastUpdated, failedInfo.lastUpdated);
+        assert.equal(payload.hints?.create?.tool, 'manage_index');
+        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'create', path: repoPath });
     });
 });
 

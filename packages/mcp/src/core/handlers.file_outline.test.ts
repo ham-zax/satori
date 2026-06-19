@@ -414,6 +414,41 @@ test('handleFileOutline returns not_ready envelope when codebase is indexing', a
     });
 });
 
+test('handleFileOutline failed-index payload preserves failure diagnostics', async () => {
+    await withTempRepo(async (repoPath) => {
+        const failedInfo = {
+            status: 'indexfailed',
+            errorMessage: 'Interrupted indexing detected without completion marker proof.',
+            lastAttemptedPercentage: 0,
+            lastUpdated: '2026-06-19T12:15:18.574Z'
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: failedInfo }],
+            getIndexedCodebases: () => [],
+            getIndexingCodebases: () => [],
+            getCodebaseInfo: () => failedInfo,
+            getCodebaseStatus: () => 'indexfailed',
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {}, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'index_failed');
+        assert.equal(payload.codebaseRoot, repoPath);
+        assert.equal(payload.file, 'src/runtime.ts');
+        assert.match(payload.message, /Interrupted indexing detected without completion marker proof/i);
+        assert.match(payload.message, /0\.0%/);
+        assert.equal(payload.indexingFailure?.errorMessage, failedInfo.errorMessage);
+        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
+    });
+});
+
 test('handleFileOutline returns unsupported for unsupported file extensions', async () => {
     await withTempRepo(async (repoPath) => {
         const snapshotManager = {

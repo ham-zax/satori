@@ -251,6 +251,51 @@ function createHandlers(repoPath: string, searchResults: any[] = []) {
     return { handlers, snapshotManager: createSnapshotManager(repoPath), syncManager };
 }
 
+function createFailedIndexHandlers(repoPath: string) {
+    const failedInfo = {
+        status: 'indexfailed',
+        errorMessage: 'Interrupted indexing detected without completion marker proof.',
+        lastAttemptedPercentage: 0,
+        lastUpdated: '2026-06-19T12:15:18.574Z',
+    };
+    const context = {
+        getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+        getVectorStore: () => ({ listCollections: async () => [] }),
+        semanticSearch: async () => {
+            throw new Error('semanticSearch should not run for failed indexes');
+        },
+    } as any;
+    const snapshotManager = {
+        getAllCodebases: () => [{ path: repoPath, info: failedInfo }],
+        getIndexedCodebases: () => [],
+        getIndexingCodebases: () => [],
+        getCodebaseInfo: () => failedInfo,
+        getCodebaseStatus: () => 'indexfailed',
+        getCodebaseCallGraphSidecar: () => undefined,
+        ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+        saveCodebaseSnapshot: () => undefined,
+    } as any;
+    const syncManager = {
+        ensureFreshness: async () => {
+            throw new Error('ensureFreshness should not run for failed indexes');
+        },
+        touchWatchedCodebase: async () => undefined,
+    } as any;
+
+    return {
+        handlers: new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            () => Date.parse('2026-06-19T12:20:00.000Z'),
+        ),
+        snapshotManager,
+        syncManager,
+    };
+}
+
 function createReadFileToolContext(input: {
     handlers: ToolHandlers;
     snapshotManager: ToolContext['snapshotManager'];
@@ -428,14 +473,28 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
             hints: {
                 version: 1,
                 navigation: {
-                    nextStep: 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.',
+                    nextStep: 'Use recommendedNextAction when present. Call call_graph only when nextActions.callGraph is present and callGraphHint.supported=true.',
                 },
+            },
+            recommendedNextAction: {
+                resultIndex: 0,
+                tool: 'read_file',
+                args: {
+                    path: '<repo>/src/auth.ts',
+                    open_symbol: {
+                        symbolId: '<symbol:function:validateSession>',
+                        symbolLabel: 'function validateSession(token: string)',
+                    },
+                },
+                reason: 'Open the selected owner before graph traversal so edits are grounded in source.',
             },
             results: [{
                 kind: 'group',
                 groupId: '<symbol:function:validateSession>',
                 file: 'src/auth.ts',
                 span: { startLine: 5, endLine: 7 },
+                previewSpan: { startLine: 5, endLine: 7 },
+                symbolSpan: { startLine: 5, endLine: 7 },
                 language: 'typescript',
                 symbolId: '<symbol:function:validateSession>',
                 symbolLabel: 'function validateSession(token: string)',
@@ -458,6 +517,12 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
                         symbolLabel: 'function validateSession(token: string)',
                         span: { startLine: 5, endLine: 7 },
                     },
+                },
+                capabilities: {
+                    openSymbol: 'medium',
+                    callGraphCallers: 'low',
+                    callGraphCallees: 'medium',
+                    semanticMatch: 'medium',
                 },
                 nextActions: {
                     openSymbol: {
@@ -496,7 +561,31 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
                         },
                     },
                 },
-                preview: 'return normalizeToken(token).length > 0;',
+                recommendedNextAction: {
+                    tool: 'read_file',
+                    args: {
+                        path: '<repo>/src/auth.ts',
+                        open_symbol: {
+                            symbolId: '<symbol:function:validateSession>',
+                            symbolLabel: 'function validateSession(token: string)',
+                        },
+                    },
+                    reason: 'Open the selected owner before graph traversal so edits are grounded in source.',
+                },
+                fallbacks: [{
+                    when: 'call_graph returns no edges or relationship confidence is lower than the edit needs',
+                    tool: 'search_codebase',
+                    args: {
+                        path: '<repo>',
+                        query: 'must:validateSession validateSession',
+                        scope: 'runtime',
+                        resultMode: 'grouped',
+                        groupBy: 'symbol',
+                        limit: 5,
+                    },
+                    reason: 'Inbound graph coverage can be incomplete; exact lexical search verifies references before impact analysis.',
+                }],
+                preview: 'function validateSession(token: string)\nreturn normalizeToken(token).length > 0;',
             }],
         });
     }));
@@ -669,6 +758,57 @@ test('golden MCP search_codebase invalid root shape', async () => {
     }));
 });
 
+test('golden MCP search_codebase failed index shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const { handlers } = createFailedIndexHandlers(repoPath);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            status: 'not_indexed',
+            reason: 'index_failed',
+            codebasePath: '<repo>',
+            path: '<repo>',
+            query: 'runtime',
+            scope: 'runtime',
+            groupBy: 'symbol',
+            resultMode: 'grouped',
+            limit: 5,
+            freshnessDecision: null,
+            message: "Codebase '<repo>' has a failed indexing attempt. Error: Interrupted indexing detected without completion marker proof. Failed at: 0.0% progress. Failed at: 2026-06-19T12:15:18.574Z. Satori will not serve semantic results from an unproven partial index. Run manage_index with {\"action\":\"create\",\"path\":\"<repo>\"} to restart indexing for this failed state.",
+            indexingFailure: {
+                errorMessage: 'Interrupted indexing detected without completion marker proof.',
+                lastAttemptedPercentage: 0,
+                lastUpdated: '2026-06-19T12:15:18.574Z',
+            },
+            recommendedNextAction: {
+                tool: 'manage_index',
+                args: { action: 'create', path: '<repo>' },
+                reason: 'Restart indexing because the previous attempt failed before completion marker proof.',
+            },
+            hints: {
+                create: {
+                    tool: 'manage_index',
+                    args: { action: 'create', path: '<repo>' },
+                },
+                status: {
+                    tool: 'manage_index',
+                    args: { action: 'status', path: '<repo>' },
+                },
+            },
+            results: [],
+        });
+    }));
+});
+
 test('golden MCP file_outline invalid root shape', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const missingRoot = path.join(repoPath, 'missing-root');
@@ -689,6 +829,44 @@ test('golden MCP file_outline invalid root shape', async () => {
             outline: null,
             hasMore: false,
             message: "Path '<repo>/missing-root' does not exist. file_outline requires an indexed codebase directory root.",
+        });
+    }));
+});
+
+test('golden MCP file_outline failed index shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const { handlers } = createFailedIndexHandlers(repoPath);
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            status: 'not_indexed',
+            reason: 'index_failed',
+            path: '<repo>',
+            codebaseRoot: '<repo>',
+            file: 'src/runtime.ts',
+            outline: null,
+            hasMore: false,
+            message: "Codebase '<repo>' has a failed indexing attempt. Error: Interrupted indexing detected without completion marker proof. Failed at: 0.0% progress. Failed at: 2026-06-19T12:15:18.574Z. Satori will not serve semantic results from an unproven partial index. Run manage_index with {\"action\":\"create\",\"path\":\"<repo>\"} to restart indexing for this failed state.",
+            indexingFailure: {
+                errorMessage: 'Interrupted indexing detected without completion marker proof.',
+                lastAttemptedPercentage: 0,
+                lastUpdated: '2026-06-19T12:15:18.574Z',
+            },
+            hints: {
+                create: {
+                    tool: 'manage_index',
+                    args: { action: 'create', path: '<repo>' },
+                },
+                status: {
+                    tool: 'manage_index',
+                    args: { action: 'status', path: '<repo>' },
+                },
+            },
         });
     }));
 });
@@ -724,6 +902,55 @@ test('golden MCP call_graph invalid root shape', async () => {
             totalNoteCount: 0,
             returnedNoteCount: 0,
             message: "Path '<repo>/missing-root' does not exist. call_graph requires an indexed codebase directory root.",
+        });
+    }));
+});
+
+test('golden MCP call_graph failed index shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const { handlers } = createFailedIndexHandlers(repoPath);
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: { file: 'src/runtime.ts', symbolId: 'sym_runtime_run' },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+        });
+
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
+        assert.deepEqual(payload, {
+            status: 'not_indexed',
+            supported: false,
+            reason: 'index_failed',
+            path: '<repo>',
+            codebaseRoot: '<repo>',
+            symbolRef: {
+                file: 'src/runtime.ts',
+                symbolId: 'sym_runtime_run',
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 20,
+            nodes: [],
+            edges: [],
+            notes: [],
+            message: "Codebase '<repo>' has a failed indexing attempt. Error: Interrupted indexing detected without completion marker proof. Failed at: 0.0% progress. Failed at: 2026-06-19T12:15:18.574Z. Satori will not serve semantic results from an unproven partial index. Run manage_index with {\"action\":\"create\",\"path\":\"<repo>\"} to restart indexing for this failed state.",
+            indexingFailure: {
+                errorMessage: 'Interrupted indexing detected without completion marker proof.',
+                lastAttemptedPercentage: 0,
+                lastUpdated: '2026-06-19T12:15:18.574Z',
+            },
+            hints: {
+                create: {
+                    tool: 'manage_index',
+                    args: { action: 'create', path: '<repo>' },
+                },
+                status: {
+                    tool: 'manage_index',
+                    args: { action: 'status', path: '<repo>' },
+                },
+            },
         });
     }));
 });

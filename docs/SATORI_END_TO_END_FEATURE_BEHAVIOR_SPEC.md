@@ -29,7 +29,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Rerank is policy-controlled (capability/profile + docs-scope skip), runs post-filter and pre-group, top-K bounded, deterministic rank-only boost, stable failure degradation.
 - Candidate and group sorting both use explicit deterministic tie-break chains.
 - Grouping supports `symbol` and `file`; symbol grouping prefers owner metadata when present, repairs missing owner identity from a compatible registry, and uses deterministic hashed fallback groups when symbol identity is unavailable.
-- `callGraphHint` contains supported/unsupported reasoned state; supported groups expose compact `nextActions.callGraph` args plus allowed directions, unsupported groups expose executable `navigationFallback`, and search hints always include the next navigation step.
+- `callGraphHint` contains supported/unsupported reasoned state; supported groups expose compact `nextActions.callGraph` args plus allowed directions, unsupported groups expose executable `navigationFallback`, and search results include `recommendedNextAction`, capability confidence, and fallbacks so agents can choose the proof path without reconstructing spans.
 - `file_outline` supports `resolveMode=outline|exact` with exact outcomes `ok|ambiguous|not_found`.
 - `read_file` supports `plain|annotated`; annotated mode returns `outlineStatus`, `outline`, `hasMore`, warnings/hints; `open_symbol` resolves deterministically via `file_outline exact`.
 - Reindex-compatibility gates propagate `requires_reindex` envelopes with deterministic `hints.reindex` across search/navigation tools.
@@ -82,7 +82,7 @@ Symbol identity contract:
 - `symbolInstanceId` is exact snapshot identity derived from `symbolKey`, file hash, canonical span serialization, and extractor version.
 - `symbolKey` lookup is candidate lookup; exact opens must disambiguate with `symbolInstanceId`, file hash, manifest compatibility, and exact file/label constraints.
 - Relationship manifests must bind to the compatible symbol registry manifest hash before graph data can be trusted.
-- Current implementation status: core exports contract types and runtime guards, writes symbol registry sidecars for completed full indexes, assigns owner metadata into retrieval documents, writes relationship manifests bound to the symbol registry manifest hash, writes conservative function/method-owned `CALLS v0` relationship edge shards plus TS/JS `IMPORTS`/`EXPORTS v0` file-owner edge shards, reads relationship sidecars for registry-backed search/outline/navigation through `NavigationStore`, and mirrors compatible JSON navigation state into `navigation.sqlite` for additive parity-checked reads. `CALLS v0` is heuristic and name-based: unique same-file targets are high confidence, unique cross-file targets are low confidence, and ambiguous same-name targets are skipped until import/receiver-aware resolution exists. `IMPORTS`/`EXPORTS v0` only records resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped. `call_graph` resolves exact symbols through the registry and traverses compatible relationship sidecars for conservative `CALLS v0` edges, filtering unsupported low-confidence edges by default and promoting low-confidence cross-file calls only when deterministic import/export-supported evidence points to the target symbol. When the default shared runtime store is created with `SATORI_NAVIGATION_BACKEND=sqlite`, runtime navigation can explicitly serve from SQLite only if canonical JSON registry and relationship metadata prove parity; JSON remains the canonical default and fallback path, and SQLite remains cache/validation/experimental serving only.
+- Current implementation status: core exports contract types and runtime guards, writes symbol registry sidecars for completed full indexes, assigns owner metadata into retrieval documents, writes relationship manifests bound to the symbol registry manifest hash, writes conservative function/method-owned `CALLS v0` relationship edge shards plus TS/JS relative-module and Python relative-module `IMPORTS`/`EXPORTS v0` file-owner edge shards, reads relationship sidecars for registry-backed search/outline/navigation through `NavigationStore`, and mirrors compatible JSON navigation state into `navigation.sqlite` for additive parity-checked reads. `CALLS v0` is heuristic and name-based: unique same-file targets are high confidence, unique cross-file targets are low confidence, and ambiguous same-name targets are skipped until import/receiver-aware resolution exists. `IMPORTS`/`EXPORTS v0` only records resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped. For Python, top-level `def`/`class` declarations act as module-owner exports, which allows deterministic promotion of relative-import-backed low-confidence cross-file calls. `call_graph` resolves exact symbols through the registry and traverses compatible relationship sidecars for conservative `CALLS v0` edges, filtering unsupported low-confidence edges by default and promoting low-confidence cross-file calls only when deterministic import/export-supported evidence points to the target symbol. When suppressed Python caller/callee records still carry a concrete site, MCP can synthesize bounded source-backed dynamic recovery only if source-span repair validates the owning function body, the recorded site remains inside that repaired span, and direct-call verification resolves to the exact suppressed target symbol; successful recovery is surfaced as `SOURCE_BACKED_DYNAMIC_CALLEES:<n>` or `SOURCE_BACKED_DYNAMIC_CALLERS:<n>`. Remaining suppressed candidates are surfaced in structured notes with the candidate site location. When the default shared runtime store is created with `SATORI_NAVIGATION_BACKEND=sqlite`, runtime navigation can explicitly serve from SQLite only if canonical JSON registry and relationship metadata prove parity; JSON remains the canonical default and fallback path, and SQLite remains cache/validation/experimental serving only.
 
 Behavior contract:
 - Trigger: MCP server starts and tools are invoked.
@@ -189,12 +189,16 @@ Inputs/defaults:
 - Defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `limit=capability default`, `debug=false`.
 
 Outputs:
-- JSON envelope: `status`, `path`, `query`, `scope`, `groupBy`, `resultMode`, `limit`, `freshnessDecision`, `freshnessSummary`, `results`, optional `warnings`, and `hints`.
+- JSON envelope: `status`, `path`, `query`, `scope`, `groupBy`, `resultMode`, `limit`, `freshnessDecision`, `freshnessSummary`, `results`, optional structured `warnings`, top-level `recommendedNextAction`, and `hints`.
+- Grouped results include legacy `span`, explicit `previewSpan` and optional authoritative `symbolSpan`, plus `capabilities`, optional result-level `recommendedNextAction`, optional `fallbacks`, executable `nextActions`, and `navigationFallback` only when a deterministic preview-span fallback is intentionally allowed.
+- `nextActions.openSymbol` is gated by exact symbol navigation readiness; `nextActions.callGraph` is gated separately by relationship-sidecar readiness. Search may expose `openSymbol` without exposing `callGraph`.
+- If exact symbol navigation is not ready because symbol registry readiness is missing or incompatible, search suppresses preview-span action leaks: no `navigationFallback.readSpan`, no preview-span `read_file` fallback entries, and no recommended action derived from those preview spans.
 - Status variants: `ok`, `not_indexed`, `requires_reindex`, `not_ready`.
+- Failed index snapshots return `status:"not_indexed"` with `reason:"index_failed"`, `indexingFailure` diagnostics, and `manage_index {action:"create"}` hints. This restarts a failed partial attempt; it is not a fingerprint `reindex` requirement.
 
 Warnings/hints:
-- `FILTER_MUST_UNSATISFIED`, `SEARCH_PASS_FAILED:*`, `RERANKER_FAILED`, `SEARCH_DIRTY_WORKTREE_NOT_SYNCED`, `SEARCH_CHANGED_FILES_BOOST_SKIPPED`.
-- `hints.navigation`, `hints.noiseMitigation`, `hints.debugSearch`, `hints.reindex`, `navigationFallback`.
+- Search warnings are structured objects with `code`, `severity`, `blocksUse`, `message`, and optional `action`; known codes include `FILTER_MUST_UNSATISFIED`, `SEARCH_PASS_FAILED:*`, `RERANKER_FAILED`, `SEARCH_DIRTY_WORKTREE_NOT_SYNCED`, and `SEARCH_CHANGED_FILES_BOOST_SKIPPED`.
+- `hints.navigation`, `hints.noiseMitigation`, `hints.debugSummary`, `hints.debugSearch`, `hints.reindex`, result `fallbacks`, and `navigationFallback`.
 - Backend failures return structured `not_ready` envelopes with `reason=vector_backend_unavailable`, stable diagnostic codes such as `ZILLIZ_CLUSTER_STOPPED`, and remediation in `hints.backend`.
 
 Determinism:
@@ -203,11 +207,12 @@ Determinism:
 Common recipes:
 1. Runtime triage: `scope=runtime, resultMode=grouped, groupBy=symbol`.
 2. Noise remediation: apply `.satoriignore`, wait debounce, rerun search.
-3. Debug ranking: `debug:true` and inspect `hints.debugSearch`.
+3. Debug ranking: `debug:true`, inspect `hints.debugSummary` first, then drill into `hints.debugSearch` if needed.
 
 Behavior:
 - Trigger: search call.
 - Effect: sync-on-read + multi-pass retrieval + deterministic post-processing.
+- Effect detail: `search_codebase` remains the only sync-on-read exception in the MCP read surface. It resolves the candidate tracked root, runs freshness, reruns tracked-root readiness, and fails closed if readiness degraded before final result emission.
 - Effect detail: when semantic retrieval under-delivers, exact identifiers, exact path filters, and quoted literal phrases may trigger a bounded tracked-file lexical recovery pass before final ranking/grouping.
 - Observability: envelope + debug hints.
 - Determinism: explicit comparator chains and bounded loops.
@@ -222,8 +227,9 @@ Inputs/defaults:
 - Exact mode requires `symbolIdExact` or `symbolLabelExact`.
 
 Outputs:
-- JSON envelope: `status`, `path`, `file`, `outline|null`, `hasMore`, optional `message`, `warnings`, `hints`.
+- JSON envelope: `status`, `path`, `file`, `outline|null`, `hasMore`, optional `message`, `warnings`, `hints`, and `indexingFailure` when the tracked root is in `indexfailed`.
 - Status variants: `ok|not_found|requires_reindex|unsupported|ambiguous`.
+- Failed index snapshots return `status:"not_indexed"` with `reason:"index_failed"` and `manage_index {action:"create"}` hints rather than hiding the failed-state cause behind generic `not_indexed`.
 
 Warnings/hints:
 - `OUTLINE_MISSING_SYMBOL_METADATA:<count>`.
@@ -260,6 +266,7 @@ Inputs/defaults:
 Outputs:
 - JSON envelope with `status` plus graph payload.
 - Status variants via handler mapping: `ok|not_found|unsupported|not_ready|requires_reindex|not_indexed`.
+- Failed index snapshots return `status:"not_indexed"`, `reason:"index_failed"`, `supported:false`, `indexingFailure`, empty graph arrays, and `manage_index {action:"create"}` hints.
 - Malformed direct handler calls fail as a normal JSON envelope with `status:"not_found"`, `reason:"invalid_symbol_ref"`, and empty `nodes`/`edges`/`notes`; normal MCP tool execution rejects malformed `symbolRef` at schema validation before dispatch.
 - `sidecar.nodeCount` and `sidecar.edgeCount` report the node/edge counts returned in that traversal response. They are not whole-sidecar totals for the indexed codebase.
 - `testReferences` are static call-graph references from test-like files to returned symbols. They are investigation hints only; they do not prove runtime coverage, assertion coverage, or that a test executed a path.
@@ -267,6 +274,7 @@ Outputs:
 Warnings/hints:
 - Missing sidecar: reindex hint.
 - Missing symbol: advisory hint.
+- Validated Python source-backed recovery keeps the suppressed low-confidence note and adds `SOURCE_BACKED_DYNAMIC_CALLEES:<n>` or `SOURCE_BACKED_DYNAMIC_CALLERS:<n>` only for exact target-validated recovery.
 
 Determinism:
 - node/edge/note sorting deterministic.
@@ -337,7 +345,7 @@ Behavior:
 2) Result modes and grouping
 - Trigger: `resultMode` and `groupBy`.
 - Effect: `raw` returns chunks; `grouped` returns collapsed groups by symbol/file. For `groupBy=symbol`, grouping prefers `ownerSymbolKey` plus `ownerSymbolInstanceId` when present, repairs missing owner identity from a compatible symbol registry by file/span containment, then falls back to deterministic file/proximity grouping.
-- Observability: `resultMode`, `results.kind`, additive `symbolKey`, `symbolInstanceId`, `symbolKind`, `confidence`, `collapsedChunkCount`, `callGraphHint`, compact `nextActions`, capped `preview`, and `debug.symbolAggregation.ownerSource` (`owner_metadata|registry_repair|fallback`) when `debug:true`.
+- Observability: `resultMode`, `results.kind`, legacy `span`, additive `previewSpan`, optional authoritative `symbolSpan`, additive `symbolKey`, `symbolInstanceId`, `symbolKind`, `confidence`, `collapsedChunkCount`, `callGraphHint`, compact readiness-gated `nextActions`, `recommendedNextAction`, `capabilities`, `fallbacks`, symbol-bounded capped `preview`, and `debug.symbolAggregation.ownerSource` (`owner_metadata|registry_repair|fallback`) when `debug:true`.
 - Determinism: group key construction, saturated support boost, and sorted representative selection.
 - Performance: grouped mode reduces result payload/noise with capped previews and shared call-graph action args; raw mode preserves chunk detail.
 
@@ -395,7 +403,7 @@ Behavior:
 - Trigger: `rankingMode=auto_changed_first`.
 - Effect: tracked git-changed files get multiplicative boost when changed-file count is within threshold.
 - Observability: `freshnessSummary.changedFileCount`, `freshnessSummary.gitDirtyFilesConsidered`, `freshnessSummary.changedFilesBoostApplied` (true only when at least one candidate was boosted), `freshnessSummary.changedFilesBoostSkippedForLargeChangeSet`, and `hints.debugSearch.changedFilesBoost` when `debug:true`.
-- Warnings: `SEARCH_DIRTY_WORKTREE_NOT_SYNCED` when tracked dirty files are visible but freshness did not sync/reconcile, and `SEARCH_CHANGED_FILES_BOOST_SKIPPED` when the dirty set exceeds the boost threshold.
+- Warnings: structured `SEARCH_DIRTY_WORKTREE_NOT_SYNCED` when tracked dirty files are visible but freshness did not sync/reconcile, and structured `SEARCH_CHANGED_FILES_BOOST_SKIPPED` when the dirty set exceeds the boost threshold. Each warning carries an action string for the caller.
 - Determinism: tracked-only porcelain parse, normalized paths, TTL-cached set, threshold disable path.
 - Performance: one cached git status call per TTL window (5s), fallback to stale cache on git failure.
 
@@ -413,6 +421,13 @@ Behavior:
 - Determinism: fixed query-intent regexes and fixed multipliers; no extra backend calls.
 - Performance: metadata/content-prefix scoring adjustment only.
 
+8c) Structural-anchor sibling demotion
+- Trigger: mixed or semantic lexical scoring when the query contains high-signal structural anchors such as exact phase/path tokens.
+- Effect: exact anchor hits still receive the existing pre-weight lexical boost, while sibling near misses that share the same prefix structure but differ on the terminal anchor segment (for example `phase6p` vs `phase6m`) receive a pre-weight lexical demotion. Neutral candidates that simply lack the sibling anchor are not penalized.
+- Observability: `results[].debug.lexicalScore` reflects the pre-weight adjustment and should rank exact anchor hits above sibling near misses even when backend scores are otherwise parallel.
+- Determinism: fixed anchor token splitting and sibling comparison rules; no fuzzy edit-distance matching.
+- Performance: lexical-only adjustment; no extra backend calls.
+
 9) Noise mitigation hint
 - Trigger: top visible results exceed noise ratio threshold.
 - Effect: emits deterministic mitigation payload (`ratios`, `recommendedScope`, patterns, debounce, nextStep) with root `.gitignore` redundancy suppression.
@@ -428,7 +443,7 @@ Behavior:
 10) Reranking
 - Trigger: policy enable + non-docs scope + reranker present + scored candidates.
 - Effect: reranks top-K slice, converts rerank order to rank-only RRF boost, recomputes final score and resorts.
-- Observability: `hints.debugSearch.rerank`, warnings include `RERANKER_FAILED` on degradation.
+- Observability: `hints.debugSearch.rerank`; structured warnings include `RERANKER_FAILED` on degradation.
 - Observability (precedence semantics): debug exposes `enabledByPolicy`, `capabilityPresent`, `rerankerPresent`, and final `enabled`.
 - Determinism (precedence): rerank is attempted only when all are true: policy-enabled, capability present, reranker instance present, and scope is not docs. If policy is enabled but instance is missing, rerank is not attempted and no warning is emitted.
 - Determinism: fixed K/weight/rankK constants, stable comparator after rerank.
@@ -468,9 +483,9 @@ Recent vs legacy:
 
 2) `navigationFallback`
 - Trigger: `callGraphHint.supported === false`.
-- Effect: emits executable fallback plan (`readSpan` always; `fileOutlineWindow` when sidecar-ready and extension supports outline).
+- Effect: emits executable fallback plan derived from `previewSpan` (`readSpan` always; `fileOutlineWindow` when sidecar-ready and extension supports outline). `symbolSpan` remains authoritative owner metadata for exact navigation when available.
 - Observability: `results[].navigationFallback`.
-- Determinism: executable action args and span are derived deterministically from representative chunk/effective root.
+- Determinism: executable fallback args are derived deterministically from representative chunk/effective root; preview-span fallback and owner-symbol span remain distinct fields in grouped results.
 - Performance: no extra backend calls; payload-only guidance.
 
 3) `file_outline` exact resolution
@@ -762,11 +777,16 @@ Behavior contract:
 - Any tool returning `status:"requires_reindex"` with `hints.reindex` should be remediated by `manage_index {action:"reindex", path:hints.reindex.args.path}`.
 - Re-run original tool call after reindex.
 
-4) “call graph not ready”
-- If `call_graph` returns `not_ready`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, or `incompatible_relationship_sidecar`, reindex.
-- While waiting, use `search_codebase` `navigationFallback.readSpan` and optional `fileOutlineWindow` for deterministic navigation.
+4) “failed index”
+- Any search/navigation tool returning `status:"not_indexed"` with `reason:"index_failed"` is preserving a failed lifecycle state from the snapshot. Inspect `indexingFailure`, then run `manage_index {action:"create", path:hints.create.args.path}` when you want to restart that failed partial attempt.
+- Do not convert `reason:"index_failed"` into `reindex`; `reindex` is reserved for explicit `requires_reindex` compatibility gates.
 
-5) “partial scan detected” (core sync)
+5) “call graph not ready”
+- If `call_graph` returns `not_ready`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, or `incompatible_relationship_sidecar`, reindex.
+- While waiting, use `search_codebase` `navigationFallback.readSpan` and optional `fileOutlineWindow` only when they are actually emitted.
+- If search emits `openSymbol` without `callGraph`, read the exact symbol first and treat graph traversal as unavailable until readiness is repaired.
+
+6) “partial scan detected” (core sync)
 - Observe `partialScan=true` and `unscannedDirPrefixes` in core sync diagnostics.
 - Restore permissions/access for unreadable files/dirs.
 - Re-run sync/search; verify no false removals and eventual convergence.

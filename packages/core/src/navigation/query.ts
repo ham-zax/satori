@@ -56,6 +56,7 @@ export interface GetGraphNeighborsOk {
     rootPath: string;
     manifest: RelationshipManifest;
     records: RelationshipRecord[];
+    suppressedLowConfidenceRecords: RelationshipRecord[];
     visitedSymbolInstanceIds: string[];
     warnings: string[];
 }
@@ -338,6 +339,7 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
     const visitedSymbolInstanceIds = [input.symbolInstanceId];
     const selectedRecords = new Map<string, RelationshipRecord>();
     const skippedLowConfidence = new Set<string>();
+    const suppressedLowConfidenceRecords = new Map<string, RelationshipRecord>();
     let frontier = [input.symbolInstanceId];
 
     for (let depth = 1; depth <= maxDepth; depth += 1) {
@@ -378,6 +380,7 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
                         continue;
                     }
                     skippedLowConfidence.add(recordKey);
+                    suppressedLowConfidenceRecords.set(recordKey, record);
                     continue;
                 }
 
@@ -420,6 +423,7 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
         rootPath: relationshipSidecar.rootPath,
         manifest: relationshipSidecar.manifest,
         records: Array.from(selectedRecords.values()),
+        suppressedLowConfidenceRecords: Array.from(suppressedLowConfidenceRecords.values()).sort(compareRelationshipQueryRecords),
         visitedSymbolInstanceIds,
         warnings: uniqSortedWarnings(warnings),
     };

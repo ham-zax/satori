@@ -52,13 +52,15 @@ function createFunctionSymbol(input: {
     startLine: number;
     endLine: number;
     fileHash: string;
+    language?: string;
 }): SymbolRecord {
     const qualifiedName = input.qualifiedName || input.name;
     const label = input.label || `function ${input.name}()`;
+    const language = input.language || 'typescript';
     const parentQualifiedNamePath: string[] = [];
     const symbolKey = createSymbolKey({
         relativePath: input.file,
-        language: 'typescript',
+        language,
         kind: 'function',
         qualifiedName,
         parentQualifiedNamePath,
@@ -72,7 +74,7 @@ function createFunctionSymbol(input: {
             span,
             extractorVersion: 'extractor-v1',
         }),
-        language: 'typescript',
+        language,
         kind: 'function',
         name: input.name,
         qualifiedName,
@@ -253,6 +255,7 @@ test('getGraphNeighbors excludes low-confidence relationships by default and rep
             normalize.symbolInstanceId,
         ]);
         assert.deepEqual(neighbors.records.map((record) => record.targetInstanceId), [normalize.symbolInstanceId]);
+        assert.deepEqual(neighbors.suppressedLowConfidenceRecords.map((record) => record.targetInstanceId), [issue.symbolInstanceId]);
         assert.deepEqual(neighbors.warnings, ['RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1']);
     });
 });
@@ -371,6 +374,158 @@ test('getGraphNeighbors upgrades import/export-backed cross-file CALLS v0 edges 
             confidence: 'medium',
         }]);
         assert.deepEqual(neighbors.warnings, []);
+    });
+});
+
+test('getGraphNeighbors upgrades Python relative-import-backed cross-file CALLS v0 edges for traversal', async () => {
+    await withTempDir(async (stateRoot) => {
+        const telemetryContent = [
+            'def build_entry_telemetry():',
+            '    return None',
+        ].join('\n');
+        const phasesContent = [
+            'from .telemetry import build_entry_telemetry',
+            '',
+            'def _attach_entry_telemetry():',
+            '    return build_entry_telemetry()',
+        ].join('\n');
+        const telemetryFile = createSynthesizedFileSymbol({
+            relativePath: 'src/telemetry.py',
+            language: 'python',
+            content: telemetryContent,
+            fileHash: 'hash-telemetry',
+            extractorVersion: 'extractor-v1',
+        });
+        const phasesFile = createSynthesizedFileSymbol({
+            relativePath: 'src/phases.py',
+            language: 'python',
+            content: phasesContent,
+            fileHash: 'hash-phases',
+            extractorVersion: 'extractor-v1',
+        });
+        const buildEntryTelemetry = createFunctionSymbol({
+            file: 'src/telemetry.py',
+            name: 'build_entry_telemetry',
+            startLine: 1,
+            endLine: 2,
+            fileHash: 'hash-telemetry',
+            language: 'python',
+        });
+        const attachEntryTelemetry = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: '_attach_entry_telemetry',
+            startLine: 3,
+            endLine: 4,
+            fileHash: 'hash-phases',
+            language: 'python',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([
+                { path: 'src/phases.py', hash: 'hash-phases', language: 'python', symbolCount: 2 },
+                { path: 'src/telemetry.py', hash: 'hash-telemetry', language: 'python', symbolCount: 2 },
+            ]),
+            symbols: [phasesFile, attachEntryTelemetry, telemetryFile, buildEntryTelemetry],
+        });
+        const registryResult = await writeSymbolRegistrySidecar({ stateRoot, registry });
+        await writeRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolRegistryManifestHash: registryResult.manifestHash,
+            relationshipVersion: 'relationship-v1',
+            builtAt: '2026-06-17T00:00:00.000Z',
+            files: registry.manifest.files,
+            records: [
+                {
+                    sourceKey: phasesFile.symbolKey,
+                    sourceInstanceId: phasesFile.symbolInstanceId,
+                    targetKey: telemetryFile.symbolKey,
+                    targetInstanceId: telemetryFile.symbolInstanceId,
+                    targetPath: telemetryFile.file,
+                    type: 'IMPORTS',
+                    file: 'src/phases.py',
+                    span: { startLine: 1, endLine: 1 },
+                    confidence: 'high',
+                },
+                {
+                    sourceKey: phasesFile.symbolKey,
+                    sourceInstanceId: phasesFile.symbolInstanceId,
+                    targetKey: attachEntryTelemetry.symbolKey,
+                    targetInstanceId: attachEntryTelemetry.symbolInstanceId,
+                    type: 'EXPORTS',
+                    file: 'src/phases.py',
+                    span: { startLine: 3, endLine: 3 },
+                    confidence: 'high',
+                },
+                {
+                    sourceKey: telemetryFile.symbolKey,
+                    sourceInstanceId: telemetryFile.symbolInstanceId,
+                    targetKey: buildEntryTelemetry.symbolKey,
+                    targetInstanceId: buildEntryTelemetry.symbolInstanceId,
+                    type: 'EXPORTS',
+                    file: 'src/telemetry.py',
+                    span: { startLine: 1, endLine: 1 },
+                    confidence: 'high',
+                },
+                {
+                    sourceKey: attachEntryTelemetry.symbolKey,
+                    sourceInstanceId: attachEntryTelemetry.symbolInstanceId,
+                    targetKey: buildEntryTelemetry.symbolKey,
+                    targetInstanceId: buildEntryTelemetry.symbolInstanceId,
+                    type: 'CALLS',
+                    file: 'src/phases.py',
+                    span: { startLine: 4, endLine: 4 },
+                    confidence: 'low',
+                },
+            ],
+        });
+
+        const callees = await getGraphNeighbors({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: registryResult.manifestHash,
+            symbolInstanceId: attachEntryTelemetry.symbolInstanceId,
+            depth: 2,
+            direction: 'callees',
+            allowedTypes: ['CALLS'],
+        });
+
+        assert.equal(callees.status, 'ok');
+        assert.deepEqual(callees.visitedSymbolInstanceIds, [
+            attachEntryTelemetry.symbolInstanceId,
+            buildEntryTelemetry.symbolInstanceId,
+        ]);
+        assert.deepEqual(callees.records.map((record) => ({
+            targetInstanceId: record.targetInstanceId,
+            confidence: record.confidence,
+        })), [{
+            targetInstanceId: buildEntryTelemetry.symbolInstanceId,
+            confidence: 'medium',
+        }]);
+        assert.deepEqual(callees.warnings, []);
+
+        const callers = await getGraphNeighbors({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: registryResult.manifestHash,
+            symbolInstanceId: buildEntryTelemetry.symbolInstanceId,
+            depth: 2,
+            direction: 'callers',
+            allowedTypes: ['CALLS'],
+        });
+
+        assert.equal(callers.status, 'ok');
+        assert.deepEqual(callers.visitedSymbolInstanceIds, [
+            buildEntryTelemetry.symbolInstanceId,
+            attachEntryTelemetry.symbolInstanceId,
+        ]);
+        assert.deepEqual(callers.records.map((record) => ({
+            sourceInstanceId: record.sourceInstanceId,
+            confidence: record.confidence,
+        })), [{
+            sourceInstanceId: attachEntryTelemetry.symbolInstanceId,
+            confidence: 'medium',
+        }]);
+        assert.deepEqual(callers.warnings, []);
     });
 });
 

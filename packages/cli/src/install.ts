@@ -89,6 +89,9 @@ This project uses Satori MCP for semantic-first code exploration, freshness-awar
 
 ## Verification Rules
 - Treat \`navigationFallback\` as authoritative. Do not reconstruct spans from prose.
+- Treat \`recommendedNextAction\` as the default next move unless the user requested a different proof path.
+- Read \`warnings[].action\` and \`capabilities\` before trusting graph/navigation depth; warnings are degraded, not fatal, unless \`blocksUse=true\`.
+- Follow result \`fallbacks\` when graph traversal is unavailable, empty, or low confidence.
 - If any tool returns \`requires_reindex\` or \`hints.reindex\`, stop and run \`manage_index(action="reindex")\`; do not substitute \`sync\`.
 - Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with rg, tests, or direct references.
 - For ultra-fast exact literal lookup, local lexical search may still be faster; use Satori when semantic ownership or freshness-aware navigation matters.
@@ -107,6 +110,8 @@ This project uses Satori MCP for plain-English semantic code discovery, determin
 ## Rules
 - Prefer Satori for semantic code discovery before grep/glob.
 - Start with plain-English behavior questions; switch to exact ids, constants, and operators for proof.
+- Prefer \`recommendedNextAction\`, inspect \`warnings[].action\`, and use \`capabilities\` to judge whether opening, semantic match, or graph traversal is strong.
+- Follow result \`fallbacks\` when call graph evidence is unavailable, empty, or low confidence.
 - If a tool returns \`requires_reindex\`, run \`manage_index(action="reindex")\` and retry the original call.
 - Treat \`navigationFallback\` as authoritative when call graph is unavailable.
 - Read the relevant implementation and call sites before editing behavior.

@@ -40,7 +40,7 @@ Only these public tools exist:
 |------|----------|
 | `list_codebases` | Plain-text readiness buckets; deterministic ordering. |
 | `manage_index` | Text responses for lifecycle actions. `clear` is destructive and requires explicit user request. |
-| `search_codebase` | JSON envelope with status, results, warnings/hints, freshnessDecision, optional debug. Default path for discovery. |
+| `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. |
 | `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. |
 | `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. |
 | `read_file` | Plain text by default; annotated mode returns JSON. `open_symbol` resolves exactly and must not guess on ambiguity. |
@@ -50,12 +50,13 @@ Do not invent tools, parameters, write capabilities, rerank knobs, or output sha
 ## Tool Runtime Rules
 - Default feature-navigation path: `search_codebase` -> `file_outline` -> `call_graph` when supported -> `read_file(open_symbol)`.
 - If a grouped search result has `callGraphHint.supported=false`, treat `navigationFallback` as authoritative and call tools from its args. Do not reconstruct spans from prose.
+- Prefer `recommendedNextAction` when present; inspect `warnings[].action`, `capabilities`, and result `fallbacks` before deciding the next proof step.
 - If any tool returns `requires_reindex` or `hints.reindex`, stop and run `manage_index(action="reindex", path=<hinted path or indexed root>)`; do not substitute `sync`.
 - `search_codebase` is the sync-on-read freshness tool. Other tools may run compatibility gates but do not imply the same freshness behavior.
 - `search_codebase` defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `debug=false`.
 - Search operators are limited to deterministic prefix operators: `lang:`, `path:`, `-path:`, `must:`, `exclude:`. Path matching is gitignore-style against normalized repo-relative paths.
 - Filtering order is fixed: scope -> lang -> path include -> path exclude -> must -> exclude.
-- Warnings mean usable-but-degraded. Compensate with deeper reads or debug payloads; do not treat warnings as fatal unless the status is fatal.
+- Warnings mean usable-but-degraded unless `blocksUse=true`. Compensate with the warning's `action`, deeper reads, result fallbacks, or debug payloads.
 - For subdirectory searches, pass the user's requested path to `search_codebase`, then follow returned spans/fallbacks exactly.
 - For noise mitigation, prefer `.satoriignore` and `manage_index(action="sync")` for immediate convergence after ignore changes.
 

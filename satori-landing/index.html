@@ -1358,8 +1358,8 @@ npx -y @zokizuan/satori-cli@0.4.4 doctor</code></pre>
           <p>
             <code>search_codebase</code> searches by plain-English intent,
             exact identifiers, and exact terms with runtime, docs, or mixed
-            scope, then returns grouped results with navigation hints and next
-            actions.
+            scope, then returns grouped results with recommended actions,
+            structured warnings, capabilities, and navigation hints.
           </p>
         </article>
         <article class="card">
@@ -1697,8 +1697,9 @@ score desc -> file asc -> start_line asc -> symbol label asc -> symbol id asc</c
           <div class="details-body">
             <p>
               If <code>call_graph</code> returns <code>not_ready</code>, search
-              results still include <code>navigationFallback</code> with a
-              runnable read span and optional file outline window.
+              results still include <code>recommendedNextAction</code>,
+              <code>capabilities</code>, and <code>navigationFallback</code>
+              with a runnable read span and optional file outline window.
             </p>
           </div>
         </details>

@@ -23,9 +23,10 @@ Satori exposes exactly six MCP tools:
 1. Use `manage_index(action="status", path=...)` when index state is unknown.
 2. If the codebase is not indexed, use `manage_index(action="create", path=...)`.
 3. Search the requested path with `search_codebase(path=..., query=..., scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`; start with plain-English behavior/concept queries unless you already know the exact identifier, constant, warning code, or path.
-4. Use `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)` to lock exact symbol spans when identity is available.
-5. If `callGraphHint.supported=true`, call `call_graph(path=..., symbolRef=..., direction="both", depth=1)`.
-6. Use `read_file(path=..., open_symbol=...)` or deterministic line spans for final evidence before editing.
+4. Prefer `recommendedNextAction` when present; it is Satori's ranked next proof step for the current result.
+5. Use `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)` to lock exact symbol spans when identity is available.
+6. If `callGraphHint.supported=true`, call `call_graph(path=..., symbolRef=..., direction="both", depth=1)`.
+7. Use `read_file(path=..., open_symbol=...)` or deterministic line spans for final evidence before editing.
 
 ## Search Rules
 
@@ -34,12 +35,15 @@ Satori exposes exactly six MCP tools:
 - Default to `scope="runtime"`.
 - Use operators only when useful: `lang:`, `path:`, `-path:`, `must:`, `exclude:`.
 - Pass the user's requested path; if Satori resolves an indexed parent, follow returned fallback payloads exactly.
-- Treat warnings as usable-but-degraded results, not fatal errors.
-- Use `debug=true` only when ranking, filter, freshness, exact-registry, tracked-lexical, or latency explanations are required; inspect `debugSearch.exactRegistry`, `phaseTimingsMs`, `trackedLexical`, and `passesUsed`.
+- Treat `warnings[]` as usable-but-degraded results unless `blocksUse=true`; read each warning's `action` before deciding whether to sync, narrow, or verify.
+- Use `capabilities` to distinguish strong symbol-opening evidence from weak caller/callee graph confidence.
+- Follow result `fallbacks` when `call_graph` returns no edges, low-confidence relationship warnings, or unsupported navigation.
+- Use `debug=true` only when ranking, filter, freshness, exact-registry, tracked-lexical, or latency explanations are required; inspect `hints.debugSummary` first, then `debugSearch.exactRegistry`, `phaseTimingsMs`, `trackedLexical`, and `passesUsed`.
 
 ## Navigation Rules
 
 - Treat `navigationFallback` as authoritative. Do not invent spans.
+- Treat `recommendedNextAction` as the default next move unless the user requested a different proof path.
 - `open_symbol` must resolve deterministically. Do not guess on ambiguity.
 - Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with `rg`, tests, or direct references.
 - Prefer `read_file(mode="annotated")` when outline metadata helps.
@@ -57,6 +61,7 @@ Satori exposes exactly six MCP tools:
 ## Status Handling
 
 - `not_indexed`: create the index.
+- `not_indexed` with `reason:"index_failed"`: inspect `indexingFailure`, then use the hinted `manage_index(action="create")` when restarting the failed partial attempt. Do not treat this as `requires_reindex`.
 - `not_ready` with indexing reason: check status and wait for terminal completion.
 - `requires_reindex`: reindex before trusting search or navigation.
 - `unsupported`: fall back to deterministic `read_file` spans when supplied by `navigationFallback`.

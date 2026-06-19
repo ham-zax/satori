@@ -101,16 +101,28 @@ function getFileOwners(symbols: SymbolRecord[]): Map<string, SymbolRecord> {
 }
 
 function isImportExportLanguage(language: string): boolean {
-    return language === 'typescript' || language === 'javascript' || language === 'tsx' || language === 'jsx';
+    return language === 'typescript'
+        || language === 'javascript'
+        || language === 'tsx'
+        || language === 'jsx'
+        || language === 'python';
 }
 
-function resolveRelativeModulePath(sourceFile: string, specifier: string, registry: SymbolRegistry): string | undefined {
+function resolveRelativeModulePath(sourceFile: string, specifier: string, registry: SymbolRegistry, language: string): string | undefined {
     if (!specifier.startsWith('.')) {
         return undefined;
     }
+    const candidates = language === 'python'
+        ? resolvePythonRelativeModuleCandidates(sourceFile, specifier)
+        : resolveJsRelativeModuleCandidates(sourceFile, specifier);
+    const files = new Set(registry.manifest.files.map((file) => file.path));
+    return candidates.find((candidate) => files.has(candidate));
+}
+
+function resolveJsRelativeModuleCandidates(sourceFile: string, specifier: string): string[] {
     const sourceDir = sourceFile.includes('/') ? sourceFile.slice(0, sourceFile.lastIndexOf('/')) : '';
     const basePath = pathJoinPosix(sourceDir, specifier);
-    const candidates = [
+    return [
         basePath,
         `${basePath}.ts`,
         `${basePath}.tsx`,
@@ -125,8 +137,28 @@ function resolveRelativeModulePath(sourceFile: string, specifier: string, regist
         pathJoinPosix(basePath, 'index.mjs'),
         pathJoinPosix(basePath, 'index.cjs'),
     ];
-    const files = new Set(registry.manifest.files.map((file) => file.path));
-    return candidates.find((candidate) => files.has(candidate));
+}
+
+function resolvePythonRelativeModuleCandidates(sourceFile: string, specifier: string): string[] {
+    let leadingDots = 0;
+    while (leadingDots < specifier.length && specifier[leadingDots] === '.') {
+        leadingDots += 1;
+    }
+    if (leadingDots === 0) {
+        return [];
+    }
+    const sourceDir = sourceFile.includes('/') ? sourceFile.slice(0, sourceFile.lastIndexOf('/')) : '';
+    const parentSteps = Math.max(0, leadingDots - 1);
+    const relativeModule = specifier.slice(leadingDots).replace(/\./g, '/');
+    const baseParts = sourceDir.length > 0 ? sourceDir.split('/') : [];
+    const keptParts = baseParts.slice(0, Math.max(0, baseParts.length - parentSteps));
+    const moduleBase = relativeModule.length > 0
+        ? pathJoinPosix(...keptParts, relativeModule)
+        : pathJoinPosix(...keptParts);
+    return [
+        `${moduleBase}.py`,
+        pathJoinPosix(moduleBase, '__init__.py'),
+    ];
 }
 
 function pathJoinPosix(...parts: string[]): string {
@@ -147,23 +179,39 @@ function pathJoinPosix(...parts: string[]): string {
     return segments.join('/');
 }
 
-function extractImportSpecifier(line: string): string | undefined {
+function extractImportSpecifier(line: string, language: string): string | undefined {
+    if (language === 'python') {
+        const match = line.match(/^\s*from\s+([.\w]+)\s+import\s+.+$/);
+        return match?.[1];
+    }
     const match = line.match(/^\s*import(?:\s+type)?(?:\s+[^'"]*?\s+from)?\s*['"]([^'"]+)['"]\s*;?\s*$/);
     return match?.[1];
 }
 
-function extractExportFromSpecifier(line: string): string | undefined {
+function extractExportFromSpecifier(line: string, language: string): string | undefined {
+    if (language === 'python') {
+        return undefined;
+    }
     const match = line.match(/^\s*export(?:\s+type)?\s+(?:\*|{[^}]*}|[A-Za-z_$][\w$]*)(?:\s+as\s+[A-Za-z_$][\w$]*)?\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
     return match?.[1];
 }
 
-function extractLocalExportName(line: string): string | undefined {
+function extractLocalExportName(line: string, language: string): string | undefined {
+    if (language === 'python') {
+        const match = line.match(/^\s*(?:async\s+def|def|class)\s+([A-Za-z_][\w]*)\b/);
+        return match?.[1];
+    }
     const match = line.match(/^\s*export\s+(?:async\s+)?(?:function|class|interface|type|enum|const|let|var)\s+([A-Za-z_$][\w$]*)\b/);
     return match?.[1];
 }
 
-function resolveUniqueLocalSymbol(file: string, name: string, symbols: SymbolRecord[]): SymbolRecord | undefined {
-    const matches = symbols.filter((symbol) => symbol.file === file && symbol.kind !== 'file' && symbol.name === name);
+function resolveUniqueLocalSymbol(file: string, name: string, symbols: SymbolRecord[], topLevelOnly = false): SymbolRecord | undefined {
+    const matches = symbols.filter((symbol) => (
+        symbol.file === file
+        && symbol.kind !== 'file'
+        && symbol.name === name
+        && (!topLevelOnly || symbol.parentQualifiedNamePath.length === 0)
+    ));
     return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -259,9 +307,9 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
                 continue;
             }
 
-            const importSpecifier = extractImportSpecifier(line);
+            const importSpecifier = extractImportSpecifier(line, source.language);
             if (importSpecifier) {
-                const targetPath = resolveRelativeModulePath(source.file, importSpecifier, input.registry);
+                const targetPath = resolveRelativeModulePath(source.file, importSpecifier, input.registry, source.language);
                 const target = targetPath ? fileOwners.get(targetPath) : undefined;
                 if (target) {
                     const record: RelationshipRecord = {
@@ -280,9 +328,9 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
                 continue;
             }
 
-            const exportFromSpecifier = extractExportFromSpecifier(line);
+            const exportFromSpecifier = extractExportFromSpecifier(line, source.language);
             if (exportFromSpecifier) {
-                const targetPath = resolveRelativeModulePath(source.file, exportFromSpecifier, input.registry);
+                const targetPath = resolveRelativeModulePath(source.file, exportFromSpecifier, input.registry, source.language);
                 const target = targetPath ? fileOwners.get(targetPath) : undefined;
                 if (target) {
                     const record: RelationshipRecord = {
@@ -301,9 +349,9 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
                 continue;
             }
 
-            const localExportName = extractLocalExportName(line);
+            const localExportName = extractLocalExportName(line, source.language);
             const target = localExportName
-                ? resolveUniqueLocalSymbol(source.file, localExportName, input.registry.symbols)
+                ? resolveUniqueLocalSymbol(source.file, localExportName, input.registry.symbols, source.language === 'python')
                 : undefined;
             if (target) {
                 const record: RelationshipRecord = {

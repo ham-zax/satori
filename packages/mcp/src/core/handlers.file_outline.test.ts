@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -198,6 +199,10 @@ function baseSnapshotManager(repoPath: string) {
     } as any;
 }
 
+function sha256Content(content: string): string {
+    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
 test('handleFileOutline returns requires_reindex when sidecar metadata is missing', async () => {
     await withTempRepo(async (repoPath) => {
         const snapshotManager = {
@@ -216,6 +221,87 @@ test('handleFileOutline returns requires_reindex when sidecar metadata is missin
         assert.equal(payload.reason, 'missing_symbol_registry');
         assert.equal(payload.file, 'src/runtime.ts');
         assert.equal(payload.hints.reindex.args.path, repoPath);
+    });
+});
+
+test('handleFileOutline allows source-backed navigation under runtime fingerprint mismatch', async () => {
+    await withTempRepo(async (repoPath) => {
+        const fileHash = crypto.createHash('sha256')
+            .update(fs.readFileSync(path.join(repoPath, 'src', 'runtime.ts')))
+            .digest('hex');
+        const symbol = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function run()',
+            name: 'run',
+            qualifiedName: 'src.runtime.run',
+            startLine: 1,
+            endLine: 1,
+            fileHash,
+        });
+
+        const snapshotManager = {
+            getAllCodebases: () => [{
+                path: repoPath,
+                info: {
+                    status: 'indexed',
+                    indexedFiles: 1,
+                    totalChunks: 1,
+                    indexStatus: 'completed',
+                    lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                }
+            }],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: false,
+                changed: false,
+                reason: 'fingerprint_mismatch',
+                message: 'Index fingerprint mismatch.',
+            }),
+            saveCodebaseSnapshot: () => undefined,
+        } as any;
+
+        const navigationStore = {
+            getSymbolsByFile: async () => ({
+                status: 'ok',
+                symbols: [symbol],
+                manifestHash: 'manifest-hash',
+                warnings: [],
+            }),
+            getCompatibilityState: async () => ({
+                relationships: {
+                    status: 'ok',
+                    manifest: { builtAt: new Date('2026-01-01T00:00:00.000Z').toISOString() },
+                },
+            }),
+        } as any;
+
+        const handlers = new ToolHandlers(
+            baseContext(),
+            snapshotManager,
+            {} as any,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+            undefined,
+            undefined,
+            undefined,
+            navigationStore,
+        );
+        (handlers as any).validateCompletionProof = async () => ({
+            outcome: 'fingerprint_mismatch',
+        });
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'outline',
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.file, 'src/runtime.ts');
+        assert.equal(payload.outline.symbols[0]?.symbolId, symbol.symbolInstanceId);
     });
 });
 
@@ -434,6 +520,87 @@ test('handleFileOutline returns registry-backed outline when call graph sidecar 
         assert.equal(payload.outline.symbols[0].callGraphHint.supported, true);
         assert.equal(payload.outline.symbols[0].callGraphHint.symbolRef.symbolId, alpha.symbolInstanceId);
         assert.equal(payload.warnings, undefined);
+    }));
+});
+
+test('handleFileOutline repairs stale Python multiline-signature spans from source without reindex', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = [
+            'def previous_phase():',
+            '    return _rename_outputs(signal)',
+            '',
+            'def _attach_entry_telemetry(',
+            '    *,',
+            '    signal=None,',
+            '    entry_decision=None,',
+            '    pending=None,',
+            ') -> None:',
+            '    telemetry = build_entry_telemetry(',
+            '        signal=signal,',
+            '        entry_decision=entry_decision,',
+            '        pending=pending,',
+            '    )',
+            '    return telemetry',
+            '',
+            'def build_entry_telemetry(*, signal=None, entry_decision=None, pending=None):',
+            '    return (signal, entry_decision, pending)',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'phases.py'), source);
+        const fileHash = sha256Content(source);
+        const attach = createTestSymbol({
+            file: 'src/phases.py',
+            label: 'function _attach_entry_telemetry(',
+            name: '_attach_entry_telemetry',
+            qualifiedName: '_attach_entry_telemetry',
+            startLine: 2,
+            endLine: 9,
+            fileHash,
+            language: 'python',
+            kind: 'function',
+        });
+        const build = createTestSymbol({
+            file: 'src/phases.py',
+            label: 'function build_entry_telemetry(',
+            name: 'build_entry_telemetry',
+            qualifiedName: 'build_entry_telemetry',
+            startLine: 17,
+            endLine: 18,
+            fileHash,
+            language: 'python',
+            kind: 'function',
+        });
+        const { registry, result } = await writeTestSymbolRegistry(repoPath, [attach, build]);
+        await writeRelationshipSidecar({
+            normalizedRootPath: repoPath,
+            symbolRegistryManifestHash: result.manifestHash,
+            relationshipVersion: 'test-relationships-v1',
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: registry.manifest.files,
+            records: [],
+        });
+
+        const snapshotManager = {
+            ...baseSnapshotManager(repoPath),
+            getCodebaseCallGraphSidecar: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/phases.py',
+            resolveMode: 'exact',
+            symbolIdExact: attach.symbolInstanceId,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.outline.symbols.length, 1);
+        assert.deepEqual(payload.outline.symbols[0].span, { startLine: 4, endLine: 15 });
+        assert.deepEqual(payload.outline.symbols[0].callGraphHint.symbolRef.span, { startLine: 4, endLine: 15 });
+        assert.equal(payload.outline.symbols[0].callGraphHint.symbolRef.symbolId, attach.symbolInstanceId);
+        assert.ok(payload.warnings.includes('OUTLINE_SPAN_START_BEFORE_DEF'));
+        assert.ok(payload.warnings.includes('OUTLINE_TRUNCATED_SYMBOL_SPAN'));
     }));
 });
 

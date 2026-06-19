@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -80,14 +81,18 @@ function createFunctionSymbol(input: {
     startLine: number;
     endLine: number;
     fileHash: string;
+    language?: string;
+    kind?: SymbolRecord['kind'];
 }): SymbolRecord {
     const qualifiedName = input.qualifiedName || input.name;
     const label = input.label || `function ${input.name}()`;
+    const language = input.language || 'typescript';
+    const kind = input.kind || 'function';
     const parentQualifiedNamePath: string[] = [];
     const symbolKey = createSymbolKey({
         relativePath: input.file,
-        language: 'typescript',
-        kind: 'function',
+        language,
+        kind,
         qualifiedName,
         parentQualifiedNamePath,
     });
@@ -100,8 +105,8 @@ function createFunctionSymbol(input: {
             span,
             extractorVersion: 'extractor-v1',
         }),
-        language: 'typescript',
-        kind: 'function',
+        language,
+        kind,
         name: input.name,
         qualifiedName,
         label,
@@ -111,6 +116,10 @@ function createFunctionSymbol(input: {
         fileHash: input.fileHash,
         extractorVersion: 'extractor-v1',
     };
+}
+
+function sha256Content(content: string): string {
+    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
 async function writeTestNavigation(input: {
@@ -221,7 +230,122 @@ test('handleCallGraph returns requires_reindex envelope with explicit freshnessD
     });
 });
 
-test('handleCallGraph returns requires_reindex when snapshot marks codebase blocked but not indexed', async () => {
+test('handleCallGraph allows source-backed traversal under runtime fingerprint mismatch', async () => {
+    await withTempRepo(async (repoPath) => {
+        const fileHash = crypto.createHash('sha256')
+            .update(fs.readFileSync(path.join(repoPath, 'src', 'runtime.ts')))
+            .digest('hex');
+        const symbol = createFunctionSymbol({
+            file: 'src/runtime.ts',
+            name: 'run',
+            qualifiedName: 'src.runtime.run',
+            label: 'function run()',
+            startLine: 1,
+            endLine: 1,
+            fileHash,
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] }),
+        } as any;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{
+                path: repoPath,
+                info: {
+                    status: 'indexed',
+                    indexedFiles: 1,
+                    totalChunks: 1,
+                    indexStatus: 'completed',
+                    lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                }
+            }],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            getCodebaseInfo: () => undefined,
+            getCodebaseStatus: () => 'indexed',
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: false,
+                changed: false,
+                reason: 'fingerprint_mismatch',
+                message: 'Index fingerprint mismatch.',
+            }),
+            saveCodebaseSnapshot: () => undefined,
+        } as any;
+
+        const navigationStore = {
+            getSymbolsByFile: async () => ({
+                status: 'ok',
+                symbols: [symbol],
+                manifestHash: 'manifest-hash',
+                warnings: [],
+                registry: { manifest: { builtAt: new Date('2026-01-01T00:00:00.000Z').toISOString() } },
+            }),
+            getCompatibilityState: async () => ({
+                relationships: {
+                    status: 'ok',
+                    manifest: { builtAt: new Date('2026-01-01T00:00:00.000Z').toISOString() },
+                },
+            }),
+        } as any;
+
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            {} as any,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+            undefined,
+            undefined,
+            undefined,
+            navigationStore,
+        );
+        (handlers as any).validateCompletionProof = async () => ({
+            outcome: 'fingerprint_mismatch',
+        });
+        (handlers as any).buildRelationshipBackedCallGraph = async () => ({
+            supported: true,
+            direction: 'callees',
+            depth: 1,
+            limit: 5,
+            nodes: [{
+                symbolId: symbol.symbolInstanceId,
+                symbolLabel: symbol.label,
+                file: symbol.file,
+                language: symbol.language,
+                span: symbol.span,
+            }],
+            edges: [],
+            notes: [],
+            notesTruncated: false,
+            totalNoteCount: 0,
+            returnedNoteCount: 0,
+        });
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/runtime.ts',
+                symbolId: symbol.symbolInstanceId,
+                symbolLabel: symbol.label,
+                span: { startLine: 1, endLine: 1 },
+            },
+            direction: 'callees',
+            depth: 1,
+            limit: 5,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.supported, true);
+        assert.equal(payload.path, repoPath);
+        assert.equal(payload.nodes[0]?.symbolId, symbol.symbolInstanceId);
+    });
+});
+
+test('handleCallGraph returns requires_reindex when snapshot marks codebase blocked for a non-recoverable reason', async () => {
     await withTempRepo(async (repoPath) => {
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
@@ -234,15 +358,17 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
             getCodebaseStatus: () => 'requires_reindex',
             getCodebaseCallGraphSidecar: () => undefined,
             ensureFingerprintCompatibilityOnAccess: () => ({
-                allowed: true,
-                changed: false
+                allowed: false,
+                changed: false,
+                reason: 'missing_fingerprint',
+                message: 'Index has no fingerprint metadata.',
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => [{
                 path: repoPath,
                 info: {
                     status: 'requires_reindex',
-                    message: 'Legacy v2 index detected.',
+                    message: 'Index has no fingerprint metadata.',
                     lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString()
                 }
             }]
@@ -453,6 +579,121 @@ test('handleCallGraph traverses compatible relationship sidecars without requiri
         assert.equal(payload.edges.length, 1);
         assert.equal(payload.edges[0].srcSymbolId, login.symbolInstanceId);
         assert.equal(payload.edges[0].dstSymbolId, normalize.symbolInstanceId);
+    }));
+});
+
+test('handleCallGraph synthesizes source-backed Python callees when stored span only covers multiline signature', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const source = [
+            'def previous_phase():',
+            '    return _rename_outputs(signal)',
+            '',
+            'def _attach_entry_telemetry(',
+            '    *,',
+            '    signal=None,',
+            '    entry_decision=None,',
+            '    pending=None,',
+            ') -> None:',
+            '    telemetry = build_entry_telemetry(',
+            '        signal=signal,',
+            '        entry_decision=entry_decision,',
+            '        pending=pending,',
+            '    )',
+            '    return telemetry',
+            '',
+            'def build_entry_telemetry(*, signal=None, entry_decision=None, pending=None):',
+            '    return (signal, entry_decision, pending)',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'phases.py'), source);
+        const fileHash = sha256Content(source);
+        const attach = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: '_attach_entry_telemetry',
+            label: 'function _attach_entry_telemetry(',
+            startLine: 2,
+            endLine: 9,
+            fileHash,
+            language: 'python',
+        });
+        const build = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: 'build_entry_telemetry',
+            label: 'function build_entry_telemetry(',
+            startLine: 17,
+            endLine: 18,
+            fileHash,
+            language: 'python',
+        });
+        const renameOutputs = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: '_rename_outputs',
+            label: 'function _rename_outputs(',
+            startLine: 1,
+            endLine: 2,
+            fileHash,
+            language: 'python',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [attach, build, renameOutputs],
+            records: [{
+                sourceKey: attach.symbolKey,
+                sourceInstanceId: attach.symbolInstanceId,
+                targetKey: renameOutputs.symbolKey,
+                targetInstanceId: renameOutputs.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/phases.py',
+                span: { startLine: 2, endLine: 2 },
+                confidence: 'high',
+            }],
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/phases.py',
+                symbolId: attach.symbolInstanceId,
+                symbolLabel: attach.label,
+            },
+            direction: 'callees',
+            depth: 1,
+            limit: 20
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.supported, true);
+        assert.deepEqual(payload.nodes.map((node: { symbolId: string }) => node.symbolId), [
+            attach.symbolInstanceId,
+            build.symbolInstanceId,
+        ]);
+        assert.equal(payload.edges.length, 1);
+        assert.equal(payload.edges[0].srcSymbolId, attach.symbolInstanceId);
+        assert.equal(payload.edges[0].dstSymbolId, build.symbolInstanceId);
+        assert.equal(payload.edges[0].site.startLine, 10);
+        assert.ok(payload.warnings.includes('CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:1'));
+        assert.ok(payload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLEES:1'));
+        assert.equal(payload.notes[0].type, 'dynamic_edge');
     }));
 });
 

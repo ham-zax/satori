@@ -87,7 +87,7 @@ test('v2 snapshot migrates to v3 and first access hard-blocks assumed_v2 entries
     });
 });
 
-test('fingerprint mismatch transitions searchable entry to requires_reindex', () => {
+test('fingerprint mismatch does not persistently downgrade searchable entry', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo');
         fs.mkdirSync(codebase, { recursive: true });
@@ -105,15 +105,16 @@ test('fingerprint mismatch transitions searchable entry to requires_reindex', ()
 
         const gate = reader.ensureFingerprintCompatibilityOnAccess(codebase);
         assert.equal(gate.allowed, false);
+        assert.equal(gate.changed, false);
         assert.equal(gate.reason, 'fingerprint_mismatch');
 
         const updated = reader.getCodebaseInfo(codebase);
         assert.ok(updated);
-        assert.equal(updated?.status, 'requires_reindex');
+        assert.equal(updated?.status, 'indexed');
     });
 });
 
-test('fingerprint mismatch reason and message persist after transition save/load', () => {
+test('fingerprint mismatch remains runtime-local across save/load', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo-persisted-mismatch');
         fs.mkdirSync(codebase, { recursive: true });
@@ -130,7 +131,7 @@ test('fingerprint mismatch reason and message persist after transition save/load
         transitioningReader.loadCodebaseSnapshot();
         const transition = transitioningReader.ensureFingerprintCompatibilityOnAccess(codebase);
         assert.equal(transition.allowed, false);
-        assert.equal(transition.changed, true);
+        assert.equal(transition.changed, false);
         assert.equal(transition.reason, 'fingerprint_mismatch');
         assert.match(transition.message || '', /Index fingerprint mismatch/);
         transitioningReader.saveCodebaseSnapshot();
@@ -145,11 +146,42 @@ test('fingerprint mismatch reason and message persist after transition save/load
 
         const persistedInfo = persistedReader.getCodebaseInfo(codebase);
         assert.ok(persistedInfo);
-        if (persistedInfo.status !== 'requires_reindex') {
-            assert.fail(`Expected requires_reindex, received ${persistedInfo.status}`);
+        if (persistedInfo.status !== 'indexed') {
+            assert.fail(`Expected indexed, received ${persistedInfo.status}`);
         }
-        assert.equal(persistedInfo.reindexReason, 'fingerprint_mismatch');
-        assert.equal(persistedInfo.message, transition.message);
+        assert.equal(persistedInfo.reindexReason, undefined);
+    });
+});
+
+test('matching runtime recovers stale fingerprint-mismatch requires_reindex entry', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-recover-mismatch');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setCodebaseIndexed(codebase, {
+            indexedFiles: 3,
+            totalChunks: 12,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+        writer.setCodebaseRequiresReindex(codebase, 'fingerprint_mismatch', 'Index fingerprint mismatch.');
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+
+        const gate = reader.ensureFingerprintCompatibilityOnAccess(codebase);
+        assert.equal(gate.allowed, true);
+        assert.equal(gate.changed, true);
+
+        const recovered = reader.getCodebaseInfo(codebase);
+        assert.ok(recovered);
+        if (recovered.status !== 'sync_completed') {
+            assert.fail(`Expected sync_completed, received ${recovered.status}`);
+        }
+        assert.equal(recovered.indexFingerprint?.embeddingModel, FINGERPRINT_A.embeddingModel);
+        assert.equal(recovered.added, 0);
+        assert.equal(recovered.modified, 0);
     });
 });
 
@@ -409,7 +441,7 @@ test('limit_reached index status persists after save/load', () => {
     });
 });
 
-test('legacy schemaVersion v2 fingerprint transitions entry to requires_reindex under v3 runtime', () => {
+test('legacy schemaVersion v2 fingerprint mismatch stays runtime-local under v3 runtime', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo');
         fs.mkdirSync(codebase, { recursive: true });
@@ -432,11 +464,12 @@ test('legacy schemaVersion v2 fingerprint transitions entry to requires_reindex 
 
         const gate = reader.ensureFingerprintCompatibilityOnAccess(codebase);
         assert.equal(gate.allowed, false);
+        assert.equal(gate.changed, false);
         assert.equal(gate.reason, 'fingerprint_mismatch');
 
         const updated = reader.getCodebaseInfo(codebase);
         assert.ok(updated);
-        assert.equal(updated?.status, 'requires_reindex');
+        assert.equal(updated?.status, 'indexed');
     });
 });
 

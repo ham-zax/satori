@@ -38,6 +38,12 @@ const CAPABILITIES_NO_RERANK = new CapabilityResolver({
     encoderModel: 'voyage-4-large',
 });
 
+function warningCodes(payload: { warnings?: Array<string | { code?: string }> }): string[] {
+    return (payload.warnings || [])
+        .map((warning) => typeof warning === 'string' ? warning : warning.code)
+        .filter((code): code is string => typeof code === 'string');
+}
+
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-handlers-'));
     const repoPath = path.join(tempDir, 'repo');
@@ -1196,6 +1202,10 @@ test('handleSearchCode exact registry fast path returns a grouped symbol without
             assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
             assert.equal(typeof payload.results[0].callGraphHint?.supported, 'boolean');
             assert.equal(payload.results[0].nextActions?.openSymbol?.tool, 'read_file');
+            assert.equal(payload.results[0].recommendedNextAction?.tool, 'read_file');
+            assert.equal(payload.results[0].recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.recommendedNextAction?.tool, 'read_file');
+            assert.equal(payload.recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
             assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('exact_registry'), true);
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('exact_registry'), true);
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), false);
@@ -2189,7 +2199,7 @@ test('handleSearchCode grouped symbol mode disables call graph hints when relati
             assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
             assert.equal(payload.results[0].callGraphHint.supported, false);
             assert.equal(payload.results[0].callGraphHint.reason, 'incompatible_relationship_sidecar');
-            assert.ok(payload.warnings.includes('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
+            assert.ok(warningCodes(payload).includes('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
         });
     });
 });
@@ -2409,9 +2419,295 @@ test('handleSearchCode grouped output caps previews for compact default response
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].preview, `${'x'.repeat(800)}...`);
+        assert.match(payload.results[0].preview, /^method validateSession\(token: string\)\n/);
         assert.equal(payload.results[0].preview.length, 803);
     });
+});
+
+test('handleSearchCode normalizes malformed labels and removes noisy duplicate preview lines', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: [
+                '@cached',
+                'function qap_spread_type(',
+                'function qap_spread_type(',
+                '  return qap_spread_type(frame)',
+                '}',
+                'function unrelatedOwner() {',
+                '  return "neighbor";',
+                '}',
+            ].join('\n'),
+            relativePath: 'src/spread.ts',
+            startLine: 10,
+            endLine: 18,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_qap_spread',
+            symbolLabel: 'function qap_spread_type(',
+            symbolKind: 'function',
+        }]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'qap_spread_type',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].symbolLabel, 'function qap_spread_type');
+        assert.match(payload.results[0].preview, /^function qap_spread_type\n/);
+        assert.match(payload.results[0].preview, /return qap_spread_type\(frame\)/);
+        assert.doesNotMatch(payload.results[0].preview, /@cached/);
+        assert.doesNotMatch(payload.results[0].preview, /unrelatedOwner/);
+        assert.equal((payload.results[0].preview.match(/function qap_spread_type/g) || []).length, 1);
+    });
+});
+
+test('handleSearchCode compacts multiline signatures without leaking parameter fragments into previews', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: [
+                'def check_survival(',
+                '    hreshold_violated="ADF",',
+                '    mi_2_given_1=None,',
+                '    tau=None,',
+                ') -> SurvivalCheck:',
+                '    survives = hreshold_violated != "ADF"',
+                '    return survives',
+            ].join('\n'),
+            relativePath: 'src/regime/jit_veto.py',
+            startLine: 47,
+            endLine: 157,
+            language: 'python',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_check_survival',
+            symbolLabel: 'function check_survival(',
+            symbolKind: 'function',
+        }]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'check_survival',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].symbolLabel, 'function check_survival');
+        assert.match(payload.results[0].preview, /^function check_survival\n/);
+        assert.match(payload.results[0].preview, /return survives/);
+        assert.doesNotMatch(payload.results[0].preview, /^hreshold_violated="ADF",$/m);
+        assert.doesNotMatch(payload.results[0].preview, /^.*mi_2_given_1/m);
+        assert.doesNotMatch(payload.results[0].preview, /^\) -> SurvivalCheck:/m);
+    });
+});
+
+test('handleSearchCode repairs registry-owned Python multiline spans before exposing navigation actions', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const relativePath = 'src/phases.py';
+        const source = [
+            'def previous_phase():',
+            '    return _rename_outputs(signal)',
+            '',
+            'def _attach_entry_telemetry(',
+            '    *,',
+            '    signal=None,',
+            '    entry_decision=None,',
+            '    pending=None,',
+            ') -> None:',
+            '    telemetry = build_entry_telemetry(',
+            '        signal=signal,',
+            '        entry_decision=entry_decision,',
+            '        pending=pending,',
+            '    )',
+            '    return telemetry',
+            '',
+            'def build_entry_telemetry(*, signal=None, entry_decision=None, pending=None):',
+            '    return (signal, entry_decision, pending)',
+            '',
+        ].join('\n');
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, relativePath), source, 'utf8');
+
+        const { symbols } = await writeSearchNavigationSidecars({
+            repoPath,
+            relativePath,
+            content: source,
+            language: 'python',
+            chunks: [{
+                content: source.split('\n').slice(1, 9).join('\n'),
+                startLine: 2,
+                endLine: 9,
+                symbolLabel: 'function _attach_entry_telemetry(',
+            }],
+        });
+        const owner = symbols.find((symbol) => symbol.name === '_attach_entry_telemetry');
+        assert.ok(owner);
+        assert.equal(owner.span.startLine, 2);
+        assert.equal(owner.span.endLine, 9);
+
+        const handlers = createHandlers(repoPath, [{
+            content: source.split('\n').slice(1, 9).join('\n'),
+            relativePath,
+            startLine: 2,
+            endLine: 9,
+            language: 'python',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: owner.label,
+            ownerSymbolKey: owner.symbolKey,
+            ownerSymbolInstanceId: owner.symbolInstanceId,
+            symbolKind: owner.kind,
+        }]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where attach entry telemetry is assembled',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results[0].span.startLine, 4);
+        assert.equal(payload.results[0].span.endLine, 15);
+        assert.equal(payload.results[0].callGraphHint.symbolRef.span.startLine, 4);
+        assert.equal(payload.results[0].callGraphHint.symbolRef.span.endLine, 15);
+        assert.equal(payload.results[0].nextActions.openSymbol.args.open_symbol.symbolId, owner.symbolInstanceId);
+        assert.equal(payload.results[0].nextActions.openSymbol.args.open_symbol.end_line, undefined);
+        assert.ok(warningCodes(payload).includes('SEARCH_SPAN_START_BEFORE_DEF'));
+        assert.ok(warningCodes(payload).includes('SEARCH_TRUNCATED_SYMBOL_SPAN'));
+    }));
+});
+
+test('handleSearchCode downgrades openSymbol capability when Python span validation fails', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const relativePath = 'src/phases.py';
+        const currentSource = [
+            'def renamed_owner(',
+            '    *,',
+            '    signal=None,',
+            ') -> None:',
+            '    return signal',
+            '',
+        ].join('\n');
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, relativePath), currentSource, 'utf8');
+
+        const staleChunk = [
+            'def _attach_entry_telemetry(',
+            '    *,',
+            '    signal=None,',
+            '    pending=None,',
+            ') -> None:',
+            '    return signal',
+        ].join('\n');
+        const { symbols } = await writeSearchNavigationSidecars({
+            repoPath,
+            relativePath,
+            content: currentSource,
+            language: 'python',
+            chunks: [{
+                content: staleChunk,
+                startLine: 1,
+                endLine: 6,
+                symbolLabel: 'function _attach_entry_telemetry(',
+            }],
+        });
+        const owner = symbols.find((symbol) => symbol.name === '_attach_entry_telemetry');
+        assert.ok(owner);
+
+        const handlers = createHandlers(repoPath, [{
+            content: staleChunk,
+            relativePath,
+            startLine: 1,
+            endLine: 6,
+            language: 'python',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: owner.label,
+            ownerSymbolKey: owner.symbolKey,
+            ownerSymbolInstanceId: owner.symbolInstanceId,
+            symbolKind: owner.kind,
+        }]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'attach entry telemetry',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results[0].span.startLine, 1);
+        assert.equal(payload.results[0].span.endLine, 6);
+        assert.equal(payload.results[0].capabilities.openSymbol, 'low');
+        assert.ok(warningCodes(payload).includes('SEARCH_SYMBOL_SPAN_UNVERIFIED'));
+    }));
+});
+
+test('handleSearchCode reports caller graph confidence conservatively for supported graph handles', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const fileContent = [
+            'export function build_entry_telemetry() {',
+            '  return EntryTelemetry.create();',
+            '}',
+            '',
+        ].join('\n');
+        const { symbols } = await writeSearchNavigationSidecars({
+            repoPath,
+            relativePath: 'src/telemetry.ts',
+            content: fileContent,
+            chunks: [{
+                content: 'return EntryTelemetry.create();',
+                startLine: 1,
+                endLine: 3,
+                symbolLabel: 'function build_entry_telemetry()',
+            }],
+        });
+        const owner = symbols.find((symbol) => symbol.kind !== 'file');
+        assert.ok(owner);
+
+        const handlers = createHandlers(repoPath, [{
+            content: 'return EntryTelemetry.create();',
+            relativePath: 'src/telemetry.ts',
+            startLine: 1,
+            endLine: 3,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolLabel: owner!.label,
+            ownerSymbolKey: owner!.symbolKey,
+            ownerSymbolInstanceId: owner!.symbolInstanceId,
+            symbolKind: owner!.kind,
+        }], undefined, { sidecarReady: false });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'build_entry_telemetry',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].callGraphHint.supported, true);
+        assert.equal(payload.results[0].capabilities.callGraphCallers, 'low');
+        assert.equal(payload.results[0].capabilities.callGraphCallees, 'medium');
+    }));
 });
 
 test('handleSearchCode downgrades stale search symbol refs to navigation fallback', async () => {
@@ -2665,7 +2961,7 @@ test('handleSearchCode parses operators from query prefix and applies determinis
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
         assert.equal(payload.results[0].file, 'src/auth.ts');
-        assert.equal(Array.isArray(payload.warnings) && payload.warnings.includes('FILTER_MUST_UNSATISFIED'), false);
+        assert.equal(warningCodes(payload).includes('FILTER_MUST_UNSATISFIED'), false);
         assert.equal(payload.hints?.debugSearch?.operatorSummary?.lang?.[0], 'typescript');
         assert.equal(payload.hints?.debugSearch?.operatorSummary?.path?.[0], 'src/**');
         assert.equal(payload.hints?.debugSearch?.operatorSummary?.must?.[0], 'ERR_CODE_42');
@@ -2724,7 +3020,7 @@ test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', asy
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 0);
         assert.ok(Array.isArray(payload.warnings));
-        assert.equal(payload.warnings.includes('FILTER_MUST_UNSATISFIED'), true);
+        assert.equal(warningCodes(payload).includes('FILTER_MUST_UNSATISFIED'), true);
     });
 });
 
@@ -2778,7 +3074,7 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
         assert.equal(payload.results[0].file, 'src/retry-40.ts');
-        assert.equal(Array.isArray(payload.warnings) && payload.warnings.includes('FILTER_MUST_UNSATISFIED'), false);
+        assert.equal(warningCodes(payload).includes('FILTER_MUST_UNSATISFIED'), false);
         assert.equal(payload.hints?.debugSearch?.mustRetry?.attempts, 2);
         assert.equal(payload.hints?.debugSearch?.mustRetry?.satisfied, true);
         assert.equal(payload.hints?.debugSearch?.mustRetry?.finalCount, 1);
@@ -3097,7 +3393,10 @@ test('handleSearchCode exposes freshness summary and warns when dirty files were
         assert.equal(payload.freshnessSummary.gitDirtyFilesConsidered, true);
         assert.equal(payload.freshnessSummary.changedFilesBoostApplied, true);
         assert.equal(payload.freshnessSummary.changedFilesBoostSkippedForLargeChangeSet, false);
-        assert.equal(payload.warnings.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
+        assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
+        assert.equal(payload.warnings[0].severity, 'caution');
+        assert.match(payload.warnings[0].message, /dirty or untracked files may have changed after the last sync/i);
+        assert.match(payload.warnings[0].action, /manage_index sync/);
     });
 });
 
@@ -3161,7 +3460,7 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence when in
         assert.equal(payload.results.length, 1);
         assert.equal(payload.results[0].file, relativePath);
         assert.match(payload.results[0].preview, /endColumn/);
-        assert.equal(payload.warnings.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
+        assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
     });
 });
 
@@ -3219,7 +3518,7 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence after s
         assert.equal(payload.results.length, 1);
         assert.equal(payload.results[0].file, relativePath);
         assert.match(payload.results[0].preview, /endColumn/);
-        assert.equal(payload.warnings?.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), undefined);
+        assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), false);
         assert.equal(payload.hints.debugSearch.passesUsed.includes('live_path'), true);
     });
 });
@@ -3287,7 +3586,7 @@ test('handleSearchCode supplements exact path-scoped tracked test evidence witho
         assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
         assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
         assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('live_path'), false);
-        assert.equal(payload.warnings?.includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), undefined);
+        assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), false);
     });
 });
 
@@ -3493,6 +3792,105 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
     });
 });
 
+test('handleSearchCode debug changed-code payload is capped with totals and truncation flag', async () => {
+    await withTempRepo(async (repoPath) => {
+        const changedFiles = Array.from({ length: 12 }, (_, index) => `src/changed-${index}.ts`);
+        const changedNodes = Array.from({ length: 25 }, (_, index) => ({
+            symbolId: `sym_changed_${index.toString().padStart(2, '0')}`,
+            symbolLabel: `function changed_${index}(`,
+            file: changedFiles[index % changedFiles.length],
+            language: 'typescript',
+            span: { startLine: index + 1, endLine: index + 2 }
+        }));
+        const callerNodes = Array.from({ length: 25 }, (_, index) => ({
+            symbolId: `sym_caller_${index.toString().padStart(2, '0')}`,
+            symbolLabel: `function caller_${index}()`,
+            file: `src/caller-${index}.ts`,
+            language: 'typescript',
+            span: { startLine: index + 30, endLine: index + 31 }
+        }));
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => ([
+                {
+                    content: 'export function changed_0() { return true; }',
+                    relativePath: changedFiles[0],
+                    startLine: 1,
+                    endLine: 3,
+                    language: 'typescript',
+                    score: 0.98,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'sym_changed_00',
+                    symbolLabel: 'function changed_0()'
+                }
+            ])
+        } as any;
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as any;
+        const callGraphManager = {
+            loadSidecar: () => ({
+                nodes: [...changedNodes, ...callerNodes],
+                edges: changedNodes.map((node, index) => ({
+                    srcSymbolId: callerNodes[index].symbolId,
+                    dstSymbolId: node.symbolId,
+                    kind: 'call',
+                    site: { file: callerNodes[index].file, startLine: index + 30 },
+                    confidence: 0.8
+                })),
+                notes: []
+            })
+        } as any;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            DENSE_RUNTIME_FINGERPRINT,
+            CAPABILITIES_NO_RERANK,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+            callGraphManager
+        );
+        (handlers as any).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set(changedFiles)
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'changed symbol',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debug: true
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        const changedCode = payload.hints?.debugSearch?.changedCode;
+        assert.equal(changedCode?.files.length, 10);
+        assert.equal(changedCode?.symbols.length, 20);
+        assert.equal(changedCode?.directCallers.length, 20);
+        assert.equal(changedCode?.totalFiles, 12);
+        assert.equal(changedCode?.totalSymbols, 25);
+        assert.equal(changedCode?.totalDirectCallers, 25);
+        assert.equal(changedCode?.truncated, true);
+        assert.equal(payload.hints?.debugSummary?.changedCodeTruncated, true);
+        assert.equal(changedCode?.symbols[0].symbolLabel, 'function changed_0');
+    });
+});
+
 test('handleSearchCode auto_changed_first skips boost when changed file set exceeds threshold', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [
@@ -3546,7 +3944,7 @@ test('handleSearchCode auto_changed_first skips boost when changed file set exce
         assert.equal(payload.freshnessSummary.gitDirtyFilesConsidered, true);
         assert.equal(payload.freshnessSummary.changedFilesBoostApplied, false);
         assert.equal(payload.freshnessSummary.changedFilesBoostSkippedForLargeChangeSet, true);
-        assert.equal(payload.warnings.includes('SEARCH_CHANGED_FILES_BOOST_SKIPPED'), true);
+        assert.equal(warningCodes(payload).includes('SEARCH_CHANGED_FILES_BOOST_SKIPPED'), true);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.enabled, true);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.applied, false);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.changedCount, SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES + 1);
@@ -3724,7 +4122,7 @@ test('handleSearchCode degrades gracefully when reranker fails', async () => {
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(Array.isArray(payload.warnings), true);
-        assert.equal(payload.warnings.includes('RERANKER_FAILED'), true);
+        assert.equal(warningCodes(payload).includes('RERANKER_FAILED'), true);
         assert.equal(payload.hints?.debugSearch?.rerank?.enabledByPolicy, true);
         assert.equal(payload.hints?.debugSearch?.rerank?.capabilityPresent, true);
         assert.equal(payload.hints?.debugSearch?.rerank?.rerankerPresent, true);
@@ -5004,7 +5402,7 @@ test('handleSearchCode collapses duplicate function declaration groups for refer
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        const declarationHits = payload.results.filter((result: any) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'function check_hurst_gate(');
+        const declarationHits = payload.results.filter((result: any) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'function check_hurst_gate');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -5740,6 +6138,16 @@ test('handleSearchCode grouped fallback emits stable hash groupId and unsupporte
                 end_line: 45
             }
         });
+        assert.equal(firstPayload.results[0].recommendedNextAction.tool, 'read_file');
+        assert.deepEqual(
+            firstPayload.results[0].recommendedNextAction.args,
+            firstPayload.results[0].navigationFallback.readSpan.args
+        );
+        assert.equal(firstPayload.results[0].fallbacks[0].tool, 'read_file');
+        assert.deepEqual(
+            firstPayload.results[0].fallbacks[0].args,
+            firstPayload.results[0].navigationFallback.readSpan.args
+        );
         assert.equal(firstPayload.results[0].navigationFallback.fileOutlineWindow, undefined);
     });
 });
@@ -5910,6 +6318,8 @@ test('handleSearchCode grouped sorting places null symbolLabel last for determin
         assert.equal(payload.results.length, 2);
         assert.equal(payload.results[0].symbolId, 'owner_with_label_instance');
         assert.equal(payload.results[1].symbolId, 'owner_without_label_instance');
+        assert.equal(typeof payload.results[1].symbolLabel, 'string');
+        assert.notEqual(payload.results[1].symbolLabel, null);
     });
 });
 
@@ -6085,7 +6495,9 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
         assert.ok(Array.isArray(payload.warnings));
-        assert.equal(payload.warnings[0], 'SEARCH_PASS_FAILED:expanded - expanded semantic search pass failed; results may be degraded.');
+        assert.equal(payload.warnings[0].code, 'SEARCH_PASS_FAILED:expanded');
+        assert.equal(payload.warnings[0].severity, 'degraded');
+        assert.match(payload.warnings[0].message, /expanded semantic search pass failed/);
     });
 });
 
@@ -6243,9 +6655,8 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
             assert.equal(payload.results.length, 1);
             assert.equal(payload.results[0].symbolId, undefined);
             assert.equal(payload.results[0].file, 'src/primary.ts');
-            assert.deepEqual(payload.warnings, [
-                'SEARCH_PASS_FAILED:expanded - expanded semantic search pass failed; results may be degraded.'
-            ]);
+            assert.deepEqual(warningCodes(payload), ['SEARCH_PASS_FAILED:expanded']);
+            assert.equal(payload.warnings[0].severity, 'degraded');
             assert.equal(response.meta?.searchDiagnostics?.searchPassFailureCount, 1);
         });
     });
@@ -6395,26 +6806,33 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
             getAllCodebases: () => [{
                 path: repoPath,
                 info: {
-                    status: 'requires_reindex',
-                    message: 'Legacy fingerprint mismatch.',
+                    status: 'indexed',
+                    indexedFiles: 10,
+                    totalChunks: 40,
+                    indexStatus: 'completed',
                     lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                     indexFingerprint: legacyFingerprint,
                     fingerprintSource: 'verified',
-                    reindexReason: 'fingerprint_mismatch'
                 }
             }],
             getCodebaseInfo: () => ({
-                status: 'requires_reindex',
-                message: 'Legacy fingerprint mismatch.',
+                status: 'indexed',
+                indexedFiles: 10,
+                totalChunks: 40,
+                indexStatus: 'completed',
                 lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 indexFingerprint: legacyFingerprint,
                 fingerprintSource: 'verified',
-                reindexReason: 'fingerprint_mismatch'
             }),
-            getCodebaseStatus: () => 'requires_reindex',
-            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => 'indexed',
+            getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
-            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: false,
+                changed: false,
+                reason: 'fingerprint_mismatch',
+                message: 'Legacy fingerprint mismatch.',
+            })
         } as any;
 
         const syncManager = {
@@ -6443,6 +6861,11 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
         assert.equal(payload.compatibility.runtimeFingerprint.schemaVersion, 'hybrid_v3');
         assert.equal(payload.compatibility.indexedFingerprint.schemaVersion, 'dense_v3');
         assert.equal(payload.compatibility.reindexReason, 'fingerprint_mismatch');
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.equal(payload.recommendedNextAction?.args?.action, 'status');
+        assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
+        assert.equal(payload.hints?.runtimeMismatch?.reason, 'runtime_fingerprint_mismatch');
+        assert.match(payload.message, /restart Satori with VoyageAI\/voyage-4-lite\/1024\/Milvus\/dense_v3/i);
     });
 });
 
@@ -6545,10 +6968,12 @@ test('handleSearchCode blocks skipped_requires_reindex freshness before vector s
 
     assert.equal(payload.hints?.reindex?.tool, 'manage_index');
     assert.equal(payload.hints?.reindex?.args?.action, 'reindex');
+    assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+    assert.equal(payload.recommendedNextAction?.args?.action, 'reindex');
 });
 
 test('handleSearchCode blocks skipped_missing_path freshness before vector search', async () => {
-    await runSearchFreshnessDecisionCase({
+    const payload = await runSearchFreshnessDecisionCase({
         mode: 'skipped_missing_path',
         checkedAt: '2026-01-01T00:00:00.000Z',
         thresholdMs: 180000
@@ -6558,6 +6983,9 @@ test('handleSearchCode blocks skipped_missing_path freshness before vector searc
         semanticSearchCalls: 0,
         messageIncludes: 'no longer exists'
     });
+
+    assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+    assert.equal(payload.recommendedNextAction?.args?.action, 'create');
 });
 
 test('handleSearchCode blocks ignore_reload_failed freshness before vector search', async () => {
@@ -6575,10 +7003,12 @@ test('handleSearchCode blocks ignore_reload_failed freshness before vector searc
     });
 
     assert.match(payload.message, /Fallback incremental sync was executed/);
+    assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+    assert.equal(payload.recommendedNextAction?.args?.action, 'reindex');
 });
 
 test('handleSearchCode blocks failed coalesced freshness before vector search', async () => {
-    await runSearchFreshnessDecisionCase({
+    const payload = await runSearchFreshnessDecisionCase({
         mode: 'coalesced',
         checkedAt: '2026-01-01T00:00:00.000Z',
         thresholdMs: 180000,
@@ -6589,6 +7019,9 @@ test('handleSearchCode blocks failed coalesced freshness before vector search', 
         semanticSearchCalls: 0,
         messageIncludes: 'coalesced in-flight sync failed'
     });
+
+    assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+    assert.equal(payload.recommendedNextAction?.args?.action, 'reindex');
 });
 
 test('handleSearchCode allows successful coalesced freshness reuse', async () => {
@@ -6644,5 +7077,58 @@ test('handleSearchCode not_indexed payload includes stable reason code', async (
         assert.equal(payload.reason, 'not_indexed');
         assert.equal(payload.hints?.create?.tool, 'manage_index');
         assert.equal(payload.hints?.create?.args?.action, 'create');
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.equal(payload.recommendedNextAction?.args?.action, 'create');
+        assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
+    });
+});
+
+test('handleSearchCode indexing payload recommends manage_index status', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                throw new Error('semanticSearch should not run while indexing');
+            }
+        } as any;
+
+        const indexingInfo = {
+            status: 'indexing',
+            indexingPercentage: 42,
+            lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString()
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: indexingInfo }],
+            getCodebaseInfo: () => indexingInfo,
+            getCodebaseStatus: () => 'indexing',
+            getIndexedCodebases: () => [],
+            getIndexingCodebases: () => [repoPath],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+
+        const syncManager = {
+            ensureFreshness: async () => {
+                throw new Error('ensureFreshness should not run while indexing');
+            }
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'indexing');
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.equal(payload.recommendedNextAction?.args?.action, 'status');
+        assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
+        assert.equal(payload.indexing?.progressPct, 42);
     });
 });

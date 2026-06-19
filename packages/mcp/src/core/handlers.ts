@@ -21,7 +21,7 @@ import {
 } from "@zokizuan/satori-core";
 import type { CodeChunk, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
-import { SnapshotManager } from "./snapshot.js";
+import { AccessGateReason, SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
 import { SyncManager, type FreshnessDecision } from "./sync.js";
 import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint } from "../config.js";
@@ -68,14 +68,18 @@ import {
     FileOutlineSymbolResult,
     NonOkReason,
     SearchChunkResult,
+    SearchCapabilityConfidence,
     SearchDebugHint,
     SearchGroupResult,
     SearchFreshnessSummary,
     SearchNoiseMitigationHint,
     SearchOperatorSummary,
+    SearchRecommendedNextAction,
     SearchRequestInput,
     SearchResponseEnvelope,
+    SearchResultCapabilities,
     SearchSpan,
+    SearchWarningDetail,
     StalenessBucket
 } from "./search-types.js";
 import {
@@ -152,6 +156,9 @@ const SEARCH_TRACKED_LEXICAL_MAX_FILES = 128;
 const SEARCH_TRACKED_LEXICAL_MAX_RESULTS = 16;
 const SEARCH_TRACKED_LEXICAL_CONTEXT_LINES = 2;
 const SEARCH_TRACKED_LEXICAL_TOTAL_BYTES = 2 * 1024 * 1024;
+const SEARCH_DEBUG_CHANGED_CODE_MAX_FILES = 10;
+const SEARCH_DEBUG_CHANGED_CODE_MAX_SYMBOLS = 20;
+const SEARCH_DEBUG_CHANGED_CODE_MAX_DIRECT_CALLERS = 20;
 const SEARCH_AGENT_FIT_NEUTRAL = 1.0;
 const SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER = 1.25;
 const SEARCH_AGENT_FIT_TEST_DEMOTION_RUNTIME = 0.45;
@@ -202,6 +209,16 @@ type SearchCandidate = {
 };
 
 type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'fallback';
+type SearchSpanValidation = 'verified' | 'unverified' | 'not_applicable';
+
+type PythonSourceBackedSpanRepair = {
+    symbol: SymbolRecord;
+    attempted: boolean;
+    validated: boolean;
+    repaired: boolean;
+    startBeforeDefinition: boolean;
+    endTruncated: boolean;
+};
 
 type SearchPhaseTimingKey =
     | 'prepareRead'
@@ -301,7 +318,12 @@ type ReindexPreflightResult = {
     probeFailed?: boolean;
 };
 
-type CompletionProbeDebugHint = { ok: false; reason: "probe_failed" };
+type CompletionProbeDebugHint = {
+    ok: false;
+    reason: "probe_failed";
+    message: string;
+    action: string;
+};
 
 interface CandidateCollection {
     name: string;
@@ -509,6 +531,14 @@ export class ToolHandlers {
 
     private buildReindexInstruction(codebasePath: string, detail?: string): string {
         const detailLine = detail ? `${detail}\n\n` : '';
+        const compatibility = this.buildCompatibilityDiagnostics(codebasePath);
+        if (this.isRuntimeFingerprintMismatch(compatibility)) {
+            const indexedFingerprint = compatibility.indexedFingerprint
+                ? this.summarizeFingerprint(compatibility.indexedFingerprint)
+                : 'the indexed runtime fingerprint';
+            const runtimeFingerprint = this.summarizeFingerprint(compatibility.runtimeFingerprint);
+            return `${detailLine}Error: The current Satori runtime does not match the existing index at '${codebasePath}'. Recovery: restart Satori with ${indexedFingerprint} to reuse the current index. Reindex only if you intentionally want to migrate this repo to ${runtimeFingerprint}.`;
+        }
         return `${detailLine}Error: The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt.\nNext step: call manage_index with {\"action\":\"reindex\",\"path\":\"${codebasePath}\"}.`;
     }
 
@@ -529,6 +559,18 @@ export class ToolHandlers {
                 action: "create",
                 path: codebasePath
             }
+        };
+    }
+
+    private buildManageIndexRecommendedAction(
+        action: Extract<ManageIndexAction, "create" | "reindex" | "status" | "sync">,
+        codebasePath: string,
+        reason: string
+    ): SearchRecommendedNextAction {
+        return {
+            tool: "manage_index",
+            args: { action, path: codebasePath },
+            reason,
         };
     }
 
@@ -993,6 +1035,11 @@ export class ToolHandlers {
             limit: searchContext.limit,
             freshnessDecision: null,
             message: this.buildMissingLocalCollectionMessage(codebasePath, searchContext.path, collectionName),
+            recommendedNextAction: this.buildManageIndexRecommendedAction(
+                "create",
+                codebasePath,
+                "Restore index readiness because local metadata points at a missing configured vector backend collection."
+            ),
             hints: {
                 create: this.buildCreateHint(codebasePath)
             },
@@ -1051,7 +1098,10 @@ export class ToolHandlers {
         };
     }
 
-    private async prepareTrackedRootForRead(absolutePath: string): Promise<
+    private async prepareTrackedRootForRead(
+        absolutePath: string,
+        accessMode: 'semantic' | 'navigation' = 'semantic'
+    ): Promise<
         | { state: 'ready'; root: { path: string; info: any }; proofDebugHint?: CompletionProbeDebugHint }
         | { state: 'requires_reindex'; codebasePath: string; message?: string }
         | { state: 'indexing'; codebasePath: string }
@@ -1089,20 +1139,28 @@ export class ToolHandlers {
         const effectiveRoot = searchableRoot.path;
         const gateResult = this.enforceFingerprintGate(effectiveRoot);
         if (gateResult.blockedResponse) {
-            return {
-                state: 'requires_reindex',
-                codebasePath: effectiveRoot,
-                message: gateResult.message
-            };
+            if (accessMode === 'navigation' && gateResult.reason === 'fingerprint_mismatch') {
+                // Navigation sidecars are source-backed and can still be safe under a runtime-model mismatch.
+            } else {
+                return {
+                    state: 'requires_reindex',
+                    codebasePath: effectiveRoot,
+                    message: gateResult.message
+                };
+            }
         }
 
         const completionProof = await this.validateCompletionProof(effectiveRoot);
         if (completionProof.outcome === 'fingerprint_mismatch') {
-            return {
-                state: 'requires_reindex',
-                codebasePath: effectiveRoot,
-                message: 'Completion proof fingerprint does not match the current runtime fingerprint.'
-            };
+            if (accessMode === 'navigation') {
+                // Completion proof mismatch blocks semantic/vector search, not source-backed navigation.
+            } else {
+                return {
+                    state: 'requires_reindex',
+                    codebasePath: effectiveRoot,
+                    message: 'Completion proof fingerprint does not match the current runtime fingerprint.'
+                };
+            }
         }
 
         if (completionProof.outcome === 'stale_local') {
@@ -1114,7 +1172,12 @@ export class ToolHandlers {
         }
 
         const proofDebugHint: CompletionProbeDebugHint | undefined = completionProof.outcome === 'probe_failed'
-            ? { ok: false, reason: 'probe_failed' }
+            ? {
+                ok: false,
+                reason: 'probe_failed',
+                message: 'Completion proof could not be checked, so readiness is based on the local snapshot state.',
+                action: 'If navigation looks stale or inconsistent, run manage_index status and then reindex only when the response asks for it.',
+            }
             : undefined;
 
         const collectionState = await this.probeLocalSearchCollectionState(effectiveRoot);
@@ -1137,6 +1200,30 @@ export class ToolHandlers {
 
     private summarizeFingerprint(fingerprint: IndexFingerprint): string {
         return `${fingerprint.embeddingProvider}/${fingerprint.embeddingModel}/${fingerprint.embeddingDimension}/${fingerprint.vectorStoreProvider}/${fingerprint.schemaVersion}`;
+    }
+
+    private fingerprintsEqual(left: IndexFingerprint, right: IndexFingerprint): boolean {
+        return left.embeddingProvider === right.embeddingProvider
+            && left.embeddingModel === right.embeddingModel
+            && left.embeddingDimension === right.embeddingDimension
+            && left.vectorStoreProvider === right.vectorStoreProvider
+            && left.schemaVersion === right.schemaVersion;
+    }
+
+    private isRuntimeFingerprintMismatch(diagnostics: FingerprintCompatibilityDiagnostics): boolean {
+        return Boolean(
+            diagnostics.indexedFingerprint
+            && !this.fingerprintsEqual(diagnostics.indexedFingerprint, diagnostics.runtimeFingerprint)
+        );
+    }
+
+    private buildRuntimeMismatchHint(codebasePath: string, diagnostics: FingerprintCompatibilityDiagnostics): Record<string, unknown> {
+        return {
+            reason: 'runtime_fingerprint_mismatch',
+            indexedFingerprint: diagnostics.indexedFingerprint ? this.summarizeFingerprint(diagnostics.indexedFingerprint) : null,
+            runtimeFingerprint: this.summarizeFingerprint(diagnostics.runtimeFingerprint),
+            nextStep: `Restart Satori with the indexed fingerprint for '${codebasePath}' to reuse the current index. Reindex only if you intentionally want to migrate the repo to the current runtime.`,
+        };
     }
 
     private buildCompatibilityDiagnostics(codebasePath: string): FingerprintCompatibilityDiagnostics {
@@ -1162,6 +1249,10 @@ export class ToolHandlers {
 
         if (info?.reindexReason) {
             diagnostics.reindexReason = info.reindexReason;
+        }
+
+        if (!diagnostics.reindexReason && this.isRuntimeFingerprintMismatch(diagnostics)) {
+            diagnostics.reindexReason = 'fingerprint_mismatch';
         }
 
         return diagnostics;
@@ -1206,6 +1297,17 @@ export class ToolHandlers {
             resultMode: searchContext.resultMode,
             limit: searchContext.limit,
         } : {};
+        const compatibility = this.buildCompatibilityDiagnostics(codebasePath);
+        const runtimeMismatch = this.isRuntimeFingerprintMismatch(compatibility);
+        const message = runtimeMismatch
+            ? (() => {
+                const indexedFingerprint = compatibility.indexedFingerprint
+                    ? this.summarizeFingerprint(compatibility.indexedFingerprint)
+                    : 'the indexed runtime fingerprint';
+                const runtimeFingerprint = this.summarizeFingerprint(compatibility.runtimeFingerprint);
+                return `${detailLine}The current Satori runtime does not match the existing index at '${codebasePath}'. Recovery: restart Satori with ${indexedFingerprint} to reuse the current index. Reindex only if you intentionally want to migrate this repo to ${runtimeFingerprint}.`;
+            })()
+            : `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {\"action\":\"reindex\",\"path\":\"${codebasePath}\"}.`;
         return {
             ...base,
             status: "requires_reindex",
@@ -1215,11 +1317,26 @@ export class ToolHandlers {
             freshnessDecision: {
                 mode: "skipped_requires_reindex"
             },
-            message: `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {\"action\":\"reindex\",\"path\":\"${codebasePath}\"}.`,
+            message,
+            recommendedNextAction: runtimeMismatch
+                ? this.buildManageIndexRecommendedAction(
+                    "status",
+                    codebasePath,
+                    "Inspect the indexed/runtime fingerprints, then restart a matching runtime unless you intend to migrate the index."
+                )
+                : this.buildManageIndexRecommendedAction(
+                    "reindex",
+                    codebasePath,
+                    "Rebuild the incompatible index before retrying search."
+                ),
             hints: {
+                ...(runtimeMismatch ? {
+                    status: this.buildStatusHint(codebasePath),
+                    runtimeMismatch: this.buildRuntimeMismatchHint(codebasePath, compatibility),
+                } : {}),
                 reindex: this.buildReindexHint(codebasePath)
             },
-            compatibility: this.buildCompatibilityDiagnostics(codebasePath)
+            compatibility
         };
     }
 
@@ -1313,6 +1430,11 @@ export class ToolHandlers {
                 mode: "skipped_indexing"
             },
             message: `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry.`,
+            recommendedNextAction: this.buildManageIndexRecommendedAction(
+                "status",
+                codebasePath,
+                "Check indexing progress before retrying search."
+            ),
             hints: {
                 status: this.buildStatusHint(codebasePath),
                 debugIndexing: {
@@ -1364,6 +1486,11 @@ export class ToolHandlers {
                     limit: searchContext.limit,
                     freshnessDecision,
                     message: `Indexed codebase path '${codebasePath}' no longer exists. Search cannot serve stale vector results for this path.`,
+                    recommendedNextAction: this.buildManageIndexRecommendedAction(
+                        "create",
+                        searchContext.path,
+                        "Recreate the index for the requested path after the previously indexed root disappeared."
+                    ),
                     hints: {
                         create: this.buildCreateHint(searchContext.path)
                     },
@@ -1651,7 +1778,18 @@ export class ToolHandlers {
         }
 
         blocked.sort((a, b) => b.path.length - a.path.length);
-        const match = blocked.find((entry) => absolutePath === entry.path || absolutePath.startsWith(`${entry.path}${path.sep}`));
+        const match = blocked.find((entry) => {
+            if (!(absolutePath === entry.path || absolutePath.startsWith(`${entry.path}${path.sep}`))) {
+                return false;
+            }
+            const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(entry.path);
+            if (gate.changed) {
+                if (typeof this.snapshotManager.saveCodebaseSnapshot === 'function') {
+                    this.snapshotManager.saveCodebaseSnapshot();
+                }
+            }
+            return !gate.allowed;
+        });
         if (!match) {
             return null;
         }
@@ -1663,13 +1801,14 @@ export class ToolHandlers {
         };
     }
 
-    private enforceFingerprintGate(codebasePath: string): { blockedResponse?: any; message?: string } {
+    private enforceFingerprintGate(codebasePath: string): { blockedResponse?: any; message?: string; reason?: AccessGateReason } {
         const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(codebasePath);
         if (!gate.allowed) {
             if (gate.changed) {
                 this.snapshotManager.saveCodebaseSnapshot();
             }
             return {
+                reason: gate.reason,
                 message: gate.message,
                 blockedResponse: {
                     content: [{
@@ -3805,6 +3944,7 @@ export class ToolHandlers {
     private buildExactRegistryGroupResult(input: {
         codebaseRoot: string;
         symbol: SymbolRecord;
+        spanRepair?: PythonSourceBackedSpanRepair;
         indexedAt: string | null;
         callGraphNavigationState: {
             relationshipReady: boolean;
@@ -3822,7 +3962,7 @@ export class ToolHandlers {
             file: input.symbol.file,
             language: input.symbol.language,
             span,
-            symbolLabel: input.symbol.label,
+            symbolLabel: this.normalizeSearchSymbolLabel(input.symbol.label) || input.symbol.label,
             ownerSymbolInstanceId: input.symbol.symbolInstanceId,
             registrySymbol: input.symbol,
             registryLoaded: true,
@@ -3842,9 +3982,20 @@ export class ToolHandlers {
             callGraphHint,
             input.sidecarReadyForOutline
         );
+        const capabilities = this.buildSearchResultCapabilities({
+            callGraphHint,
+            confidence: 'high',
+            hasOpenSymbol: Boolean(nextActions?.openSymbol),
+            hasReadFallback: Boolean(navigationFallback?.readSpan),
+            semanticMatch: 'medium',
+            spanValidation: input.spanRepair
+                ? (input.spanRepair.validated ? 'verified' : input.spanRepair.attempted ? 'unverified' : 'not_applicable')
+                : 'not_applicable',
+        });
+        const displaySymbolLabel = this.normalizeSearchSymbolLabel(input.symbol.label) || input.symbol.label;
         const preview = [
-            input.symbol.label,
-            input.symbol.qualifiedName !== input.symbol.label ? input.symbol.qualifiedName : '',
+            displaySymbolLabel,
+            input.symbol.qualifiedName !== displaySymbolLabel ? input.symbol.qualifiedName : '',
         ].filter(Boolean).join('\n');
 
         return {
@@ -3854,7 +4005,7 @@ export class ToolHandlers {
             span,
             language: input.symbol.language,
             symbolId: input.symbol.symbolInstanceId,
-            symbolLabel: input.symbol.label,
+            symbolLabel: displaySymbolLabel,
             symbolKey: input.symbol.symbolKey,
             symbolInstanceId: input.symbol.symbolInstanceId,
             symbolKind: input.symbol.kind,
@@ -3866,6 +4017,7 @@ export class ToolHandlers {
             callGraphHint,
             ...(navigationFallback ? { navigationFallback } : {}),
             ...(nextActions ? { nextActions } : {}),
+            capabilities,
             preview: truncateContent(preview, SEARCH_GROUP_PREVIEW_MAX_CHARS),
             __exactLexicalMatch: true,
             ...(input.debug ? {
@@ -3887,7 +4039,7 @@ export class ToolHandlers {
                         lexicalCandidate: false,
                         rerankAdjusted: false,
                         exactMatchPinned: false,
-                        ownerRepairApplied: false,
+                        ownerRepairApplied: Boolean(input.spanRepair?.repaired),
                     },
                 }
             } : {})
@@ -4510,15 +4662,18 @@ export class ToolHandlers {
 
         const changedSymbols = sidecar.nodes
             .filter((node: any) => node && typeof node.file === 'string' && changedFileSet.has(this.normalizeRelativeFilePath(node.file)))
-            .map((node: any) => ({
-                file: this.normalizeRelativeFilePath(node.file),
-                symbolId: String(node.symbolId),
-                ...(typeof node.symbolLabel === 'string' ? { symbolLabel: node.symbolLabel } : {}),
-                span: {
-                    startLine: Number.isFinite(node.span?.startLine) ? Number(node.span.startLine) : 1,
-                    endLine: Number.isFinite(node.span?.endLine) ? Number(node.span.endLine) : (Number.isFinite(node.span?.startLine) ? Number(node.span.startLine) : 1),
-                }
-            }))
+            .map((node: any) => {
+                const symbolLabel = this.normalizeSearchSymbolLabel(node.symbolLabel);
+                return {
+                    file: this.normalizeRelativeFilePath(node.file),
+                    symbolId: String(node.symbolId),
+                    ...(symbolLabel ? { symbolLabel } : {}),
+                    span: {
+                        startLine: Number.isFinite(node.span?.startLine) ? Number(node.span.startLine) : 1,
+                        endLine: Number.isFinite(node.span?.endLine) ? Number(node.span.endLine) : (Number.isFinite(node.span?.startLine) ? Number(node.span.startLine) : 1),
+                    }
+                };
+            })
             .sort((a: any, b: any) => {
                 const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
                 if (fileCmp !== 0) return fileCmp;
@@ -4539,11 +4694,12 @@ export class ToolHandlers {
                 }
                 const startLine = Number.isFinite(caller.span?.startLine) ? Number(caller.span.startLine) : 1;
                 const endLine = Number.isFinite(caller.span?.endLine) ? Number(caller.span.endLine) : startLine;
+                const callerSymbolLabel = this.normalizeSearchSymbolLabel(caller.symbolLabel);
                 return {
                     targetSymbolId: String(edge.dstSymbolId),
                     file: this.normalizeRelativeFilePath(caller.file),
                     symbolId: String(caller.symbolId),
-                    ...(typeof caller.symbolLabel === 'string' ? { symbolLabel: caller.symbolLabel } : {}),
+                    ...(callerSymbolLabel ? { symbolLabel: callerSymbolLabel } : {}),
                     span: {
                         startLine,
                         endLine,
@@ -4572,10 +4728,20 @@ export class ToolHandlers {
                 return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
             });
 
+        const files = changedFiles.slice(0, SEARCH_DEBUG_CHANGED_CODE_MAX_FILES);
+        const symbols = changedSymbols.slice(0, SEARCH_DEBUG_CHANGED_CODE_MAX_SYMBOLS);
+        const cappedDirectCallers = directCallers.slice(0, SEARCH_DEBUG_CHANGED_CODE_MAX_DIRECT_CALLERS);
+
         return {
-            files: changedFiles,
-            symbols: changedSymbols.slice(0, 50),
-            directCallers: directCallers.slice(0, 50),
+            files,
+            symbols,
+            directCallers: cappedDirectCallers,
+            totalFiles: changedFiles.length,
+            totalSymbols: changedSymbols.length,
+            totalDirectCallers: directCallers.length,
+            truncated: files.length < changedFiles.length
+                || symbols.length < changedSymbols.length
+                || cappedDirectCallers.length < directCallers.length,
         };
     }
 
@@ -4862,8 +5028,14 @@ export class ToolHandlers {
         };
         warnings?: string[];
     }): FileOutlineResponseEnvelope {
-        const visibleState = this.buildVisibleRegistrySymbolState({
+        const repairs = this.repairSourceBackedPythonSpans({
+            codebaseRoot: input.codebaseRoot,
             symbols: input.symbols,
+        });
+        const repairedSymbols = repairs.map((repair) => repair.symbol);
+        const repairBySymbolId = new Map(repairs.map((repair) => [repair.symbol.symbolInstanceId, repair]));
+        const visibleState = this.buildVisibleRegistrySymbolState({
+            symbols: repairedSymbols,
             windowStart: input.windowStart,
             windowEnd: input.windowEnd,
         });
@@ -4879,22 +5051,28 @@ export class ToolHandlers {
             callGraphHint: this.buildRegistrySymbolCallGraphHint(symbol, input.file, input.callGraphNavigationState),
         } as FileOutlineSymbolResult)));
 
-        const warningSet = new Set(input.warnings || []);
-        if (mappedSymbols.some((symbol) => !symbol.callGraphHint.supported)) {
-            const firstUnsupported = mappedSymbols.find((symbol) => !symbol.callGraphHint.supported)?.callGraphHint;
-            if (firstUnsupported && !firstUnsupported.supported) {
-                warningSet.add(`OUTLINE_CALL_GRAPH_UNAVAILABLE:${firstUnsupported.reason}`);
+        const collectWarnings = (symbols: FileOutlineSymbolResult[]): string[] => {
+            const warningSet = new Set(input.warnings || []);
+            for (const symbol of symbols) {
+                for (const warning of this.buildOutlineSpanWarningCodes(repairBySymbolId.get(symbol.symbolId))) {
+                    warningSet.add(warning);
+                }
             }
-        }
-        if (!visibleState.hasExtractedSymbols && mappedSymbols.length > 0) {
-            warningSet.add('OUTLINE_SYNTHESIZED_FILE_SYMBOL');
-        }
-
-        const warnings = [...warningSet].sort((a, b) => a.localeCompare(b));
+            if (symbols.some((symbol) => !symbol.callGraphHint.supported)) {
+                const firstUnsupported = symbols.find((symbol) => !symbol.callGraphHint.supported)?.callGraphHint;
+                if (firstUnsupported && !firstUnsupported.supported) {
+                    warningSet.add(`OUTLINE_CALL_GRAPH_UNAVAILABLE:${firstUnsupported.reason}`);
+                }
+            }
+            if (!visibleState.hasExtractedSymbols && symbols.length > 0) {
+                warningSet.add('OUTLINE_SYNTHESIZED_FILE_SYMBOL');
+            }
+            return [...warningSet].sort((a, b) => a.localeCompare(b));
+        };
 
         if (input.resolveMode === 'exact') {
             const exactMatchIds = new Set(this.findExactRegistrySymbols({
-                symbols: input.symbols,
+                symbols: repairedSymbols,
                 symbolIdExact: input.symbolIdExact,
                 symbolLabelExact: input.symbolLabelExact,
                 windowStart: input.windowStart,
@@ -4913,11 +5091,12 @@ export class ToolHandlers {
                     outline: null,
                     hasMore: false,
                     message: 'No exact symbol match found in file outline.',
-                    ...(warnings.length > 0 ? { warnings } : {})
+                    ...(collectWarnings(mappedSymbols).length > 0 ? { warnings: collectWarnings(mappedSymbols) } : {})
                 };
             }
 
             const hasMoreExact = exactMatches.length > input.limitSymbols;
+            const exactWarnings = collectWarnings(exactMatches);
             return {
                 status: exactMatches.length > 1 ? 'ambiguous' : 'ok',
                 path: input.codebaseRoot,
@@ -4929,11 +5108,12 @@ export class ToolHandlers {
                 ...(exactMatches.length > 1 ? {
                     message: `Multiple exact symbol matches found (${exactMatches.length}). Narrow with symbolIdExact for deterministic selection.`
                 } : {}),
-                ...(warnings.length > 0 ? { warnings } : {})
+                ...(exactWarnings.length > 0 ? { warnings: exactWarnings } : {})
             };
         }
 
         const hasMore = mappedSymbols.length > input.limitSymbols;
+        const warnings = collectWarnings(mappedSymbols);
         return {
             status: 'ok',
             path: input.codebaseRoot,
@@ -5002,6 +5182,504 @@ export class ToolHandlers {
         return `SEARCH_PASS_FAILED:${passId} - ${passId} semantic search pass failed; results may be degraded.`;
     }
 
+    private buildSearchWarningDetails(warnings: string[]): SearchWarningDetail[] {
+        const byCode = new Map<string, SearchWarningDetail>();
+        for (const warning of warnings) {
+            const detail = this.buildSearchWarningDetail(warning);
+            byCode.set(detail.code, detail);
+        }
+        return Array.from(byCode.values()).sort((a, b) => a.code.localeCompare(b.code));
+    }
+
+    private buildSearchWarningDetail(warning: string): SearchWarningDetail {
+        const [rawCode, rawMessage] = warning.split(/\s+-\s+/, 2);
+        const code = rawCode.trim();
+        const fallbackMessage = rawMessage?.trim();
+
+        if (code === 'SEARCH_SPAN_START_BEFORE_DEF') {
+            return {
+                code,
+                severity: 'caution',
+                blocksUse: false,
+                message: 'The stored Python symbol span started before the actual definition; Satori repaired the start from source.',
+                action: 'Use read_file(open_symbol) or file_outline exact output as the canonical span before relying on graph traversal.',
+            };
+        }
+        if (code === 'SEARCH_TRUNCATED_SYMBOL_SPAN') {
+            return {
+                code,
+                severity: 'caution',
+                blocksUse: false,
+                message: 'The stored Python symbol span ended before the full body; Satori extended it from source.',
+                action: 'Prefer the repaired span for reads and treat older sidecar graph edges as suspect until reindexed.',
+            };
+        }
+        if (code === 'SEARCH_SYMBOL_SPAN_UNVERIFIED') {
+            return {
+                code,
+                severity: 'degraded',
+                blocksUse: false,
+                message: 'Source validation could not confirm the stored Python symbol span, so open-symbol precision is degraded.',
+                action: 'Verify with direct read_file line windows or file_outline before trusting call_graph results for this symbol.',
+            };
+        }
+        if (code === WARNING_CODES.SEARCH_DIRTY_WORKTREE_NOT_SYNCED) {
+            return {
+                code,
+                severity: 'caution',
+                blocksUse: false,
+                message: 'Index freshness was checked, but currently dirty or untracked files may have changed after the last sync and may not be represented.',
+                action: 'Run manage_index sync only if those dirty or untracked files are relevant to the query, then retry the search.',
+            };
+        }
+        if (code === WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED) {
+            return {
+                code,
+                severity: 'info',
+                blocksUse: false,
+                message: 'Changed-file ranking boost was skipped because the dirty file set is too large for a precise boost.',
+                action: 'Narrow the query with path: or sync the repo if changed-file recency should affect ranking.',
+            };
+        }
+        if (code === WARNING_CODES.FILTER_MUST_UNSATISFIED) {
+            return {
+                code,
+                severity: 'degraded',
+                blocksUse: false,
+                message: 'The must: filter did not match any retained search result.',
+                action: 'Check the identifier spelling or remove must: to allow semantic discovery.',
+            };
+        }
+        if (code === WARNING_CODES.RERANKER_FAILED) {
+            return {
+                code,
+                severity: 'degraded',
+                blocksUse: false,
+                message: 'Reranking failed, so results use retrieval ranking only.',
+                action: 'Open the recommended result before trusting final ordering.',
+            };
+        }
+        if (code.startsWith('SEARCH_PASS_FAILED:')) {
+            return {
+                code,
+                severity: 'degraded',
+                blocksUse: false,
+                message: fallbackMessage || 'A semantic retrieval pass failed; returned results may be incomplete.',
+                action: 'Use the recommended action for the best result, or retry with a narrower path:/must: query.',
+            };
+        }
+        if (code.startsWith('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:')) {
+            return {
+                code,
+                severity: 'degraded',
+                blocksUse: false,
+                message: 'Relationship-backed call graph navigation is unavailable or incompatible for these search results.',
+                action: 'Open the symbol first; use lexical search or tests to verify inbound impact.',
+            };
+        }
+        if (code === SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING) {
+            return {
+                code,
+                severity: 'degraded',
+                blocksUse: false,
+                message: 'Partial search data may exist, but deterministic navigation sidecars were not published.',
+                action: 'Use read_file spans for inspection; reindex only if the response asks for requires_reindex.',
+            };
+        }
+        if (code.startsWith('SEARCH_PARTIAL_INDEX:')) {
+            return {
+                code,
+                severity: 'degraded',
+                blocksUse: false,
+                message: 'The index was built from a partial indexing run; search results may be incomplete.',
+                action: 'Treat results as hints and verify with direct reads or tests before editing.',
+            };
+        }
+
+        return {
+            code,
+            severity: 'caution',
+            blocksUse: false,
+            message: fallbackMessage || 'Search completed with a degraded condition.',
+            action: 'Inspect the result hints and verify with read_file before relying on this result.',
+        };
+    }
+
+    private buildSearchSpanWarningCodes(repair: PythonSourceBackedSpanRepair | undefined): string[] {
+        if (!repair) {
+            return [];
+        }
+        const warnings: string[] = [];
+        if (repair.startBeforeDefinition) {
+            warnings.push('SEARCH_SPAN_START_BEFORE_DEF');
+        }
+        if (repair.endTruncated) {
+            warnings.push('SEARCH_TRUNCATED_SYMBOL_SPAN');
+        }
+        if (repair.attempted && !repair.validated) {
+            warnings.push('SEARCH_SYMBOL_SPAN_UNVERIFIED');
+        }
+        return warnings;
+    }
+
+    private buildOutlineSpanWarningCodes(repair: PythonSourceBackedSpanRepair | undefined): string[] {
+        if (!repair) {
+            return [];
+        }
+        const warnings: string[] = [];
+        if (repair.startBeforeDefinition) {
+            warnings.push('OUTLINE_SPAN_START_BEFORE_DEF');
+        }
+        if (repair.endTruncated) {
+            warnings.push('OUTLINE_TRUNCATED_SYMBOL_SPAN');
+        }
+        if (repair.attempted && !repair.validated) {
+            warnings.push('OUTLINE_SYMBOL_SPAN_UNVERIFIED');
+        }
+        return warnings;
+    }
+
+    private buildSearchDebugSummary(
+        debugHint: SearchDebugHint | undefined,
+        freshnessSummary: SearchFreshnessSummary
+    ): NonNullable<NonNullable<SearchResponseEnvelope['hints']>['debugSummary']> | undefined {
+        if (!debugHint) {
+            return undefined;
+        }
+        const passes = new Set(debugHint.passesUsed);
+        const retrieval = passes.has('exact_registry')
+            ? 'exact_registry'
+            : passes.has('live_path')
+                ? 'live_path'
+                : passes.has('lexical_files')
+                    ? 'tracked_lexical'
+                    : debugHint.rankingProvenance.semanticPassesUsed.join('+') || debugHint.retrieval.mode;
+        const rerank = debugHint.rerank?.applied
+            ? 'applied'
+            : debugHint.rerank?.skippedByIdentifierIntent
+                ? 'skipped_identifier_intent'
+                : debugHint.rerank?.skippedByScopeDocs
+                    ? 'skipped_docs_scope'
+                    : debugHint.rerank?.enabled === false
+                        ? 'skipped'
+                        : 'not_attempted';
+
+        return {
+            retrieval,
+            freshness: freshnessSummary.syncMode,
+            dirtyFiles: freshnessSummary.changedFileCount,
+            rerank,
+            ...(debugHint.changedCode?.truncated ? { changedCodeTruncated: true } : {}),
+        };
+    }
+
+    private buildSearchResultCapabilities(input: {
+        callGraphHint: CallGraphHint;
+        confidence?: "high" | "medium" | "low";
+        hasOpenSymbol: boolean;
+        hasReadFallback: boolean;
+        semanticMatch: SearchCapabilityConfidence;
+        spanValidation: SearchSpanValidation;
+    }): SearchResultCapabilities {
+        const openSymbol: SearchCapabilityConfidence = input.hasOpenSymbol
+            ? input.spanValidation === 'unverified'
+                ? 'low'
+                : (input.confidence === 'high' ? 'high' : 'medium')
+            : input.hasReadFallback
+                ? 'medium'
+                : 'low';
+        const graphUnavailableConfidence: SearchCapabilityConfidence = input.callGraphHint.supported
+            ? 'medium'
+            : input.callGraphHint.reason === 'unsupported_language'
+                ? 'unavailable'
+                : 'low';
+        return {
+            openSymbol,
+            callGraphCallers: input.callGraphHint.supported ? 'low' : graphUnavailableConfidence,
+            callGraphCallees: input.callGraphHint.supported ? 'medium' : graphUnavailableConfidence,
+            semanticMatch: input.semanticMatch,
+        };
+    }
+
+    private buildSearchGroupRecommendedAction(
+        result: SearchGroupResult,
+        resultIndex?: number
+    ): SearchRecommendedNextAction | undefined {
+        if (result.nextActions?.openSymbol) {
+            return {
+                ...(resultIndex !== undefined ? { resultIndex } : {}),
+                tool: 'read_file',
+                args: result.nextActions.openSymbol.args,
+                reason: result.confidence === 'high'
+                    ? 'Open the exact owner before call graph because symbol identity is high confidence.'
+                    : 'Open the selected owner before graph traversal so edits are grounded in source.',
+            };
+        }
+        if (result.navigationFallback?.readSpan) {
+            return {
+                ...(resultIndex !== undefined ? { resultIndex } : {}),
+                tool: 'read_file',
+                args: result.navigationFallback.readSpan.args,
+                reason: 'Call graph navigation is unavailable; read the result span directly.',
+            };
+        }
+        if (result.nextActions?.outlineWindow) {
+            return {
+                ...(resultIndex !== undefined ? { resultIndex } : {}),
+                tool: 'file_outline',
+                args: result.nextActions.outlineWindow.args,
+                reason: 'Open the nearby outline window to resolve the owner before reading code.',
+            };
+        }
+        return undefined;
+    }
+
+    private buildTopRecommendedSearchAction(results: SearchGroupResult[]): SearchRecommendedNextAction | undefined {
+        const firstActionableIndex = results.findIndex((result) => this.buildSearchGroupRecommendedAction(result) !== undefined);
+        if (firstActionableIndex < 0) {
+            return undefined;
+        }
+        return this.buildSearchGroupRecommendedAction(results[firstActionableIndex], firstActionableIndex);
+    }
+
+    private buildTopRecommendedRawSearchAction(
+        codebaseRoot: string,
+        results: SearchChunkResult[]
+    ): SearchRecommendedNextAction | undefined {
+        const first = results[0];
+        if (!first) {
+            return undefined;
+        }
+        return {
+            resultIndex: 0,
+            tool: 'read_file',
+            args: {
+                path: path.resolve(codebaseRoot, first.file),
+                start_line: Math.max(1, first.span.startLine),
+                end_line: Math.max(Math.max(1, first.span.startLine), first.span.endLine),
+            },
+            reason: 'Open the top raw chunk before inferring ownership from ungrouped search results.',
+        };
+    }
+
+    private buildSearchGroupFallbacks(input: {
+        codebaseRoot: string;
+        query: string;
+        scope: SearchScope;
+        groupBy: SearchGroupBy;
+        result: SearchGroupResult;
+    }): SearchGroupResult['fallbacks'] | undefined {
+        const fallbacks: NonNullable<SearchGroupResult['fallbacks']> = [];
+        if (input.result.callGraphHint.supported) {
+            fallbacks.push({
+                when: 'call_graph returns no edges or relationship confidence is lower than the edit needs',
+                tool: 'search_codebase',
+                args: {
+                    path: input.codebaseRoot,
+                    query: this.buildExactSymbolFallbackQuery(input.result, input.query),
+                    scope: input.scope,
+                    resultMode: 'grouped',
+                    groupBy: input.groupBy,
+                    limit: 5,
+                },
+                reason: 'Inbound graph coverage can be incomplete; exact lexical search verifies references before impact analysis.',
+            });
+        } else if (input.result.navigationFallback?.readSpan) {
+            fallbacks.push({
+                when: `call graph is unavailable: ${input.result.callGraphHint.supported ? 'unknown' : input.result.callGraphHint.reason}`,
+                tool: 'read_file',
+                args: input.result.navigationFallback.readSpan.args,
+                reason: 'Read the indexed span directly because deterministic graph navigation is unavailable.',
+            });
+        }
+
+        return fallbacks.length > 0 ? fallbacks : undefined;
+    }
+
+    private buildExactSymbolFallbackQuery(result: SearchGroupResult, originalQuery: string): string {
+        const identifier = this.extractIdentifierFromSymbolLabel(result.symbolLabel) || this.extractIdentifierFromSymbolLabel(result.groupId);
+        return identifier ? `must:${identifier} ${identifier}` : originalQuery;
+    }
+
+    private extractIdentifierFromSymbolLabel(label: string | null | undefined): string | undefined {
+        if (!label) {
+            return undefined;
+        }
+        const kindMatch = label.match(/\b(?:(?:export|default|public|private|protected|static|readonly)\s+)*(?:async\s+)?(?:function|method|def|class|const|let|var|interface|type|symbol)\s+([A-Za-z_$][\w$]*)/);
+        if (kindMatch) {
+            return kindMatch[1];
+        }
+        const keywordLike = new Set([
+            'export',
+            'default',
+            'public',
+            'private',
+            'protected',
+            'static',
+            'readonly',
+            'async',
+            'function',
+            'method',
+            'def',
+            'class',
+            'const',
+            'let',
+            'var',
+            'interface',
+            'type',
+            'symbol',
+        ]);
+        const identifiers = label.match(/\b[A-Za-z_$][\w$]*\b/g) || [];
+        return identifiers.find((identifier) => !keywordLike.has(identifier));
+    }
+
+    private buildDisplaySymbolLabel(input: {
+        symbolLabel?: string | null;
+        symbolKind?: string;
+        relativePath: string;
+        span: SearchSpan;
+        content?: string;
+    }): string {
+        const normalizedLabel = this.normalizeSearchSymbolLabel(input.symbolLabel);
+        if (normalizedLabel) {
+            return normalizedLabel;
+        }
+        const content = input.content || '';
+        const declaration = content.match(/\b(?:async\s+)?(?:function|def|class|const|let|var|interface|type)\s+([A-Za-z_$][\w$]*)/);
+        if (declaration) {
+            return `${input.symbolKind || 'symbol'} ${declaration[1]}`;
+        }
+        return `${input.symbolKind || 'symbol'} ${input.relativePath}:${Math.max(1, input.span.startLine)}`;
+    }
+
+    private normalizeSearchSymbolLabel(label: string | null | undefined): string | undefined {
+        if (typeof label !== 'string') {
+            return undefined;
+        }
+        let normalized = Array.from(label, (character) => {
+            const code = character.charCodeAt(0);
+            return code <= 31 || code === 127 ? ' ' : character;
+        }).join('')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/\s*\{\s*$/, '');
+        if (normalized.length === 0) {
+            return undefined;
+        }
+
+        const unmatchedParen = (normalized.match(/\(/g) || []).length > (normalized.match(/\)/g) || []).length;
+        if (unmatchedParen) {
+            const declaration = normalized.match(/\b((?:async\s+)?(?:function|method|def|class|const|let|var|interface|type))\s+([A-Za-z_$][\w$]*)/);
+            if (declaration) {
+                return `${declaration[1].replace(/\s+/g, ' ')} ${declaration[2]}`;
+            }
+            normalized = normalized.replace(/\s*\([^)]*$/, '').trim();
+        }
+
+        return normalized.length > 0 ? normalized : undefined;
+    }
+
+    private buildSearchGroupPreview(symbolLabel: string, content: string): string {
+        const normalizedLabel = this.normalizeSearchSymbolLabel(symbolLabel) || symbolLabel;
+        const labelIdentifier = this.extractIdentifierFromSymbolLabel(normalizedLabel);
+        const previewLines = [normalizedLabel];
+        const seen = new Set([this.normalizeSearchPreviewLine(normalizedLabel).toLowerCase()]);
+        let skippingSignatureContinuation = false;
+
+        for (const rawLine of content.split(/\r?\n/)) {
+            const line = this.normalizeSearchPreviewLine(rawLine);
+            if (!line || this.isSearchPreviewNoiseLine(line)) {
+                continue;
+            }
+            if (skippingSignatureContinuation) {
+                if (this.isSearchPreviewSignatureContinuationLine(line)) {
+                    if (this.isSearchPreviewSignatureContinuationEndLine(line)) {
+                        skippingSignatureContinuation = false;
+                    }
+                    continue;
+                }
+                skippingSignatureContinuation = false;
+            }
+            const key = line.toLowerCase();
+            if (seen.has(key)) {
+                continue;
+            }
+
+            const lineIdentifier = this.extractIdentifierFromSymbolLabel(line);
+            if (lineIdentifier && labelIdentifier && lineIdentifier !== labelIdentifier && this.isSearchPreviewNeighborDeclarationLine(line) && previewLines.length > 1) {
+                break;
+            }
+            if (lineIdentifier && labelIdentifier && lineIdentifier === labelIdentifier && this.isSearchPreviewPureDuplicateDeclarationLine(line)) {
+                if (this.isSearchPreviewOpenSignatureLine(line)) {
+                    skippingSignatureContinuation = true;
+                }
+                seen.add(key);
+                continue;
+            }
+
+            previewLines.push(line);
+            seen.add(key);
+            if (previewLines.length >= 5) {
+                break;
+            }
+        }
+
+        return truncateContent(previewLines.join('\n'), SEARCH_GROUP_PREVIEW_MAX_CHARS);
+    }
+
+    private normalizeSearchPreviewLine(line: string): string {
+        return line
+            .replace(/\s+/g, ' ')
+            .replace(/^\s+|\s+$/g, '')
+            .replace(/\s+([,;:)\]}])/g, '$1')
+            .replace(/([({\[])\s+/g, '$1');
+    }
+
+    private isSearchPreviewNoiseLine(line: string): boolean {
+        return line.length === 0
+            || /^[@#]\s*$/.test(line)
+            || /^@/.test(line)
+            || /^(?:\/\/|\/\*|\*\/|\*|#)\s*$/.test(line)
+            || /^[{}()[\],;]+$/.test(line);
+    }
+
+    private isSearchPreviewDeclarationLine(line: string): boolean {
+        return /^\s*(?:export\s+)?(?:async\s+)?(?:function|def|class|const|let|var|interface|type)\s+[A-Za-z_$][\w$]*/.test(line)
+            || /^\s*(?:(?:public|private|protected)\s+)?(?:async\s+)?[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{\s*$/.test(line);
+    }
+
+    private isSearchPreviewOpenSignatureLine(line: string): boolean {
+        const openParens = (line.match(/\(/g) || []).length;
+        const closeParens = (line.match(/\)/g) || []).length;
+        return openParens > closeParens || /\(\s*$/.test(line);
+    }
+
+    private isSearchPreviewSignatureContinuationLine(line: string): boolean {
+        return this.isSearchPreviewSignatureContinuationEndLine(line)
+            || /^(?:\.\.\.)?[A-Za-z_$][\w$]*\??(?:\s*:\s*[^,=]+)?(?:\s*=\s*[^,]+)?[,]?$/.test(line)
+            || /^\*{1,2}[A-Za-z_$][\w$]*(?:\s*=\s*[^,]+)?[,]?$/.test(line);
+    }
+
+    private isSearchPreviewSignatureContinuationEndLine(line: string): boolean {
+        return /^\)\s*(?:(?:->|=>)\s*[^:{]+)?\s*[:{,;]?$/.test(line);
+    }
+
+    private isSearchPreviewNeighborDeclarationLine(line: string): boolean {
+        return /^\s*(?:export\s+)?(?:async\s+)?(?:function|def|class|interface|type)\s+[A-Za-z_$][\w$]*/.test(line)
+            || /^\s*(?:(?:public|private|protected)\s+)?(?:async\s+)?[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{\s*$/.test(line);
+    }
+
+    private isSearchPreviewPureDuplicateDeclarationLine(line: string): boolean {
+        if (!this.isSearchPreviewDeclarationLine(line)) {
+            return false;
+        }
+        return !/\breturn\b/.test(line)
+            && !/=>/.test(line)
+            && !/=\s*[^=>]/.test(line)
+            && !/["'`]/.test(line)
+            && !/\b[A-Z][A-Z0-9_]{2,}\b/.test(line);
+    }
+
     private isSearchPassFaultInjectionEnabled(): boolean {
         return process.env.NODE_ENV === 'test';
     }
@@ -5040,16 +5718,20 @@ export class ToolHandlers {
         });
     }
 
+    private compareRelationshipBackedCallGraphEdges(a: CallGraphEdge, b: CallGraphEdge): number {
+        const srcCmp = this.compareNullableStringsAsc(a.srcSymbolId, b.srcSymbolId);
+        if (srcCmp !== 0) return srcCmp;
+        const dstCmp = this.compareNullableStringsAsc(a.dstSymbolId, b.dstSymbolId);
+        if (dstCmp !== 0) return dstCmp;
+        const kindCmp = this.compareNullableStringsAsc(a.kind, b.kind);
+        if (kindCmp !== 0) return kindCmp;
+        const fileCmp = this.compareNullableStringsAsc(a.site?.file, b.site?.file);
+        if (fileCmp !== 0) return fileCmp;
+        return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
+    }
+
     private sortRelationshipBackedCallGraphEdges(edges: CallGraphEdge[]): CallGraphEdge[] {
-        return [...edges].sort((a, b) => {
-            const srcCmp = this.compareNullableStringsAsc(a.srcSymbolId, b.srcSymbolId);
-            if (srcCmp !== 0) return srcCmp;
-            const dstCmp = this.compareNullableStringsAsc(a.dstSymbolId, b.dstSymbolId);
-            if (dstCmp !== 0) return dstCmp;
-            const kindCmp = this.compareNullableStringsAsc(a.kind, b.kind);
-            if (kindCmp !== 0) return kindCmp;
-            return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
-        });
+        return [...edges].sort((a, b) => this.compareRelationshipBackedCallGraphEdges(a, b));
     }
 
     private mapRelationshipConfidenceToCallGraphConfidence(confidence: 'high' | 'medium' | 'low'): number {
@@ -5077,11 +5759,313 @@ export class ToolHandlers {
         };
     }
 
+    private countPythonIndent(line: string): number {
+        let indent = 0;
+        for (const char of line) {
+            if (char === ' ') {
+                indent += 1;
+            } else if (char === '\t') {
+                indent += 4;
+            } else {
+                break;
+            }
+        }
+        return indent;
+    }
+
+    private escapeRegExp(value: string): string {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    private isPythonHeaderTerminated(trimmedLine: string): boolean {
+        return /:\s*(?:#.*)?$/.test(trimmedLine);
+    }
+
+    private findPythonDefinitionIndexByName(lines: string[], symbolName: string, startIndex: number, endExclusive: number): number | undefined {
+        const matcher = new RegExp(`^(?:async\\s+def|def)\\s+${this.escapeRegExp(symbolName)}\\b`);
+        for (let index = Math.max(0, startIndex); index < Math.min(lines.length, endExclusive); index += 1) {
+            if (matcher.test((lines[index] || '').trim())) {
+                return index;
+            }
+        }
+        return undefined;
+    }
+
+    private findPythonDefinitionIndexNearSpan(lines: string[], symbol: SymbolRecord): number | undefined {
+        const startIndex = Math.max(0, symbol.span.startLine - 1);
+        const spanEndExclusive = Math.min(lines.length, Math.max(startIndex + 1, symbol.span.endLine));
+        const inSpan = this.findPythonDefinitionIndexByName(lines, symbol.name, startIndex, spanEndExclusive);
+        if (inSpan !== undefined) {
+            return inSpan;
+        }
+        const windowStart = Math.max(0, startIndex - 8);
+        const windowEnd = Math.min(lines.length, Math.max(spanEndExclusive, startIndex + 48));
+        return this.findPythonDefinitionIndexByName(lines, symbol.name, windowStart, windowEnd);
+    }
+
+    private findPythonDecoratedDefinitionStart(lines: string[], definitionIndex: number): number {
+        const indent = this.countPythonIndent(lines[definitionIndex] || '');
+        let startIndex = definitionIndex;
+        for (let index = definitionIndex - 1; index >= 0; index -= 1) {
+            const line = lines[index] || '';
+            const trimmed = line.trim();
+            if (trimmed.length === 0) {
+                break;
+            }
+            if (!trimmed.startsWith('@') || this.countPythonIndent(line) !== indent) {
+                break;
+            }
+            startIndex = index;
+        }
+        return startIndex;
+    }
+
+    private findPythonSourceBackedBlockEnd(lines: string[], definitionIndex: number, indent: number): number | undefined {
+        let lastContentLine = definitionIndex + 1;
+        let headerComplete = this.isPythonHeaderTerminated((lines[definitionIndex] || '').trim());
+        for (let index = definitionIndex + 1; index < lines.length; index += 1) {
+            const line = lines[index] || '';
+            const trimmed = line.trim();
+            if (!headerComplete) {
+                lastContentLine = index + 1;
+                if (this.isPythonHeaderTerminated(trimmed)) {
+                    headerComplete = true;
+                }
+                continue;
+            }
+            if (trimmed.length === 0 || trimmed.startsWith('#')) {
+                continue;
+            }
+            if (this.countPythonIndent(line) <= indent) {
+                return lastContentLine;
+            }
+            lastContentLine = index + 1;
+        }
+        return headerComplete ? lastContentLine : undefined;
+    }
+
+    private repairSourceBackedPythonSpan(input: {
+        codebaseRoot: string;
+        symbol: SymbolRecord;
+        sourceLines?: string[];
+    }): PythonSourceBackedSpanRepair {
+        const symbol = input.symbol;
+        if (symbol.language !== 'python' || (symbol.kind !== 'function' && symbol.kind !== 'method')) {
+            return {
+                symbol,
+                attempted: false,
+                validated: false,
+                repaired: false,
+                startBeforeDefinition: false,
+                endTruncated: false,
+            };
+        }
+        const absoluteFile = path.resolve(input.codebaseRoot, symbol.file);
+        const relativeToRoot = path.relative(input.codebaseRoot, absoluteFile);
+        if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot) || !fs.existsSync(absoluteFile)) {
+            return {
+                symbol,
+                attempted: false,
+                validated: false,
+                repaired: false,
+                startBeforeDefinition: false,
+                endTruncated: false,
+            };
+        }
+        const lines = input.sourceLines || fs.readFileSync(absoluteFile, 'utf8').split(/\r?\n/);
+        const definitionIndex = this.findPythonDefinitionIndexNearSpan(lines, symbol);
+        if (definitionIndex === undefined) {
+            return {
+                symbol,
+                attempted: true,
+                validated: false,
+                repaired: false,
+                startBeforeDefinition: false,
+                endTruncated: false,
+            };
+        }
+        const definitionLine = lines[definitionIndex] || '';
+        const repairedStartIndex = this.findPythonDecoratedDefinitionStart(lines, definitionIndex);
+        const repairedEndLine = this.findPythonSourceBackedBlockEnd(
+            lines,
+            definitionIndex,
+            this.countPythonIndent(definitionLine)
+        );
+        if (!repairedEndLine) {
+            return {
+                symbol,
+                attempted: true,
+                validated: false,
+                repaired: false,
+                startBeforeDefinition: false,
+                endTruncated: false,
+            };
+        }
+        const repairedStartLine = repairedStartIndex + 1;
+        const startBeforeDefinition = symbol.span.startLine < repairedStartLine;
+        const endTruncated = symbol.span.endLine < repairedEndLine;
+        const repaired = repairedStartLine !== symbol.span.startLine || repairedEndLine !== symbol.span.endLine;
+        return {
+            symbol: repaired
+                ? {
+                    ...symbol,
+                    span: {
+                        ...symbol.span,
+                        startLine: repairedStartLine,
+                        endLine: repairedEndLine,
+                    },
+                }
+                : symbol,
+            attempted: true,
+            validated: true,
+            repaired,
+            startBeforeDefinition,
+            endTruncated,
+        };
+    }
+
+    private repairSourceBackedPythonSpans(input: {
+        codebaseRoot: string;
+        symbols: SymbolRecord[];
+    }): PythonSourceBackedSpanRepair[] {
+        const linesByFile = new Map<string, string[] | undefined>();
+        return input.symbols.map((symbol) => {
+            if (symbol.language !== 'python' || (symbol.kind !== 'function' && symbol.kind !== 'method')) {
+                return {
+                    symbol,
+                    attempted: false,
+                    validated: false,
+                    repaired: false,
+                    startBeforeDefinition: false,
+                    endTruncated: false,
+                };
+            }
+            if (!linesByFile.has(symbol.file)) {
+                const absoluteFile = path.resolve(input.codebaseRoot, symbol.file);
+                const relativeToRoot = path.relative(input.codebaseRoot, absoluteFile);
+                const safeFile = !relativeToRoot.startsWith('..') && !path.isAbsolute(relativeToRoot);
+                const lines = safeFile && fs.existsSync(absoluteFile)
+                    ? fs.readFileSync(absoluteFile, 'utf8').split(/\r?\n/)
+                    : undefined;
+                linesByFile.set(symbol.file, lines);
+            }
+            return this.repairSourceBackedPythonSpan({
+                codebaseRoot: input.codebaseRoot,
+                symbol,
+                sourceLines: linesByFile.get(symbol.file),
+            });
+        });
+    }
+
+    private extractDirectCallNamesFromLine(line: string): string[] {
+        const names: string[] = [];
+        const seen = new Set<string>();
+        const ignored = new Set(['if', 'for', 'while', 'return', 'class', 'def']);
+        const directCallRegex = /\b([A-Za-z_][\w]*)\s*\(/g;
+        for (const match of line.matchAll(directCallRegex)) {
+            const name = match[1] || '';
+            const key = name.toLowerCase();
+            if (!name || ignored.has(key) || seen.has(key)) {
+                continue;
+            }
+            seen.add(key);
+            names.push(name);
+        }
+        return names;
+    }
+
+    private resolveUnambiguousDirectCallTarget(
+        source: SymbolRecord,
+        candidates: SymbolRecord[]
+    ): SymbolRecord | undefined {
+        const nonSelfCandidates = candidates.filter((candidate) => candidate.symbolInstanceId !== source.symbolInstanceId);
+        const sameFileCandidates = nonSelfCandidates.filter((candidate) => candidate.file === source.file);
+        if (sameFileCandidates.length === 1) {
+            return sameFileCandidates[0];
+        }
+        if (sameFileCandidates.length > 1) {
+            return undefined;
+        }
+        return nonSelfCandidates.length === 1 ? nonSelfCandidates[0] : undefined;
+    }
+
+    private buildSourceBackedPythonCalleeFallback(input: {
+        codebaseRoot: string;
+        registry: SymbolRegistry;
+        source: SymbolRecord;
+    }): { edges: CallGraphEdge[]; targetSymbols: SymbolRecord[]; notes: CallGraphNote[] } {
+        const source = input.source;
+        if (source.language !== 'python' || (source.kind !== 'function' && source.kind !== 'method')) {
+            return { edges: [], targetSymbols: [], notes: [] };
+        }
+        const absoluteFile = path.resolve(input.codebaseRoot, source.file);
+        const relativeToRoot = path.relative(input.codebaseRoot, absoluteFile);
+        if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot) || !fs.existsSync(absoluteFile)) {
+            return { edges: [], targetSymbols: [], notes: [] };
+        }
+
+        const targetsByName = new Map<string, SymbolRecord[]>();
+        for (const symbol of input.registry.symbols.filter((candidate) => candidate.kind !== 'file')) {
+            const key = symbol.name.toLowerCase();
+            targetsByName.set(key, [...(targetsByName.get(key) || []), symbol]);
+        }
+
+        const lines = fs.readFileSync(absoluteFile, 'utf8').split(/\r?\n/);
+        const edgesByKey = new Map<string, CallGraphEdge>();
+        const targetSymbolsById = new Map<string, SymbolRecord>();
+        const maxLine = Math.min(source.span.endLine, lines.length);
+        for (let lineNo = source.span.startLine; lineNo <= maxLine; lineNo += 1) {
+            const line = (lines[lineNo - 1] || '').replace(/#.*$/, '');
+            if (line.trim().length === 0 || /^\s*(?:async\s+def|def|class)\s+/.test(line)) {
+                continue;
+            }
+            for (const callName of this.extractDirectCallNamesFromLine(line)) {
+                const target = this.resolveUnambiguousDirectCallTarget(
+                    source,
+                    targetsByName.get(callName.toLowerCase()) || []
+                );
+                if (!target) {
+                    continue;
+                }
+                const edge: CallGraphEdge = {
+                    srcSymbolId: source.symbolInstanceId,
+                    dstSymbolId: target.symbolInstanceId,
+                    kind: 'dynamic',
+                    site: {
+                        file: source.file,
+                        startLine: lineNo,
+                        endLine: lineNo,
+                    },
+                    confidence: 0.65,
+                };
+                edgesByKey.set(`${edge.srcSymbolId}\0${edge.dstSymbolId}\0${lineNo}`, edge);
+                targetSymbolsById.set(target.symbolInstanceId, target);
+            }
+        }
+
+        const edges = this.sortRelationshipBackedCallGraphEdges([...edgesByKey.values()]);
+        const notes = edges.length > 0
+            ? [{
+                type: 'dynamic_edge' as const,
+                file: source.file,
+                startLine: source.span.startLine,
+                symbolId: source.symbolInstanceId,
+                detail: 'Source-backed direct callee fallback synthesized edges because the relationship sidecar was built from a truncated Python span.',
+            }]
+            : [];
+        return {
+            edges,
+            targetSymbols: [...targetSymbolsById.values()],
+            notes,
+        };
+    }
+
     private async buildRelationshipBackedCallGraph(input: {
         codebaseRoot: string;
         registry: SymbolRegistry;
         registryManifestHash: string;
         resolvedSymbol: SymbolRecord;
+        sourceSpanRepair?: PythonSourceBackedSpanRepair;
         direction: CallGraphDirection;
         depth: number;
         limit: number;
@@ -5118,9 +6102,15 @@ export class ToolHandlers {
             return null;
         }
 
+        const resolveNodeSymbol = (symbolInstanceId: string): SymbolRecord | undefined => (
+            symbolInstanceId === input.resolvedSymbol.symbolInstanceId
+                ? input.resolvedSymbol
+                : input.registry.symbolsByInstanceId.get(symbolInstanceId)
+        );
+        let droppedEdgesOutsideSourceSpan = 0;
         const nodes = this.sortRelationshipBackedCallGraphNodes(
             neighbors.visitedSymbolInstanceIds
-                .map((symbolInstanceId) => input.registry.symbolsByInstanceId.get(symbolInstanceId))
+                .map((symbolInstanceId) => resolveNodeSymbol(symbolInstanceId))
                 .filter((symbol): symbol is SymbolRecord => Boolean(symbol))
                 .map((symbol) => this.createCallGraphNodeFromRegistrySymbol(symbol))
         );
@@ -5129,9 +6119,23 @@ export class ToolHandlers {
                 if (!record.sourceInstanceId || !record.targetInstanceId) {
                     return [];
                 }
-                const source = input.registry.symbolsByInstanceId.get(record.sourceInstanceId);
-                const target = input.registry.symbolsByInstanceId.get(record.targetInstanceId);
+                const source = resolveNodeSymbol(record.sourceInstanceId);
+                const target = resolveNodeSymbol(record.targetInstanceId);
                 if (!source || !target) {
+                    return [];
+                }
+                const siteStartLine = record.span?.startLine || source.span.startLine;
+                const siteEndLine = record.span?.endLine || siteStartLine;
+                if (
+                    record.sourceInstanceId === input.resolvedSymbol.symbolInstanceId
+                    && input.sourceSpanRepair?.validated
+                    && (
+                        record.file !== input.resolvedSymbol.file
+                        || siteStartLine < input.resolvedSymbol.span.startLine
+                        || siteEndLine > input.resolvedSymbol.span.endLine
+                    )
+                ) {
+                    droppedEdgesOutsideSourceSpan += 1;
                     return [];
                 }
                 return [{
@@ -5140,31 +6144,72 @@ export class ToolHandlers {
                     kind: 'call' as const,
                     site: {
                         file: record.file,
-                        startLine: record.span?.startLine || source.span.startLine,
+                        startLine: siteStartLine,
                         ...(record.span?.endLine ? { endLine: record.span.endLine } : {}),
                     },
                     confidence: this.mapRelationshipConfidenceToCallGraphConfidence(record.confidence),
                 }];
             })
         );
-        const warnings = [...new Set([...input.registry.warnings, ...neighbors.warnings])].sort((a, b) => a.localeCompare(b));
+        const dynamicFallback = input.sourceSpanRepair?.repaired && (input.direction === 'callees' || input.direction === 'both')
+            ? this.buildSourceBackedPythonCalleeFallback({
+                codebaseRoot: input.codebaseRoot,
+                registry: input.registry,
+                source: input.resolvedSymbol,
+            })
+            : { edges: [], targetSymbols: [], notes: [] };
+        const existingEdgeKeys = new Set(edges.map((edge) => [
+            edge.srcSymbolId,
+            edge.dstSymbolId,
+            edge.site.file,
+            edge.site.startLine,
+        ].join('\0')));
+        const addedDynamicEdges = dynamicFallback.edges.filter((edge) => {
+            const key = [
+                edge.srcSymbolId,
+                edge.dstSymbolId,
+                edge.site.file,
+                edge.site.startLine,
+            ].join('\0');
+            return !existingEdgeKeys.has(key);
+        });
+        const combinedEdges = this.sortRelationshipBackedCallGraphEdges([...edges, ...addedDynamicEdges]);
+        const nodeById = new Map(nodes.map((node) => [node.symbolId, node]));
+        for (const target of dynamicFallback.targetSymbols) {
+            if (!nodeById.has(target.symbolInstanceId) && addedDynamicEdges.some((edge) => edge.dstSymbolId === target.symbolInstanceId)) {
+                nodeById.set(target.symbolInstanceId, this.createCallGraphNodeFromRegistrySymbol(target));
+            }
+        }
+        const referencedNodeIds = new Set<string>([
+            input.resolvedSymbol.symbolInstanceId,
+            ...combinedEdges.flatMap((edge) => [edge.srcSymbolId, edge.dstSymbolId]),
+        ]);
+        const combinedNodes = this.sortRelationshipBackedCallGraphNodes(
+            [...nodeById.values()].filter((node) => referencedNodeIds.has(node.symbolId))
+        );
+        const warnings = [...new Set([
+            ...input.registry.warnings,
+            ...neighbors.warnings,
+            ...(droppedEdgesOutsideSourceSpan > 0 ? [`CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:${droppedEdgesOutsideSourceSpan}`] : []),
+            ...(addedDynamicEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicEdges.length}`] : []),
+        ])].sort((a, b) => a.localeCompare(b));
 
         return {
             supported: true,
             direction: input.direction,
             depth: Math.max(1, Math.min(3, input.depth)),
             limit: Math.max(1, input.limit),
-            nodes,
-            edges,
-            notes: [],
+            nodes: combinedNodes,
+            edges: combinedEdges,
+            notes: addedDynamicEdges.length > 0 ? dynamicFallback.notes : [],
             ...(warnings.length > 0 ? { warnings } : {}),
             notesTruncated: false,
-            totalNoteCount: 0,
-            returnedNoteCount: 0,
+            totalNoteCount: addedDynamicEdges.length > 0 ? dynamicFallback.notes.length : 0,
+            returnedNoteCount: addedDynamicEdges.length > 0 ? dynamicFallback.notes.length : 0,
             sidecar: {
                 builtAt: neighbors.manifest.builtAt,
-                nodeCount: nodes.length,
-                edgeCount: edges.length,
+                nodeCount: combinedNodes.length,
+                edgeCount: combinedEdges.length,
             },
         };
     }
@@ -6182,6 +7227,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     resultMode: input.resultMode,
                     freshnessDecision: null,
                     message: `Codebase '${absolutePath}' (or any parent) is not indexed.`,
+                    recommendedNextAction: this.buildManageIndexRecommendedAction(
+                        "create",
+                        absolutePath,
+                        "Create an index for this codebase before retrying search."
+                    ),
                     hints: {
                         create: {
                             tool: "manage_index",
@@ -6208,6 +7258,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     resultMode: input.resultMode,
                     freshnessDecision: null,
                     message: this.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason),
+                    recommendedNextAction: this.buildManageIndexRecommendedAction(
+                        "create",
+                        trackedRootState.codebasePath,
+                        "Create a fresh index because local readiness metadata is stale."
+                    ),
                     hints: {
                         create: this.buildCreateHint(trackedRootState.codebasePath),
                         staleLocal: this.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason)
@@ -6407,16 +7462,35 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         if (changedFilesBoostSkippedForLargeChangeSet) {
                             searchWarnings.push(WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED);
                         }
-                        const finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
                         const exactGroupingStartedAtMs = this.searchPhaseNowMs();
-                        const exactGroup = this.buildExactRegistryGroupResult({
+                        const exactRegistrySymbolRepair = this.repairSourceBackedPythonSpan({
                             codebaseRoot: effectiveRoot,
                             symbol: exactRegistryMatch.symbol,
+                        });
+                        const finalizedSearchWarnings = Array.from(new Set([
+                            ...searchWarnings,
+                            ...this.buildSearchSpanWarningCodes(exactRegistrySymbolRepair),
+                        ])).sort();
+                        const exactGroup = this.buildExactRegistryGroupResult({
+                            codebaseRoot: effectiveRoot,
+                            symbol: exactRegistrySymbolRepair.symbol,
+                            spanRepair: exactRegistrySymbolRepair,
                             indexedAt: registryState.registry.manifest.builtAt || null,
                             callGraphNavigationState,
                             sidecarReadyForOutline: true,
                             debug: Boolean(input.debug),
                         });
+                        exactGroup.recommendedNextAction = this.buildSearchGroupRecommendedAction(exactGroup);
+                        const exactFallbacks = this.buildSearchGroupFallbacks({
+                            codebaseRoot: effectiveRoot,
+                            query: input.query,
+                            scope: input.scope,
+                            groupBy: input.groupBy,
+                            result: exactGroup,
+                        });
+                        if (exactFallbacks) {
+                            exactGroup.fallbacks = exactFallbacks;
+                        }
                         this.addSearchPhaseTiming(phaseTimings, 'grouping', exactGroupingStartedAtMs);
                         const visibleGroupedResults = [exactGroup];
                         const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file), input.scope);
@@ -6438,7 +7512,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         }
                         if (input.debug) {
                             const rerankDecision = this.resolveRerankDecision(input.scope, queryPlan);
-                            responseHints.debugSearch = {
+                            const debugSearch = {
                                 queryIntent: {
                                     classification: queryPlan.intent,
                                     confidence: queryPlan.confidence,
@@ -6507,6 +7581,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                     docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
                                 },
                             } satisfies SearchDebugHint;
+                            responseHints.debugSearch = debugSearch;
+                            responseHints.debugSummary = this.buildSearchDebugSummary(debugSearch, freshnessSummary);
                         }
                         if (proofDebugHint) {
                             responseHints.debugProofCheck = proofDebugHint;
@@ -6522,7 +7598,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             resultMode: "grouped",
                             freshnessDecision,
                             freshnessSummary,
-                            ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
+                            ...(finalizedSearchWarnings.length > 0 ? { warnings: this.buildSearchWarningDetails(finalizedSearchWarnings) } : {}),
+                            recommendedNextAction: this.buildTopRecommendedSearchAction(visibleGroupedResults),
                             hints: responseHints,
                             results: visibleGroupedResults.map(({ __exactLexicalMatch: _exactLexicalMatch, ...result }) => result)
                         };
@@ -7023,6 +8100,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
                 if (debugHintBase) {
                     responseHints.debugSearch = debugHintBase;
+                    responseHints.debugSummary = this.buildSearchDebugSummary(debugHintBase, freshnessSummary);
                 }
                 if (proofDebugHint) {
                     responseHints.debugProofCheck = proofDebugHint;
@@ -7038,7 +8116,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     resultMode: "raw",
                     freshnessDecision,
                     freshnessSummary,
-                    ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
+                    ...(finalizedSearchWarnings.length > 0 ? { warnings: this.buildSearchWarningDetails(finalizedSearchWarnings) } : {}),
+                    recommendedNextAction: this.buildTopRecommendedRawSearchAction(effectiveRoot, rawResults),
                     hints: responseHints,
                     results: rawResults
                 };
@@ -7152,13 +8231,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             const sidecarReadyForOutline = Boolean(searchSymbolRegistryManifestHash);
             const groupingResultsStartedAtMs = this.searchPhaseNowMs();
             const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
+            const spanWarningCodes = new Set<string>();
             for (const group of groups.values()) {
                 exactMatchPinningApplied = this.sortSearchCandidates(group.chunks, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
                 rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
                 const representative = group.chunks[0];
-                const spanStart = Math.min(...group.chunks.map((c) => c.result.startLine || 0));
-                const spanEnd = Math.max(...group.chunks.map((c) => c.result.endLine || 0));
-                const span: SearchSpan = { startLine: spanStart, endLine: spanEnd };
+                const chunkSpanStart = Math.min(...group.chunks.map((c) => c.result.startLine || 0));
+                const chunkSpanEnd = Math.max(...group.chunks.map((c) => c.result.endLine || 0));
+                const chunkSpan: SearchSpan = { startLine: chunkSpanStart, endLine: chunkSpanEnd };
 
                 let indexedAtMax: string | undefined;
                 let indexedAtMaxMs = Number.NEGATIVE_INFINITY;
@@ -7171,7 +8251,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     }
                 }
 
-                const repSymbolLabel = typeof representative.result.symbolLabel === 'string' ? representative.result.symbolLabel : null;
                 const ownerSymbolKey = group.ownerSymbolKey;
                 const ownerSymbolInstanceId = group.ownerSymbolInstanceId;
                 const symbolKind = group.ownerSymbolKind || (typeof representative.result.symbolKind === 'string' ? representative.result.symbolKind : undefined);
@@ -7185,15 +8264,38 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
                 const groupId = ownerSymbolInstanceId
                     || ownerSymbolKey
-                    || this.buildFallbackGroupId(representative.result.relativePath, span);
-                const registrySymbol = ownerSymbolInstanceId
+                    || this.buildFallbackGroupId(representative.result.relativePath, chunkSpan);
+                const rawRegistrySymbol = ownerSymbolInstanceId
                     ? searchSymbolRegistry?.symbolsByInstanceId.get(ownerSymbolInstanceId)
                     : undefined;
+                const registrySymbolRepair = rawRegistrySymbol
+                    ? this.repairSourceBackedPythonSpan({
+                        codebaseRoot: effectiveRoot,
+                        symbol: rawRegistrySymbol,
+                    })
+                    : undefined;
+                for (const warning of this.buildSearchSpanWarningCodes(registrySymbolRepair)) {
+                    spanWarningCodes.add(warning);
+                }
+                const registrySymbol = registrySymbolRepair?.symbol;
+                const span: SearchSpan = registrySymbol
+                    ? {
+                        startLine: registrySymbol.span.startLine,
+                        endLine: registrySymbol.span.endLine,
+                    }
+                    : chunkSpan;
+                const repSymbolLabel = this.buildDisplaySymbolLabel({
+                    symbolLabel: typeof representative.result.symbolLabel === 'string' ? representative.result.symbolLabel : undefined,
+                    symbolKind,
+                    relativePath: representative.result.relativePath,
+                    span,
+                    content: String(representative.result.content || ''),
+                });
                 const callGraphHint = this.buildSearchGroupCallGraphHint({
                     file: representative.result.relativePath,
                     language: representative.result.language || 'unknown',
                     span,
-                    symbolLabel: repSymbolLabel || undefined,
+                    symbolLabel: repSymbolLabel,
                     ownerSymbolInstanceId,
                     registrySymbol,
                     registryLoaded: Boolean(searchSymbolRegistry),
@@ -7214,8 +8316,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     callGraphHint,
                     sidecarReadyForOutline
                 );
-
-                groupedResults.push({
+                const semanticMatch: SearchCapabilityConfidence = representative.backendScoreKindsSeen.includes('dense_similarity')
+                    ? (queryPlan.intent === 'semantic' || queryPlan.intent === 'mixed' ? 'high' : 'medium')
+                    : representative.exactLexicalMatch
+                        ? 'low'
+                        : 'medium';
+                const groupResult: SearchGroupResult & { __exactLexicalMatch: boolean } = {
                     kind: "group",
                     groupId,
                     file: representative.result.relativePath,
@@ -7234,7 +8340,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     callGraphHint,
                     ...(navigationFallback ? { navigationFallback } : {}),
                     ...(nextActions ? { nextActions } : {}),
-                    preview: truncateContent(String(representative.result.content || ''), SEARCH_GROUP_PREVIEW_MAX_CHARS),
+                    capabilities: this.buildSearchResultCapabilities({
+                        callGraphHint,
+                        confidence,
+                        hasOpenSymbol: Boolean(nextActions?.openSymbol),
+                        hasReadFallback: Boolean(navigationFallback?.readSpan),
+                        semanticMatch,
+                        spanValidation: registrySymbolRepair
+                            ? (registrySymbolRepair.validated ? 'verified' : registrySymbolRepair.attempted ? 'unverified' : 'not_applicable')
+                            : 'not_applicable',
+                    }),
+                    preview: this.buildSearchGroupPreview(repSymbolLabel, String(representative.result.content || '')),
                     __exactLexicalMatch: representative.exactLexicalMatch,
                     ...(input.debug ? {
                         debug: {
@@ -7256,9 +8372,27 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                             provenance: this.buildSearchCandidateProvenance(representative, group.ownerSource),
                         }
                     } : {})
+                };
+                groupResult.recommendedNextAction = this.buildSearchGroupRecommendedAction(groupResult);
+                const fallbacks = this.buildSearchGroupFallbacks({
+                    codebaseRoot: effectiveRoot,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    result: groupResult,
                 });
+                if (fallbacks) {
+                    groupResult.fallbacks = fallbacks;
+                }
+                groupedResults.push(groupResult);
             }
             this.addSearchPhaseTiming(phaseTimings, 'grouping', groupingResultsStartedAtMs);
+            if (spanWarningCodes.size > 0) {
+                finalizedSearchWarnings = Array.from(new Set([
+                    ...finalizedSearchWarnings,
+                    ...spanWarningCodes,
+                ])).sort();
+            }
 
             const rankedGroupedResults = (queryPlan.referenceSeeking || queryPlan.intent === 'identifier')
                 ? this.collapseDuplicateDeclarationGroups(groupedResults)
@@ -7293,6 +8427,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     ...debugHintBase,
                     diversitySummary: diversityApplied.summary
                 };
+                responseHints.debugSummary = this.buildSearchDebugSummary(responseHints.debugSearch as SearchDebugHint, freshnessSummary);
             }
             if (proofDebugHint) {
                 responseHints.debugProofCheck = proofDebugHint;
@@ -7308,7 +8443,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 resultMode: "grouped",
                 freshnessDecision,
                 freshnessSummary,
-                ...(finalizedSearchWarnings.length > 0 ? { warnings: finalizedSearchWarnings } : {}),
+                ...(finalizedSearchWarnings.length > 0 ? { warnings: this.buildSearchWarningDetails(finalizedSearchWarnings) } : {}),
+                recommendedNextAction: this.buildTopRecommendedSearchAction(visibleGroupedResults),
                 hints: responseHints,
                 results: visibleGroupedResults.map(({ __exactLexicalMatch: _exactLexicalMatch, ...result }) => result)
             };
@@ -7407,7 +8543,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             trackCodebasePath(absoluteRoot);
 
-            const trackedRootState = await this.prepareTrackedRootForRead(absoluteRoot);
+            const trackedRootState = await this.prepareTrackedRootForRead(absoluteRoot, 'navigation');
             if (trackedRootState.state === 'requires_reindex') {
                 const payload = this.buildRequiresReindexFileOutlinePayload(trackedRootState.codebasePath, {
                     ...args,
@@ -7731,7 +8867,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             trackCodebasePath(absolutePath);
 
-            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
+            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath, 'navigation');
             if (trackedRootState.state === 'requires_reindex') {
                 const payload = this.buildRequiresReindexCallGraphPayload(
                     trackedRootState.codebasePath,
@@ -7931,7 +9067,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
-            const resolvedSymbol = exactRegistrySymbols[0];
+            const resolvedSymbolRepair = this.repairSourceBackedPythonSpan({
+                codebaseRoot: effectiveRoot,
+                symbol: exactRegistrySymbols[0],
+            });
+            const resolvedSymbol = resolvedSymbolRepair.symbol;
             const absoluteSymbolFile = path.resolve(effectiveRoot, normalizedSymbolFile);
             const relativeSymbolFile = path.relative(effectiveRoot, absoluteSymbolFile);
             const symbolFileInsideRoot = !relativeSymbolFile.startsWith('..') && !path.isAbsolute(relativeSymbolFile);
@@ -8057,6 +9197,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 registry: registryState.registry,
                 registryManifestHash: registryState.manifestHash,
                 resolvedSymbol,
+                sourceSpanRepair: resolvedSymbolRepair,
                 direction,
                 depth,
                 limit,

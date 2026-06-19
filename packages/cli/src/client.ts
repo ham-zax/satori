@@ -2,6 +2,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { CliError } from "./errors.js";
 
+export type ListToolsResult = Awaited<ReturnType<Client["listTools"]>>;
+export type CallToolResult = Awaited<ReturnType<Client["callTool"]>>;
+
 interface SessionOptions {
     command: string;
     args: string[];
@@ -52,7 +55,7 @@ export class CliMcpSession {
         this.writeStderr = writeStderr;
     }
 
-    async listTools(): Promise<any> {
+    async listTools(): Promise<ListToolsResult> {
         return createTimeout(
             this.client.listTools(),
             this.callTimeoutMs,
@@ -61,7 +64,7 @@ export class CliMcpSession {
         );
     }
 
-    async callTool(name: string, args: Record<string, unknown>): Promise<any> {
+    async callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
         return createTimeout(
             this.client.callTool({ name, arguments: args }),
             this.callTimeoutMs,

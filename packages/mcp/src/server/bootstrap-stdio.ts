@@ -1,11 +1,11 @@
-import { installCliStdoutRedirect, installConsoleToStderrPatch, StdoutGuardMode } from "./stdio-safety.js";
+import { installCliStdoutRedirect, installConsoleToStderrPatch, StdoutGuardMode, WritableStdoutLike } from "./stdio-safety.js";
 
 type BootstrapRunMode = "mcp" | "cli";
 
 interface BootstrapStdioSafetyOptions {
     runMode: BootstrapRunMode;
     guardMode: StdoutGuardMode | "off";
-    stdout?: Record<string, any>;
+    stdout?: WritableStdoutLike;
     writeToStderr?: (text: string) => void;
     onGuardDisabled?: () => void;
 }

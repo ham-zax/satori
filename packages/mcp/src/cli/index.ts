@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCliArgs, parseWrapperArgumentsFromSchema, resolveRawArguments } from "./args.js";
 import type { ParsedCommand } from "./args.js";
-import { connectCliMcpSession } from "./client.js";
+import { connectCliMcpSession, type CallToolResult, type ListToolsResult } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, parseStructuredEnvelope } from "./format.js";
 import { executeInstallCommand, type ManagedRuntimeCommand } from "./install.js";
@@ -39,21 +39,33 @@ interface RunCliOptions {
 interface ToolDescriptor {
     name: string;
     inputSchema?: unknown;
+    input_schema?: unknown;
 }
 
 interface CliSession {
-    listTools(): Promise<any>;
-    callTool(name: string, args: Record<string, unknown>): Promise<any>;
+    listTools(): Promise<ListToolsResult>;
+    callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult>;
     close(): Promise<void>;
 }
 
-function firstText(result: any): string | null {
-    const content = result?.content;
+interface TextContentEntry {
+    type: "text";
+    text: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
+function firstText(result: unknown): string | null {
+    const content = isRecord(result) ? result.content : undefined;
     if (!Array.isArray(content)) {
         return null;
     }
-    const entry = content.find((item: any) => item?.type === "text" && typeof item?.text === "string");
-    return entry?.text || null;
+    const entry = content.find((item): item is TextContentEntry => (
+        isRecord(item) && item.type === "text" && typeof item.text === "string"
+    ));
+    return entry?.text ?? null;
 }
 
 function readPackageVersion(): string {
@@ -99,13 +111,17 @@ function buildHelpPayload() {
     };
 }
 
-function resolveToolSchema(toolsResult: any, toolName: string): unknown {
-    const tools = Array.isArray(toolsResult?.tools) ? toolsResult.tools as ToolDescriptor[] : [];
-    const tool = tools.find((entry) => entry && entry.name === toolName);
+function resolveToolSchema(toolsResult: unknown, toolName: string): unknown {
+    const tools = isRecord(toolsResult) && Array.isArray(toolsResult.tools)
+        ? toolsResult.tools
+        : [];
+    const tool = tools.find((entry): entry is ToolDescriptor => (
+        isRecord(entry) && typeof entry.name === "string" && entry.name === toolName
+    ));
     if (!tool) {
         throw new CliError("E_USAGE", `Unknown tool '${toolName}'.`, 2);
     }
-    const schema = (tool as any).inputSchema ?? (tool as any).input_schema;
+    const schema = tool.inputSchema ?? tool.input_schema;
     if (!schema || typeof schema !== "object") {
         throw new CliError("E_SCHEMA_UNSUPPORTED", `${toolName} schema is missing or invalid. Use --args-json/--args-file.`, 2);
     }
@@ -122,7 +138,7 @@ function summarizeEnvelopeError(writers: { writeStderr: (text: string) => void }
     writers.writeStderr(`E_TOOL_ERROR status=${status}${reasonPart}${statusHintPart}\n`);
 }
 
-function maybeEmitTextSummary(writers: { writeStderr: (text: string) => void }, result: any): void {
+function maybeEmitTextSummary(writers: { writeStderr: (text: string) => void }, result: unknown): void {
     const text = firstText(result);
     if (text) {
         writers.writeStderr(`${text}\n`);
@@ -130,10 +146,10 @@ function maybeEmitTextSummary(writers: { writeStderr: (text: string) => void }, 
 }
 
 function evaluateToolResultForError(
-    result: any,
+    result: unknown,
     writers: { writeStderr: (text: string) => void; },
 ): number | null {
-    if (result?.isError === true) {
+    if (isRecord(result) && result.isError === true) {
         const message = firstText(result) || "tool call failed";
         writers.writeStderr(`E_TOOL_ERROR ${message}\n`);
         return 1;

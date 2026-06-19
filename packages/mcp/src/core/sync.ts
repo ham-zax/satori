@@ -73,6 +73,27 @@ interface IgnoreReloadResult {
 // v1 policy: only root-level control files trigger index-policy reconciliation.
 const IGNORE_RULE_CONTROL_FILES = new Set(['.satoriignore', '.gitignore', 'satori.toml']);
 
+function errorMessage(error: unknown, fallback = "unknown_error"): string {
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+    if (typeof error === "string" && error.length > 0) {
+        return error;
+    }
+    if (error === null || error === undefined) {
+        return fallback;
+    }
+    return String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+    if (typeof error !== "object" || error === null || !("code" in error)) {
+        return undefined;
+    }
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "string" ? code : undefined;
+}
+
 export class SyncManager {
     private context: Context;
     private snapshotManager: SnapshotManager;
@@ -325,7 +346,7 @@ export class SyncManager {
                 newlyIgnoredFiles: newlyIgnoredCount,
                 fallbackSyncExecuted: false,
             };
-        } catch (error: any) {
+        } catch (error) {
             let fallbackSyncExecuted = false;
             let fallbackStats: { added: number; removed: number; modified: number } | undefined;
             let fallbackRecovered = false;
@@ -354,7 +375,7 @@ export class SyncManager {
                 ignoreRulesVersion: this.ignoreRulesVersions.get(codebasePath),
                 coalescedEdits: Math.max(1, coalescedEdits),
                 durationMs: Math.max(0, this.now() - startedAt),
-                errorMessage: String(error?.message || error || 'unknown_ignore_reload_error'),
+                errorMessage: errorMessage(error, "unknown_ignore_reload_error"),
                 fallbackSyncExecuted,
                 fallbackStats,
             };
@@ -432,7 +453,7 @@ export class SyncManager {
                 console.log(`[SYNC] ✅ Sync Result for '${codebasePath}': +${stats.added}, -${stats.removed}, ~${stats.modified}`);
             }
             return { mode: 'synced', stats };
-        } catch (error: any) {
+        } catch (error) {
             console.error(`[SYNC] Failed to sync '${codebasePath}':`, error);
             throw error; // Let ensureFreshness handle the catch/finally
         }
@@ -665,7 +686,7 @@ export class SyncManager {
                 }
 
                 await this.ensureFreshness(codebasePath, 0);
-            } catch (error: any) {
+            } catch (error) {
                 console.error(`[SYNC-WATCH] Debounced sync failed for '${codebasePath}':`, error);
             }
         }, this.watchDebounceMs);
@@ -673,9 +694,9 @@ export class SyncManager {
         this.debounceTimers.set(codebasePath, timer);
     }
 
-    private async handleWatcherError(codebasePath: string, error: any): Promise<void> {
-        const message = String(error?.message || error || '');
-        const code = error?.code;
+    private async handleWatcherError(codebasePath: string, error: unknown): Promise<void> {
+        const message = errorMessage(error, "");
+        const code = errorCode(error);
         if (code === 'ENOSPC' || message.includes('ENOSPC')) {
             console.error(`[SYNC-WATCH] ENOSPC detected while watching '${codebasePath}'. Disabling watcher mode and relying on periodic/manual sync.`);
             await this.stopWatcherMode();

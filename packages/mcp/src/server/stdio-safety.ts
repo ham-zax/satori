@@ -2,6 +2,13 @@ export type StdoutGuardMode = "drop" | "redirect";
 
 type ConsoleMethodName = "log" | "info" | "warn" | "error" | "debug";
 
+export interface WritableStdoutLike {
+    [methodName: string]: unknown;
+    write?: (...args: unknown[]) => unknown;
+    end?: (...args: unknown[]) => unknown;
+    writev?: (...args: unknown[]) => unknown;
+}
+
 interface ConsolePatchOptions {
     writeToStderr?: (text: string) => void;
     methods?: ConsoleMethodName[];
@@ -9,7 +16,7 @@ interface ConsolePatchOptions {
 
 interface CliStdoutRedirectOptions {
     mode?: StdoutGuardMode;
-    stdout?: Record<string, any>;
+    stdout?: WritableStdoutLike;
     writeToStderr?: (text: string) => void;
 }
 
@@ -80,7 +87,7 @@ export function installConsoleToStderrPatch(options: ConsolePatchOptions = {}): 
 }
 
 export function installCliStdoutRedirect(options: CliStdoutRedirectOptions = {}): () => void {
-    const stdout = options.stdout || (process.stdout as unknown as Record<string, any>);
+    const stdout = options.stdout || (process.stdout as unknown as WritableStdoutLike);
     const mode: StdoutGuardMode = options.mode || "drop";
     const writeToStderr = options.writeToStderr || ((text: string) => {
         process.stderr.write(text);

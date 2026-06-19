@@ -16,6 +16,10 @@ import { ContextMcpConfig, IndexFingerprint } from "../config.js";
 import { createEmbeddingInstance, logEmbeddingProviderInfo } from "../embedding.js";
 import { MissingProviderConfigIssue, ProviderBackedOperation, ToolContext } from "../tools/types.js";
 
+type VectorSearchResults = Awaited<ReturnType<VectorDatabase["search"]>>;
+type HybridVectorSearchResults = Awaited<ReturnType<VectorDatabase["hybridSearch"]>>;
+type VectorQueryRows = Awaited<ReturnType<VectorDatabase["query"]>>;
+
 class MetadataOnlyEmbedding extends Embedding {
     protected maxTokens = 1;
     private readonly provider: string;
@@ -60,10 +64,10 @@ class UnconfiguredVectorDatabase implements VectorDatabase {
     async listCollections(): Promise<string[]> { this.throwMissing(); }
     async insert(): Promise<void> { this.throwMissing(); }
     async insertHybrid(): Promise<void> { this.throwMissing(); }
-    async search(): Promise<any[]> { this.throwMissing(); }
-    async hybridSearch(): Promise<any[]> { this.throwMissing(); }
+    async search(): Promise<VectorSearchResults> { this.throwMissing(); }
+    async hybridSearch(): Promise<HybridVectorSearchResults> { this.throwMissing(); }
     async delete(): Promise<void> { this.throwMissing(); }
-    async query(): Promise<Record<string, any>[]> { this.throwMissing(); }
+    async query(): Promise<VectorQueryRows> { this.throwMissing(); }
     async checkCollectionLimit(): Promise<boolean> { this.throwMissing(); }
 }
 

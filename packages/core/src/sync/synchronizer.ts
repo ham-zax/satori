@@ -49,6 +49,17 @@ interface EffectiveState {
     partialScan: boolean;
 }
 
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+    if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') {
+        return error.code;
+    }
+    return undefined;
+}
+
 export interface FileChangeResult {
     added: string[];
     removed: string[];
@@ -278,16 +289,16 @@ export class FileSynchronizer {
         let entries: fsSync.Dirent[];
         try {
             entries = await fsp.readdir(directoryPath, { withFileTypes: true });
-        } catch (error: any) {
+        } catch (error: unknown) {
             if (directoryPath === this.rootDir) {
-                throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${error.message}`);
+                throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`);
             }
 
             const relativeDir = this.normalizeRelPath(path.relative(this.rootDir, directoryPath));
             if (relativeDir) {
                 result.unscannedDirPrefixes.add(relativeDir);
             }
-            console.warn(`[Synchronizer] Cannot read directory ${directoryPath}: ${error.message}`);
+            console.warn(`[Synchronizer] Cannot read directory ${directoryPath}: ${errorMessage(error)}`);
             return;
         }
 
@@ -307,13 +318,13 @@ export class FileSynchronizer {
             let stat: fsSync.Stats;
             try {
                 stat = await fsp.stat(absolutePath);
-            } catch (error: any) {
+            } catch (error: unknown) {
                 if (entry.isDirectory()) {
                     result.unscannedDirPrefixes.add(relativePath);
                 } else {
                     result.unreadableFiles.add(relativePath);
                 }
-                console.warn(`[Synchronizer] Cannot stat ${absolutePath}: ${error.message}`);
+                console.warn(`[Synchronizer] Cannot stat ${absolutePath}: ${errorMessage(error)}`);
                 continue;
             }
 
@@ -382,10 +393,10 @@ export class FileSynchronizer {
                     const hash = await this.hashFileBytes(candidate.absolutePath);
                     result.scannedHashes.set(candidate.relativePath, hash);
                     hashedCount += 1;
-                } catch (error: any) {
+                } catch (error: unknown) {
                     result.unreadableFiles.add(candidate.relativePath);
                     result.scannedStats.delete(candidate.relativePath);
-                    console.warn(`[Synchronizer] Cannot hash file ${candidate.absolutePath}: ${error.message}`);
+                    console.warn(`[Synchronizer] Cannot hash file ${candidate.absolutePath}: ${errorMessage(error)}`);
                 }
             }
         });
@@ -577,8 +588,8 @@ export class FileSynchronizer {
             }
 
             return { migrated };
-        } catch (error: any) {
-            if (error.code === 'ENOENT') {
+        } catch (error: unknown) {
+            if (errorCode(error) === 'ENOENT') {
                 console.log(`Snapshot file not found at ${this.snapshotPath}. Creating baseline snapshot.`);
                 this.fileHashes = new Map();
                 this.fileStats = new Map();
@@ -707,11 +718,11 @@ export class FileSynchronizer {
         try {
             await fsp.unlink(snapshotPath);
             console.log(`Deleted snapshot file: ${snapshotPath}`);
-        } catch (error: any) {
-            if (error.code === 'ENOENT') {
+        } catch (error: unknown) {
+            if (errorCode(error) === 'ENOENT') {
                 console.log(`Snapshot file not found (already deleted): ${snapshotPath}`);
             } else {
-                console.error(`[Synchronizer] Failed to delete snapshot file ${snapshotPath}:`, error.message);
+                console.error(`[Synchronizer] Failed to delete snapshot file ${snapshotPath}:`, errorMessage(error));
                 throw error;
             }
         }

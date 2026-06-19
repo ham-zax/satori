@@ -8,6 +8,11 @@ import { readFileTool } from "./read_file.js";
 import { listCodebasesTool } from "./list_codebases.js";
 import { McpTool, ToolContext } from "./types.js";
 
+type JsonSchemaObject = Record<string, unknown> & {
+    $schema?: unknown;
+    definitions?: unknown;
+};
+
 export const toolList: McpTool[] = [
     manageIndexTool,
     searchCodebaseTool,
@@ -21,11 +26,11 @@ export const toolRegistry: Record<string, McpTool> = Object.fromEntries(
     toolList.map((tool) => [tool.name, tool])
 );
 
-function toJsonSchema(schema: z.ZodTypeAny): Record<string, any> {
+function toJsonSchema(schema: z.ZodTypeAny): JsonSchemaObject {
     const jsonSchema = zodToJsonSchema(schema, {
         target: 'jsonSchema7',
         $refStrategy: 'none',
-    }) as Record<string, any>;
+    }) as JsonSchemaObject;
 
     // MCP doesn't need draft metadata in the tool schema payload.
     delete jsonSchema.$schema;
@@ -33,7 +38,7 @@ function toJsonSchema(schema: z.ZodTypeAny): Record<string, any> {
     return jsonSchema;
 }
 
-export function getMcpToolList(ctx: ToolContext): Array<{ name: string; description: string; inputSchema: Record<string, any> }> {
+export function getMcpToolList(ctx: ToolContext): Array<{ name: string; description: string; inputSchema: JsonSchemaObject }> {
     return toolList.map((tool) => ({
         name: tool.name,
         description: tool.description(ctx),

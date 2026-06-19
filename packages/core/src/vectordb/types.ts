@@ -1,3 +1,19 @@
+export type VectorRecord = Record<string, unknown>;
+
+export interface VectorDocumentMetadata extends VectorRecord {
+    language?: string;
+    filePath?: string;
+    breadcrumbs?: string[];
+    indexedAt?: string;
+    symbolId?: string;
+    symbolLabel?: string;
+    symbolKind?: string;
+    ownerSymbolKey?: string;
+    ownerSymbolInstanceId?: string;
+    startByte?: number;
+    endByte?: number;
+}
+
 // Interface definitions
 export interface VectorDocument {
     id: string;
@@ -7,7 +23,7 @@ export interface VectorDocument {
     startLine: number;
     endLine: number;
     fileExtension: string;
-    metadata: Record<string, any>;
+    metadata: VectorDocumentMetadata;
 }
 
 export type RetrievalMode = 'dense' | 'lexical' | 'hybrid';
@@ -20,7 +36,7 @@ export type BackendScoreKind = 'dense_similarity' | 'lexical_rank' | 'rrf_fusion
 
 export interface SearchOptions {
     topK?: number;
-    filter?: Record<string, any>;
+    filter?: VectorRecord;
     threshold?: number;
     filterExpr?: string;
 }
@@ -29,7 +45,7 @@ export interface SearchOptions {
 export interface HybridSearchRequest {
     data: number[] | string; // Query vector or text
     anns_field: string; // Vector field name (vector or sparse_vector)
-    param: Record<string, any>; // Search parameters
+    param: VectorRecord; // Search parameters
     limit: number;
 }
 
@@ -42,7 +58,7 @@ export interface HybridSearchOptions {
 
 export interface RerankStrategy {
     strategy: 'rrf' | 'weighted';
-    params?: Record<string, any>;
+    params?: VectorRecord;
 }
 
 export interface VectorSearchResult {
@@ -74,7 +90,7 @@ export interface IndexCompletionFingerprint {
     schemaVersion: string;
 }
 
-export interface IndexCompletionMarkerDocument {
+export interface IndexCompletionMarkerDocument extends VectorDocumentMetadata {
     kind: 'satori_index_completion_v1';
     codebasePath: string;
     fingerprint: IndexCompletionFingerprint;
@@ -176,7 +192,7 @@ export interface VectorDatabase {
      * @param outputFields Fields to return
      * @param limit Maximum number of results
      */
-    query(collectionName: string, filter: string, outputFields: string[], limit?: number): Promise<Record<string, any>[]>;
+    query(collectionName: string, filter: string, outputFields: string[], limit?: number): Promise<VectorRecord[]>;
 
     /**
      * Check collection limit

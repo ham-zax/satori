@@ -1,12 +1,12 @@
-import { Ollama } from 'ollama';
+import { EmbedRequest, Fetch, Ollama, Options } from 'ollama';
 import { Embedding, EmbeddingVector } from './base-embedding';
 
 export interface OllamaEmbeddingConfig {
     model: string;
     host?: string;
-    fetch?: any;
+    fetch?: Fetch;
     keepAlive?: string | number;
-    options?: Record<string, any>;
+    options?: Partial<Options>;
     dimension?: number; // Optional dimension parameter
     maxTokens?: number; // Optional max tokens parameter
 }
@@ -54,6 +54,20 @@ export class OllamaEmbedding extends Embedding {
         }
     }
 
+    private buildEmbedRequest(input: string | string[]): EmbedRequest {
+        const request: EmbedRequest = {
+            model: this.config.model,
+            input,
+            options: this.config.options,
+        };
+
+        if (this.config.keepAlive && this.config.keepAlive !== '') {
+            request.keep_alive = this.config.keepAlive;
+        }
+
+        return request;
+    }
+
     async embed(text: string): Promise<EmbeddingVector> {
         // Preprocess the text
         const processedText = this.preprocessText(text);
@@ -65,18 +79,7 @@ export class OllamaEmbedding extends Embedding {
             console.log(`[OllamaEmbedding] 📏 Detected Ollama embedding dimension: ${this.dimension} for model: ${this.config.model}`);
         }
 
-        const embedOptions: any = {
-            model: this.config.model,
-            input: processedText,
-            options: this.config.options,
-        };
-
-        // Only include keep_alive if it has a valid value
-        if (this.config.keepAlive && this.config.keepAlive !== '') {
-            embedOptions.keep_alive = this.config.keepAlive;
-        }
-
-        const response = await this.client.embed(embedOptions);
+        const response = await this.client.embed(this.buildEmbedRequest(processedText));
 
         if (!response.embeddings || !response.embeddings[0]) {
             throw new Error('Ollama API returned invalid response');
@@ -100,18 +103,7 @@ export class OllamaEmbedding extends Embedding {
         }
 
         // Use Ollama's native batch embedding API
-        const embedOptions: any = {
-            model: this.config.model,
-            input: processedTexts, // Pass array directly to Ollama
-            options: this.config.options,
-        };
-
-        // Only include keep_alive if it has a valid value
-        if (this.config.keepAlive && this.config.keepAlive !== '') {
-            embedOptions.keep_alive = this.config.keepAlive;
-        }
-
-        const response = await this.client.embed(embedOptions);
+        const response = await this.client.embed(this.buildEmbedRequest(processedTexts));
 
         if (!response.embeddings || !Array.isArray(response.embeddings)) {
             throw new Error('Ollama API returned invalid batch response');
@@ -175,7 +167,7 @@ export class OllamaEmbedding extends Embedding {
      * Set additional options
      * @param options Additional options for the model
      */
-    setOptions(options: Record<string, any>): void {
+    setOptions(options: Partial<Options>): void {
         this.config.options = options;
     }
 
@@ -200,17 +192,7 @@ export class OllamaEmbedding extends Embedding {
 
         try {
             const processedText = this.preprocessText(testText);
-            const embedOptions: any = {
-                model: this.config.model,
-                input: processedText,
-                options: this.config.options,
-            };
-
-            if (this.config.keepAlive && this.config.keepAlive !== '') {
-                embedOptions.keep_alive = this.config.keepAlive;
-            }
-
-            const response = await this.client.embed(embedOptions);
+            const response = await this.client.embed(this.buildEmbedRequest(processedText));
 
             if (!response.embeddings || !response.embeddings[0]) {
                 throw new Error('Ollama API returned invalid response');

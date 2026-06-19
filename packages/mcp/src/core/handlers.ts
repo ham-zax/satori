@@ -321,6 +321,9 @@ type SearchResultLike = Partial<SemanticSearchResult> & {
 
 type IndexCompletionMarkerContext = {
     getIndexCompletionMarker?: (codebasePath: string) => Promise<IndexCompletionMarkerDocument | null>;
+    writeIndexCompletionMarker?: (codebasePath: string, marker: IndexCompletionMarkerDocument) => Promise<void>;
+    clearIndexCompletionMarker?: (codebasePath: string) => Promise<void>;
+    pruneIndexedCollectionFamily?: (codebasePath: string, keepCollectionName: string) => Promise<string[]>;
 };
 
 type ToolTextResponse = {
@@ -350,6 +353,41 @@ type ReindexCodebaseArgs = {
 };
 
 type ToolArgs = Record<string, unknown>;
+
+type IndexProfileView = {
+    profile: string;
+    configPath?: string;
+};
+
+type ContextLifecycleCapabilities = IndexCompletionMarkerContext & {
+    resolveCollectionName?: (codebasePath: string) => string;
+    resolveStagedCollectionName?: (codebasePath: string, generationId: string) => string;
+    setWriteCollectionOverride?: (codebasePath: string, collectionName: string | null) => void;
+    loadIndexProfileForCodebase?: (codebasePath: string) => IndexProfileView;
+    getActiveIgnorePatterns?: (codebasePath?: string) => string[];
+    getIndexedExtensionsForCodebase?: (codebasePath: string) => string[];
+    getIndexedExtensions?: () => string[];
+    getTrackedRelativePaths?: (codebasePath: string) => string[];
+};
+
+type SnapshotAccessGateResult = {
+    allowed: boolean;
+    changed: boolean;
+    reason?: AccessGateReason;
+    message?: string;
+};
+
+type SnapshotManagerCapabilities = {
+    getCodebaseInfo?: (codebasePath: string) => CodebaseInfo | undefined;
+    getCodebaseStatus?: (codebasePath: string) => CodebaseStatus | 'not_found';
+    getAllCodebases?: () => Array<{ path: string; info: CodebaseInfo }>;
+    getIndexedCodebases?: () => string[];
+    getIndexingCodebases?: () => string[];
+    getIndexingProgress?: (codebasePath: string) => number | undefined;
+    ensureFingerprintCompatibilityOnAccess?: (codebasePath: string) => SnapshotAccessGateResult;
+    markCodebaseCleared?: (codebasePath: string, collectionName?: string) => void;
+    saveCodebaseSnapshot?: () => void;
+};
 
 type SourceBackedPythonCallFallback = {
     edges: CallGraphEdge[];
@@ -701,6 +739,168 @@ export class ToolHandlers {
         }
     }
 
+    private getSyncWatchDebounceMs(): number {
+        const syncManager = this.syncManager as unknown as {
+            getWatchDebounceMs?: () => number;
+        };
+        const value = syncManager.getWatchDebounceMs?.();
+        return typeof value === 'number' && Number.isFinite(value) && value > 0
+            ? value
+            : DEFAULT_WATCH_DEBOUNCE_MS;
+    }
+
+    private contextLifecycle(): ContextLifecycleCapabilities {
+        return this.context as unknown as ContextLifecycleCapabilities;
+    }
+
+    private snapshotCapabilities(): SnapshotManagerCapabilities {
+        return this.snapshotManager as unknown as SnapshotManagerCapabilities;
+    }
+
+    private getSnapshotIndexedCodebases(): string[] {
+        const value = this.snapshotCapabilities().getIndexedCodebases?.();
+        return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+    }
+
+    private getSnapshotIndexingCodebases(): string[] {
+        const value = this.snapshotCapabilities().getIndexingCodebases?.();
+        return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+    }
+
+    private getSnapshotAllCodebases(): TrackedRootEntry[] {
+        const value = this.snapshotCapabilities().getAllCodebases?.();
+        if (!Array.isArray(value)) {
+            return [];
+        }
+        return value
+            .filter((entry): entry is { path: string; info: CodebaseInfo } =>
+                Boolean(entry)
+                && typeof entry.path === 'string'
+                && Boolean(entry.info)
+                && typeof entry.info.status === 'string'
+            )
+            .map((entry) => ({ path: entry.path, info: entry.info as unknown as TrackedCodebaseInfo }));
+    }
+
+    private getSnapshotCodebaseStatus(codebasePath: string): CodebaseStatus | 'not_found' {
+        const capabilities = this.snapshotCapabilities();
+        const info = capabilities.getCodebaseInfo?.(codebasePath);
+        if (info?.status) {
+            return info.status;
+        }
+        const status = capabilities.getCodebaseStatus?.(codebasePath);
+        if (status) {
+            return status;
+        }
+        if (this.getSnapshotIndexedCodebases().includes(codebasePath)) {
+            return 'indexed';
+        }
+        if (this.getSnapshotIndexingCodebases().includes(codebasePath)) {
+            return 'indexing';
+        }
+        return 'not_found';
+    }
+
+    private getSnapshotCodebaseInfo(codebasePath: string): TrackedCodebaseInfo | undefined {
+        const info = this.snapshotCapabilities().getCodebaseInfo?.(codebasePath);
+        if (info?.status) {
+            return info as unknown as TrackedCodebaseInfo;
+        }
+        const status = this.getSnapshotCodebaseStatus(codebasePath);
+        if (status === 'not_found') {
+            return undefined;
+        }
+        return { status, lastUpdated: new Date(0).toISOString() };
+    }
+
+    private getSnapshotIndexingProgress(codebasePath: string): number | undefined {
+        const progress = this.snapshotCapabilities().getIndexingProgress?.(codebasePath);
+        return typeof progress === 'number' && Number.isFinite(progress) ? progress : undefined;
+    }
+
+    private ensureSnapshotFingerprintCompatibility(codebasePath: string): SnapshotAccessGateResult {
+        const gate = this.snapshotCapabilities().ensureFingerprintCompatibilityOnAccess?.(codebasePath);
+        if (!gate || typeof gate.allowed !== 'boolean' || typeof gate.changed !== 'boolean') {
+            return { allowed: true, changed: false };
+        }
+        return gate;
+    }
+
+    private saveSnapshotIfSupported(): void {
+        this.snapshotCapabilities().saveCodebaseSnapshot?.();
+    }
+
+    private fallbackCollectionName(codebasePath: string): string {
+        const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
+        const hash = crypto.createHash('md5').update(canonicalPath).digest('hex').slice(0, 8);
+        return `hybrid_code_chunks_${hash}`;
+    }
+
+    private resolveCollectionName(codebasePath: string): string {
+        return this.contextLifecycle().resolveCollectionName?.(codebasePath)
+            || this.fallbackCollectionName(codebasePath);
+    }
+
+    private resolveStagedCollectionName(codebasePath: string, generationId: string): string {
+        const context = this.contextLifecycle();
+        if (typeof context.resolveStagedCollectionName === 'function') {
+            return context.resolveStagedCollectionName(codebasePath, generationId);
+        }
+        const normalizedGenerationId = generationId
+            .trim()
+            .replace(/[^a-zA-Z0-9_-]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return `${this.resolveCollectionName(codebasePath)}__gen_${normalizedGenerationId || 'run'}`;
+    }
+
+    private setWriteCollectionOverride(codebasePath: string, collectionName: string | null): void {
+        this.contextLifecycle().setWriteCollectionOverride?.(codebasePath, collectionName);
+    }
+
+    private loadIndexProfileForCodebase(codebasePath: string): IndexProfileView {
+        return this.contextLifecycle().loadIndexProfileForCodebase?.(codebasePath) || { profile: 'default' };
+    }
+
+    private getContextActiveIgnorePatterns(codebasePath: string): string[] {
+        const patterns = this.contextLifecycle().getActiveIgnorePatterns?.(codebasePath);
+        return Array.isArray(patterns) ? patterns.filter((pattern): pattern is string => typeof pattern === 'string') : [];
+    }
+
+    private getContextIndexedExtensions(codebasePath: string): string[] {
+        const context = this.contextLifecycle();
+        const codebaseExtensions = context.getIndexedExtensionsForCodebase?.(codebasePath);
+        if (Array.isArray(codebaseExtensions) && codebaseExtensions.length > 0) {
+            return codebaseExtensions.filter((extension): extension is string => typeof extension === 'string');
+        }
+        const defaultExtensions = context.getIndexedExtensions?.();
+        if (Array.isArray(defaultExtensions) && defaultExtensions.length > 0) {
+            return defaultExtensions.filter((extension): extension is string => typeof extension === 'string');
+        }
+        return getSupportedExtensionsForCapability('search');
+    }
+
+    private getContextTrackedRelativePaths(codebasePath: string): string[] {
+        const paths = this.contextLifecycle().getTrackedRelativePaths?.(codebasePath);
+        return Array.isArray(paths) ? paths.filter((entry): entry is string => typeof entry === 'string') : [];
+    }
+
+    private async writeIndexCompletionMarker(codebasePath: string, marker: IndexCompletionMarkerDocument): Promise<void> {
+        await this.contextLifecycle().writeIndexCompletionMarker?.(codebasePath, marker);
+    }
+
+    private async clearIndexCompletionMarker(codebasePath: string): Promise<void> {
+        await this.contextLifecycle().clearIndexCompletionMarker?.(codebasePath);
+    }
+
+    private async pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string): Promise<string[]> {
+        const dropped = await this.contextLifecycle().pruneIndexedCollectionFamily?.(codebasePath, keepCollectionName);
+        return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
+    }
+
+    private markCodebaseCleared(codebasePath: string, collectionName?: string): void {
+        this.snapshotCapabilities().markCodebaseCleared?.(codebasePath, collectionName);
+    }
+
     private buildManageResponseEnvelope(
         action: ManageIndexAction,
         codebasePath: string,
@@ -836,7 +1036,7 @@ export class ToolHandlers {
     }
 
     private buildIndexingMetadata(codebasePath: string): { progressPct: number | null; lastUpdated: string | null; phase: string | null } {
-        const info = this.snapshotManager.getCodebaseInfo(codebasePath);
+        const info = this.getSnapshotCodebaseInfo(codebasePath);
         if (!info || info.status !== 'indexing') {
             return {
                 progressPct: null,
@@ -853,12 +1053,14 @@ export class ToolHandlers {
     }
 
     private isIndexingStateStale(codebasePath: string, graceMs: number = STALE_INDEXING_RECOVERY_GRACE_MS): boolean {
-        const info = this.snapshotManager.getCodebaseInfo(codebasePath);
+        const info = this.getSnapshotCodebaseInfo(codebasePath);
         if (!info || info.status !== "indexing") {
             return false;
         }
 
-        const lastUpdatedMs = Date.parse(info.lastUpdated);
+        const lastUpdatedMs = typeof info.lastUpdated === 'string'
+            ? Date.parse(info.lastUpdated)
+            : Number.NaN;
         if (!Number.isFinite(lastUpdatedMs)) {
             return true;
         }
@@ -867,7 +1069,7 @@ export class ToolHandlers {
     }
 
     private async recoverStaleIndexingStateIfNeeded(codebasePath: string): Promise<void> {
-        const indexingCodebases = this.snapshotManager.getIndexingCodebases?.();
+        const indexingCodebases = this.getSnapshotIndexingCodebases();
         if (!Array.isArray(indexingCodebases) || !indexingCodebases.includes(codebasePath)) {
             return;
         }
@@ -890,7 +1092,7 @@ export class ToolHandlers {
         const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
         if (decision.action === "promote_indexed") {
             this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified");
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.saveSnapshotIfSupported();
             const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
                 ? " using completion marker proof from a different runtime fingerprint"
                 : " using completion marker proof";
@@ -898,9 +1100,9 @@ export class ToolHandlers {
             return;
         }
 
-        const lastProgress = this.snapshotManager.getIndexingProgress(codebasePath);
+        const lastProgress = this.getSnapshotIndexingProgress(codebasePath);
         this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message, lastProgress);
-        this.snapshotManager.saveCodebaseSnapshot();
+        this.saveSnapshotIfSupported();
         console.log(`[INDEX-RECOVERY] Marked stale indexing state as failed for '${codebasePath}' (${decision.reason}).`);
     }
 
@@ -1050,7 +1252,7 @@ export class ToolHandlers {
             recovered.indexFingerprint,
             'verified'
         );
-        this.snapshotManager.saveCodebaseSnapshot();
+        this.saveSnapshotIfSupported();
         return true;
     }
 
@@ -1069,9 +1271,9 @@ export class ToolHandlers {
     }
 
     private getTrackedRootEntryForPath(codebasePath: string): TrackedRootEntry | null {
-        const info = this.snapshotManager.getCodebaseInfo(codebasePath);
+        const info = this.getSnapshotCodebaseInfo(codebasePath);
         const status = info?.status
-            || this.snapshotManager.getCodebaseStatus(codebasePath);
+            || this.getSnapshotCodebaseStatus(codebasePath);
         if ((!info || typeof info !== 'object') && (!status || status === 'not_found')) {
             return null;
         }
@@ -1091,7 +1293,7 @@ export class ToolHandlers {
         statuses: CodebaseStatus[]
     ): TrackedRootEntry | null {
         const statusSet = new Set(statuses);
-        const allEntries = this.snapshotManager.getAllCodebases();
+        const allEntries = this.getSnapshotAllCodebases();
 
         const mergedByPath = new Map<string, TrackedRootEntry>();
         for (const entry of allEntries) {
@@ -1101,13 +1303,13 @@ export class ToolHandlers {
             mergedByPath.set(entry.path, { path: entry.path, info: entry.info as unknown as TrackedCodebaseInfo });
         }
 
-        for (const codebasePath of this.snapshotManager.getIndexedCodebases()) {
+        for (const codebasePath of this.getSnapshotIndexedCodebases()) {
             if (!mergedByPath.has(codebasePath)) {
                 mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexed', lastUpdated: new Date(0).toISOString() } });
             }
         }
 
-        for (const codebasePath of this.snapshotManager.getIndexingCodebases()) {
+        for (const codebasePath of this.getSnapshotIndexingCodebases()) {
             if (!mergedByPath.has(codebasePath)) {
                 mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexing', lastUpdated: new Date(0).toISOString() } });
             }
@@ -1560,9 +1762,9 @@ export class ToolHandlers {
     }
 
     private buildCompatibilityDiagnostics(codebasePath: string): FingerprintCompatibilityDiagnostics {
-        const info = this.snapshotManager.getCodebaseInfo(codebasePath);
+        const info = this.getSnapshotCodebaseInfo(codebasePath);
         const statusAtCheck = info?.status
-            || this.snapshotManager.getCodebaseStatus(codebasePath);
+            || this.getSnapshotCodebaseStatus(codebasePath);
         const diagnostics: FingerprintCompatibilityDiagnostics = {
             runtimeFingerprint: this.runtimeFingerprint,
             statusAtCheck
@@ -2099,19 +2301,16 @@ export class ToolHandlers {
     }
 
     private getMatchingBlockedRoot(absolutePath: string): { path: string; message?: string } | null {
-        const blocked = typeof this.snapshotManager.getAllCodebases === 'function'
-            ? this.snapshotManager
-                .getAllCodebases()
-                .filter((entry) => entry.info.status === 'requires_reindex')
-            : [];
+        const blocked = this.getSnapshotAllCodebases()
+            .filter((entry) => entry.info.status === 'requires_reindex');
         if (blocked.length === 0) {
             const directEntry = this.getTrackedRootEntryForPath(absolutePath);
             if (!directEntry || directEntry.info?.status !== 'requires_reindex') {
                 return null;
             }
-            const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(absolutePath);
-            if (gate.changed && typeof this.snapshotManager.saveCodebaseSnapshot === 'function') {
-                this.snapshotManager.saveCodebaseSnapshot();
+            const gate = this.ensureSnapshotFingerprintCompatibility(absolutePath);
+            if (gate.changed) {
+                this.saveSnapshotIfSupported();
             }
             if (gate.allowed === true && gate.changed === true) {
                 return null;
@@ -2127,9 +2326,9 @@ export class ToolHandlers {
             if (!(absolutePath === entry.path || absolutePath.startsWith(`${entry.path}${path.sep}`))) {
                 return false;
             }
-            const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(entry.path);
-            if (gate.changed && typeof this.snapshotManager.saveCodebaseSnapshot === 'function') {
-                this.snapshotManager.saveCodebaseSnapshot();
+            const gate = this.ensureSnapshotFingerprintCompatibility(entry.path);
+            if (gate.changed) {
+                this.saveSnapshotIfSupported();
             }
             // A requires_reindex snapshot state is blocked by default. The only legal
             // escape hatch is when the access gate actively recovers a resolved
@@ -2150,10 +2349,10 @@ export class ToolHandlers {
     }
 
     private enforceFingerprintGate(codebasePath: string): { blockedResponse?: ToolTextResponse; message?: string; reason?: AccessGateReason } {
-        const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(codebasePath);
+        const gate = this.ensureSnapshotFingerprintCompatibility(codebasePath);
         if (!gate.allowed) {
             if (gate.changed) {
-                this.snapshotManager.saveCodebaseSnapshot();
+                this.saveSnapshotIfSupported();
             }
             return {
                 reason: gate.reason,
@@ -2169,7 +2368,7 @@ export class ToolHandlers {
         }
 
         if (gate.changed) {
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.saveSnapshotIfSupported();
         }
 
         return {};
@@ -2461,7 +2660,7 @@ export class ToolHandlers {
     }
 
     private activeIgnorePatternsExcludePath(codebaseRoot: string, relativePath: string): boolean {
-        const patterns = this.context.getActiveIgnorePatterns(codebaseRoot);
+        const patterns = this.getContextActiveIgnorePatterns(codebaseRoot);
         if (!Array.isArray(patterns) || patterns.length === 0) {
             return false;
         }
@@ -2622,7 +2821,7 @@ export class ToolHandlers {
             return { results: [], debug: disabledDebug() };
         }
 
-        const trackedRelativePaths = this.context.getTrackedRelativePaths(input.effectiveRoot);
+        const trackedRelativePaths = this.getContextTrackedRelativePaths(input.effectiveRoot);
         if (!Array.isArray(trackedRelativePaths) || trackedRelativePaths.length === 0) {
             return { results: [], debug: disabledDebug() };
         }
@@ -3046,7 +3245,7 @@ export class ToolHandlers {
             generated: this.roundRatio(counts.generated / topK),
             runtime: this.roundRatio(counts.runtime / topK),
         };
-        const debounceMs = this.syncManager.getWatchDebounceMs() || DEFAULT_WATCH_DEBOUNCE_MS;
+        const debounceMs = this.getSyncWatchDebounceMs();
         const filtered = this.filterNoiseHintPatternsByRootGitignore(codebaseRoot, observedNoisyFiles);
         const isRootCoveredMessageEligible = filtered.matcherState === 'ready' && filtered.coveredByRootGitignore && filtered.suggestedIgnorePatterns.length === 0;
         const nextStepMiddle = filtered.suggestedIgnorePatterns.length > 0
@@ -3942,7 +4141,7 @@ export class ToolHandlers {
     }
 
     private evaluateReindexPreflight(codebasePath: string): ReindexPreflightResult {
-        const currentStatus = this.snapshotManager.getCodebaseStatus(codebasePath);
+        const currentStatus = this.getSnapshotCodebaseStatus(codebasePath);
         const isIndexedLikeStatus = currentStatus === 'indexed' || currentStatus === 'sync_completed';
         if (currentStatus === 'requires_reindex') {
             return {
@@ -3952,7 +4151,7 @@ export class ToolHandlers {
             };
         }
 
-        const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(codebasePath);
+        const gate = this.ensureSnapshotFingerprintCompatibility(codebasePath);
         if (!gate.allowed || gate.changed || !!gate.reason) {
             return {
                 outcome: 'reindex_required',
@@ -6912,18 +7111,14 @@ export class ToolHandlers {
     }
 
     private getContextIgnorePatterns(codebasePath: string): string[] {
-        const patterns = this.context.getActiveIgnorePatterns(codebasePath);
-        if (Array.isArray(patterns)) {
-            return patterns.filter((pattern) => typeof pattern === 'string');
-        }
-        return [];
+        return this.getContextActiveIgnorePatterns(codebasePath);
     }
 
     private async rebuildCallGraphForIndex(codebasePath: string): Promise<void> {
         try {
             const sidecar = await this.callGraphManager.rebuildForCodebase(codebasePath, this.getContextIgnorePatterns(codebasePath));
             this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.saveSnapshotIfSupported();
             console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
         } catch (error) {
             console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after indexing '${codebasePath}': ${formatUnknownError(error)}`);
@@ -6941,7 +7136,7 @@ export class ToolHandlers {
                 return false;
             }
             this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.saveSnapshotIfSupported();
             console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync delta (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
             return true;
         } catch (error) {
@@ -7099,18 +7294,18 @@ export class ToolHandlers {
     }
 
     private async buildZillizCollectionLimitGuidance(targetCodebasePath: string): Promise<string> {
-        const targetCollectionName = this.context.resolveCollectionName(targetCodebasePath);
+        const targetCollectionName = this.resolveCollectionName(targetCodebasePath);
         const vectorDb = this.getVectorStore();
         const collectionDetails = await this.listCollectionDetailsWithFallback(vectorDb);
         const codeCollections = collectionDetails.filter((detail) => this.isSatoriCodeCollection(detail.name));
 
-        const trackedCodebases = this.snapshotManager.getAllCodebases().map((entry) => entry.path);
+        const trackedCodebases = this.getSnapshotAllCodebases().map((entry) => entry.path);
         const byCollectionName = new Map<string, string>();
         for (const codebasePath of trackedCodebases) {
-            byCollectionName.set(this.context.resolveCollectionName(codebasePath), codebasePath);
+            byCollectionName.set(this.resolveCollectionName(codebasePath), codebasePath);
         }
         const snapshotLastUpdatedByPath = new Map<string, number>();
-        for (const entry of this.snapshotManager.getAllCodebases()) {
+        for (const entry of this.getSnapshotAllCodebases()) {
             const lastUpdatedMs = this.parseTimestampMs(entry.info.lastUpdated);
             if (lastUpdatedMs !== undefined) {
                 snapshotLastUpdatedByPath.set(entry.path, lastUpdatedMs);
@@ -7211,8 +7406,8 @@ Agent instructions:
 
         if (droppedCodebasePath) {
             this.snapshotManager.removeCodebaseCompletely(droppedCodebasePath);
-            this.snapshotManager.markCodebaseCleared(droppedCodebasePath, trimmedName);
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.markCodebaseCleared(droppedCodebasePath, trimmedName);
+            this.saveSnapshotIfSupported();
             try {
                 await this.unwatchCodebase(droppedCodebasePath);
             } catch {
@@ -7280,7 +7475,7 @@ Agent instructions:
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);
 
             // Check if already indexing
-            if (this.snapshotManager.getIndexingCodebases().includes(absolutePath)) {
+            if (this.getSnapshotIndexingCodebases().includes(absolutePath)) {
                 const blockedAction: 'create' | 'reindex' = forceReindex ? 'reindex' : 'create';
                 return this.manageResponse(
                     manageAction,
@@ -7299,13 +7494,16 @@ Agent instructions:
                 );
             }
 
-            const existingInfo = this.snapshotManager.getCodebaseInfo(absolutePath);
+            const existingInfo = this.getSnapshotCodebaseInfo(absolutePath);
             if (!forceReindex && existingInfo?.status === 'requires_reindex') {
                 return this.manageResponse(
                     manageAction,
                     absolutePath,
                     "requires_reindex",
-                    this.buildReindexInstruction(absolutePath, existingInfo.message),
+                    this.buildReindexInstruction(
+                        absolutePath,
+                        typeof existingInfo.message === 'string' ? existingInfo.message : undefined
+                    ),
                     {
                         ...preflightOptions,
                         reason: "requires_reindex",
@@ -7315,7 +7513,7 @@ Agent instructions:
             }
 
             // Check if already indexed (unless force is true)
-            const isIndexedInSnapshot = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
+            const isIndexedInSnapshot = this.getSnapshotIndexedCodebases().includes(absolutePath);
             if (!forceReindex && !isIndexedInSnapshot) {
                 const proof = await this.validateCompletionProof(absolutePath);
                 if (this.recoverIndexedSnapshotFromCompletionProof(absolutePath, proof)) {
@@ -7375,7 +7573,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     );
                 }
 
-                const targetCollectionName = this.context.resolveCollectionName(absolutePath);
+                const targetCollectionName = this.resolveCollectionName(absolutePath);
                 if (requestedDropCollection === targetCollectionName) {
                     return this.manageResponse(
                         manageAction,
@@ -7415,7 +7613,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     : `\nDropped Zilliz collection '${requestedDropCollection}'.`;
             }
 
-            const stagedCollectionName = this.context.resolveStagedCollectionName(absolutePath, `run_${crypto.randomUUID()}`);
+            const stagedCollectionName = this.resolveStagedCollectionName(absolutePath, `run_${crypto.randomUUID()}`);
 
             // CRITICAL: Pre-index collection creation validation
             try {
@@ -7500,14 +7698,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             // Check current status and log if retrying after failure
-            const failedInfo = this.snapshotManager.getCodebaseInfo(absolutePath);
+            const failedInfo = this.getSnapshotCodebaseInfo(absolutePath);
             if (failedInfo?.status === 'indexfailed') {
                 console.log(`[BACKGROUND-INDEX] Retrying indexing for previously failed codebase. Previous error: ${failedInfo.errorMessage || 'Unknown error'}`);
             }
 
             // Set to indexing status and save snapshot immediately
             this.snapshotManager.setCodebaseIndexing(absolutePath, 0);
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.saveSnapshotIfSupported();
 
             // Track the codebase path for syncing
             trackCodebasePath(absolutePath);
@@ -7570,8 +7768,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const targetCollectionName = typeof writeCollectionName === 'string' && writeCollectionName.trim().length > 0
                 ? writeCollectionName
-                : this.context.resolveCollectionName(absolutePath);
-            this.context.setWriteCollectionOverride(absolutePath, targetCollectionName);
+                : this.resolveCollectionName(absolutePath);
+            this.setWriteCollectionOverride(absolutePath, targetCollectionName);
 
             if (forceReindex) {
                 console.log(`[BACKGROUND-INDEX] ℹ️  Force reindex mode - building a staged generation before retiring the previous proven collection.`);
@@ -7579,7 +7777,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const contextForThisTask = this.context;
 
-            const profileConfig = this.context.loadIndexProfileForCodebase(absolutePath);
+            const profileConfig = this.loadIndexProfileForCodebase(absolutePath);
             console.log(`[BACKGROUND-INDEX] Using index profile '${profileConfig.profile}'${profileConfig.configPath ? ` from ${profileConfig.configPath}` : ' (default)'}`);
 
             // Load supported root ignore files before synchronizer and index setup.
@@ -7587,15 +7785,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Initialize file synchronizer with proper ignore patterns (including project-specific patterns)
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
-            const ignorePatterns = this.context.getActiveIgnorePatterns(absolutePath) || [];
-            const supportedExtensions = this.context.getIndexedExtensionsForCodebase(absolutePath);
+            const ignorePatterns = this.getContextActiveIgnorePatterns(absolutePath);
+            const supportedExtensions = this.getContextIndexedExtensions(absolutePath);
             console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(', ')}`);
             const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns, supportedExtensions);
             await synchronizer.initialize();
 
             // Store synchronizer in the context (let context manage collection names)
             await this.context.ensureCollectionPrepared(absolutePath);
-            const synchronizerKey = this.context.resolveCollectionName(absolutePath);
+            const synchronizerKey = this.resolveCollectionName(absolutePath);
             this.context.registerSynchronizer(synchronizerKey, synchronizer);
 
             console.log(`[BACKGROUND-INDEX] Starting indexing for: ${absolutePath}`);
@@ -7613,7 +7811,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 // Save snapshot periodically (every 2 seconds to avoid too frequent saves)
                 const currentTime = Date.now();
                 if (currentTime - lastSaveTime >= 2000) { // 2 seconds = 2000ms
-                    this.snapshotManager.saveCodebaseSnapshot();
+                    this.saveSnapshotIfSupported();
                     lastSaveTime = currentTime;
                     console.log(`[BACKGROUND-INDEX] 💾 Saved progress snapshot at ${progress.percentage.toFixed(1)}%`);
                 }
@@ -7624,7 +7822,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             const runId = `run_${crypto.randomUUID()}`;
             const canonicalMarkerPath = this.canonicalizeCodebasePath(absolutePath);
-            await contextForThisTask.writeIndexCompletionMarker(absolutePath, {
+            await this.writeIndexCompletionMarker(absolutePath, {
                 kind: 'satori_index_completion_v1',
                 codebasePath: canonicalMarkerPath,
                 fingerprint: this.runtimeFingerprint,
@@ -7635,7 +7833,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             });
 
             try {
-                const droppedCollections = await contextForThisTask.pruneIndexedCollectionFamily(absolutePath, targetCollectionName);
+                const droppedCollections = await this.pruneIndexedCollectionFamily(absolutePath, targetCollectionName);
                 if (Array.isArray(droppedCollections) && droppedCollections.length > 0) {
                     console.log(`[BACKGROUND-INDEX] 🧹 Retired ${droppedCollections.length} superseded collection(s): ${droppedCollections.join(', ')}`);
                 }
@@ -7645,13 +7843,13 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Set codebase to indexed status with complete statistics
             this.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.runtimeFingerprint, 'verified');
-            const trackedPaths = this.context.getTrackedRelativePaths(absolutePath);
+            const trackedPaths = this.getContextTrackedRelativePaths(absolutePath);
             this.snapshotManager.setCodebaseIndexManifest(absolutePath, trackedPaths);
             this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks };
             await this.syncManager.recordCurrentIgnoreControlSignature(absolutePath);
 
             // Save snapshot after updating codebase lists
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.saveSnapshotIfSupported();
             await this.rebuildCallGraphForIndex(absolutePath);
             await this.touchWatchedCodebase(absolutePath);
 
@@ -7666,7 +7864,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             console.error(`[BACKGROUND-INDEX] Error during indexing for ${absolutePath}:`, error);
 
             // Get the last attempted progress
-            const lastProgress = this.snapshotManager.getIndexingProgress(absolutePath);
+            const lastProgress = this.getSnapshotIndexingProgress(absolutePath);
 
             // Set codebase to failed status with error information
             let errorMessage = formatUnknownError(error);
@@ -7675,18 +7873,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             try {
-                await this.context.clearIndexCompletionMarker(absolutePath);
+                await this.clearIndexCompletionMarker(absolutePath);
             } catch (clearError) {
                 console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
             }
 
             this.snapshotManager.setCodebaseIndexFailed(absolutePath, errorMessage, lastProgress);
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.saveSnapshotIfSupported();
 
             // Log error but don't crash MCP service - indexing errors are handled gracefully
             console.error(`[BACKGROUND-INDEX] Indexing failed for ${absolutePath}: ${errorMessage}`);
         } finally {
-            this.context.setWriteCollectionOverride(absolutePath, null);
+            this.setWriteCollectionOverride(absolutePath, null);
         }
     }
 
@@ -9984,7 +10182,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         const codebasePath = typeof args.path === 'string' ? args.path : '';
         const requestedPath = ensureAbsolutePath(codebasePath);
 
-        if (this.snapshotManager.getAllCodebases().length === 0) {
+        if (this.getSnapshotAllCodebases().length === 0) {
             return this.manageResponse(
                 "clear",
                 requestedPath,
@@ -10017,9 +10215,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             // Check if this codebase is indexed or being indexed
-            const isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
-            const isIndexing = this.snapshotManager.getIndexingCodebases().includes(absolutePath);
-            const status = this.snapshotManager.getCodebaseStatus(absolutePath);
+            const isIndexed = this.getSnapshotIndexedCodebases().includes(absolutePath);
+            const isIndexing = this.getSnapshotIndexingCodebases().includes(absolutePath);
+            const status = this.getSnapshotCodebaseStatus(absolutePath);
             const isRequiresReindex = status === 'requires_reindex';
 
             if (!isIndexed && !isIndexing && !isRequiresReindex) {
@@ -10081,19 +10279,19 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Completely remove the cleared codebase from snapshot
             this.snapshotManager.removeCodebaseCompletely(absolutePath);
-            this.snapshotManager.markCodebaseCleared(absolutePath, this.context.resolveCollectionName(absolutePath));
+            this.markCodebaseCleared(absolutePath, this.resolveCollectionName(absolutePath));
 
             // Reset indexing stats if this was the active codebase
             this.indexingStats = null;
 
             // Save snapshot after clearing index
-            this.snapshotManager.saveCodebaseSnapshot();
+            this.saveSnapshotIfSupported();
             await this.unwatchCodebase(absolutePath);
 
             let resultText = `Successfully cleared codebase '${absolutePath}'`;
 
-            const remainingIndexed = this.snapshotManager.getIndexedCodebases().length;
-            const remainingIndexing = this.snapshotManager.getIndexingCodebases().length;
+            const remainingIndexed = this.getSnapshotIndexedCodebases().length;
+            const remainingIndexing = this.getSnapshotIndexingCodebases().length;
 
             if (remainingIndexed > 0 || remainingIndexing > 0) {
                 resultText += `\n${remainingIndexed} other indexed codebase(s) and ${remainingIndexing} indexing codebase(s) remain`;
@@ -10201,16 +10399,20 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     retryAfterMs: this.getManageRetryAfterMs(),
                     indexing: this.buildIndexingMetadata(trackedRootState.codebasePath),
                 };
-                const info = this.snapshotManager.getCodebaseInfo(trackedRootState.codebasePath);
+                const info = this.getSnapshotCodebaseInfo(trackedRootState.codebasePath);
                 if (info?.status === 'indexing') {
-                    const progressPercentage = info.indexingPercentage || 0;
+                    const progressPercentage = typeof info.indexingPercentage === 'number' && Number.isFinite(info.indexingPercentage)
+                        ? info.indexingPercentage
+                        : 0;
                     statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is currently being indexed. Progress: ${progressPercentage.toFixed(1)}%`;
                     if (progressPercentage < 10) {
                         statusMessage += ' (Preparing and scanning files...)';
                     } else if (progressPercentage < 100) {
                         statusMessage += ' (Processing files and generating embeddings...)';
                     }
-                    statusMessage += `\n🕐 Last updated: ${new Date(info.lastUpdated).toLocaleString()}`;
+                    if (typeof info.lastUpdated === 'string') {
+                        statusMessage += `\n🕐 Last updated: ${new Date(info.lastUpdated).toLocaleString()}`;
+                    }
                 } else {
                     statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is currently being indexed.`;
                 }
@@ -10234,8 +10436,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             } else {
                 envelopePath = trackedRootState.root.path;
                 proofDebugHint = trackedRootState.proofDebugHint;
-                const status = this.snapshotManager.getCodebaseStatus(trackedRootState.root.path);
-                const info = trackedRootState.root.info || this.snapshotManager.getCodebaseInfo(trackedRootState.root.path);
+                const status = this.getSnapshotCodebaseStatus(trackedRootState.root.path);
+                const info = trackedRootState.root.info || this.getSnapshotCodebaseInfo(trackedRootState.root.path);
                 switch (status) {
                     case 'indexed':
                         if (info.status === 'indexed') {
@@ -10349,7 +10551,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 );
             }
 
-            if (this.snapshotManager.getIndexingCodebases().includes(absolutePath)) {
+            if (this.getSnapshotIndexingCodebases().includes(absolutePath)) {
                 return this.manageResponse(
                     "sync",
                     absolutePath,
@@ -10366,7 +10568,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 );
             }
 
-            const isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
+            const isIndexed = this.getSnapshotIndexedCodebases().includes(absolutePath);
             if (!isIndexed) {
                 return this.manageResponse(
                     "sync",

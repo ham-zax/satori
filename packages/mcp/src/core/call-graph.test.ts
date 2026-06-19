@@ -7,6 +7,10 @@ import { AstCodeSplitter } from '@zokizuan/satori-core';
 import { CallGraphSidecarManager, SupportedSourceDeltaPolicy } from './call-graph.js';
 import { IndexFingerprint } from '../config.js';
 
+type TestableCallGraphSidecarManager = CallGraphSidecarManager & {
+    getSidecarPath(codebasePath: string): string;
+};
+
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
@@ -41,6 +45,10 @@ function sortEdgesForAssertion(edges: Array<{ srcSymbolId: string; dstSymbolId: 
         if (kindCmp !== 0) return kindCmp;
         return a.site.startLine - b.site.startLine;
     });
+}
+
+function getSidecarPathForTest(manager: CallGraphSidecarManager, codebasePath: string): string {
+    return (manager as unknown as TestableCallGraphSidecarManager).getSidecarPath(codebasePath);
 }
 
 test('call graph sidecar builds and query traversal is deterministic on TS fixture', async () => {
@@ -220,7 +228,7 @@ test('supported source delta policy only rebuilds for source file changes', () =
 test('call graph notes are deterministically sorted by file, type, symbolId, and line', async () => {
     await withTempRepo(async (repoPath) => {
         const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
-        const sidecarPath = (manager as any).getSidecarPath(repoPath) as string;
+        const sidecarPath = getSidecarPathForTest(manager, repoPath);
         fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
 
         fs.writeFileSync(sidecarPath, JSON.stringify({
@@ -289,8 +297,8 @@ test('call graph query filters notes to returned scope and emits truncation meta
     await withTempRepo(async (repoPath) => {
         const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT, {
             noteLimit: 2
-        } as any);
-        const sidecarPath = (manager as any).getSidecarPath(repoPath) as string;
+        });
+        const sidecarPath = getSidecarPathForTest(manager, repoPath);
         fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
 
         fs.writeFileSync(sidecarPath, JSON.stringify({
@@ -382,7 +390,7 @@ test('call graph query filters notes to returned scope and emits truncation meta
 test('call graph query exposes static test references for symbols referenced by test files', async () => {
     await withTempRepo(async (repoPath) => {
         const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
-        const sidecarPath = (manager as any).getSidecarPath(repoPath) as string;
+        const sidecarPath = getSidecarPathForTest(manager, repoPath);
         fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
 
         fs.writeFileSync(sidecarPath, JSON.stringify({

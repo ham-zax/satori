@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runDoctor } from "./doctor.js";
+import { DoctorOptions, runDoctor } from "./doctor.js";
+
+const successfulExecFileSync = (() => "0.0.0") as NonNullable<DoctorOptions["execFileSyncImpl"]>;
 
 test("runDoctor reports missing default VoyageAI and Milvus env", () => {
     const result = runDoctor({
         nodeVersion: "v20.11.0",
         env: {},
-        execFileSyncImpl: (() => "0.0.0") as any,
+        execFileSyncImpl: successfulExecFileSync,
     });
 
     assert.equal(result.status, "error");
@@ -29,7 +31,7 @@ test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () 
             EMBEDDING_PROVIDER: "Ollama",
             MILVUS_ADDRESS: "localhost:19530",
         },
-        execFileSyncImpl: (() => "0.0.0") as any,
+        execFileSyncImpl: successfulExecFileSync,
     });
 
     assert.equal(result.status, "ok");
@@ -48,7 +50,7 @@ test("runDoctor flags unsupported Node versions", () => {
             VOYAGEAI_API_KEY: "pa-test",
             MILVUS_ADDRESS: "localhost:19530",
         },
-        execFileSyncImpl: (() => "0.0.0") as any,
+        execFileSyncImpl: successfulExecFileSync,
     });
 
     assert.equal(result.status, "error");

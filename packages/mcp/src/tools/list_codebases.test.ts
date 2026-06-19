@@ -5,6 +5,11 @@ import { ToolContext } from './types.js';
 
 type SectionMap = Map<string, string[]>;
 type MarkerMap = Record<string, unknown>;
+type ProviderRuntimeOverride = {
+    providerRuntime: {
+        requireToolContext(operation: string): Promise<ToolContext>;
+    };
+};
 
 const RUNTIME_FINGERPRINT = {
     embeddingProvider: 'VoyageAI',
@@ -233,7 +238,7 @@ test('list_codebases uses provider vector context for completion proof when avai
     const ctx = buildContext([
         { path: '/repo/a', info: { status: 'indexed' } }
     ], {}, { throwOnProbe: true });
-    (ctx as any).providerRuntime = {
+    (ctx as unknown as ProviderRuntimeOverride).providerRuntime = {
         requireToolContext: async (operation: string) => {
             requestedOperation = operation;
             return buildContext([
@@ -265,7 +270,7 @@ test('list_codebases preserves getIndexCompletionMarker receiver binding', async
     const ctx = buildContext([
         { path: '/repo/a', info: { status: 'indexed' } }
     ]);
-    (ctx as any).context = markerContext;
+    (ctx as unknown as { context: typeof markerContext }).context = markerContext;
 
     const response = await listCodebasesTool.execute({}, ctx);
     const sections = parseSectionLines(response.content[0]?.text || '');

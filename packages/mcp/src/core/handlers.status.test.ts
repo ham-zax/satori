@@ -22,6 +22,14 @@ const CAPABILITIES = new CapabilityResolver({
     encoderModel: 'voyage-4-large',
 });
 
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type StatusPayload = {
+    message: string;
+    humanText: string;
+};
+
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-status-handler-'));
     const repoPath = path.join(tempDir, 'repo');
@@ -41,7 +49,7 @@ test('handleGetIndexingStatus includes fingerprint diagnostics for requires_rein
             schemaVersion: 'dense_v3'
         };
 
-        const context = {} as any;
+        const context = {} as unknown as HandlerContext;
         const snapshotManager = {
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseStatus: () => 'requires_reindex',
@@ -53,8 +61,8 @@ test('handleGetIndexingStatus includes fingerprint diagnostics for requires_rein
                 fingerprintSource: 'verified',
                 reindexReason: 'fingerprint_mismatch'
             })
-        } as any;
-        const syncManager = {} as any;
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = {} as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
@@ -78,7 +86,7 @@ test('handleGetIndexingStatus keeps rich humanText but emits compact machine JSO
             schemaVersion: 'dense_v3'
         };
 
-        const context = {} as any;
+        const context = {} as unknown as HandlerContext;
         const snapshotManager = {
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseStatus: () => 'requires_reindex',
@@ -90,13 +98,13 @@ test('handleGetIndexingStatus keeps rich humanText but emits compact machine JSO
                 fingerprintSource: 'verified',
                 reindexReason: 'fingerprint_mismatch'
             })
-        } as any;
-        const syncManager = {} as any;
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = {} as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const rawText = response.content[0]?.text || '';
-        const payload = JSON.parse(rawText);
+        const payload = JSON.parse(rawText) as StatusPayload;
 
         assert.doesNotMatch(rawText, /\n\s+"/);
         assert.equal(payload.message.includes('\n'), false);
@@ -119,7 +127,7 @@ test('handleGetIndexingStatus includes fingerprint diagnostics when access gate 
             schemaVersion: 'dense_v3'
         };
 
-        const context = {} as any;
+        const context = {} as unknown as HandlerContext;
         const snapshotManager = {
             ensureFingerprintCompatibilityOnAccess: () => ({
                 allowed: false,
@@ -135,8 +143,8 @@ test('handleGetIndexingStatus includes fingerprint diagnostics when access gate 
                 fingerprintSource: 'assumed_v2',
                 reindexReason: 'legacy_unverified_fingerprint'
             })
-        } as any;
-        const syncManager = {} as any;
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = {} as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });

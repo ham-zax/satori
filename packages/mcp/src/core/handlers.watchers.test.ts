@@ -15,6 +15,31 @@ import type { SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
+import type { CallGraphSymbolRef } from './call-graph.js';
+
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type MutableSnapshot = HandlerSnapshotManager & { readonly saveCalls: number; readonly removedCompletely: number };
+type ToolTextResponse = { content?: Array<{ text?: string }> };
+type JsonPayload = Record<string, unknown> & {
+    status?: string;
+    action?: string;
+    reason?: string;
+    outline?: {
+        symbols?: Array<{
+            callGraphHint?: {
+                symbolRef?: unknown;
+            };
+        }>;
+    };
+};
+type ToolHandlersTestOverrides = {
+    startBackgroundIndexing: (codebasePath: string, forceReindex: boolean, writeCollectionName?: string) => void;
+    evaluateReindexPreflight: (codebasePath: string) => unknown;
+    clearAllCollectionsForForceReindex: (codebasePath: string) => Promise<unknown[]>;
+    validateCompletionProof: (codebasePath: string) => Promise<unknown>;
+};
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -130,7 +155,7 @@ async function writeNavigationSidecars(input: {
     return registry;
 }
 
-function createMutableSnapshot(repoPath: string, initialStatus: 'not_found' | 'indexed' | 'indexing' = 'indexed') {
+function createMutableSnapshot(repoPath: string, initialStatus: 'not_found' | 'indexed' | 'indexing' = 'indexed'): MutableSnapshot {
     let currentStatus = initialStatus;
     let removedCompletely = 0;
     let saveCalls = 0;
@@ -169,7 +194,7 @@ function createMutableSnapshot(repoPath: string, initialStatus: 'not_found' | 'i
             saveCalls += 1;
         },
         setCodebaseIndexFailed: () => undefined,
-    } as any;
+    } as unknown as MutableSnapshot;
 }
 
 function createWatchRecorder() {
@@ -192,14 +217,27 @@ function createWatchRecorder() {
             unwatchCodebase: async (codebasePath: string) => {
                 unwatched.push(codebasePath);
             }
-        } as any
+        } as unknown as HandlerSyncManager
     };
 }
 
-function parsePayload(response: any): any {
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+}
+
+function isCallGraphSymbolRef(value: unknown): value is CallGraphSymbolRef {
+    if (!isRecord(value)) {
+        return false;
+    }
+    return typeof value.file === 'string' && typeof value.symbolId === 'string';
+}
+
+function parsePayload(response: ToolTextResponse): JsonPayload {
     const text = response?.content?.[0]?.text;
     assert.equal(typeof text, 'string');
-    return JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    assert.equal(isRecord(parsed), true);
+    return parsed as JsonPayload;
 }
 
 test('handleIndexCodebase touches the watch list when create starts successfully', async () => {
@@ -211,10 +249,10 @@ test('handleIndexCodebase touches the watch list when create starts successfully
             addCustomExtensions: () => undefined,
             addCustomIgnorePatterns: () => undefined,
             clearIndexCompletionMarker: async () => undefined,
-        } as any;
+        } as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).startBackgroundIndexing = () => undefined;
+        (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = () => undefined;
 
         const response = await handlers.handleIndexCodebase({ path: repoPath });
         const payload = parsePayload(response);
@@ -234,16 +272,17 @@ test('handleReindexCodebase touches the watch list when reindex starts successfu
             addCustomExtensions: () => undefined,
             addCustomIgnorePatterns: () => undefined,
             clearIndexCompletionMarker: async () => undefined,
-        } as any;
+        } as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).evaluateReindexPreflight = () => ({
+        const overrides = handlers as unknown as ToolHandlersTestOverrides;
+        overrides.evaluateReindexPreflight = () => ({
             outcome: 'reindex_required',
             warnings: [],
             confidence: 'high'
         });
-        (handlers as any).clearAllCollectionsForForceReindex = async () => [];
-        (handlers as any).startBackgroundIndexing = () => undefined;
+        overrides.clearAllCollectionsForForceReindex = async () => [];
+        overrides.startBackgroundIndexing = () => undefined;
 
         const response = await handlers.handleReindexCodebase({ path: repoPath });
         const payload = parsePayload(response);
@@ -260,7 +299,7 @@ test('handleSyncCodebase touches the watch list on success and handleClearIndex 
         const watch = createWatchRecorder();
         const context = {
             clearIndex: async () => undefined,
-        } as any;
+        } as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
@@ -293,7 +332,7 @@ test('handleClearIndex clears a tracked repo after its directory was deleted', a
             clearIndex: async (pathToClear: string) => {
                 clearedPaths.push(pathToClear);
             },
-        } as any;
+        } as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
@@ -327,10 +366,10 @@ test('handleSearchCode touches the watch list only for successful indexed-root s
                 symbolId: 'sym_auth',
                 symbolLabel: 'function auth()'
             }]
-        } as any;
+        } as unknown as HandlerContext;
 
         const indexedHandlers = new ToolHandlers(indexedContext, indexedSnapshot, indexedWatch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (indexedHandlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
+        (indexedHandlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const okResponse = await indexedHandlers.handleSearchCode({
             path: repoPath,
@@ -382,7 +421,7 @@ test('handleFileOutline and handleCallGraph touch the watch list for successful 
 
         const snapshot = createMutableSnapshot(repoPath, 'indexed');
         const watch = createWatchRecorder();
-        const context = {} as any;
+        const context = {} as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(
             context,
@@ -391,7 +430,7 @@ test('handleFileOutline and handleCallGraph touch the watch list for successful 
             RUNTIME_FINGERPRINT,
             CAPABILITIES
         );
-        (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const outlineResponse = await handlers.handleFileOutline({
             path: repoPath,
@@ -399,7 +438,8 @@ test('handleFileOutline and handleCallGraph touch the watch list for successful 
         });
         const outlinePayload = parsePayload(outlineResponse);
         assert.equal(outlinePayload.status, 'ok');
-        const symbolRef = outlinePayload.outline.symbols[0].callGraphHint.symbolRef;
+        const symbolRef = outlinePayload.outline?.symbols?.[0]?.callGraphHint?.symbolRef;
+        assert.equal(isCallGraphSymbolRef(symbolRef), true);
 
         const graphResponse = await handlers.handleCallGraph({
             path: repoPath,

@@ -5,6 +5,10 @@ import { ContextMcpConfig } from '../config.js';
 import { getMcpToolList, toolRegistry } from './registry.js';
 import { ToolContext } from './types.js';
 
+type SchemaProperty = Record<string, unknown> & {
+    default?: unknown;
+};
+
 function buildConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig {
     return {
         name: 'test',
@@ -64,7 +68,7 @@ test('search_codebase schema exposes scoped grouped/raw controls', () => {
     const searchTool = tools.find((tool) => tool.name === 'search_codebase');
     assert.ok(searchTool);
 
-    const properties = searchTool!.inputSchema.properties as Record<string, any>;
+    const properties = searchTool!.inputSchema.properties as Record<string, SchemaProperty>;
     assert.ok(properties.scope);
     assert.ok(properties.resultMode);
     assert.ok(properties.groupBy);
@@ -86,7 +90,7 @@ test('read_file schema includes optional start_line and end_line parameters', ()
     const readFileTool = tools.find((tool) => tool.name === 'read_file');
     assert.ok(readFileTool);
 
-    const properties = readFileTool!.inputSchema.properties as Record<string, any>;
+    const properties = readFileTool!.inputSchema.properties as Record<string, SchemaProperty>;
     assert.ok(properties.path);
     assert.ok(properties.start_line);
     assert.ok(properties.end_line);
@@ -105,7 +109,7 @@ test('manage_index schema does not expose deprecated splitter knob', () => {
     const manageIndexTool = tools.find((tool) => tool.name === 'manage_index');
     assert.ok(manageIndexTool);
 
-    const properties = manageIndexTool!.inputSchema.properties as Record<string, any>;
+    const properties = manageIndexTool!.inputSchema.properties as Record<string, SchemaProperty>;
     assert.equal(Object.prototype.hasOwnProperty.call(properties, 'splitter'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(properties, 'allowUnnecessaryReindex'), true);
 });
@@ -115,7 +119,7 @@ test('file_outline schema exposes path/file and line window controls', () => {
     const fileOutlineTool = tools.find((tool) => tool.name === 'file_outline');
     assert.ok(fileOutlineTool);
 
-    const properties = fileOutlineTool!.inputSchema.properties as Record<string, any>;
+    const properties = fileOutlineTool!.inputSchema.properties as Record<string, SchemaProperty>;
     assert.ok(properties.path);
     assert.ok(properties.file);
     assert.ok(properties.start_line);
@@ -136,7 +140,7 @@ test('call_graph schema exposes symbolRef, direction, depth, and limit controls'
     const callGraphTool = tools.find((tool) => tool.name === 'call_graph');
     assert.ok(callGraphTool);
 
-    const properties = callGraphTool!.inputSchema.properties as Record<string, any>;
+    const properties = callGraphTool!.inputSchema.properties as Record<string, SchemaProperty>;
     assert.ok(properties.path);
     assert.ok(properties.symbolRef);
     assert.ok(properties.direction);

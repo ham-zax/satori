@@ -6,6 +6,9 @@ import ignore from "ignore";
 import {
     Context,
     COLLECTION_LIMIT_MESSAGE,
+    type IndexCompletionMarkerDocument,
+    type SemanticSearchResult,
+    type VectorDatabase,
     createRuntimeNavigationStore,
     type NavigationStore,
     VoyageAIReranker,
@@ -19,12 +22,12 @@ import {
     isLanguageCapabilitySupportedForLanguage,
     resolveOwnerSymbolForChunk,
 } from "@zokizuan/satori-core";
-import type { CodeChunk, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+import type { CodeChunk, RelationshipRecord, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
 import { AccessGateReason, SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
 import { SyncManager, type FreshnessDecision } from "./sync.js";
-import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint } from "../config.js";
+import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint, type CodebaseInfo } from "../config.js";
 import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
@@ -66,6 +69,7 @@ import {
     FileOutlineResponseEnvelope,
     FileOutlineStatus,
     FileOutlineSymbolResult,
+    IndexingFailureMetadata,
     NonOkReason,
     SearchChunkResult,
     SearchCapabilityConfidence,
@@ -145,7 +149,7 @@ const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; u
 const PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL = 'Partial index/search data may exist, but navigation sidecars were not published because indexing stopped before completion.';
 const SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING = 'SEARCH_PARTIAL_INDEX:limit_reached';
 const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = 'SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE';
-const SEARCH_NAVIGATION_NEXT_STEP = 'Open the selected result, then call call_graph with nextActions.callGraph args and a listed direction when callGraphHint.supported=true; otherwise use navigationFallback.readSpan.';
+const SEARCH_NAVIGATION_NEXT_STEP = 'Use recommendedNextAction when present. Call call_graph only when nextActions.callGraph is present and callGraphHint.supported=true.';
 const SEARCH_GROUP_PREVIEW_MAX_CHARS = 800;
 const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES = 256 * 1024;
 const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_FILES = 8;
@@ -172,6 +176,8 @@ const SEARCH_AGENT_FIT_WRITER_NON_OWNER_DEMOTION = 0.55;
 const SEARCH_AGENT_FIT_TYPE_DEMOTION = 0.72;
 const SEARCH_AGENT_FIT_SCHEMA_DEMOTION = 0.80;
 const SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION = 0.70;
+const SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_MIXED = 0.80;
+const SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_SEMANTIC = 0.55;
 type CallGraphUnavailableReason = Extract<CallGraphHint, { supported: false }>['reason'];
 // Recovery probe threshold for "likely interrupted" indexing states.
 // Keep this shorter than snapshot merge stale semantics for better operator UX.
@@ -188,7 +194,7 @@ type ParsedSearchOperators = {
 };
 
 type SearchCandidate = {
-    result: any;
+    result: SearchResultLike;
     baseScore: number;
     backendScore: number;
     backendScoreKind: 'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown';
@@ -283,6 +289,74 @@ type SearchLexicalEvidence = {
     exactLexicalMatch: boolean;
 };
 
+type CodebaseStatus = CodebaseInfo['status'];
+type TrackedCodebaseInfo = Record<string, unknown> & {
+    status: CodebaseStatus;
+    lastUpdated?: string;
+    indexStatus?: unknown;
+    indexedFiles?: unknown;
+    totalChunks?: unknown;
+    added?: unknown;
+    removed?: unknown;
+    modified?: unknown;
+    errorMessage?: unknown;
+    lastAttemptedPercentage?: unknown;
+    indexFingerprint?: IndexFingerprint;
+    fingerprintSource?: CodebaseInfo['fingerprintSource'];
+    reindexReason?: CodebaseInfo['reindexReason'];
+    message?: unknown;
+};
+type TrackedRootEntry = {
+    path: string;
+    info: TrackedCodebaseInfo;
+};
+
+type SearchResultLike = Partial<SemanticSearchResult> & {
+    relativePath: string;
+    startLine?: number;
+    endLine?: number;
+    startByte?: unknown;
+    endByte?: unknown;
+};
+
+type IndexCompletionMarkerContext = {
+    getIndexCompletionMarker?: (codebasePath: string) => Promise<IndexCompletionMarkerDocument | null>;
+};
+
+type ToolTextResponse = {
+    content: Array<{ type: "text"; text: string }>;
+    isError?: boolean;
+};
+
+type ChangedCodeDebug = NonNullable<SearchDebugHint['changedCode']>;
+type ChangedCodeDebugSymbol = ChangedCodeDebug['symbols'][number];
+type ChangedCodeDebugDirectCaller = ChangedCodeDebug['directCallers'][number];
+
+type IndexCodebaseArgs = {
+    path: string;
+    force?: boolean;
+    customExtensions?: unknown;
+    ignorePatterns?: unknown;
+    zillizDropCollection?: unknown;
+    __reindexPreflight?: ReindexPreflightResult;
+};
+
+type ReindexCodebaseArgs = {
+    path: string;
+    customExtensions?: unknown;
+    ignorePatterns?: unknown;
+    zillizDropCollection?: unknown;
+    allowUnnecessaryReindex?: boolean;
+};
+
+type ToolArgs = Record<string, unknown>;
+
+type SourceBackedPythonCallFallback = {
+    edges: CallGraphEdge[];
+    symbols: SymbolRecord[];
+    notes: CallGraphNote[];
+};
+
 type SearchFilterSummary = {
     removedByScope: number;
     removedByLanguage: number;
@@ -344,6 +418,10 @@ interface VectorStoreBackendInfoView {
     address?: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function collectErrorFragments(
     value: unknown,
     output: string[],
@@ -369,7 +447,7 @@ function collectErrorFragments(
 
     if (value instanceof Error) {
         collectErrorFragments(value.message, output, visited, depth + 1);
-        collectErrorFragments((value as any).cause, output, visited, depth + 1);
+        collectErrorFragments((value as Error & { cause?: unknown }).cause, output, visited, depth + 1);
         return;
     }
 
@@ -584,6 +662,17 @@ export class ToolHandlers {
         };
     }
 
+    private buildManageRequiresReindexHints(codebasePath: string): Record<string, unknown> {
+        const compatibility = this.buildCompatibilityDiagnostics(codebasePath);
+        return {
+            reindex: this.buildReindexHint(codebasePath),
+            status: this.buildStatusHint(codebasePath),
+            ...(this.isRuntimeFingerprintMismatch(compatibility)
+                ? { runtimeMismatch: this.buildRuntimeMismatchHint(codebasePath, compatibility) }
+                : {}),
+        };
+    }
+
     private async touchWatchedCodebase(codebasePath: string): Promise<void> {
         const syncManager = this.syncManager as unknown as {
             touchWatchedCodebase?: (path: string) => Promise<void> | void;
@@ -785,23 +874,27 @@ export class ToolHandlers {
         if (!this.isIndexingStateStale(codebasePath)) {
             return;
         }
-        if (typeof (this.context as any).getIndexCompletionMarker !== "function") {
+        const completionMarkerContext = this.context as unknown as IndexCompletionMarkerContext;
+        if (typeof completionMarkerContext.getIndexCompletionMarker !== "function") {
             return;
         }
 
-        let marker: any = null;
+        let marker: IndexCompletionMarkerDocument | null = null;
         try {
-            marker = await (this.context as any).getIndexCompletionMarker(codebasePath);
-        } catch (error: any) {
+            marker = await completionMarkerContext.getIndexCompletionMarker(codebasePath);
+        } catch (error: unknown) {
             console.warn(`[INDEX-RECOVERY] Stale indexing recovery probe failed for '${codebasePath}': ${formatUnknownError(error)}`);
             return;
         }
 
         const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
         if (decision.action === "promote_indexed") {
-            this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, this.runtimeFingerprint, "verified");
+            this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified");
             this.snapshotManager.saveCodebaseSnapshot();
-            console.log(`[INDEX-RECOVERY] Promoted stale indexing state to indexed for '${codebasePath}' using completion marker proof.`);
+            const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
+                ? " using completion marker proof from a different runtime fingerprint"
+                : " using completion marker proof";
+            console.log(`[INDEX-RECOVERY] Promoted stale indexing state to indexed for '${codebasePath}'${recoveryMode}.`);
             return;
         }
 
@@ -874,13 +967,91 @@ export class ToolHandlers {
         return validateIndexCompletionProof({
             codebasePath,
             runtimeFingerprint: this.runtimeFingerprint,
-            getIndexCompletionMarker: typeof (this.context as any).getIndexCompletionMarker === 'function'
-                ? (markerPath) => (this.context as any).getIndexCompletionMarker(markerPath)
+            getIndexCompletionMarker: typeof (this.context as unknown as IndexCompletionMarkerContext).getIndexCompletionMarker === 'function'
+                ? (markerPath) => (this.context as unknown as IndexCompletionMarkerContext).getIndexCompletionMarker?.(markerPath) ?? Promise.resolve(null)
                 : undefined,
             onProbeError: (error) => {
                 console.warn(`[INDEX-PROOF] Completion marker probe failed for '${codebasePath}': ${formatUnknownError(error)}`);
             }
         });
+    }
+
+    private extractIndexedRecoveryFromCompletionProof(
+        completionProof: CompletionProofValidationResult
+    ): {
+        stats: {
+            indexedFiles: number;
+            totalChunks: number;
+            status: 'completed';
+        };
+        indexFingerprint: IndexFingerprint;
+    } | null {
+        if (completionProof.outcome !== 'valid' && completionProof.outcome !== 'fingerprint_mismatch') {
+            return null;
+        }
+
+        const marker = completionProof.marker;
+        const fingerprint = marker?.fingerprint;
+        if (!marker || !fingerprint || typeof fingerprint !== 'object') {
+            return null;
+        }
+
+        const record = fingerprint as Record<string, unknown>;
+        if (
+            typeof record.embeddingProvider !== 'string'
+            || typeof record.embeddingModel !== 'string'
+            || typeof record.vectorStoreProvider !== 'string'
+            || typeof record.schemaVersion !== 'string'
+        ) {
+            return null;
+        }
+
+        const embeddingDimension = Number(record.embeddingDimension);
+        const indexedFiles = Number(marker.indexedFiles);
+        const totalChunks = Number(marker.totalChunks);
+        if (
+            !Number.isFinite(embeddingDimension)
+            || !Number.isFinite(indexedFiles)
+            || indexedFiles < 0
+            || !Number.isFinite(totalChunks)
+            || totalChunks < 0
+        ) {
+            return null;
+        }
+
+        return {
+            stats: {
+                indexedFiles,
+                totalChunks,
+                status: 'completed',
+            },
+            indexFingerprint: {
+                embeddingProvider: record.embeddingProvider as IndexFingerprint['embeddingProvider'],
+                embeddingModel: record.embeddingModel,
+                embeddingDimension,
+                vectorStoreProvider: record.vectorStoreProvider as IndexFingerprint['vectorStoreProvider'],
+                schemaVersion: record.schemaVersion as IndexFingerprint['schemaVersion'],
+            },
+        };
+    }
+
+    private recoverIndexedSnapshotFromCompletionProof(
+        codebasePath: string,
+        completionProof: CompletionProofValidationResult
+    ): boolean {
+        const recovered = this.extractIndexedRecoveryFromCompletionProof(completionProof);
+        if (!recovered) {
+            return false;
+        }
+
+        this.snapshotManager.setCodebaseIndexed(
+            codebasePath,
+            recovered.stats,
+            recovered.indexFingerprint,
+            'verified'
+        );
+        this.snapshotManager.saveCodebaseSnapshot();
+        return true;
     }
 
     private refreshSnapshotStateFromDisk(): void {
@@ -897,41 +1068,58 @@ export class ToolHandlers {
         return targetPath === rootPath || targetPath.startsWith(`${rootPath}${path.sep}`);
     }
 
+    private getTrackedRootEntryForPath(codebasePath: string): TrackedRootEntry | null {
+        const info = this.snapshotManager.getCodebaseInfo(codebasePath);
+        const status = info?.status
+            || this.snapshotManager.getCodebaseStatus(codebasePath);
+        if ((!info || typeof info !== 'object') && (!status || status === 'not_found')) {
+            return null;
+        }
+        if (status === 'not_found') {
+            return null;
+        }
+        return {
+            path: codebasePath,
+            info: info
+                ? info as unknown as TrackedCodebaseInfo
+                : { status, lastUpdated: new Date(0).toISOString() }
+        };
+    }
+
     private resolveTrackedRoot(
         absolutePath: string,
-        statuses: Array<'indexed' | 'sync_completed' | 'indexing' | 'requires_reindex'>
-    ): { path: string; info: any } | null {
+        statuses: CodebaseStatus[]
+    ): TrackedRootEntry | null {
         const statusSet = new Set(statuses);
-        const allEntries = typeof this.snapshotManager.getAllCodebases === 'function'
-            ? this.snapshotManager.getAllCodebases()
-            : [];
+        const allEntries = this.snapshotManager.getAllCodebases();
 
-        const mergedByPath = new Map<string, { path: string; info: any }>();
+        const mergedByPath = new Map<string, TrackedRootEntry>();
         for (const entry of allEntries) {
             if (!entry || typeof entry.path !== 'string' || !entry.info) {
                 continue;
             }
-            mergedByPath.set(entry.path, { path: entry.path, info: entry.info });
+            mergedByPath.set(entry.path, { path: entry.path, info: entry.info as unknown as TrackedCodebaseInfo });
         }
 
-        if (typeof this.snapshotManager.getIndexedCodebases === 'function') {
-            for (const codebasePath of this.snapshotManager.getIndexedCodebases()) {
-                if (!mergedByPath.has(codebasePath)) {
-                    mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexed' } });
-                }
+        for (const codebasePath of this.snapshotManager.getIndexedCodebases()) {
+            if (!mergedByPath.has(codebasePath)) {
+                mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexed', lastUpdated: new Date(0).toISOString() } });
             }
         }
 
-        if (typeof this.snapshotManager.getIndexingCodebases === 'function') {
-            for (const codebasePath of this.snapshotManager.getIndexingCodebases()) {
-                if (!mergedByPath.has(codebasePath)) {
-                    mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexing' } });
-                }
+        for (const codebasePath of this.snapshotManager.getIndexingCodebases()) {
+            if (!mergedByPath.has(codebasePath)) {
+                mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexing', lastUpdated: new Date(0).toISOString() } });
             }
+        }
+
+        const directEntry = this.getTrackedRootEntryForPath(absolutePath);
+        if (directEntry && !mergedByPath.has(directEntry.path)) {
+            mergedByPath.set(directEntry.path, directEntry);
         }
 
         const matches = Array.from(mergedByPath.values())
-            .filter((entry) => statusSet.has(entry.info.status as any) && this.isPathWithinCodebase(absolutePath, entry.path))
+            .filter((entry) => statusSet.has(entry.info.status) && this.isPathWithinCodebase(absolutePath, entry.path))
             .sort((a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path));
         if (matches.length === 0) {
             return null;
@@ -945,6 +1133,7 @@ export class ToolHandlers {
     }> {
         const context = this.context as unknown as {
             getVectorStore?: () => { hasCollection?: (collectionName: string) => Promise<boolean> | boolean };
+            getActiveIndexedCollectionName?: (codebasePath: string) => Promise<string | null>;
             resolveCollectionName?: (codebasePath: string) => string;
         };
 
@@ -959,7 +1148,16 @@ export class ToolHandlers {
 
         let collectionName: string;
         try {
-            collectionName = context.resolveCollectionName(codebasePath);
+            if (typeof context.getActiveIndexedCollectionName === 'function') {
+                const activeCollectionName = await context.getActiveIndexedCollectionName(codebasePath);
+                if (typeof activeCollectionName === 'string' && activeCollectionName.trim().length > 0) {
+                    collectionName = activeCollectionName;
+                } else {
+                    collectionName = context.resolveCollectionName(codebasePath);
+                }
+            } else {
+                collectionName = context.resolveCollectionName(codebasePath);
+            }
         } catch (error) {
             console.warn(`[SEARCH-READINESS] Failed to resolve collection name for '${codebasePath}': ${formatUnknownError(error)}`);
             return { state: 'unknown' };
@@ -1047,6 +1245,127 @@ export class ToolHandlers {
         } as SearchResponseEnvelope;
     }
 
+    private buildIndexingFailureMetadata(info: TrackedCodebaseInfo): IndexingFailureMetadata {
+        return {
+            errorMessage: typeof info.errorMessage === 'string' ? info.errorMessage : null,
+            lastAttemptedPercentage: typeof info.lastAttemptedPercentage === 'number' && Number.isFinite(info.lastAttemptedPercentage)
+                ? Number(info.lastAttemptedPercentage)
+                : null,
+            lastUpdated: typeof info.lastUpdated === 'string' ? info.lastUpdated : null
+        };
+    }
+
+    private buildIndexFailedMessage(codebasePath: string, requestedPath: string, info: TrackedCodebaseInfo): string {
+        const failure = this.buildIndexingFailureMetadata(info);
+        const requestedPathDetail = requestedPath !== codebasePath
+            ? ` Requested path: '${requestedPath}'.`
+            : '';
+        const errorDetail = failure.errorMessage
+            ? ` Error: ${failure.errorMessage}`
+            : ' Error: unknown indexing failure.';
+        const progressDetail = failure.lastAttemptedPercentage !== null
+            ? ` Failed at: ${failure.lastAttemptedPercentage.toFixed(1)}% progress.`
+            : '';
+        const updatedDetail = failure.lastUpdated
+            ? ` Failed at: ${failure.lastUpdated}.`
+            : '';
+        return `Codebase '${codebasePath}' has a failed indexing attempt.${requestedPathDetail}${errorDetail}${progressDetail}${updatedDetail} Satori will not serve semantic results from an unproven partial index. Run manage_index with {"action":"create","path":"${codebasePath}"} to restart indexing for this failed state.`;
+    }
+
+    private buildIndexFailedSearchPayload(
+        codebasePath: string,
+        searchContext: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        },
+        info: TrackedCodebaseInfo
+    ): SearchResponseEnvelope {
+        return {
+            status: "not_indexed",
+            reason: "index_failed",
+            codebasePath,
+            path: searchContext.path,
+            query: searchContext.query,
+            scope: searchContext.scope,
+            groupBy: searchContext.groupBy,
+            resultMode: searchContext.resultMode,
+            limit: searchContext.limit,
+            freshnessDecision: null,
+            message: this.buildIndexFailedMessage(codebasePath, searchContext.path, info),
+            indexingFailure: this.buildIndexingFailureMetadata(info),
+            recommendedNextAction: this.buildManageIndexRecommendedAction(
+                "create",
+                codebasePath,
+                "Restart indexing because the previous attempt failed before completion marker proof."
+            ),
+            hints: {
+                create: this.buildCreateHint(codebasePath),
+                status: this.buildStatusHint(codebasePath)
+            },
+            results: []
+        } as SearchResponseEnvelope;
+    }
+
+    private buildIndexFailedFileOutlinePayload(
+        codebasePath: string,
+        requestedPath: string,
+        file: string,
+        info: TrackedCodebaseInfo
+    ): FileOutlineResponseEnvelope {
+        return {
+            status: 'not_indexed',
+            reason: 'index_failed',
+            path: requestedPath,
+            codebaseRoot: codebasePath,
+            file,
+            outline: null,
+            hasMore: false,
+            message: this.buildIndexFailedMessage(codebasePath, requestedPath, info),
+            indexingFailure: this.buildIndexingFailureMetadata(info),
+            hints: {
+                create: this.buildCreateHint(codebasePath),
+                status: this.buildStatusHint(codebasePath)
+            }
+        } as FileOutlineResponseEnvelope;
+    }
+
+    private buildIndexFailedCallGraphPayload(
+        codebasePath: string,
+        context: {
+            path: string;
+            symbolRef: CallGraphSymbolRef;
+            direction: CallGraphDirection;
+            depth: number;
+            limit: number;
+        },
+        info: TrackedCodebaseInfo
+    ): CallGraphResponseEnvelope {
+        return {
+            status: 'not_indexed',
+            supported: false,
+            reason: 'index_failed',
+            path: context.path,
+            codebaseRoot: codebasePath,
+            symbolRef: context.symbolRef,
+            direction: context.direction,
+            depth: context.depth,
+            limit: context.limit,
+            nodes: [],
+            edges: [],
+            notes: [],
+            message: this.buildIndexFailedMessage(codebasePath, context.path, info),
+            indexingFailure: this.buildIndexingFailureMetadata(info),
+            hints: {
+                create: this.buildCreateHint(codebasePath),
+                status: this.buildStatusHint(codebasePath)
+            }
+        };
+    }
+
     private buildMissingLocalCollectionFileOutlinePayload(
         codebasePath: string,
         requestedPath: string,
@@ -1102,9 +1421,10 @@ export class ToolHandlers {
         absolutePath: string,
         accessMode: 'semantic' | 'navigation' = 'semantic'
     ): Promise<
-        | { state: 'ready'; root: { path: string; info: any }; proofDebugHint?: CompletionProbeDebugHint }
+        | { state: 'ready'; root: TrackedRootEntry; proofDebugHint?: CompletionProbeDebugHint }
         | { state: 'requires_reindex'; codebasePath: string; message?: string }
         | { state: 'indexing'; codebasePath: string }
+        | { state: 'index_failed'; codebasePath: string; info: TrackedCodebaseInfo }
         | { state: 'not_indexed' }
         | { state: 'stale_local'; codebasePath: string; reason: CompletionProofReason }
         | { state: 'missing_collection'; codebasePath: string; collectionName?: string; proofDebugHint?: CompletionProbeDebugHint }
@@ -1122,6 +1442,19 @@ export class ToolHandlers {
 
         const searchableRoot = this.resolveTrackedRoot(absolutePath, ['indexed', 'sync_completed']);
         const indexingRoot = this.resolveTrackedRoot(absolutePath, ['indexing']);
+        const failedRoot = this.resolveTrackedRoot(absolutePath, ['indexfailed']);
+
+        if (
+            failedRoot
+            && (!searchableRoot || failedRoot.path.length >= searchableRoot.path.length)
+            && (!indexingRoot || failedRoot.path.length >= indexingRoot.path.length)
+        ) {
+            return {
+                state: 'index_failed',
+                codebasePath: failedRoot.path,
+                info: failedRoot.info
+            };
+        }
 
         if (!searchableRoot && indexingRoot) {
             return {
@@ -1227,13 +1560,9 @@ export class ToolHandlers {
     }
 
     private buildCompatibilityDiagnostics(codebasePath: string): FingerprintCompatibilityDiagnostics {
-        const info = typeof (this.snapshotManager as any).getCodebaseInfo === 'function'
-            ? this.snapshotManager.getCodebaseInfo(codebasePath)
-            : undefined;
+        const info = this.snapshotManager.getCodebaseInfo(codebasePath);
         const statusAtCheck = info?.status
-            || (typeof (this.snapshotManager as any).getCodebaseStatus === 'function'
-                ? this.snapshotManager.getCodebaseStatus(codebasePath)
-                : 'not_found');
+            || this.snapshotManager.getCodebaseStatus(codebasePath);
         const diagnostics: FingerprintCompatibilityDiagnostics = {
             runtimeFingerprint: this.runtimeFingerprint,
             statusAtCheck
@@ -1770,11 +2099,27 @@ export class ToolHandlers {
     }
 
     private getMatchingBlockedRoot(absolutePath: string): { path: string; message?: string } | null {
-        const blocked = this.snapshotManager
-            .getAllCodebases()
-            .filter((entry) => entry.info.status === 'requires_reindex');
+        const blocked = typeof this.snapshotManager.getAllCodebases === 'function'
+            ? this.snapshotManager
+                .getAllCodebases()
+                .filter((entry) => entry.info.status === 'requires_reindex')
+            : [];
         if (blocked.length === 0) {
-            return null;
+            const directEntry = this.getTrackedRootEntryForPath(absolutePath);
+            if (!directEntry || directEntry.info?.status !== 'requires_reindex') {
+                return null;
+            }
+            const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(absolutePath);
+            if (gate.changed && typeof this.snapshotManager.saveCodebaseSnapshot === 'function') {
+                this.snapshotManager.saveCodebaseSnapshot();
+            }
+            if (gate.allowed === true && gate.changed === true) {
+                return null;
+            }
+            return {
+                path: absolutePath,
+                message: typeof directEntry.info.message === 'string' ? directEntry.info.message : undefined
+            };
         }
 
         blocked.sort((a, b) => b.path.length - a.path.length);
@@ -1783,25 +2128,28 @@ export class ToolHandlers {
                 return false;
             }
             const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(entry.path);
-            if (gate.changed) {
-                if (typeof this.snapshotManager.saveCodebaseSnapshot === 'function') {
-                    this.snapshotManager.saveCodebaseSnapshot();
-                }
+            if (gate.changed && typeof this.snapshotManager.saveCodebaseSnapshot === 'function') {
+                this.snapshotManager.saveCodebaseSnapshot();
             }
-            return !gate.allowed;
+            // A requires_reindex snapshot state is blocked by default. The only legal
+            // escape hatch is when the access gate actively recovers a resolved
+            // fingerprint mismatch and reports allowed=true together with changed=true.
+            return !(gate.allowed === true && gate.changed === true);
         });
         if (!match) {
             return null;
         }
 
-        const message = 'message' in match.info ? match.info.message : undefined;
+        const message = 'message' in match.info && typeof match.info.message === 'string'
+            ? match.info.message
+            : undefined;
         return {
             path: match.path,
             message
         };
     }
 
-    private enforceFingerprintGate(codebasePath: string): { blockedResponse?: any; message?: string; reason?: AccessGateReason } {
+    private enforceFingerprintGate(codebasePath: string): { blockedResponse?: ToolTextResponse; message?: string; reason?: AccessGateReason } {
         const gate = this.snapshotManager.ensureFingerprintCompatibilityOnAccess(codebasePath);
         if (!gate.allowed) {
             if (gate.changed) {
@@ -1828,7 +2176,7 @@ export class ToolHandlers {
     }
 
     private buildSearchExcludeMatcher(
-        excludePatterns: any,
+        excludePatterns: unknown,
         effectiveRoot: string,
         absoluteSearchPath: string
     ): { matcher?: ReturnType<typeof ignore>; warning?: string } {
@@ -1837,8 +2185,8 @@ export class ToolHandlers {
         }
 
         const rawPatterns = excludePatterns
-            .filter((v: any) => typeof v === 'string')
-            .map((v: string) => v.trim())
+            .filter((value): value is string => typeof value === 'string')
+            .map((value) => value.trim())
             .filter((v: string) => v.length > 0);
         if (rawPatterns.length === 0) {
             return {};
@@ -1902,8 +2250,8 @@ export class ToolHandlers {
                     ? `Note: excludePatterns partially applied. Ignored (invalid patterns): ${JSON.stringify(invalidPatterns)}.`
                     : undefined
             };
-        } catch (error: any) {
-            const parseError = error?.message || String(error);
+        } catch (error: unknown) {
+            const parseError = formatUnknownError(error);
             const invalidNote = invalidPatterns.length > 0
                 ? ` Ignored patterns: ${JSON.stringify(invalidPatterns)}.`
                 : '';
@@ -1914,14 +2262,14 @@ export class ToolHandlers {
     }
 
     private applySearchExcludeMatcher(
-        searchResults: any[],
+        searchResults: SearchResultLike[],
         matcher: ReturnType<typeof ignore> | undefined
-    ): any[] {
+    ): SearchResultLike[] {
         if (!matcher || searchResults.length === 0) {
             return searchResults;
         }
 
-        return searchResults.filter((result: any) => {
+        return searchResults.filter((result) => {
             if (!result || typeof result.relativePath !== 'string') {
                 return true;
             }
@@ -2113,12 +2461,7 @@ export class ToolHandlers {
     }
 
     private activeIgnorePatternsExcludePath(codebaseRoot: string, relativePath: string): boolean {
-        const getActiveIgnorePatterns = (this.context as any).getActiveIgnorePatterns;
-        if (typeof getActiveIgnorePatterns !== 'function') {
-            return false;
-        }
-
-        const patterns = getActiveIgnorePatterns.call(this.context, codebaseRoot);
+        const patterns = this.context.getActiveIgnorePatterns(codebaseRoot);
         if (!Array.isArray(patterns) || patterns.length === 0) {
             return false;
         }
@@ -2146,12 +2489,12 @@ export class ToolHandlers {
         parsedOperators: ParsedSearchOperators;
         queryPlan: SearchQueryPlan;
         changedFiles: Set<string>;
-    }): any[] {
+    }): SearchResultLike[] {
         if (input.parsedOperators.path.length === 0 || input.changedFiles.size === 0) {
             return [];
         }
 
-        const results: any[] = [];
+        const results: SearchResultLike[] = [];
         const seenPaths = new Set<string>();
         const lexicalTerms = input.queryPlan.lexicalTerms
             .map((term) => term.value.toLowerCase())
@@ -2264,7 +2607,7 @@ export class ToolHandlers {
         scope: SearchScope;
         limit: number;
         exactRegistryFallback: boolean;
-    }): { results: any[]; debug: TrackedLexicalSearchDebug } {
+    }): { results: SearchResultLike[]; debug: TrackedLexicalSearchDebug } {
         const disabledDebug = (): TrackedLexicalSearchDebug => ({
             enabled: false,
             trackedPathCount: 0,
@@ -2279,12 +2622,7 @@ export class ToolHandlers {
             return { results: [], debug: disabledDebug() };
         }
 
-        const getTrackedRelativePaths = (this.context as any).getTrackedRelativePaths;
-        if (typeof getTrackedRelativePaths !== 'function') {
-            return { results: [], debug: disabledDebug() };
-        }
-
-        const trackedRelativePaths = getTrackedRelativePaths.call(this.context, input.effectiveRoot);
+        const trackedRelativePaths = this.context.getTrackedRelativePaths(input.effectiveRoot);
         if (!Array.isArray(trackedRelativePaths) || trackedRelativePaths.length === 0) {
             return { results: [], debug: disabledDebug() };
         }
@@ -2473,7 +2811,7 @@ export class ToolHandlers {
             language: candidate.language,
             score: candidate.score,
             backendScore: candidate.score,
-            backendScoreKind: 'lexical_rank',
+            backendScoreKind: 'lexical_rank' as const,
         }));
         debug.returnedResults = results.length;
         return { results, debug };
@@ -2581,8 +2919,8 @@ export class ToolHandlers {
             };
             this.rootGitignoreMatcherCache.set(cacheKey, ready);
             return ready;
-        } catch (error: any) {
-            const code = typeof error?.code === 'string' ? error.code : '';
+        } catch (error: unknown) {
+            const code = isRecord(error) && typeof error.code === 'string' ? error.code : '';
             if (code === 'ENOENT' || code === 'ENOTDIR') {
                 const absent = {
                     state: "absent" as GitignoreMatcherCacheState,
@@ -2708,9 +3046,7 @@ export class ToolHandlers {
             generated: this.roundRatio(counts.generated / topK),
             runtime: this.roundRatio(counts.runtime / topK),
         };
-        const debounceMs = typeof (this.syncManager as any)?.getWatchDebounceMs === 'function'
-            ? this.syncManager.getWatchDebounceMs()
-            : DEFAULT_WATCH_DEBOUNCE_MS;
+        const debounceMs = this.syncManager.getWatchDebounceMs() || DEFAULT_WATCH_DEBOUNCE_MS;
         const filtered = this.filterNoiseHintPatternsByRootGitignore(codebaseRoot, observedNoisyFiles);
         const isRootCoveredMessageEligible = filtered.matcherState === 'ready' && filtered.coveredByRootGitignore && filtered.suggestedIgnorePatterns.length === 0;
         const nextStepMiddle = filtered.suggestedIgnorePatterns.length > 0
@@ -3150,7 +3486,64 @@ export class ToolHandlers {
         return 0.35;
     }
 
-    private scoreCandidateLexicalEvidence(plan: SearchQueryPlan, result: any): SearchLexicalEvidence {
+    private isHighSignalStructuralAnchorTerm(term: SearchLexicalTerm): boolean {
+        if (term.kind !== 'whole') {
+            return false;
+        }
+        return (
+            (/[a-z]/.test(term.value) && /\d/.test(term.value))
+            || /[_/\\.\-:]/.test(term.value)
+        );
+    }
+
+    private extractNormalizedCandidateTokens(fields: string[]): string[] {
+        const tokens = new Set<string>();
+        for (const field of fields) {
+            for (const match of field.toLowerCase().matchAll(/[a-z0-9]+/g)) {
+                const token = match[0] || '';
+                if (token.length > 0) {
+                    tokens.add(token);
+                }
+            }
+        }
+        return Array.from(tokens.values());
+    }
+
+    private splitStructuralAnchorSegments(value: string): string[] {
+        return value.toLowerCase().match(/[a-z]+|\d+/g) || [];
+    }
+
+    private isSiblingStructuralAnchorNearMiss(queryAnchor: string, candidateToken: string): boolean {
+        const querySegments = this.splitStructuralAnchorSegments(queryAnchor);
+        const candidateSegments = this.splitStructuralAnchorSegments(candidateToken);
+        if (querySegments.length < 2 || querySegments.length !== candidateSegments.length) {
+            return false;
+        }
+
+        for (let index = 0; index < querySegments.length - 1; index += 1) {
+            if (querySegments[index] !== candidateSegments[index]) {
+                return false;
+            }
+        }
+
+        const queryLast = querySegments[querySegments.length - 1] || '';
+        const candidateLast = candidateSegments[candidateSegments.length - 1] || '';
+        if (queryLast === candidateLast || queryLast.length !== candidateLast.length) {
+            return false;
+        }
+
+        const queryLastIsDigits = /^\d+$/.test(queryLast);
+        const candidateLastIsDigits = /^\d+$/.test(candidateLast);
+        if (queryLastIsDigits !== candidateLastIsDigits) {
+            return false;
+        }
+
+        const queryLastIsLetters = /^[a-z]+$/.test(queryLast);
+        const candidateLastIsLetters = /^[a-z]+$/.test(candidateLast);
+        return queryLastIsLetters === candidateLastIsLetters;
+    }
+
+    private scoreCandidateLexicalEvidence(plan: SearchQueryPlan, result: SearchResultLike): SearchLexicalEvidence {
         if (plan.lexicalTerms.length === 0 && plan.quotedLiteralPhrases.length === 0) {
             return { score: 0, exactLexicalMatch: false };
         }
@@ -3159,10 +3552,17 @@ export class ToolHandlers {
         const symbolLabel = typeof result?.symbolLabel === 'string' ? result.symbolLabel.toLowerCase() : '';
         const content = typeof result?.content === 'string' ? result.content.toLowerCase() : '';
         const pathSegments = relativePath.split('/').filter((segment: string) => segment.length > 0);
+        const candidateTokens = this.extractNormalizedCandidateTokens([
+            symbolLabel,
+            relativePath,
+            content,
+        ]);
 
         let score = 0;
         let exactLexicalMatch = false;
         const matchedWholeTerms = new Set<string>();
+        const matchedStructuralAnchorTerms = new Set<string>();
+        const matchedExactStructuralAnchorTerms = new Set<string>();
 
         for (const phrase of plan.quotedLiteralPhrases) {
             if (symbolLabel.includes(phrase)) {
@@ -3200,6 +3600,10 @@ export class ToolHandlers {
                 score = Math.max(score, (plan.referenceSeeking ? 0.02 : 1.30) * termFactor);
                 if (term.kind === 'whole') {
                     matchedWholeTerms.add(term.value);
+                    if (this.isHighSignalStructuralAnchorTerm(term)) {
+                        matchedStructuralAnchorTerms.add(term.value);
+                        matchedExactStructuralAnchorTerms.add(term.value);
+                    }
                 }
                 if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
                     exactLexicalMatch = true;
@@ -3211,6 +3615,10 @@ export class ToolHandlers {
                 score = Math.max(score, (plan.referenceSeeking ? 0.02 : 1.20) * termFactor);
                 if (term.kind === 'whole') {
                     matchedWholeTerms.add(term.value);
+                    if (this.isHighSignalStructuralAnchorTerm(term)) {
+                        matchedStructuralAnchorTerms.add(term.value);
+                        matchedExactStructuralAnchorTerms.add(term.value);
+                    }
                 }
                 if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
                     exactLexicalMatch = true;
@@ -3222,6 +3630,9 @@ export class ToolHandlers {
                 score = Math.max(score, (plan.referenceSeeking ? (declarationMatch ? 0.10 : 1.25) : 0.90) * termFactor);
                 if (term.kind === 'whole') {
                     matchedWholeTerms.add(term.value);
+                    if (this.isHighSignalStructuralAnchorTerm(term)) {
+                        matchedExactStructuralAnchorTerms.add(term.value);
+                    }
                 }
                 if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
                     exactLexicalMatch = true;
@@ -3257,9 +3668,29 @@ export class ToolHandlers {
             matchedWholeTerms.size * (plan.implementationSeeking || plan.writerSeeking ? 0.18 : 0.08),
             plan.implementationSeeking || plan.writerSeeking ? 0.54 : 0.24
         );
+        const structuralAnchorBoost = matchedStructuralAnchorTerms.size > 0
+            && !plan.referenceSeeking
+            && !plan.writerSeeking
+            && (plan.intent === 'mixed' || plan.intent === 'semantic')
+            ? (plan.intent === 'mixed' ? 0.80 : 0.55)
+            : 0;
+        const structuralAnchorNearMissPenalty = !plan.referenceSeeking
+            && !plan.writerSeeking
+            && (plan.intent === 'mixed' || plan.intent === 'semantic')
+            && plan.lexicalTerms.some((term) => (
+                term.kind === 'whole'
+                && this.isHighSignalStructuralAnchorTerm(term)
+                && !matchedExactStructuralAnchorTerms.has(term.value)
+                && candidateTokens.some((candidateToken) => this.isSiblingStructuralAnchorNearMiss(term.value, candidateToken))
+            ))
+            ? (plan.intent === 'mixed'
+                ? SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_MIXED
+                : SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_SEMANTIC)
+            : 0;
 
         return {
-            score: (score + coverageBoost) * plan.lexicalWeight,
+            // Penalty is applied in the same pre-weight lexical stage as the structural-anchor boost.
+            score: (score + coverageBoost + structuralAnchorBoost - structuralAnchorNearMissPenalty) * plan.lexicalWeight,
             exactLexicalMatch,
         };
     }
@@ -3388,7 +3819,7 @@ export class ToolHandlers {
         };
     }
 
-    private buildRerankDocument(result: any): string {
+    private buildRerankDocument(result: SearchResultLike): string {
         const relativePath = typeof result?.relativePath === 'string' ? result.relativePath : '';
         const language = typeof result?.language === 'string' ? result.language : 'unknown';
         const symbolLabel = typeof result?.symbolLabel === 'string' ? result.symbolLabel : '';
@@ -3661,7 +4092,7 @@ export class ToolHandlers {
         return this.isImplementationPathCategory(category);
     }
 
-    private classifyAgentFitSymbolRole(result: any): 'implementation' | 'type' | 'schema' | 'anonymous' | 'unknown' {
+    private classifyAgentFitSymbolRole(result: SearchResultLike): 'implementation' | 'type' | 'schema' | 'anonymous' | 'unknown' {
         const label = typeof result?.symbolLabel === 'string'
             ? result.symbolLabel.trim().toLowerCase()
             : '';
@@ -3690,7 +4121,7 @@ export class ToolHandlers {
         return 'unknown';
     }
 
-    private isWriterOwnerResult(result: any): boolean {
+    private isWriterOwnerResult(result: SearchResultLike): boolean {
         const label = typeof result?.symbolLabel === 'string'
             ? result.symbolLabel.trim().toLowerCase()
             : '';
@@ -3705,7 +4136,7 @@ export class ToolHandlers {
         return /\b(?:writefilesync|writefile|appendfile|mkdir|rename|unlink|rm|copyfile|lines\.splice)\b/.test(evidence);
     }
 
-    private isStrongWriterOwnerResult(result: any): boolean {
+    private isStrongWriterOwnerResult(result: SearchResultLike): boolean {
         const label = typeof result?.symbolLabel === 'string'
             ? result.symbolLabel.trim().toLowerCase()
             : '';
@@ -3724,7 +4155,7 @@ export class ToolHandlers {
         return /^(?:write|writes|writing|written|update|updates|updated|updating|create|creates|created|creating|generate|generates|generated|generating|emit|emits|emitted|emitting|persist|persists|persisted|persisting|configure|configures|configured|configuring|install|installs|installed|installing|build|builds|built|builder)$/.test(term);
     }
 
-    private countCandidateDomainTermMatches(plan: SearchQueryPlan, result: any): number {
+    private countCandidateDomainTermMatches(plan: SearchQueryPlan, result: SearchResultLike): number {
         const content = typeof result?.content === 'string' ? result.content : '';
         const label = typeof result?.symbolLabel === 'string' ? result.symbolLabel : '';
         const relativePath = typeof result?.relativePath === 'string' ? result.relativePath : '';
@@ -3748,7 +4179,7 @@ export class ToolHandlers {
 
     private resolveAgentFitMultiplier(
         plan: SearchQueryPlan,
-        result: any,
+        result: SearchResultLike,
         category: PathCategory,
         scope: SearchScope
     ): { multiplier: number; reason: string } {
@@ -3958,6 +4389,14 @@ export class ToolHandlers {
             startLine: input.symbol.span.startLine,
             endLine: input.symbol.span.endLine,
         };
+        const previewSpan: SearchSpan = {
+            startLine: span.startLine,
+            endLine: span.endLine,
+        };
+        const symbolSpan: SearchSpan = {
+            startLine: span.startLine,
+            endLine: span.endLine,
+        };
         const callGraphHint = this.buildSearchGroupCallGraphHint({
             file: input.symbol.file,
             language: input.symbol.language,
@@ -3968,19 +4407,21 @@ export class ToolHandlers {
             registryLoaded: true,
             navigationState: input.callGraphNavigationState,
         });
-        const navigationFallback = this.buildNavigationFallback(
-            input.codebaseRoot,
-            input.symbol.file,
-            span,
-            callGraphHint,
-            input.sidecarReadyForOutline
-        );
         const nextActions = this.buildSearchNextActions(
             input.codebaseRoot,
             input.symbol.file,
             span,
             callGraphHint,
-            input.sidecarReadyForOutline
+            input.sidecarReadyForOutline,
+            input.symbol
+        );
+        const navigationFallback = this.buildNavigationFallback(
+            input.codebaseRoot,
+            input.symbol.file,
+            previewSpan,
+            callGraphHint,
+            input.sidecarReadyForOutline,
+            this.shouldAllowPreviewReadFallback(callGraphHint, Boolean(nextActions?.openSymbol))
         );
         const capabilities = this.buildSearchResultCapabilities({
             callGraphHint,
@@ -4003,6 +4444,8 @@ export class ToolHandlers {
             groupId: input.symbol.symbolInstanceId,
             file: input.symbol.file,
             span,
+            previewSpan,
+            symbolSpan,
             language: input.symbol.language,
             symbolId: input.symbol.symbolInstanceId,
             symbolLabel: displaySymbolLabel,
@@ -4179,8 +4622,8 @@ export class ToolHandlers {
         return isLanguageCapabilitySupportedForFilename(file, 'fileOutline');
     }
 
-    private isPartialIndexNavigationUnavailable(info: { indexStatus?: unknown } | undefined): boolean {
-        return info?.indexStatus === 'limit_reached';
+    private isPartialIndexNavigationUnavailable(info: unknown): boolean {
+        return isRecord(info) && info.indexStatus === 'limit_reached';
     }
 
     private async loadRegistryValidatedCallGraphSidecar(input: {
@@ -4271,7 +4714,7 @@ export class ToolHandlers {
         return compact;
     }
 
-    private buildSearchOwnerChunk(result: any): CodeChunk | null {
+    private buildSearchOwnerChunk(result: SearchResultLike): CodeChunk | null {
         const startLine = Number(result?.startLine);
         const endLine = Number(result?.endLine);
         if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
@@ -4401,7 +4844,7 @@ export class ToolHandlers {
         return scored[0]?.symbol;
     }
 
-    private resolveSearchOwnerFromRegistry(result: any, registry?: SymbolRegistry, plan?: SearchQueryPlan): SearchOwnerResolution {
+    private resolveSearchOwnerFromRegistry(result: SearchResultLike, registry?: SymbolRegistry, plan?: SearchQueryPlan): SearchOwnerResolution {
         const metadataOwnerKey = typeof result?.ownerSymbolKey === 'string' && result.ownerSymbolKey.length > 0
             ? result.ownerSymbolKey
             : undefined;
@@ -4510,14 +4953,51 @@ export class ToolHandlers {
             : {};
     }
 
+    private buildSearchOpenSymbolAction(
+        codebaseRoot: string,
+        registrySymbol: SymbolRecord | undefined
+    ): NonNullable<NonNullable<SearchGroupResult['nextActions']>['openSymbol']> | undefined {
+        if (!registrySymbol || registrySymbol.kind === 'file') {
+            return undefined;
+        }
+
+        const normalizedFile = this.sanitizeIndexedRelativeFilePath(registrySymbol.file);
+        if (!normalizedFile) {
+            return undefined;
+        }
+
+        return {
+            tool: 'read_file',
+            args: {
+                path: path.resolve(codebaseRoot, normalizedFile),
+                open_symbol: {
+                    symbolId: registrySymbol.symbolInstanceId,
+                    ...(registrySymbol.label ? { symbolLabel: registrySymbol.label } : {}),
+                }
+            }
+        };
+    }
+
+    private shouldAllowPreviewReadFallback(
+        callGraphHint: CallGraphHint,
+        hasOpenSymbol: boolean
+    ): boolean {
+        if (callGraphHint.supported || hasOpenSymbol) {
+            return false;
+        }
+
+        return callGraphHint.reason === 'missing_symbol' || callGraphHint.reason === 'stale_symbol_ref';
+    }
+
     private buildNavigationFallback(
         codebaseRoot: string,
         relativeFilePath: string,
-        span: SearchSpan,
+        previewSpan: SearchSpan,
         callGraphHint: CallGraphHint,
-        sidecarReadyForOutline: boolean
+        sidecarReadyForOutline: boolean,
+        allowPreviewReadFallback: boolean
     ): SearchGroupResult['navigationFallback'] | undefined {
-        if (callGraphHint.supported) {
+        if (callGraphHint.supported || !allowPreviewReadFallback) {
             return undefined;
         }
 
@@ -4526,8 +5006,8 @@ export class ToolHandlers {
             return undefined;
         }
 
-        const safeStartLine = Number.isFinite(span.startLine) ? Math.max(1, Number(span.startLine)) : 1;
-        const safeEndLine = Number.isFinite(span.endLine) ? Math.max(safeStartLine, Number(span.endLine)) : safeStartLine;
+        const safeStartLine = Number.isFinite(previewSpan.startLine) ? Math.max(1, Number(previewSpan.startLine)) : 1;
+        const safeEndLine = Number.isFinite(previewSpan.endLine) ? Math.max(safeStartLine, Number(previewSpan.endLine)) : safeStartLine;
         const absolutePath = path.resolve(codebaseRoot, normalizedFile);
 
         const fallback: SearchGroupResult['navigationFallback'] = {
@@ -4567,21 +5047,27 @@ export class ToolHandlers {
         relativeFilePath: string,
         span: SearchSpan,
         callGraphHint: CallGraphHint,
-        sidecarReadyForOutline: boolean
+        sidecarReadyForOutline: boolean,
+        registrySymbol?: SymbolRecord
     ): SearchGroupResult['nextActions'] | undefined {
+        const openSymbol = this.buildSearchOpenSymbolAction(codebaseRoot, registrySymbol);
+        const nextActions: NonNullable<SearchGroupResult['nextActions']> = {};
+        if (openSymbol) {
+            nextActions.openSymbol = openSymbol;
+        }
+
         if (!callGraphHint.supported) {
-            return undefined;
+            return Object.keys(nextActions).length > 0 ? nextActions : undefined;
         }
 
         const normalizedFile = this.sanitizeIndexedRelativeFilePath(callGraphHint.symbolRef.file || relativeFilePath);
         if (!normalizedFile) {
-            return undefined;
+            return Object.keys(nextActions).length > 0 ? nextActions : undefined;
         }
 
         const actionSpan = callGraphHint.symbolRef.span || span;
         const safeStartLine = Number.isFinite(actionSpan.startLine) ? Math.max(1, Number(actionSpan.startLine)) : 1;
         const safeEndLine = Number.isFinite(actionSpan.endLine) ? Math.max(safeStartLine, Number(actionSpan.endLine)) : safeStartLine;
-        const absolutePath = path.resolve(codebaseRoot, normalizedFile);
         const symbolRef = {
             ...callGraphHint.symbolRef,
             file: normalizedFile,
@@ -4591,30 +5077,18 @@ export class ToolHandlers {
             }
         };
 
-        const nextActions: NonNullable<SearchGroupResult['nextActions']> = {
-            openSymbol: {
-                tool: 'read_file',
-                args: {
-                    path: absolutePath,
-                    open_symbol: {
-                        symbolId: symbolRef.symbolId,
-                        ...(symbolRef.symbolLabel ? { symbolLabel: symbolRef.symbolLabel } : {}),
-                    }
-                }
+        nextActions.callGraph = {
+            tool: 'call_graph',
+            args: {
+                path: codebaseRoot,
+                symbolRef,
+                depth: 1,
+                limit: 20,
             },
-            callGraph: {
-                tool: 'call_graph',
-                args: {
-                    path: codebaseRoot,
-                    symbolRef,
-                    depth: 1,
-                    limit: 20,
-                },
-                directions: ['callers', 'callees'],
-            }
+            directions: ['callers', 'callees'],
         };
 
-        if (sidecarReadyForOutline && this.getOutlineStatusForLanguage(normalizedFile) === 'ok') {
+        if (openSymbol && sidecarReadyForOutline && this.getOutlineStatusForLanguage(normalizedFile) === 'ok') {
             nextActions.outlineWindow = {
                 tool: 'file_outline',
                 args: {
@@ -4627,7 +5101,7 @@ export class ToolHandlers {
             };
         }
 
-        return nextActions;
+        return Object.keys(nextActions).length > 0 ? nextActions : undefined;
     }
 
     private buildChangedCodeDebug(
@@ -4638,12 +5112,7 @@ export class ToolHandlers {
             return undefined;
         }
 
-        const loadSidecar = (this.callGraphManager as any)?.loadSidecar;
-        if (typeof loadSidecar !== 'function') {
-            return undefined;
-        }
-
-        const sidecar = loadSidecar.call(this.callGraphManager, codebaseRoot);
+        const sidecar = this.callGraphManager.loadSidecar(codebaseRoot);
         if (!sidecar || !Array.isArray(sidecar.nodes) || !Array.isArray(sidecar.edges)) {
             return undefined;
         }
@@ -4653,7 +5122,7 @@ export class ToolHandlers {
             .filter((file) => file.length > 0 && !file.startsWith('..') && !path.posix.isAbsolute(file))
             .sort((a, b) => a.localeCompare(b));
         const changedFileSet = new Set(changedFiles);
-        const nodeById = new Map<string, any>();
+        const nodeById = new Map<string, CallGraphNode>();
         for (const node of sidecar.nodes) {
             if (node && typeof node.symbolId === 'string') {
                 nodeById.set(node.symbolId, node);
@@ -4661,8 +5130,8 @@ export class ToolHandlers {
         }
 
         const changedSymbols = sidecar.nodes
-            .filter((node: any) => node && typeof node.file === 'string' && changedFileSet.has(this.normalizeRelativeFilePath(node.file)))
-            .map((node: any) => {
+            .filter((node) => node && typeof node.file === 'string' && changedFileSet.has(this.normalizeRelativeFilePath(node.file)))
+            .map((node): ChangedCodeDebugSymbol => {
                 const symbolLabel = this.normalizeSearchSymbolLabel(node.symbolLabel);
                 return {
                     file: this.normalizeRelativeFilePath(node.file),
@@ -4674,7 +5143,7 @@ export class ToolHandlers {
                     }
                 };
             })
-            .sort((a: any, b: any) => {
+            .sort((a, b) => {
                 const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
                 if (fileCmp !== 0) return fileCmp;
                 const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
@@ -4684,10 +5153,10 @@ export class ToolHandlers {
                 return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
             });
 
-        const changedSymbolIds = new Set(changedSymbols.map((symbol: any) => symbol.symbolId));
+        const changedSymbolIds = new Set(changedSymbols.map((symbol) => symbol.symbolId));
         const directCallers = sidecar.edges
-            .filter((edge: any) => edge && changedSymbolIds.has(edge.dstSymbolId))
-            .map((edge: any) => {
+            .filter((edge) => edge && changedSymbolIds.has(edge.dstSymbolId))
+            .map((edge): ChangedCodeDebugDirectCaller | null => {
                 const caller = nodeById.get(edge.srcSymbolId);
                 if (!caller) {
                     return null;
@@ -4713,8 +5182,8 @@ export class ToolHandlers {
                     confidence: Number.isFinite(edge.confidence) ? Number(edge.confidence) : 0,
                 };
             })
-            .filter((caller: any): caller is NonNullable<typeof caller> => Boolean(caller))
-            .sort((a: any, b: any) => {
+            .filter((caller): caller is ChangedCodeDebugDirectCaller => Boolean(caller))
+            .sort((a, b) => {
                 const targetCmp = this.compareNullableStringsAsc(a.targetSymbolId, b.targetSymbolId);
                 if (targetCmp !== 0) return targetCmp;
                 const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
@@ -5734,6 +6203,20 @@ export class ToolHandlers {
         return [...edges].sort((a, b) => this.compareRelationshipBackedCallGraphEdges(a, b));
     }
 
+    private sortRelationshipBackedCallGraphNotes(notes: CallGraphNote[]): CallGraphNote[] {
+        return [...notes].sort((a, b) => {
+            const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
+            if (fileCmp !== 0) return fileCmp;
+            const startCmp = this.compareNullableNumbersAsc(a.startLine, b.startLine);
+            if (startCmp !== 0) return startCmp;
+            const typeCmp = this.compareNullableStringsAsc(a.type, b.type);
+            if (typeCmp !== 0) return typeCmp;
+            const symbolCmp = this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+            if (symbolCmp !== 0) return symbolCmp;
+            return this.compareNullableStringsAsc(a.detail, b.detail);
+        });
+    }
+
     private mapRelationshipConfidenceToCallGraphConfidence(confidence: 'high' | 'medium' | 'low'): number {
         switch (confidence) {
             case 'high':
@@ -5989,28 +6472,38 @@ export class ToolHandlers {
         return nonSelfCandidates.length === 1 ? nonSelfCandidates[0] : undefined;
     }
 
+    private buildDirectCallTargetIndex(registry: SymbolRegistry): Map<string, SymbolRecord[]> {
+        const targetsByName = new Map<string, SymbolRecord[]>();
+        for (const symbol of registry.symbols.filter((candidate) => candidate.kind !== 'file')) {
+            const key = symbol.name.toLowerCase();
+            targetsByName.set(key, [...(targetsByName.get(key) || []), symbol]);
+        }
+        return targetsByName;
+    }
+
+    private readSafeCodebaseFileLines(codebaseRoot: string, relativeFilePath: string): string[] | undefined {
+        const absoluteFile = path.resolve(codebaseRoot, relativeFilePath);
+        const relativeToRoot = path.relative(codebaseRoot, absoluteFile);
+        if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot) || !fs.existsSync(absoluteFile)) {
+            return undefined;
+        }
+        return fs.readFileSync(absoluteFile, 'utf8').split(/\r?\n/);
+    }
+
     private buildSourceBackedPythonCalleeFallback(input: {
         codebaseRoot: string;
         registry: SymbolRegistry;
         source: SymbolRecord;
-    }): { edges: CallGraphEdge[]; targetSymbols: SymbolRecord[]; notes: CallGraphNote[] } {
+    }): SourceBackedPythonCallFallback {
         const source = input.source;
         if (source.language !== 'python' || (source.kind !== 'function' && source.kind !== 'method')) {
-            return { edges: [], targetSymbols: [], notes: [] };
+            return { edges: [], symbols: [], notes: [] };
         }
-        const absoluteFile = path.resolve(input.codebaseRoot, source.file);
-        const relativeToRoot = path.relative(input.codebaseRoot, absoluteFile);
-        if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot) || !fs.existsSync(absoluteFile)) {
-            return { edges: [], targetSymbols: [], notes: [] };
+        const lines = this.readSafeCodebaseFileLines(input.codebaseRoot, source.file);
+        if (!lines) {
+            return { edges: [], symbols: [], notes: [] };
         }
-
-        const targetsByName = new Map<string, SymbolRecord[]>();
-        for (const symbol of input.registry.symbols.filter((candidate) => candidate.kind !== 'file')) {
-            const key = symbol.name.toLowerCase();
-            targetsByName.set(key, [...(targetsByName.get(key) || []), symbol]);
-        }
-
-        const lines = fs.readFileSync(absoluteFile, 'utf8').split(/\r?\n/);
+        const targetsByName = this.buildDirectCallTargetIndex(input.registry);
         const edgesByKey = new Map<string, CallGraphEdge>();
         const targetSymbolsById = new Map<string, SymbolRecord>();
         const maxLine = Math.min(source.span.endLine, lines.length);
@@ -6055,9 +6548,175 @@ export class ToolHandlers {
             : [];
         return {
             edges,
-            targetSymbols: [...targetSymbolsById.values()],
+            symbols: [...targetSymbolsById.values()],
             notes,
         };
+    }
+
+    private buildSourceBackedPythonCallerFallback(input: {
+        codebaseRoot: string;
+        registry: SymbolRegistry;
+        resolvedTarget: SymbolRecord;
+        suppressedRecords: RelationshipRecord[];
+    }): SourceBackedPythonCallFallback {
+        const target = input.resolvedTarget;
+        if (target.language !== 'python' || (target.kind !== 'function' && target.kind !== 'method')) {
+            return { edges: [], symbols: [], notes: [] };
+        }
+
+        const targetsByName = this.buildDirectCallTargetIndex(input.registry);
+        const sourceRepairsById = new Map<string, PythonSourceBackedSpanRepair>();
+        const linesByFile = new Map<string, string[] | undefined>();
+        const edgesByKey = new Map<string, CallGraphEdge>();
+        const sourceSymbolsById = new Map<string, SymbolRecord>();
+
+        for (const record of input.suppressedRecords) {
+            if (record.targetInstanceId !== target.symbolInstanceId || !record.sourceInstanceId || !Number.isFinite(record.span?.startLine)) {
+                continue;
+            }
+
+            const source = input.registry.symbolsByInstanceId.get(record.sourceInstanceId);
+            if (!source || source.language !== 'python' || (source.kind !== 'function' && source.kind !== 'method')) {
+                continue;
+            }
+
+            let sourceRepair = sourceRepairsById.get(source.symbolInstanceId);
+            if (!sourceRepair) {
+                let sourceLines = linesByFile.get(source.file);
+                if (sourceLines === undefined) {
+                    sourceLines = this.readSafeCodebaseFileLines(input.codebaseRoot, source.file);
+                    linesByFile.set(source.file, sourceLines);
+                }
+                sourceRepair = this.repairSourceBackedPythonSpan({
+                    codebaseRoot: input.codebaseRoot,
+                    symbol: source,
+                    sourceLines,
+                });
+                sourceRepairsById.set(source.symbolInstanceId, sourceRepair);
+            }
+            if (!sourceRepair.validated) {
+                continue;
+            }
+
+            const repairedSource = sourceRepair.symbol;
+            const siteStartLine = Number(record.span?.startLine);
+            const siteEndLine = Number.isFinite(record.span?.endLine) ? Number(record.span?.endLine) : siteStartLine;
+            if (
+                record.file !== repairedSource.file
+                || siteStartLine < repairedSource.span.startLine
+                || siteEndLine > repairedSource.span.endLine
+            ) {
+                continue;
+            }
+
+            let sourceLines = linesByFile.get(repairedSource.file);
+            if (sourceLines === undefined) {
+                sourceLines = this.readSafeCodebaseFileLines(input.codebaseRoot, repairedSource.file);
+                linesByFile.set(repairedSource.file, sourceLines);
+            }
+            const siteLine = sourceLines?.[siteStartLine - 1];
+            if (typeof siteLine !== 'string') {
+                continue;
+            }
+
+            const verifiedTarget = this.extractDirectCallNamesFromLine(siteLine.replace(/#.*$/, ''))
+                .map((callName) => this.resolveUnambiguousDirectCallTarget(
+                    repairedSource,
+                    targetsByName.get(callName.toLowerCase()) || []
+                ))
+                .find((candidate) => candidate?.symbolInstanceId === target.symbolInstanceId);
+            if (!verifiedTarget) {
+                continue;
+            }
+
+            const edge: CallGraphEdge = {
+                srcSymbolId: repairedSource.symbolInstanceId,
+                dstSymbolId: target.symbolInstanceId,
+                kind: 'dynamic',
+                site: {
+                    file: record.file,
+                    startLine: siteStartLine,
+                    ...(Number.isFinite(record.span?.endLine) ? { endLine: Number(record.span?.endLine) } : {}),
+                },
+                confidence: 0.65,
+            };
+            edgesByKey.set(`${edge.srcSymbolId}\0${edge.dstSymbolId}\0${edge.site.file}\0${edge.site.startLine}`, edge);
+            sourceSymbolsById.set(repairedSource.symbolInstanceId, repairedSource);
+        }
+
+        const edges = this.sortRelationshipBackedCallGraphEdges([...edgesByKey.values()]);
+        const notes = [...sourceSymbolsById.values()].map((source) => ({
+            type: 'dynamic_edge' as const,
+            file: source.file,
+            startLine: source.span.startLine,
+            symbolId: source.symbolInstanceId,
+            detail: 'Source-backed direct caller fallback synthesized edges because the relationship sidecar suppressed a usable Python caller edge.',
+        }));
+        return {
+            edges,
+            symbols: [...sourceSymbolsById.values()],
+            notes: this.sortRelationshipBackedCallGraphNotes(notes),
+        };
+    }
+
+    private buildSuppressedLowConfidenceCallGraphNotes(input: {
+        resolvedSymbol: SymbolRecord;
+        suppressedRecords: RelationshipRecord[];
+        registry: SymbolRegistry;
+    }): CallGraphNote[] {
+        const notes = input.suppressedRecords.flatMap((record) => {
+            if (!record.sourceInstanceId || !record.targetInstanceId) {
+                return [];
+            }
+
+            const source = record.sourceInstanceId === input.resolvedSymbol.symbolInstanceId
+                ? input.resolvedSymbol
+                : input.registry.symbolsByInstanceId.get(record.sourceInstanceId);
+            const target = record.targetInstanceId === input.resolvedSymbol.symbolInstanceId
+                ? input.resolvedSymbol
+                : input.registry.symbolsByInstanceId.get(record.targetInstanceId);
+            const siteStartLine = record.span?.startLine || source?.span.startLine || input.resolvedSymbol.span.startLine;
+            const siteLocation = `${record.file}:${siteStartLine}`;
+            const confidence = this.mapRelationshipConfidenceToCallGraphConfidence(record.confidence);
+
+            if (record.sourceInstanceId === input.resolvedSymbol.symbolInstanceId) {
+                const label = target?.label || target?.qualifiedName || target?.name || record.targetInstanceId;
+                return [{
+                    type: 'suppressed_edge' as const,
+                    file: record.file,
+                    startLine: siteStartLine,
+                    symbolId: record.targetInstanceId,
+                    ...(target?.label ? { symbolLabel: target.label } : {}),
+                    confidence,
+                    detail: `Suppressed low-confidence callee candidate ${label} at ${siteLocation}.`,
+                }];
+            }
+
+            if (record.targetInstanceId === input.resolvedSymbol.symbolInstanceId) {
+                const label = source?.label || source?.qualifiedName || source?.name || record.sourceInstanceId;
+                return [{
+                    type: 'suppressed_edge' as const,
+                    file: record.file,
+                    startLine: siteStartLine,
+                    symbolId: record.sourceInstanceId,
+                    ...(source?.label ? { symbolLabel: source.label } : {}),
+                    confidence,
+                    detail: `Suppressed low-confidence caller candidate ${label} at ${siteLocation}.`,
+                }];
+            }
+
+            const sourceLabel = source?.label || source?.qualifiedName || source?.name || record.sourceInstanceId;
+            const targetLabel = target?.label || target?.qualifiedName || target?.name || record.targetInstanceId;
+            return [{
+                type: 'suppressed_edge' as const,
+                file: record.file,
+                startLine: siteStartLine,
+                confidence,
+                detail: `Suppressed low-confidence relationship candidate ${sourceLabel} -> ${targetLabel} at ${siteLocation}.`,
+            }];
+        });
+
+        return this.sortRelationshipBackedCallGraphNotes(notes);
     }
 
     private async buildRelationshipBackedCallGraph(input: {
@@ -6101,6 +6760,7 @@ export class ToolHandlers {
         if (neighbors.status !== 'ok') {
             return null;
         }
+        const suppressedLowConfidenceRecords = neighbors.suppressedLowConfidenceRecords || [];
 
         const resolveNodeSymbol = (symbolInstanceId: string): SymbolRecord | undefined => (
             symbolInstanceId === input.resolvedSymbol.symbolInstanceId
@@ -6151,33 +6811,64 @@ export class ToolHandlers {
                 }];
             })
         );
-        const dynamicFallback = input.sourceSpanRepair?.repaired && (input.direction === 'callees' || input.direction === 'both')
+        const suppressedLowConfidenceNotes = this.buildSuppressedLowConfidenceCallGraphNotes({
+            resolvedSymbol: input.resolvedSymbol,
+            suppressedRecords: suppressedLowConfidenceRecords,
+            registry: input.registry,
+        });
+        const hasSuppressedOutgoingLowConfidence = suppressedLowConfidenceRecords.some((record) => (
+            record.sourceInstanceId === input.resolvedSymbol.symbolInstanceId
+        ));
+        const hasSuppressedIncomingLowConfidence = suppressedLowConfidenceRecords.some((record) => (
+            record.targetInstanceId === input.resolvedSymbol.symbolInstanceId
+        ));
+        const shouldAttemptDynamicCalleeFallback = (input.direction === 'callees' || input.direction === 'both')
+            && (Boolean(input.sourceSpanRepair?.repaired) || hasSuppressedOutgoingLowConfidence);
+        const dynamicCalleeFallback = shouldAttemptDynamicCalleeFallback
             ? this.buildSourceBackedPythonCalleeFallback({
                 codebaseRoot: input.codebaseRoot,
                 registry: input.registry,
                 source: input.resolvedSymbol,
             })
-            : { edges: [], targetSymbols: [], notes: [] };
+            : { edges: [], symbols: [], notes: [] };
+        const shouldAttemptDynamicCallerFallback = (input.direction === 'callers' || input.direction === 'both')
+            && hasSuppressedIncomingLowConfidence;
+        const dynamicCallerFallback = shouldAttemptDynamicCallerFallback
+            ? this.buildSourceBackedPythonCallerFallback({
+                codebaseRoot: input.codebaseRoot,
+                registry: input.registry,
+                resolvedTarget: input.resolvedSymbol,
+                suppressedRecords: suppressedLowConfidenceRecords,
+            })
+            : { edges: [], symbols: [], notes: [] };
         const existingEdgeKeys = new Set(edges.map((edge) => [
             edge.srcSymbolId,
             edge.dstSymbolId,
             edge.site.file,
             edge.site.startLine,
         ].join('\0')));
-        const addedDynamicEdges = dynamicFallback.edges.filter((edge) => {
+        const addUniqueDynamicEdges = (fallbackEdges: CallGraphEdge[]): CallGraphEdge[] => fallbackEdges.filter((edge) => {
             const key = [
                 edge.srcSymbolId,
                 edge.dstSymbolId,
                 edge.site.file,
                 edge.site.startLine,
             ].join('\0');
-            return !existingEdgeKeys.has(key);
+            if (existingEdgeKeys.has(key)) {
+                return false;
+            }
+            existingEdgeKeys.add(key);
+            return true;
         });
+        const addedDynamicCalleeEdges = addUniqueDynamicEdges(dynamicCalleeFallback.edges);
+        const addedDynamicCallerEdges = addUniqueDynamicEdges(dynamicCallerFallback.edges);
+        const addedDynamicEdges = [...addedDynamicCalleeEdges, ...addedDynamicCallerEdges];
         const combinedEdges = this.sortRelationshipBackedCallGraphEdges([...edges, ...addedDynamicEdges]);
         const nodeById = new Map(nodes.map((node) => [node.symbolId, node]));
-        for (const target of dynamicFallback.targetSymbols) {
-            if (!nodeById.has(target.symbolInstanceId) && addedDynamicEdges.some((edge) => edge.dstSymbolId === target.symbolInstanceId)) {
-                nodeById.set(target.symbolInstanceId, this.createCallGraphNodeFromRegistrySymbol(target));
+        const referencedDynamicSymbolIds = new Set<string>(addedDynamicEdges.flatMap((edge) => [edge.srcSymbolId, edge.dstSymbolId]));
+        for (const symbol of [...dynamicCalleeFallback.symbols, ...dynamicCallerFallback.symbols]) {
+            if (!nodeById.has(symbol.symbolInstanceId) && referencedDynamicSymbolIds.has(symbol.symbolInstanceId)) {
+                nodeById.set(symbol.symbolInstanceId, this.createCallGraphNodeFromRegistrySymbol(symbol));
             }
         }
         const referencedNodeIds = new Set<string>([
@@ -6191,8 +6882,14 @@ export class ToolHandlers {
             ...input.registry.warnings,
             ...neighbors.warnings,
             ...(droppedEdgesOutsideSourceSpan > 0 ? [`CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:${droppedEdgesOutsideSourceSpan}`] : []),
-            ...(addedDynamicEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicEdges.length}`] : []),
+            ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),
+            ...(addedDynamicCallerEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLERS:${addedDynamicCallerEdges.length}`] : []),
         ])].sort((a, b) => a.localeCompare(b));
+        const combinedNotes = this.sortRelationshipBackedCallGraphNotes([
+            ...suppressedLowConfidenceNotes,
+            ...(addedDynamicCalleeEdges.length > 0 ? dynamicCalleeFallback.notes : []),
+            ...(addedDynamicCallerEdges.length > 0 ? dynamicCallerFallback.notes : []),
+        ]);
 
         return {
             supported: true,
@@ -6201,11 +6898,11 @@ export class ToolHandlers {
             limit: Math.max(1, input.limit),
             nodes: combinedNodes,
             edges: combinedEdges,
-            notes: addedDynamicEdges.length > 0 ? dynamicFallback.notes : [],
+            notes: combinedNotes,
             ...(warnings.length > 0 ? { warnings } : {}),
             notesTruncated: false,
-            totalNoteCount: addedDynamicEdges.length > 0 ? dynamicFallback.notes.length : 0,
-            returnedNoteCount: addedDynamicEdges.length > 0 ? dynamicFallback.notes.length : 0,
+            totalNoteCount: combinedNotes.length,
+            returnedNoteCount: combinedNotes.length,
             sidecar: {
                 builtAt: neighbors.manifest.builtAt,
                 nodeCount: combinedNodes.length,
@@ -6215,11 +6912,9 @@ export class ToolHandlers {
     }
 
     private getContextIgnorePatterns(codebasePath: string): string[] {
-        if (typeof (this.context as any).getActiveIgnorePatterns === 'function') {
-            const patterns = (this.context as any).getActiveIgnorePatterns(codebasePath);
-            if (Array.isArray(patterns)) {
-                return patterns.filter((pattern) => typeof pattern === 'string');
-            }
+        const patterns = this.context.getActiveIgnorePatterns(codebasePath);
+        if (Array.isArray(patterns)) {
+            return patterns.filter((pattern) => typeof pattern === 'string');
         }
         return [];
     }
@@ -6255,8 +6950,8 @@ export class ToolHandlers {
         }
     }
 
-    private getVectorStore(): any {
-        return this.context.getVectorStore() as any;
+    private getVectorStore(): VectorDatabase {
+        return this.context.getVectorStore();
     }
 
     private isSatoriCodeCollection(collectionName: string): boolean {
@@ -6298,7 +6993,7 @@ export class ToolHandlers {
         return backendInfo?.provider === 'zilliz';
     }
 
-    private async listCollectionDetailsWithFallback(vectorDb: any): Promise<CollectionDetailsView[]> {
+    private async listCollectionDetailsWithFallback(vectorDb: VectorDatabase): Promise<CollectionDetailsView[]> {
         if (typeof vectorDb.listCollectionDetails === 'function') {
             const details = await vectorDb.listCollectionDetails();
             if (Array.isArray(details)) {
@@ -6327,8 +7022,8 @@ export class ToolHandlers {
         }
 
         try {
-            const metadata = JSON.parse(metadataValue);
-            const codebasePath = metadata?.codebasePath;
+            const metadata: unknown = JSON.parse(metadataValue);
+            const codebasePath = isRecord(metadata) ? metadata.codebasePath : undefined;
             return typeof codebasePath === 'string' && codebasePath.trim().length > 0
                 ? codebasePath
                 : undefined;
@@ -6338,7 +7033,7 @@ export class ToolHandlers {
     }
 
     private async resolveCollectionCodebasePath(
-        vectorDb: any,
+        vectorDb: VectorDatabase,
         collectionName: string,
         byCollectionName: Map<string, string>
     ): Promise<string | undefined> {
@@ -6496,61 +7191,6 @@ Agent instructions:
         }
     }
 
-    private async clearAllCollectionsForForceReindex(codebasePath: string): Promise<string[]> {
-        const vectorDb = this.getVectorStore();
-        const resolvedCollectionName = this.context.resolveCollectionName(codebasePath);
-        const hash = resolvedCollectionName.split('_').pop();
-
-        const candidateNames = new Set<string>();
-        if (hash) {
-            candidateNames.add(`code_chunks_${hash}`);
-            candidateNames.add(`hybrid_code_chunks_${hash}`);
-        }
-        candidateNames.add(resolvedCollectionName);
-
-        try {
-            const cloudCollections = await this.listCollectionDetailsWithFallback(vectorDb);
-            for (const collection of cloudCollections) {
-                if (!this.isSatoriCodeCollection(collection.name)) {
-                    continue;
-                }
-                if (hash && collection.name.endsWith(`_${hash}`)) {
-                    candidateNames.add(collection.name);
-                }
-            }
-        } catch (error) {
-            console.warn(`[FORCE-REINDEX] Failed to list cloud collections while preparing cleanup: ${formatUnknownError(error)}`);
-        }
-
-        const droppedCollections: string[] = [];
-        const dropErrors: string[] = [];
-        for (const candidateName of candidateNames) {
-            try {
-                const result = await deleteCollectionWithVerification(vectorDb, candidateName);
-                if (result.attempts > 0) {
-                    droppedCollections.push(candidateName);
-                }
-            } catch (error) {
-                const message = formatUnknownError(error);
-                dropErrors.push(`${candidateName}: ${message}`);
-                console.warn(`[FORCE-REINDEX] Failed to drop collection '${candidateName}': ${message}`);
-            }
-        }
-
-        if (dropErrors.length > 0) {
-            throw new Error(`Force reindex cleanup failed before local state changes: ${dropErrors.join('; ')}`);
-        }
-
-        // Ensure local Merkle/snapshot state is cleared for this codebase.
-        try {
-            await this.context.clearIndex(codebasePath);
-        } catch (error) {
-            console.warn(`[FORCE-REINDEX] Failed to clear local sync snapshot for '${codebasePath}': ${formatUnknownError(error)}`);
-        }
-
-        return droppedCollections;
-    }
-
     private async dropZillizCollectionForCreate(collectionName: string): Promise<{ droppedCodebasePath?: string }> {
         const trimmedName = collectionName.trim();
         if (trimmedName.length === 0) {
@@ -6571,9 +7211,7 @@ Agent instructions:
 
         if (droppedCodebasePath) {
             this.snapshotManager.removeCodebaseCompletely(droppedCodebasePath);
-            if (typeof (this.snapshotManager as any).markCodebaseCleared === 'function') {
-                this.snapshotManager.markCodebaseCleared(droppedCodebasePath, trimmedName);
-            }
+            this.snapshotManager.markCodebaseCleared(droppedCodebasePath, trimmedName);
             this.snapshotManager.saveCodebaseSnapshot();
             try {
                 await this.unwatchCodebase(droppedCodebasePath);
@@ -6585,12 +7223,12 @@ Agent instructions:
         return { droppedCodebasePath };
     }
 
-    public async handleIndexCodebase(args: any) {
+    public async handleIndexCodebase(args: IndexCodebaseArgs) {
         const { path: codebasePath, force, customExtensions, ignorePatterns, zillizDropCollection } = args;
         const forceReindex = force || false;
         const manageAction: ManageIndexAction = forceReindex ? 'reindex' : 'create';
         const internalPreflight: ReindexPreflightResult | undefined = forceReindex
-            ? (args?.__reindexPreflight as ReindexPreflightResult | undefined)
+            ? args.__reindexPreflight
             : undefined;
         const preflightOptions = internalPreflight
             ? {
@@ -6598,8 +7236,12 @@ Agent instructions:
                 preflight: internalPreflight
             }
             : {};
-        const customFileExtensions = customExtensions || [];
-        const customIgnorePatterns = ignorePatterns || [];
+        const customFileExtensions = Array.isArray(customExtensions)
+            ? customExtensions.filter((extension): extension is string => typeof extension === 'string')
+            : [];
+        const customIgnorePatterns = Array.isArray(ignorePatterns)
+            ? ignorePatterns.filter((pattern): pattern is string => typeof pattern === 'string')
+            : [];
         const requestedDropCollection = typeof zillizDropCollection === 'string' ? zillizDropCollection.trim() : undefined;
         let dropSummaryLine = '';
 
@@ -6667,16 +7309,45 @@ Agent instructions:
                     {
                         ...preflightOptions,
                         reason: "requires_reindex",
-                        hints: {
-                            reindex: this.buildReindexHint(absolutePath),
-                            status: this.buildStatusHint(absolutePath),
-                        }
+                        hints: this.buildManageRequiresReindexHints(absolutePath)
                     }
                 );
             }
 
             // Check if already indexed (unless force is true)
             const isIndexedInSnapshot = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
+            if (!forceReindex && !isIndexedInSnapshot) {
+                const proof = await this.validateCompletionProof(absolutePath);
+                if (this.recoverIndexedSnapshotFromCompletionProof(absolutePath, proof)) {
+                    if (proof.outcome === 'fingerprint_mismatch') {
+                        return this.manageResponse(
+                            manageAction,
+                            absolutePath,
+                            "requires_reindex",
+                            this.buildReindexInstruction(
+                                absolutePath,
+                                'Recovered local readiness from completion marker proof, but the current runtime fingerprint does not match the existing index.'
+                            ),
+                            {
+                                ...preflightOptions,
+                                reason: "requires_reindex",
+                                hints: this.buildManageRequiresReindexHints(absolutePath)
+                            }
+                        );
+                    }
+
+                    return this.manageResponse(
+                        manageAction,
+                        absolutePath,
+                        "blocked",
+                        `Codebase '${absolutePath}' is already indexed. Local readiness was recovered from completion marker proof.
+
+To update incrementally with recent changes: call manage_index with {"action":"sync","path":"${absolutePath}"}.
+To force rebuild from scratch: call manage_index with {"action":"create","path":"${absolutePath}","force":true}.`,
+                        preflightOptions
+                    );
+                }
+            }
             if (!forceReindex && isIndexedInSnapshot) {
                 const proof = await this.validateCompletionProof(absolutePath);
                 if (proof.outcome === 'valid') {
@@ -6691,26 +7362,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     );
                 }
                 console.warn(`[INDEX-VALIDATION] Snapshot reports indexed for '${absolutePath}', but completion proof is '${proof.reason || proof.outcome}'. Treating as not_indexed and continuing create flow.`);
-            }
-
-            // If force reindex, always clear every previous collection for this codebase hash.
-            if (forceReindex) {
-                console.log(`[FORCE-REINDEX] 🔄 Preparing force cleanup for '${absolutePath}'`);
-                const droppedCollections = await this.clearAllCollectionsForForceReindex(absolutePath);
-                this.snapshotManager.removeCodebaseCompletely(absolutePath);
-                this.snapshotManager.saveCodebaseSnapshot();
-                try {
-                    await this.unwatchCodebase(absolutePath);
-                } catch {
-                    // Best-effort watcher cleanup after successful force cleanup.
-                }
-
-                if (droppedCollections.length > 0) {
-                    const sortedDroppedCollections = [...droppedCollections].sort();
-                    dropSummaryLine += `\nForce reindex cleanup dropped ${sortedDroppedCollections.length} prior collection(s) for this codebase hash: ${sortedDroppedCollections.join(', ')}.`;
-                } else {
-                    dropSummaryLine += `\nForce reindex cleanup found no prior collections for this codebase hash.`;
-                }
             }
 
             if (requestedDropCollection) {
@@ -6764,6 +7415,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     : `\nDropped Zilliz collection '${requestedDropCollection}'.`;
             }
 
+            const stagedCollectionName = this.context.resolveStagedCollectionName(absolutePath, `run_${crypto.randomUUID()}`);
+
             // CRITICAL: Pre-index collection creation validation
             try {
                 console.log(`[INDEX-VALIDATION] 🔍 Validating collection creation capability`);
@@ -6776,7 +7429,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
 
                 console.log(`[INDEX-VALIDATION] ✅  Collection creation validation completed`);
-            } catch (validationError: any) {
+            } catch (validationError: unknown) {
                 // Handle other collection creation errors
                 console.error(`[INDEX-VALIDATION] ❌ Collection creation validation failed:`, validationError);
                 if (isCollectionLimitError(validationError)) {
@@ -6847,15 +7500,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             }
 
             // Check current status and log if retrying after failure
-            const currentStatus = this.snapshotManager.getCodebaseStatus(absolutePath);
-            if (currentStatus === 'indexfailed') {
-                const failedInfo = this.snapshotManager.getCodebaseInfo(absolutePath) as any;
-                console.log(`[BACKGROUND-INDEX] Retrying indexing for previously failed codebase. Previous error: ${failedInfo?.errorMessage || 'Unknown error'}`);
-            }
-
-            // Invariant: completion marker must be absent during indexing.
-            if (typeof (this.context as any).clearIndexCompletionMarker === 'function') {
-                await (this.context as any).clearIndexCompletionMarker(absolutePath);
+            const failedInfo = this.snapshotManager.getCodebaseInfo(absolutePath);
+            if (failedInfo?.status === 'indexfailed') {
+                console.log(`[BACKGROUND-INDEX] Retrying indexing for previously failed codebase. Previous error: ${failedInfo.errorMessage || 'Unknown error'}`);
             }
 
             // Set to indexing status and save snapshot immediately
@@ -6867,7 +7514,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             await this.touchWatchedCodebase(absolutePath);
 
             // Start background indexing - now safe to proceed
-            this.startBackgroundIndexing(absolutePath, forceReindex);
+            this.startBackgroundIndexing(absolutePath, forceReindex, stagedCollectionName);
 
             const pathInfo = codebasePath !== absolutePath
                 ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
@@ -6889,7 +7536,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 preflightOptions
             );
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Enhanced error handling to prevent MCP service crash
             console.error('Error in handleIndexCodebase:', error);
             const vectorBackendDiagnostic = classifyVectorBackendError(error);
@@ -6914,24 +7561,26 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         }
     }
 
-    private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean) {
+    private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean, writeCollectionName?: string) {
         const absolutePath = codebasePath;
         let lastSaveTime = 0; // Track last save timestamp
 
         try {
             console.log(`[BACKGROUND-INDEX] Starting background indexing for: ${absolutePath}`);
 
-            // Note: If force reindex, collection was already cleared during validation phase
+            const targetCollectionName = typeof writeCollectionName === 'string' && writeCollectionName.trim().length > 0
+                ? writeCollectionName
+                : this.context.resolveCollectionName(absolutePath);
+            this.context.setWriteCollectionOverride(absolutePath, targetCollectionName);
+
             if (forceReindex) {
-                console.log(`[BACKGROUND-INDEX] ℹ️  Force reindex mode - collection was already cleared during validation`);
+                console.log(`[BACKGROUND-INDEX] ℹ️  Force reindex mode - building a staged generation before retiring the previous proven collection.`);
             }
 
             const contextForThisTask = this.context;
 
-            if (typeof (this.context as any).loadIndexProfileForCodebase === 'function') {
-                const profileConfig = (this.context as any).loadIndexProfileForCodebase(absolutePath);
-                console.log(`[BACKGROUND-INDEX] Using index profile '${profileConfig.profile}'${profileConfig.configPath ? ` from ${profileConfig.configPath}` : ' (default)'}`);
-            }
+            const profileConfig = this.context.loadIndexProfileForCodebase(absolutePath);
+            console.log(`[BACKGROUND-INDEX] Using index profile '${profileConfig.profile}'${profileConfig.configPath ? ` from ${profileConfig.configPath}` : ' (default)'}`);
 
             // Load supported root ignore files before synchronizer and index setup.
             await this.context.loadResolvedIgnorePatterns(absolutePath);
@@ -6939,17 +7588,15 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             // Initialize file synchronizer with proper ignore patterns (including project-specific patterns)
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
             const ignorePatterns = this.context.getActiveIgnorePatterns(absolutePath) || [];
-            const supportedExtensions = typeof (this.context as any).getIndexedExtensionsForCodebase === 'function'
-                ? (this.context as any).getIndexedExtensionsForCodebase(absolutePath)
-                : this.context.getIndexedExtensions();
+            const supportedExtensions = this.context.getIndexedExtensionsForCodebase(absolutePath);
             console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(', ')}`);
             const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns, supportedExtensions);
             await synchronizer.initialize();
 
             // Store synchronizer in the context (let context manage collection names)
             await this.context.ensureCollectionPrepared(absolutePath);
-            const collectionName = this.context.resolveCollectionName(absolutePath);
-            this.context.registerSynchronizer(collectionName, synchronizer);
+            const synchronizerKey = this.context.resolveCollectionName(absolutePath);
+            this.context.registerSynchronizer(synchronizerKey, synchronizer);
 
             console.log(`[BACKGROUND-INDEX] Starting indexing for: ${absolutePath}`);
 
@@ -6975,28 +7622,31 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             });
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
 
-            if (typeof (contextForThisTask as any).writeIndexCompletionMarker === 'function') {
-                const runId = `run_${crypto.randomUUID()}`;
-                const canonicalMarkerPath = this.canonicalizeCodebasePath(absolutePath);
-                await (contextForThisTask as any).writeIndexCompletionMarker(absolutePath, {
-                    kind: 'satori_index_completion_v1',
-                    codebasePath: canonicalMarkerPath,
-                    fingerprint: this.runtimeFingerprint,
-                    indexedFiles: stats.indexedFiles,
-                    totalChunks: stats.totalChunks,
-                    completedAt: new Date().toISOString(),
-                    runId,
-                });
+            const runId = `run_${crypto.randomUUID()}`;
+            const canonicalMarkerPath = this.canonicalizeCodebasePath(absolutePath);
+            await contextForThisTask.writeIndexCompletionMarker(absolutePath, {
+                kind: 'satori_index_completion_v1',
+                codebasePath: canonicalMarkerPath,
+                fingerprint: this.runtimeFingerprint,
+                indexedFiles: stats.indexedFiles,
+                totalChunks: stats.totalChunks,
+                completedAt: new Date().toISOString(),
+                runId,
+            });
+
+            try {
+                const droppedCollections = await contextForThisTask.pruneIndexedCollectionFamily(absolutePath, targetCollectionName);
+                if (Array.isArray(droppedCollections) && droppedCollections.length > 0) {
+                    console.log(`[BACKGROUND-INDEX] 🧹 Retired ${droppedCollections.length} superseded collection(s): ${droppedCollections.join(', ')}`);
+                }
+            } catch (pruneError) {
+                console.warn(`[BACKGROUND-INDEX] Failed to retire superseded generations for '${absolutePath}': ${formatUnknownError(pruneError)}`);
             }
 
             // Set codebase to indexed status with complete statistics
             this.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.runtimeFingerprint, 'verified');
-            if (typeof this.context.getTrackedRelativePaths === 'function') {
-                const trackedPaths = this.context.getTrackedRelativePaths(absolutePath);
-                if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
-                    this.snapshotManager.setCodebaseIndexManifest(absolutePath, trackedPaths);
-                }
-            }
+            const trackedPaths = this.context.getTrackedRelativePaths(absolutePath);
+            this.snapshotManager.setCodebaseIndexManifest(absolutePath, trackedPaths);
             this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks };
             await this.syncManager.recordCurrentIgnoreControlSignature(absolutePath);
 
@@ -7012,7 +7662,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             console.log(`[BACKGROUND-INDEX] ${message}`);
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error(`[BACKGROUND-INDEX] Error during indexing for ${absolutePath}:`, error);
 
             // Get the last attempted progress
@@ -7024,12 +7674,10 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 errorMessage = await this.buildCollectionLimitMessage(absolutePath);
             }
 
-            if (typeof (this.context as any).clearIndexCompletionMarker === 'function') {
-                try {
-                    await (this.context as any).clearIndexCompletionMarker(absolutePath);
-                } catch (clearError) {
-                    console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
-                }
+            try {
+                await this.context.clearIndexCompletionMarker(absolutePath);
+            } catch (clearError) {
+                console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
             }
 
             this.snapshotManager.setCodebaseIndexFailed(absolutePath, errorMessage, lastProgress);
@@ -7037,10 +7685,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             // Log error but don't crash MCP service - indexing errors are handled gracefully
             console.error(`[BACKGROUND-INDEX] Indexing failed for ${absolutePath}: ${errorMessage}`);
+        } finally {
+            this.context.setWriteCollectionOverride(absolutePath, null);
         }
     }
 
-    public async handleReindexCodebase(args: any) {
+    public async handleReindexCodebase(args: ReindexCodebaseArgs) {
         const {
             path: codebasePath,
             customExtensions,
@@ -7092,20 +7742,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         });
     }
 
-    public async handleSearchCode(args: any) {
-        const scope = (args?.scope || 'runtime') as SearchScope;
-        const resultMode = (args?.resultMode || 'grouped') as SearchResultMode;
-        const groupBy = (args?.groupBy || 'symbol') as SearchGroupBy;
-        const rankingMode = (args?.rankingMode || 'auto_changed_first') as SearchRankingMode;
+    public async handleSearchCode(args: ToolArgs) {
+        const scope = (typeof args.scope === 'string' ? args.scope : 'runtime') as SearchScope;
+        const resultMode = (typeof args.resultMode === 'string' ? args.resultMode : 'grouped') as SearchResultMode;
+        const groupBy = (typeof args.groupBy === 'string' ? args.groupBy : 'symbol') as SearchGroupBy;
+        const rankingMode = (typeof args.rankingMode === 'string' ? args.rankingMode : 'auto_changed_first') as SearchRankingMode;
         const debug = args?.debug === true;
+        const rawLimit = typeof args.limit === 'number' ? args.limit : Number(args.limit);
         const input: SearchRequestInput = {
-            path: args?.path,
-            query: args?.query,
+            path: typeof args.path === 'string' ? args.path : '',
+            query: typeof args.query === 'string' ? args.query : '',
             scope,
             resultMode,
             groupBy,
             rankingMode,
-            limit: Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 10,
+            limit: Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : 10,
             debug,
         };
 
@@ -7183,100 +7834,97 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
 
             trackCodebasePath(absolutePath);
 
-            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
-            this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
-            if (trackedRootState.state === 'requires_reindex') {
-                const payload = this.buildRequiresReindexPayload(trackedRootState.codebasePath, trackedRootState.message, {
-                    path: absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    resultMode: input.resultMode,
-                    limit: input.limit
-                }) as unknown as SearchResponseEnvelope;
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    meta: { searchDiagnostics }
-                };
-            }
+            const buildBlockedReadinessPayload = (trackedRootState: Awaited<ReturnType<ToolHandlers['prepareTrackedRootForRead']>>): SearchResponseEnvelope | null => {
+                if (trackedRootState.state === 'ready') {
+                    return null;
+                }
 
-            if (trackedRootState.state === 'indexing') {
-                const payload = this.buildNotReadySearchPayload(trackedRootState.codebasePath, {
-                    path: absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    resultMode: input.resultMode,
-                    limit: input.limit
-                });
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    meta: { searchDiagnostics }
-                };
-            }
+                if (trackedRootState.state === 'requires_reindex') {
+                    return this.buildRequiresReindexPayload(trackedRootState.codebasePath, trackedRootState.message, {
+                        path: absolutePath,
+                        query: input.query,
+                        scope: input.scope,
+                        groupBy: input.groupBy,
+                        resultMode: input.resultMode,
+                        limit: input.limit
+                    }) as unknown as SearchResponseEnvelope;
+                }
 
-            if (trackedRootState.state === 'not_indexed') {
-                const envelope: SearchResponseEnvelope = {
-                    status: "not_indexed",
-                    reason: "not_indexed",
-                    path: absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    limit: input.limit,
-                    resultMode: input.resultMode,
-                    freshnessDecision: null,
-                    message: `Codebase '${absolutePath}' (or any parent) is not indexed.`,
-                    recommendedNextAction: this.buildManageIndexRecommendedAction(
-                        "create",
-                        absolutePath,
-                        "Create an index for this codebase before retrying search."
-                    ),
-                    hints: {
-                        create: {
-                            tool: "manage_index",
-                            args: { action: "create", path: absolutePath }
-                        }
-                    },
-                    results: []
-                };
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
-                    meta: { searchDiagnostics }
-                };
-            }
+                if (trackedRootState.state === 'indexing') {
+                    return this.buildNotReadySearchPayload(trackedRootState.codebasePath, {
+                        path: absolutePath,
+                        query: input.query,
+                        scope: input.scope,
+                        groupBy: input.groupBy,
+                        resultMode: input.resultMode,
+                        limit: input.limit
+                    });
+                }
 
-            if (trackedRootState.state === 'stale_local') {
-                const envelope: SearchResponseEnvelope = {
-                    status: "not_indexed",
-                    reason: "not_indexed",
-                    path: absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    limit: input.limit,
-                    resultMode: input.resultMode,
-                    freshnessDecision: null,
-                    message: this.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason),
-                    recommendedNextAction: this.buildManageIndexRecommendedAction(
-                        "create",
-                        trackedRootState.codebasePath,
-                        "Create a fresh index because local readiness metadata is stale."
-                    ),
-                    hints: {
-                        create: this.buildCreateHint(trackedRootState.codebasePath),
-                        staleLocal: this.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason)
-                    },
-                    results: []
-                };
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
-                    meta: { searchDiagnostics }
-                };
-            }
+                if (trackedRootState.state === 'index_failed') {
+                    return this.buildIndexFailedSearchPayload(trackedRootState.codebasePath, {
+                        path: absolutePath,
+                        query: input.query,
+                        scope: input.scope,
+                        groupBy: input.groupBy,
+                        resultMode: input.resultMode,
+                        limit: input.limit
+                    }, trackedRootState.info);
+                }
 
-            if (trackedRootState.state === 'missing_collection') {
-                const payload = this.withProofDebugHint(this.buildMissingLocalCollectionSearchPayload(
+                if (trackedRootState.state === 'not_indexed') {
+                    return {
+                        status: "not_indexed",
+                        reason: "not_indexed",
+                        path: absolutePath,
+                        query: input.query,
+                        scope: input.scope,
+                        groupBy: input.groupBy,
+                        limit: input.limit,
+                        resultMode: input.resultMode,
+                        freshnessDecision: null,
+                        message: `Codebase '${absolutePath}' (or any parent) is not indexed.`,
+                        recommendedNextAction: this.buildManageIndexRecommendedAction(
+                            "create",
+                            absolutePath,
+                            "Create an index for this codebase before retrying search."
+                        ),
+                        hints: {
+                            create: {
+                                tool: "manage_index",
+                                args: { action: "create", path: absolutePath }
+                            }
+                        },
+                        results: []
+                    };
+                }
+
+                if (trackedRootState.state === 'stale_local') {
+                    return {
+                        status: "not_indexed",
+                        reason: "not_indexed",
+                        path: absolutePath,
+                        query: input.query,
+                        scope: input.scope,
+                        groupBy: input.groupBy,
+                        limit: input.limit,
+                        resultMode: input.resultMode,
+                        freshnessDecision: null,
+                        message: this.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason),
+                        recommendedNextAction: this.buildManageIndexRecommendedAction(
+                            "create",
+                            trackedRootState.codebasePath,
+                            "Create a fresh index because local readiness metadata is stale."
+                        ),
+                        hints: {
+                            create: this.buildCreateHint(trackedRootState.codebasePath),
+                            staleLocal: this.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason)
+                        },
+                        results: []
+                    };
+                }
+
+                return this.withProofDebugHint(this.buildMissingLocalCollectionSearchPayload(
                     trackedRootState.codebasePath,
                     {
                         path: absolutePath,
@@ -7288,16 +7936,25 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     },
                     trackedRootState.collectionName
                 ), trackedRootState.proofDebugHint);
+            };
+
+            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
+            this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
+            const blockedReadinessPayload = buildBlockedReadinessPayload(trackedRootState);
+            if (blockedReadinessPayload) {
                 return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
+                    content: [{ type: "text", text: this.stringifyToolJson(blockedReadinessPayload) }],
                     meta: { searchDiagnostics }
                 };
             }
+            if (trackedRootState.state !== 'ready') {
+                throw new Error(`Unexpected non-ready tracked root state after readiness gating: ${trackedRootState.state}`);
+            }
 
-            const searchableRoot = trackedRootState.root;
+            let searchableRoot = trackedRootState.root;
             let effectiveRoot = searchableRoot.path || absolutePath;
             proofDebugHint = trackedRootState.proofDebugHint;
-            const partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot.info)
+            let partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot.info)
                 ? [
                     SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,
                     SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,
@@ -7328,6 +7985,30 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     meta: { searchDiagnostics }
                 };
             }
+            const postFreshnessTrackedRootState = await this.measureSearchPhase(
+                phaseTimings,
+                'prepareRead',
+                () => this.prepareTrackedRootForRead(absolutePath)
+            );
+            const postFreshnessBlockedPayload = buildBlockedReadinessPayload(postFreshnessTrackedRootState);
+            if (postFreshnessBlockedPayload) {
+                return {
+                    content: [{ type: "text", text: this.stringifyToolJson(postFreshnessBlockedPayload) }],
+                    meta: { searchDiagnostics }
+                };
+            }
+            if (postFreshnessTrackedRootState.state !== 'ready') {
+                throw new Error(`Unexpected non-ready tracked root state after freshness gating: ${postFreshnessTrackedRootState.state}`);
+            }
+            searchableRoot = postFreshnessTrackedRootState.root;
+            effectiveRoot = searchableRoot.path || absolutePath;
+            proofDebugHint = postFreshnessTrackedRootState.proofDebugHint;
+            partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot.info)
+                ? [
+                    SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,
+                    SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,
+                ]
+                : [];
             const encoderEngine = this.context.getEmbeddingEngine();
             const rootTag = `[SEARCH][root=${effectiveRoot}]`;
             console.log(`${rootTag} Searching (requestedPath='${absolutePath}')`);
@@ -7651,7 +8332,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     });
                 })));
 
-                const successfulPasses: Array<{ id: string; results: any[] }> = [];
+                const successfulPasses: Array<{ id: string; results: SearchResultLike[] }> = [];
                 let vectorBackendDiagnostic: VectorBackendDiagnostic | null = null;
                 for (let idx = 0; idx < passSettled.length; idx++) {
                     const passResult = passSettled[idx];
@@ -7713,7 +8394,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     removedByMust: 0,
                     removedByExclude: 0,
                 };
-                const addPass = (results: any[], passId: string, passWeight = 1) => {
+                const addPass = (results: SearchResultLike[], passId: string, passWeight = 1) => {
                     for (let i = 0; i < results.length; i++) {
                         const result = results[i];
                         if (!result || typeof result.relativePath !== 'string') continue;
@@ -7928,7 +8609,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     const rerankRanks = new Map<number, number>();
                     try {
                         for (let idx = 0; idx < rerankResults.length; idx++) {
-                            const originalIndex = (rerankResults as any)[idx]?.index;
+                            const originalIndex = rerankResults[idx]?.index;
                             if (Number.isInteger(originalIndex) && originalIndex >= 0 && originalIndex < rerankCount && !rerankRanks.has(originalIndex)) {
                                 rerankRanks.set(originalIndex, idx + 1);
                             }
@@ -8238,7 +8919,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 const representative = group.chunks[0];
                 const chunkSpanStart = Math.min(...group.chunks.map((c) => c.result.startLine || 0));
                 const chunkSpanEnd = Math.max(...group.chunks.map((c) => c.result.endLine || 0));
-                const chunkSpan: SearchSpan = { startLine: chunkSpanStart, endLine: chunkSpanEnd };
+                const previewSpan: SearchSpan = { startLine: chunkSpanStart, endLine: chunkSpanEnd };
 
                 let indexedAtMax: string | undefined;
                 let indexedAtMaxMs = Number.NEGATIVE_INFINITY;
@@ -8264,7 +8945,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
                 const groupId = ownerSymbolInstanceId
                     || ownerSymbolKey
-                    || this.buildFallbackGroupId(representative.result.relativePath, chunkSpan);
+                    || this.buildFallbackGroupId(representative.result.relativePath, previewSpan);
                 const rawRegistrySymbol = ownerSymbolInstanceId
                     ? searchSymbolRegistry?.symbolsByInstanceId.get(ownerSymbolInstanceId)
                     : undefined;
@@ -8278,12 +8959,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     spanWarningCodes.add(warning);
                 }
                 const registrySymbol = registrySymbolRepair?.symbol;
-                const span: SearchSpan = registrySymbol
+                const symbolSpan: SearchSpan | undefined = registrySymbol
                     ? {
                         startLine: registrySymbol.span.startLine,
                         endLine: registrySymbol.span.endLine,
                     }
-                    : chunkSpan;
+                    : undefined;
+                const span: SearchSpan = symbolSpan
+                    ? {
+                        startLine: symbolSpan.startLine,
+                        endLine: symbolSpan.endLine,
+                    }
+                    : {
+                        startLine: previewSpan.startLine,
+                        endLine: previewSpan.endLine,
+                    };
                 const repSymbolLabel = this.buildDisplaySymbolLabel({
                     symbolLabel: typeof representative.result.symbolLabel === 'string' ? representative.result.symbolLabel : undefined,
                     symbolKind,
@@ -8302,19 +8992,21 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     registryUnavailableReason: searchSymbolRegistryUnavailableReason,
                     navigationState: callGraphNavigationState,
                 });
-                const navigationFallback = this.buildNavigationFallback(
-                    effectiveRoot,
-                    representative.result.relativePath,
-                    span,
-                    callGraphHint,
-                    sidecarReadyForOutline
-                );
                 const nextActions = this.buildSearchNextActions(
                     effectiveRoot,
                     representative.result.relativePath,
                     span,
                     callGraphHint,
-                    sidecarReadyForOutline
+                    sidecarReadyForOutline,
+                    registrySymbol
+                );
+                const navigationFallback = this.buildNavigationFallback(
+                    effectiveRoot,
+                    representative.result.relativePath,
+                    previewSpan,
+                    callGraphHint,
+                    sidecarReadyForOutline,
+                    this.shouldAllowPreviewReadFallback(callGraphHint, Boolean(nextActions?.openSymbol))
                 );
                 const semanticMatch: SearchCapabilityConfidence = representative.backendScoreKindsSeen.includes('dense_similarity')
                     ? (queryPlan.intent === 'semantic' || queryPlan.intent === 'mixed' ? 'high' : 'medium')
@@ -8326,6 +9018,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     groupId,
                     file: representative.result.relativePath,
                     span,
+                    previewSpan,
+                    ...(symbolSpan ? { symbolSpan } : {}),
                     language: representative.result.language || 'unknown',
                     ...(ownerSymbolInstanceId ? { symbolId: ownerSymbolInstanceId } : {}),
                     symbolLabel: repSymbolLabel,
@@ -8554,6 +9248,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 };
             }
 
+            if (trackedRootState.state === 'index_failed') {
+                const payload = this.buildIndexFailedFileOutlinePayload(
+                    trackedRootState.codebasePath,
+                    absoluteRoot,
+                    normalizedFile,
+                    trackedRootState.info
+                );
+                return {
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
+                };
+            }
+
             if (trackedRootState.state === 'not_indexed') {
                 const payload = this.buildNotIndexedFileOutlinePayload(normalizedFile, absoluteRoot);
                 return {
@@ -8772,11 +9478,11 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             return {
                 content: [{ type: "text", text: this.stringifyToolJson(payload) }]
             };
-        } catch (error: any) {
+        } catch (error: unknown) {
             const payload = this.buildInvalidFileOutlineRequestPayload(
                 typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
                 typeof args?.file === 'string' ? this.normalizeRelativeFilePath(args.file) : '',
-                `Unexpected file_outline failure: ${error?.message || error}`,
+                `Unexpected file_outline failure: ${formatUnknownError(error)}`,
                 'not_ready'
             );
             return {
@@ -8786,7 +9492,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         }
     }
 
-    public async handleCallGraph(args: any) {
+    public async handleCallGraph(args: ToolArgs) {
         const rawDirection = args?.direction;
         const direction: CallGraphDirection = rawDirection === 'callers' || rawDirection === 'callees' || rawDirection === 'both'
             ? rawDirection
@@ -8825,7 +9531,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         }
 
         try {
-            const absolutePath = ensureAbsolutePath(args?.path);
+            const absolutePath = ensureAbsolutePath(typeof args.path === 'string' ? args.path : '');
             if (!fs.existsSync(absolutePath)) {
                 const payload = this.buildInvalidCallGraphRequestPayload(
                     {
@@ -8896,6 +9602,22 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     depth,
                     limit
                 });
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.stringifyToolJson(payload)
+                    }]
+                };
+            }
+
+            if (trackedRootState.state === 'index_failed') {
+                const payload = this.buildIndexFailedCallGraphPayload(trackedRootState.codebasePath, {
+                    path: absolutePath,
+                    symbolRef,
+                    direction,
+                    depth,
+                    limit
+                }, trackedRootState.info);
                 return {
                     content: [{
                         type: "text",
@@ -9236,7 +9958,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     text: this.stringifyToolJson(payload)
                 }]
             };
-        } catch (error: any) {
+        } catch (error: unknown) {
             const payload = this.buildInvalidCallGraphRequestPayload(
                 {
                     path: typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
@@ -9245,7 +9967,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     depth,
                     limit,
                 },
-                `Unexpected call_graph failure: ${error?.message || error}`,
+                `Unexpected call_graph failure: ${formatUnknownError(error)}`,
                 'not_ready'
             );
             return {
@@ -9258,8 +9980,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         }
     }
 
-    public async handleClearIndex(args: any) {
-        const { path: codebasePath } = args;
+    public async handleClearIndex(args: ToolArgs) {
+        const codebasePath = typeof args.path === 'string' ? args.path : '';
         const requestedPath = ensureAbsolutePath(codebasePath);
 
         if (this.snapshotManager.getAllCodebases().length === 0) {
@@ -9340,7 +10062,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             try {
                 await this.context.clearIndex(absolutePath);
                 console.log(`[CLEAR] Successfully cleared index for: ${absolutePath}`);
-            } catch (error: any) {
+            } catch (error: unknown) {
                 if (error instanceof RemoteCollectionDeletePendingError) {
                     const errorMsg = `Remote deletion is still pending for ${absolutePath}. Local index state was not changed. Details: ${formatUnknownError(error)}`;
                     console.error(`[CLEAR] ${errorMsg}`);
@@ -9352,16 +10074,14 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         }
                     });
                 }
-                const errorMsg = `Failed to clear ${absolutePath}: ${error.message}`;
+                const errorMsg = `Failed to clear ${absolutePath}: ${formatUnknownError(error)}`;
                 console.error(`[CLEAR] ${errorMsg}`);
                 return this.manageResponse("clear", absolutePath, "error", errorMsg);
             }
 
             // Completely remove the cleared codebase from snapshot
             this.snapshotManager.removeCodebaseCompletely(absolutePath);
-            if (typeof (this.snapshotManager as any).markCodebaseCleared === 'function') {
-                this.snapshotManager.markCodebaseCleared(absolutePath, this.context.resolveCollectionName(absolutePath));
-            }
+            this.snapshotManager.markCodebaseCleared(absolutePath, this.context.resolveCollectionName(absolutePath));
 
             // Reset indexing stats if this was the active codebase
             this.indexingStats = null;
@@ -9395,8 +10115,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
         }
     }
 
-    public async handleGetIndexingStatus(args: any) {
-        const { path: codebasePath } = args;
+    public async handleGetIndexingStatus(args: ToolArgs) {
+        const codebasePath = typeof args.path === 'string' ? args.path : '';
         const requestedPath = ensureAbsolutePath(codebasePath);
 
         try {
@@ -9417,136 +10137,129 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             this.refreshSnapshotStateFromDisk();
             await this.recoverStaleIndexingStateIfNeeded(absolutePath);
 
-            // Check indexing status using new status system
-            const statusGate = this.enforceFingerprintGate(absolutePath);
-            if (statusGate.blockedResponse) {
-                const statusMessage = this.buildReindexInstruction(absolutePath, statusGate.message);
-                const compatibilityStatus = this.buildCompatibilityStatusLines(absolutePath);
-                const pathInfo = codebasePath !== absolutePath
-                    ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
+            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
+            if (trackedRootState.state === 'requires_reindex') {
+                const statusMessage = this.buildReindexInstruction(trackedRootState.codebasePath, trackedRootState.message);
+                const compatibilityStatus = this.buildCompatibilityStatusLines(trackedRootState.codebasePath);
+                const pathInfo = codebasePath !== trackedRootState.codebasePath
+                    ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${trackedRootState.codebasePath}'`
                     : '';
-
                 return this.manageResponse(
                     "status",
-                    absolutePath,
+                    trackedRootState.codebasePath,
                     "requires_reindex",
                     statusMessage + compatibilityStatus + pathInfo,
                     {
                         reason: "requires_reindex",
-                        hints: {
-                            reindex: this.buildReindexHint(absolutePath),
-                            status: this.buildStatusHint(absolutePath),
-                        }
+                        hints: this.buildManageRequiresReindexHints(trackedRootState.codebasePath)
                     }
                 );
             }
 
-            const status = this.snapshotManager.getCodebaseStatus(absolutePath);
-            const info = this.snapshotManager.getCodebaseInfo(absolutePath);
-
             let statusMessage = '';
+            let envelopePath = absolutePath;
             let envelopeStatus: ManageIndexStatus = "ok";
             let envelopeReason: ManageIndexReason | undefined = undefined;
             let envelopeHints: Record<string, unknown> | undefined = undefined;
-            let completionProof: CompletionProofValidationResult | null = null;
-            if (status === 'indexed' || status === 'sync_completed') {
-                completionProof = await this.validateCompletionProof(absolutePath);
-            }
+            let proofDebugHint: CompletionProbeDebugHint | undefined;
 
-            if (completionProof?.outcome === 'fingerprint_mismatch') {
-                envelopeStatus = "requires_reindex";
-                envelopeReason = "requires_reindex";
-                envelopeHints = {
-                    reindex: this.buildReindexHint(absolutePath),
-                    status: this.buildStatusHint(absolutePath),
-                };
-                statusMessage = this.buildReindexInstruction(
-                    absolutePath,
-                    'Completion proof fingerprint does not match the current runtime fingerprint.'
-                );
-            } else if (completionProof?.outcome === 'stale_local') {
-                const staleReason = completionProof.reason || 'missing_marker_doc';
+            if (trackedRootState.state === 'not_indexed') {
                 envelopeStatus = "not_indexed";
                 envelopeReason = "not_indexed";
                 envelopeHints = {
                     create: this.buildCreateHint(absolutePath),
-                    staleLocal: this.buildStaleLocalHint(absolutePath, staleReason),
                 };
-                statusMessage = `❌ Codebase '${absolutePath}' is not indexed. Local snapshot claims it is ready, but completion proof is missing or invalid (reason: ${staleReason}). Call manage_index with {"action":"create","path":"${absolutePath}"} to repair it.`;
+                statusMessage = `❌ Codebase '${absolutePath}' is not indexed. Call manage_index with {"action":"create","path":"${absolutePath}"} to index it first.`;
+            } else if (trackedRootState.state === 'stale_local') {
+                envelopePath = trackedRootState.codebasePath;
+                envelopeStatus = "not_indexed";
+                envelopeReason = "not_indexed";
+                envelopeHints = {
+                    create: this.buildCreateHint(trackedRootState.codebasePath),
+                    staleLocal: this.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason),
+                };
+                statusMessage = `❌ ${this.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason)} Run manage_index with {"action":"create","path":"${trackedRootState.codebasePath}"} to repair it.`;
+            } else if (trackedRootState.state === 'missing_collection') {
+                envelopePath = trackedRootState.codebasePath;
+                envelopeStatus = "not_indexed";
+                envelopeReason = "not_indexed";
+                envelopeHints = {
+                    create: this.buildCreateHint(trackedRootState.codebasePath),
+                };
+                statusMessage = `❌ ${this.buildMissingLocalCollectionMessage(
+                    trackedRootState.codebasePath,
+                    absolutePath,
+                    trackedRootState.collectionName
+                )}`;
+                proofDebugHint = trackedRootState.proofDebugHint;
+            } else if (trackedRootState.state === 'indexing') {
+                envelopePath = trackedRootState.codebasePath;
+                envelopeStatus = "not_ready";
+                envelopeReason = "indexing";
+                envelopeHints = {
+                    status: this.buildStatusHint(trackedRootState.codebasePath),
+                    retryAfterMs: this.getManageRetryAfterMs(),
+                    indexing: this.buildIndexingMetadata(trackedRootState.codebasePath),
+                };
+                const info = this.snapshotManager.getCodebaseInfo(trackedRootState.codebasePath);
+                if (info?.status === 'indexing') {
+                    const progressPercentage = info.indexingPercentage || 0;
+                    statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is currently being indexed. Progress: ${progressPercentage.toFixed(1)}%`;
+                    if (progressPercentage < 10) {
+                        statusMessage += ' (Preparing and scanning files...)';
+                    } else if (progressPercentage < 100) {
+                        statusMessage += ' (Processing files and generating embeddings...)';
+                    }
+                    statusMessage += `\n🕐 Last updated: ${new Date(info.lastUpdated).toLocaleString()}`;
+                } else {
+                    statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is currently being indexed.`;
+                }
+            } else if (trackedRootState.state === 'index_failed') {
+                envelopePath = trackedRootState.codebasePath;
+                envelopeStatus = "error";
+                const failedInfo = trackedRootState.info;
+                if (typeof failedInfo.errorMessage === 'string') {
+                    statusMessage = `❌ Codebase '${trackedRootState.codebasePath}' indexing failed.`;
+                    statusMessage += `\n🚨 Error: ${failedInfo.errorMessage}`;
+                    if (typeof failedInfo.lastAttemptedPercentage === 'number' && Number.isFinite(failedInfo.lastAttemptedPercentage)) {
+                        statusMessage += `\n📊 Failed at: ${failedInfo.lastAttemptedPercentage.toFixed(1)}% progress`;
+                    }
+                    if (typeof failedInfo.lastUpdated === 'string') {
+                        statusMessage += `\n🕐 Failed at: ${new Date(failedInfo.lastUpdated).toLocaleString()}`;
+                    }
+                    statusMessage += `\n💡 Retry with manage_index action='create'.`;
+                } else {
+                    statusMessage = `❌ Codebase '${trackedRootState.codebasePath}' indexing failed. You can retry indexing.`;
+                }
             } else {
+                envelopePath = trackedRootState.root.path;
+                proofDebugHint = trackedRootState.proofDebugHint;
+                const status = this.snapshotManager.getCodebaseStatus(trackedRootState.root.path);
+                const info = trackedRootState.root.info || this.snapshotManager.getCodebaseInfo(trackedRootState.root.path);
                 switch (status) {
                     case 'indexed':
-                        if (info && 'indexedFiles' in info) {
-                            const indexedInfo = info as any;
-                            statusMessage = `✅ Codebase '${absolutePath}' is fully indexed and ready for search.`;
-                            statusMessage += `\n📊 Statistics: ${indexedInfo.indexedFiles} files, ${indexedInfo.totalChunks} chunks`;
-                            statusMessage += `\n📅 Status: ${indexedInfo.indexStatus}`;
-                            statusMessage += `\n🕐 Last updated: ${new Date(indexedInfo.lastUpdated).toLocaleString()}`;
-                        } else {
-                            statusMessage = `✅ Codebase '${absolutePath}' is fully indexed and ready for search.`;
-                        }
-                        break;
-
-                    case 'indexing':
-                        envelopeStatus = "not_ready";
-                        envelopeReason = "indexing";
-                        envelopeHints = {
-                            status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.getManageRetryAfterMs(),
-                            indexing: this.buildIndexingMetadata(absolutePath),
-                        };
-                        if (info && 'indexingPercentage' in info) {
-                            const indexingInfo = info as any;
-                            const progressPercentage = indexingInfo.indexingPercentage || 0;
-                            statusMessage = `🔄 Codebase '${absolutePath}' is currently being indexed. Progress: ${progressPercentage.toFixed(1)}%`;
-
-                            // Add more detailed status based on progress
-                            if (progressPercentage < 10) {
-                                statusMessage += ' (Preparing and scanning files...)';
-                            } else if (progressPercentage < 100) {
-                                statusMessage += ' (Processing files and generating embeddings...)';
+                        if (info.status === 'indexed') {
+                            statusMessage = `✅ Codebase '${trackedRootState.root.path}' is fully indexed and ready for search.`;
+                            statusMessage += `\n📊 Statistics: ${info.indexedFiles} files, ${info.totalChunks} chunks`;
+                            statusMessage += `\n📅 Status: ${info.indexStatus}`;
+                            if (typeof info.lastUpdated === 'string') {
+                                statusMessage += `\n🕐 Last updated: ${new Date(info.lastUpdated).toLocaleString()}`;
                             }
-                            statusMessage += `\n🕐 Last updated: ${new Date(indexingInfo.lastUpdated).toLocaleString()}`;
                         } else {
-                            statusMessage = `🔄 Codebase '${absolutePath}' is currently being indexed.`;
-                        }
-                        break;
-
-                    case 'indexfailed':
-                        envelopeStatus = "error";
-                        if (info && 'errorMessage' in info) {
-                            const failedInfo = info as any;
-                            statusMessage = `❌ Codebase '${absolutePath}' indexing failed.`;
-                            statusMessage += `\n🚨 Error: ${failedInfo.errorMessage}`;
-                            if (failedInfo.lastAttemptedPercentage !== undefined) {
-                                statusMessage += `\n📊 Failed at: ${failedInfo.lastAttemptedPercentage.toFixed(1)}% progress`;
-                            }
-                            statusMessage += `\n🕐 Failed at: ${new Date(failedInfo.lastUpdated).toLocaleString()}`;
-                            statusMessage += `\n💡 Retry with manage_index action='create'.`;
-                        } else {
-                            statusMessage = `❌ Codebase '${absolutePath}' indexing failed. You can retry indexing.`;
+                            statusMessage = `✅ Codebase '${trackedRootState.root.path}' is fully indexed and ready for search.`;
                         }
                         break;
 
                     case 'sync_completed':
-                        if (info && 'added' in info) {
-                            const syncInfo = info as any;
-                            statusMessage = `🔄 Codebase '${absolutePath}' sync completed.`;
-                            statusMessage += `\n📊 Changes: +${syncInfo.added} added, -${syncInfo.removed} removed, ~${syncInfo.modified} modified`;
-                            statusMessage += `\n🕐 Last synced: ${new Date(syncInfo.lastUpdated).toLocaleString()}`;
+                        if (info.status === 'sync_completed') {
+                            statusMessage = `🔄 Codebase '${trackedRootState.root.path}' sync completed.`;
+                            statusMessage += `\n📊 Changes: +${info.added} added, -${info.removed} removed, ~${info.modified} modified`;
+                            if (typeof info.lastUpdated === 'string') {
+                                statusMessage += `\n🕐 Last synced: ${new Date(info.lastUpdated).toLocaleString()}`;
+                            }
                         } else {
-                            statusMessage = `🔄 Codebase '${absolutePath}' sync completed.`;
+                            statusMessage = `🔄 Codebase '${trackedRootState.root.path}' sync completed.`;
                         }
-                        break;
-
-                    case 'requires_reindex':
-                        envelopeStatus = "requires_reindex";
-                        envelopeReason = "requires_reindex";
-                        envelopeHints = {
-                            reindex: this.buildReindexHint(absolutePath),
-                            status: this.buildStatusHint(absolutePath),
-                        };
-                        statusMessage = this.buildReindexInstruction(absolutePath, info && 'message' in info ? info.message : undefined);
                         break;
 
                     case 'not_found':
@@ -9554,27 +10267,27 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         envelopeStatus = "not_indexed";
                         envelopeReason = "not_indexed";
                         envelopeHints = {
-                            create: this.buildCreateHint(absolutePath)
+                            create: this.buildCreateHint(trackedRootState.root.path)
                         };
-                        statusMessage = `❌ Codebase '${absolutePath}' is not indexed. Call manage_index with {\"action\":\"create\",\"path\":\"${absolutePath}\"} to index it first.`;
+                        statusMessage = `❌ Codebase '${trackedRootState.root.path}' is not indexed. Call manage_index with {\"action\":\"create\",\"path\":\"${trackedRootState.root.path}\"} to index it first.`;
                         break;
                 }
             }
 
             const warnings: WarningCode[] = [];
-            if (completionProof?.outcome === 'probe_failed') {
+            if (proofDebugHint) {
                 statusMessage += `\n⚠️ Completion proof check is temporarily unavailable (probe_failed); keeping local status.`;
                 warnings.push(WARNING_CODES.IGNORE_POLICY_PROBE_FAILED);
             }
 
-            const pathInfo = codebasePath !== absolutePath
-                ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
+            const pathInfo = codebasePath !== envelopePath
+                ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${envelopePath}'`
                 : '';
-            const compatibilityStatus = this.buildCompatibilityStatusLines(absolutePath);
+            const compatibilityStatus = this.buildCompatibilityStatusLines(envelopePath);
 
             return this.manageResponse(
                 "status",
-                absolutePath,
+                envelopePath,
                 envelopeStatus,
                 statusMessage + compatibilityStatus + pathInfo,
                 {
@@ -9584,16 +10297,16 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
             );
 
-        } catch (error: any) {
-            return this.manageResponse("status", requestedPath, "error", `Error getting indexing status: ${error.message || error}`);
+        } catch (error: unknown) {
+            return this.manageResponse("status", requestedPath, "error", `Error getting indexing status: ${formatUnknownError(error)}`);
         }
     }
 
     /**
      * Handle sync request - manually trigger incremental sync for a codebase
      */
-    public async handleSyncCodebase(args: any) {
-        const { path: codebasePath } = args;
+    public async handleSyncCodebase(args: ToolArgs) {
+        const codebasePath = typeof args.path === 'string' ? args.path : '';
         const requestedPath = ensureAbsolutePath(codebasePath);
 
         try {
@@ -9770,17 +10483,17 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             await this.touchWatchedCodebase(absolutePath);
             return this.manageResponse("sync", absolutePath, "ok", resultMessage);
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error(`[SYNC] Error during sync:`, error);
             const vectorBackendDiagnostic = classifyVectorBackendError(error);
             if (vectorBackendDiagnostic) {
                 return this.manageVectorBackendResponse("sync", requestedPath, vectorBackendDiagnostic);
             }
-            return this.manageResponse("sync", requestedPath, "error", `Error syncing codebase: ${error.message || error}`);
+            return this.manageResponse("sync", requestedPath, "error", `Error syncing codebase: ${formatUnknownError(error)}`);
         }
     }
-    public async handleReadCode(args: any) {
-        const { path: filePath } = args;
+    public async handleReadCode(args: ToolArgs) {
+        const filePath = typeof args.path === 'string' ? args.path : '';
 
         try {
             const absolutePath = ensureAbsolutePath(filePath);
@@ -9809,9 +10522,9 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     text: content
                 }]
             };
-        } catch (error: any) {
+        } catch (error: unknown) {
             return {
-                content: [{ type: "text", text: `Error reading file: ${error.message}` }],
+                content: [{ type: "text", text: `Error reading file: ${formatUnknownError(error)}` }],
                 isError: true
             };
         }

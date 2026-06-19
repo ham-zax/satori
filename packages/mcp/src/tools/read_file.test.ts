@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,13 @@ import { ToolContext } from './types.js';
 import { ToolHandlers } from '../core/handlers.js';
 import { CapabilityResolver } from '../core/capabilities.js';
 import { IndexFingerprint } from '../config.js';
+import {
+    SYMBOL_REGISTRY_SCHEMA_VERSION,
+    buildSymbolRecordsForFile,
+    buildSymbolRegistry,
+    writeSymbolRegistrySidecar,
+} from '@zokizuan/satori-core';
+import type { SymbolRegistryManifest } from '@zokizuan/satori-core';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -36,12 +44,32 @@ function buildMarker(repoPath: string, fingerprint: IndexFingerprint = RUNTIME_F
     };
 }
 
+function sha256Content(content: string): string {
+    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
 function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> | T {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-read-file-test-'));
     const run = async () => await fn(dir);
     return run().finally(() => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
+}
+
+async function withTempStateRoot<T>(fn: () => Promise<T>): Promise<T> {
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-read-file-state-'));
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    try {
+        return await fn();
+    } finally {
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
 }
 
 function buildContext(readFileMaxLines: number, overrides: Partial<ToolContext> = {}): ToolContext {
@@ -467,6 +495,121 @@ test('read_file open_symbol treats symbolId as canonical symbolInstanceId on exa
     });
 });
 
+test('read_file open_symbol opens source-repaired Python multiline function spans', async () => {
+    await withTempStateRoot(async () => withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const relativePath = 'src/phases.py';
+        const filePath = path.join(repoPath, relativePath);
+        const source = [
+            'def previous_phase():',
+            '    return _rename_outputs(signal)',
+            '',
+            'def _attach_entry_telemetry(',
+            '    *,',
+            '    signal=None,',
+            '    entry_decision=None,',
+            '    pending=None,',
+            ') -> None:',
+            '    telemetry = build_entry_telemetry(',
+            '        signal=signal,',
+            '        entry_decision=entry_decision,',
+            '        pending=pending,',
+            '    )',
+            '    return telemetry',
+            '',
+            'def build_entry_telemetry(*, signal=None, entry_decision=None, pending=None):',
+            '    return (signal, entry_decision, pending)',
+            '',
+        ].join('\n');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, source, 'utf8');
+
+        const fileHash = sha256Content(source);
+        const staleHeaderContent = source.split('\n').slice(1, 9).join('\n');
+        const symbols = buildSymbolRecordsForFile({
+            relativePath,
+            language: 'python',
+            content: source,
+            fileHash,
+            extractorVersion: 'test-extractor-v1',
+            chunks: [{
+                content: staleHeaderContent,
+                metadata: {
+                    startLine: 2,
+                    endLine: 9,
+                    language: 'python',
+                    filePath: relativePath,
+                    symbolLabel: 'function _attach_entry_telemetry(',
+                },
+            }],
+        });
+        const attach = symbols.find((symbol) => symbol.name === '_attach_entry_telemetry');
+        assert.ok(attach);
+        assert.equal(attach.span.endLine, 9);
+        const manifest: SymbolRegistryManifest = {
+            schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+            normalizedRootPath: repoPath,
+            rootFingerprint: 'test-root-fingerprint',
+            indexPolicyHash: 'test-policy',
+            languageRouterVersion: 'test-router-v1',
+            extractorVersion: 'test-extractor-v1',
+            relationshipVersion: 'test-relationships-v1',
+            builtAt: '2026-01-01T00:00:00.000Z',
+            files: [{
+                path: relativePath,
+                hash: fileHash,
+                language: 'python',
+                symbolCount: symbols.length,
+            }],
+        };
+        await writeSymbolRegistrySidecar({
+            registry: buildSymbolRegistry({ manifest, symbols }),
+        });
+
+        const codebaseInfo = {
+            status: 'indexed',
+            lastUpdated: '2026-02-28T08:00:00.000Z',
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified',
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            getCodebaseInfo: (codebasePath: string) => codebasePath === repoPath ? codebaseInfo : undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined,
+        } as any;
+        const handlers = new ToolHandlers(
+            {
+                getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            } as any,
+            snapshotManager,
+            {} as any,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES
+        );
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: attach.symbolInstanceId,
+            },
+        }, 1000, {
+            snapshotManager,
+            syncManager: {},
+            toolHandlers: handlers as any,
+        });
+
+        assert.equal(response.isError, undefined);
+        assert.match(response.content[0].text, /telemetry = build_entry_telemetry\(/);
+        assert.match(response.content[0].text, /return telemetry/);
+        assert.doesNotMatch(response.content[0].text, /def previous_phase/);
+        assert.doesNotMatch(response.content[0].text, /return _rename_outputs\(signal\)/);
+        assert.doesNotMatch(response.content[0].text, /def build_entry_telemetry/);
+    }));
+});
+
 test('read_file open_symbol opens a Go symbol by symbolInstanceId through exact outline resolution', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
@@ -773,6 +916,68 @@ test('read_file open_symbol returns not_indexed when delegated exact navigation 
         assert.equal(payload.status, 'not_indexed');
         assert.equal(payload.reason, 'not_indexed');
         assert.match(payload.message, /vector collection is missing from the configured vector backend/i);
+        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
+    });
+});
+
+test('read_file open_symbol preserves failed-index diagnostics from delegated exact navigation', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{
+                    path: repoPath,
+                    info: { status: 'indexed' }
+                }]
+            } as any,
+            syncManager: {} as any,
+            toolHandlers: {
+                handleFileOutline: async () => ({
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'not_indexed',
+                            reason: 'index_failed',
+                            path: repoPath,
+                            codebaseRoot: repoPath,
+                            file: 'src/runtime.ts',
+                            outline: null,
+                            hasMore: false,
+                            message: 'Codebase has a failed indexing attempt.',
+                            indexingFailure: {
+                                errorMessage: 'Interrupted indexing detected without completion marker proof.',
+                                lastAttemptedPercentage: 0,
+                                lastUpdated: '2026-06-19T12:15:18.574Z'
+                            },
+                            hints: {
+                                create: {
+                                    tool: 'manage_index',
+                                    args: { action: 'create', path: repoPath }
+                                }
+                            }
+                        })
+                    }]
+                })
+            } as any
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'index_failed');
+        assert.equal(payload.indexingFailure?.errorMessage, 'Interrupted indexing detected without completion marker proof.');
+        assert.equal(payload.indexingFailure?.lastAttemptedPercentage, 0);
+        assert.equal(payload.indexingFailure?.lastUpdated, '2026-06-19T12:15:18.574Z');
         assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
     });
 });

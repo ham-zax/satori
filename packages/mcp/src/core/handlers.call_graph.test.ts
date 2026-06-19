@@ -697,6 +697,464 @@ test('handleCallGraph synthesizes source-backed Python callees when stored span 
     }));
 });
 
+test('handleCallGraph surfaces suppressed low-confidence Python candidates and recovers callees when validated spans have no usable sidecar edge', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const source = [
+            'def previous_phase():',
+            '    return _rename_outputs(signal)',
+            '',
+            'def _attach_entry_telemetry(',
+            '    *,',
+            '    signal=None,',
+            '    entry_decision=None,',
+            '    pending=None,',
+            ') -> None:',
+            '    telemetry = build_entry_telemetry(',
+            '        signal=signal,',
+            '        entry_decision=entry_decision,',
+            '        pending=pending,',
+            '    )',
+            '    return telemetry',
+            '',
+            'def build_entry_telemetry(*, signal=None, entry_decision=None, pending=None):',
+            '    return (signal, entry_decision, pending)',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'phases.py'), source);
+        const fileHash = sha256Content(source);
+        const attach = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: '_attach_entry_telemetry',
+            label: 'function _attach_entry_telemetry(',
+            startLine: 4,
+            endLine: 15,
+            fileHash,
+            language: 'python',
+        });
+        const build = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: 'build_entry_telemetry',
+            label: 'function build_entry_telemetry(',
+            startLine: 17,
+            endLine: 18,
+            fileHash,
+            language: 'python',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [attach, build],
+            records: [{
+                sourceKey: attach.symbolKey,
+                sourceInstanceId: attach.symbolInstanceId,
+                targetKey: build.symbolKey,
+                targetInstanceId: build.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/phases.py',
+                span: { startLine: 10, endLine: 10 },
+                confidence: 'low',
+            }],
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const calleesResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/phases.py',
+                symbolId: attach.symbolInstanceId,
+                symbolLabel: attach.label,
+            },
+            direction: 'callees',
+            depth: 1,
+            limit: 20
+        });
+
+        const calleesPayload = JSON.parse(calleesResponse.content[0]?.text || '{}');
+        assert.equal(calleesPayload.status, 'ok');
+        assert.equal(calleesPayload.edges.length, 1);
+        assert.equal(calleesPayload.edges[0].kind, 'dynamic');
+        assert.equal(calleesPayload.edges[0].srcSymbolId, attach.symbolInstanceId);
+        assert.equal(calleesPayload.edges[0].dstSymbolId, build.symbolInstanceId);
+        assert.equal(calleesPayload.edges[0].site.startLine, 10);
+        assert.ok(calleesPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
+        assert.ok(calleesPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLEES:1'));
+        assert.ok(calleesPayload.notes.some((note: any) => (
+            note.type === 'suppressed_edge'
+            && note.symbolId === build.symbolInstanceId
+            && note.symbolLabel === build.label
+            && note.confidence === 0.35
+            && note.startLine === 10
+            && note.detail.includes('src/phases.py:10')
+        )));
+        assert.ok(calleesPayload.notes.some((note: any) => note.type === 'dynamic_edge'));
+
+        const callersResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/phases.py',
+                symbolId: build.symbolInstanceId,
+                symbolLabel: build.label,
+            },
+            direction: 'callers',
+            depth: 1,
+            limit: 20
+        });
+
+        const callersPayload = JSON.parse(callersResponse.content[0]?.text || '{}');
+        assert.equal(callersPayload.status, 'ok');
+        assert.equal(callersPayload.edges.length, 1);
+        assert.equal(callersPayload.edges[0].kind, 'dynamic');
+        assert.equal(callersPayload.edges[0].srcSymbolId, attach.symbolInstanceId);
+        assert.equal(callersPayload.edges[0].dstSymbolId, build.symbolInstanceId);
+        assert.equal(callersPayload.edges[0].site.startLine, 10);
+        assert.ok(callersPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
+        assert.ok(callersPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLERS:1'));
+        assert.deepEqual(
+            callersPayload.nodes.map((node: any) => node.symbolId).sort(),
+            [attach.symbolInstanceId, build.symbolInstanceId].sort()
+        );
+        assert.equal(callersPayload.sidecar.nodeCount, callersPayload.nodes.length);
+        assert.ok(callersPayload.notes.some((note: any) => (
+            note.type === 'suppressed_edge'
+            && note.symbolId === attach.symbolInstanceId
+            && note.symbolLabel === attach.label
+            && note.confidence === 0.35
+            && note.startLine === 10
+            && note.detail.includes('src/phases.py:10')
+        )));
+        assert.ok(callersPayload.notes.some((note: any) => (
+            note.type === 'dynamic_edge'
+            && note.symbolId === attach.symbolInstanceId
+        )));
+    }));
+});
+
+test('handleCallGraph does not synthesize Python caller fallback when the suppressed record has no site line', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const source = [
+            'def previous_phase():',
+            '    return _rename_outputs(signal)',
+            '',
+            'def _attach_entry_telemetry(',
+            '    *,',
+            '    signal=None,',
+            '    entry_decision=None,',
+            '    pending=None,',
+            ') -> None:',
+            '    telemetry = build_entry_telemetry(',
+            '        signal=signal,',
+            '        entry_decision=entry_decision,',
+            '        pending=pending,',
+            '    )',
+            '    return telemetry',
+            '',
+            'def build_entry_telemetry(*, signal=None, entry_decision=None, pending=None):',
+            '    return (signal, entry_decision, pending)',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'phases.py'), source);
+        const fileHash = sha256Content(source);
+        const attach = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: '_attach_entry_telemetry',
+            label: 'function _attach_entry_telemetry(',
+            startLine: 4,
+            endLine: 15,
+            fileHash,
+            language: 'python',
+        });
+        const build = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: 'build_entry_telemetry',
+            label: 'function build_entry_telemetry(',
+            startLine: 17,
+            endLine: 18,
+            fileHash,
+            language: 'python',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [attach, build],
+            records: [{
+                sourceKey: attach.symbolKey,
+                sourceInstanceId: attach.symbolInstanceId,
+                targetKey: build.symbolKey,
+                targetInstanceId: build.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/phases.py',
+                span: undefined,
+                confidence: 'low',
+            }],
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const callersResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/phases.py',
+                symbolId: build.symbolInstanceId,
+                symbolLabel: build.label,
+            },
+            direction: 'callers',
+            depth: 1,
+            limit: 20
+        });
+
+        const callersPayload = JSON.parse(callersResponse.content[0]?.text || '{}');
+        assert.equal(callersPayload.status, 'ok');
+        assert.equal(callersPayload.edges.length, 0);
+        assert.ok(callersPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
+        assert.ok(!callersPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLERS:1'));
+        assert.ok(callersPayload.notes.some((note: any) => (
+            note.type === 'suppressed_edge'
+            && note.symbolId === attach.symbolInstanceId
+            && note.detail.includes('src/phases.py:4')
+        )));
+        assert.ok(!callersPayload.notes.some((note: any) => note.type === 'dynamic_edge'));
+    }));
+});
+
+test('handleCallGraph does not synthesize Python caller fallback when the recorded site is outside the repaired source span', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const source = [
+            'def previous_phase():',
+            '    return _rename_outputs(signal)',
+            '',
+            'def _attach_entry_telemetry(',
+            '    *,',
+            '    signal=None,',
+            '    entry_decision=None,',
+            '    pending=None,',
+            ') -> None:',
+            '    telemetry = build_entry_telemetry(',
+            '        signal=signal,',
+            '        entry_decision=entry_decision,',
+            '        pending=pending,',
+            '    )',
+            '    return telemetry',
+            '',
+            'def build_entry_telemetry(*, signal=None, entry_decision=None, pending=None):',
+            '    return (signal, entry_decision, pending)',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'phases.py'), source);
+        const fileHash = sha256Content(source);
+        const attach = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: '_attach_entry_telemetry',
+            label: 'function _attach_entry_telemetry(',
+            startLine: 4,
+            endLine: 15,
+            fileHash,
+            language: 'python',
+        });
+        const build = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: 'build_entry_telemetry',
+            label: 'function build_entry_telemetry(',
+            startLine: 17,
+            endLine: 18,
+            fileHash,
+            language: 'python',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [attach, build],
+            records: [{
+                sourceKey: attach.symbolKey,
+                sourceInstanceId: attach.symbolInstanceId,
+                targetKey: build.symbolKey,
+                targetInstanceId: build.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/phases.py',
+                span: { startLine: 3, endLine: 3 },
+                confidence: 'low',
+            }],
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const callersResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/phases.py',
+                symbolId: build.symbolInstanceId,
+                symbolLabel: build.label,
+            },
+            direction: 'callers',
+            depth: 1,
+            limit: 20
+        });
+
+        const callersPayload = JSON.parse(callersResponse.content[0]?.text || '{}');
+        assert.equal(callersPayload.status, 'ok');
+        assert.equal(callersPayload.edges.length, 0);
+        assert.ok(callersPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
+        assert.ok(!callersPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLERS:1'));
+        assert.ok(callersPayload.notes.some((note: any) => (
+            note.type === 'suppressed_edge'
+            && note.symbolId === attach.symbolInstanceId
+            && note.detail.includes('src/phases.py:3')
+        )));
+        assert.ok(!callersPayload.notes.some((note: any) => note.type === 'dynamic_edge'));
+    }));
+});
+
+test('handleCallGraph does not synthesize Python caller fallback when the validated direct call resolves to a different target', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const phasesContent = [
+            'def build_entry_telemetry():',
+            '    return "local"',
+            '',
+            'def _attach_entry_telemetry():',
+            '    return build_entry_telemetry()',
+            '',
+        ].join('\n');
+        const telemetryContent = [
+            'def build_entry_telemetry():',
+            '    return "external"',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'phases.py'), phasesContent);
+        fs.writeFileSync(path.join(repoPath, 'src', 'telemetry.py'), telemetryContent);
+        const phasesHash = sha256Content(phasesContent);
+        const telemetryHash = sha256Content(telemetryContent);
+        const localBuild = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: 'build_entry_telemetry',
+            label: 'function build_entry_telemetry(',
+            startLine: 1,
+            endLine: 2,
+            fileHash: phasesHash,
+            language: 'python',
+        });
+        const attach = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: '_attach_entry_telemetry',
+            label: 'function _attach_entry_telemetry(',
+            startLine: 4,
+            endLine: 5,
+            fileHash: phasesHash,
+            language: 'python',
+        });
+        const externalBuild = createFunctionSymbol({
+            file: 'src/telemetry.py',
+            name: 'build_entry_telemetry',
+            label: 'function build_entry_telemetry(',
+            startLine: 1,
+            endLine: 2,
+            fileHash: telemetryHash,
+            language: 'python',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [localBuild, attach, externalBuild],
+            records: [{
+                sourceKey: attach.symbolKey,
+                sourceInstanceId: attach.symbolInstanceId,
+                targetKey: externalBuild.symbolKey,
+                targetInstanceId: externalBuild.symbolInstanceId,
+                type: 'CALLS',
+                file: 'src/phases.py',
+                span: { startLine: 5, endLine: 5 },
+                confidence: 'low',
+            }],
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const callersResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/telemetry.py',
+                symbolId: externalBuild.symbolInstanceId,
+                symbolLabel: externalBuild.label,
+            },
+            direction: 'callers',
+            depth: 1,
+            limit: 20
+        });
+
+        const callersPayload = JSON.parse(callersResponse.content[0]?.text || '{}');
+        assert.equal(callersPayload.status, 'ok');
+        assert.equal(callersPayload.edges.length, 0);
+        assert.ok(callersPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
+        assert.ok(!callersPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLERS:1'));
+        assert.ok(callersPayload.notes.some((note: any) => (
+            note.type === 'suppressed_edge'
+            && note.symbolId === attach.symbolInstanceId
+            && note.detail.includes('src/phases.py:5')
+        )));
+        assert.ok(!callersPayload.notes.some((note: any) => note.type === 'dynamic_edge'));
+    }));
+});
+
 test('handleCallGraph does not accept legacy v3 symbol ids as steady-state exact inputs', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const login = createFunctionSymbol({
@@ -1178,6 +1636,169 @@ test('handleCallGraph includes import/export-backed cross-file CALLS v0 edges in
     }));
 });
 
+test('handleCallGraph includes Python relative-import-backed cross-file CALLS v0 edges in relationship traversal', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const telemetryContent = [
+            'def build_entry_telemetry():',
+            '    return None',
+        ].join('\n');
+        const phasesContent = [
+            'from .telemetry import build_entry_telemetry',
+            '',
+            'def _attach_entry_telemetry():',
+            '    return build_entry_telemetry()',
+        ].join('\n');
+        const telemetryFile = createSynthesizedFileSymbol({
+            relativePath: 'src/telemetry.py',
+            language: 'python',
+            content: telemetryContent,
+            fileHash: 'hash-telemetry',
+            extractorVersion: 'extractor-v1',
+        });
+        const phasesFile = createSynthesizedFileSymbol({
+            relativePath: 'src/phases.py',
+            language: 'python',
+            content: phasesContent,
+            fileHash: 'hash-phases',
+            extractorVersion: 'extractor-v1',
+        });
+        const buildEntryTelemetry = createFunctionSymbol({
+            file: 'src/telemetry.py',
+            name: 'build_entry_telemetry',
+            startLine: 1,
+            endLine: 2,
+            fileHash: 'hash-telemetry',
+            language: 'python',
+        });
+        const attachEntryTelemetry = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: '_attach_entry_telemetry',
+            startLine: 3,
+            endLine: 4,
+            fileHash: 'hash-phases',
+            language: 'python',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [phasesFile, attachEntryTelemetry, telemetryFile, buildEntryTelemetry],
+            records: [
+                {
+                    sourceKey: phasesFile.symbolKey,
+                    sourceInstanceId: phasesFile.symbolInstanceId,
+                    targetKey: telemetryFile.symbolKey,
+                    targetInstanceId: telemetryFile.symbolInstanceId,
+                    targetPath: telemetryFile.file,
+                    type: 'IMPORTS',
+                    file: 'src/phases.py',
+                    span: { startLine: 1, endLine: 1 },
+                    confidence: 'high',
+                },
+                {
+                    sourceKey: phasesFile.symbolKey,
+                    sourceInstanceId: phasesFile.symbolInstanceId,
+                    targetKey: attachEntryTelemetry.symbolKey,
+                    targetInstanceId: attachEntryTelemetry.symbolInstanceId,
+                    type: 'EXPORTS',
+                    file: 'src/phases.py',
+                    span: { startLine: 3, endLine: 3 },
+                    confidence: 'high',
+                },
+                {
+                    sourceKey: telemetryFile.symbolKey,
+                    sourceInstanceId: telemetryFile.symbolInstanceId,
+                    targetKey: buildEntryTelemetry.symbolKey,
+                    targetInstanceId: buildEntryTelemetry.symbolInstanceId,
+                    type: 'EXPORTS',
+                    file: 'src/telemetry.py',
+                    span: { startLine: 1, endLine: 1 },
+                    confidence: 'high',
+                },
+                {
+                    sourceKey: attachEntryTelemetry.symbolKey,
+                    sourceInstanceId: attachEntryTelemetry.symbolInstanceId,
+                    targetKey: buildEntryTelemetry.symbolKey,
+                    targetInstanceId: buildEntryTelemetry.symbolInstanceId,
+                    type: 'CALLS',
+                    file: 'src/phases.py',
+                    span: { startLine: 4, endLine: 4 },
+                    confidence: 'low',
+                },
+            ],
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as any;
+        const callGraphManager = {
+            queryGraph: () => {
+                throw new Error('legacy call graph fallback should not run');
+            }
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+
+        const calleesResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/phases.py',
+                symbolId: attachEntryTelemetry.symbolInstanceId,
+                symbolLabel: attachEntryTelemetry.label,
+            },
+            direction: 'callees',
+            depth: 1,
+            limit: 20
+        });
+
+        const calleesPayload = JSON.parse(calleesResponse.content[0]?.text || '{}');
+        assert.equal(calleesPayload.status, 'ok');
+        assert.equal(calleesPayload.edges.length, 1);
+        assert.equal(calleesPayload.edges[0].kind, 'call');
+        assert.equal(calleesPayload.edges[0].srcSymbolId, attachEntryTelemetry.symbolInstanceId);
+        assert.equal(calleesPayload.edges[0].dstSymbolId, buildEntryTelemetry.symbolInstanceId);
+        assert.equal(calleesPayload.edges[0].site.startLine, 4);
+        assert.equal(calleesPayload.edges[0].confidence, 0.65);
+        assert.ok(!calleesPayload.warnings?.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
+        assert.ok(!calleesPayload.warnings?.includes('SOURCE_BACKED_DYNAMIC_CALLEES:1'));
+        assert.ok(!calleesPayload.notes.some((note: any) => note.type === 'suppressed_edge'));
+
+        const callersResponse = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/telemetry.py',
+                symbolId: buildEntryTelemetry.symbolInstanceId,
+                symbolLabel: buildEntryTelemetry.label,
+            },
+            direction: 'callers',
+            depth: 1,
+            limit: 20
+        });
+
+        const callersPayload = JSON.parse(callersResponse.content[0]?.text || '{}');
+        assert.equal(callersPayload.status, 'ok');
+        assert.equal(callersPayload.edges.length, 1);
+        assert.equal(callersPayload.edges[0].kind, 'call');
+        assert.equal(callersPayload.edges[0].srcSymbolId, attachEntryTelemetry.symbolInstanceId);
+        assert.equal(callersPayload.edges[0].dstSymbolId, buildEntryTelemetry.symbolInstanceId);
+        assert.equal(callersPayload.edges[0].site.startLine, 4);
+        assert.equal(callersPayload.edges[0].confidence, 0.65);
+        assert.ok(!callersPayload.warnings?.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
+        assert.ok(!callersPayload.notes.some((note: any) => note.type === 'suppressed_edge'));
+    }));
+});
+
 test('handleCallGraph maps missing_symbol to status not_found', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const login = createFunctionSymbol({
@@ -1340,5 +1961,56 @@ test('handleCallGraph returns not_ready envelope when codebase is indexing', asy
         assert.equal(payload.hints.status.tool, 'manage_index');
         assert.equal(payload.hints.status.args.action, 'status');
         assert.equal(payload.hints.status.args.path, repoPath);
+    });
+});
+
+test('handleCallGraph failed-index payload preserves failure diagnostics', async () => {
+    await withTempRepo(async (repoPath) => {
+        const failedInfo = {
+            status: 'indexfailed',
+            errorMessage: 'Interrupted indexing detected without completion marker proof.',
+            lastAttemptedPercentage: 0,
+            lastUpdated: '2026-06-19T12:15:18.574Z'
+        };
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as any;
+        const snapshotManager = {
+            getIndexedCodebases: () => [],
+            getIndexingCodebases: () => [],
+            getCodebaseInfo: () => failedInfo,
+            getCodebaseStatus: () => 'indexfailed',
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => [{ path: repoPath, info: failedInfo }]
+        } as any;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/runtime.ts',
+                symbolId: 'sym_runtime_run'
+            },
+            direction: 'both',
+            depth: 1,
+            limit: 20
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.supported, false);
+        assert.equal(payload.reason, 'index_failed');
+        assert.equal(payload.codebaseRoot, repoPath);
+        assert.match(payload.message, /Interrupted indexing detected without completion marker proof/i);
+        assert.match(payload.message, /0\.0%/);
+        assert.equal(payload.indexingFailure?.errorMessage, failedInfo.errorMessage);
+        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
     });
 });

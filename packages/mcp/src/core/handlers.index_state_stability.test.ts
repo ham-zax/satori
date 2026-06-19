@@ -23,6 +23,12 @@ const CAPABILITIES = new CapabilityResolver({
     encoderModel: 'voyage-4-large',
 });
 
+function warningCodes(payload: { warnings?: Array<string | { code?: string }> }): string[] {
+    return (payload.warnings || [])
+        .map((warning) => typeof warning === 'string' ? warning : warning.code)
+        .filter((code): code is string => typeof code === 'string');
+}
+
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-index-state-stability-'));
     const repoPath = path.join(tempDir, 'repo');
@@ -158,8 +164,8 @@ test('handleSearchCode warns when returning results from a partial limit_reached
         assert.ok(Array.isArray(payload.results));
         assert.ok(payload.results.length > 0);
         assert.ok(Array.isArray(payload.warnings));
-        assert.ok(payload.warnings.includes('SEARCH_PARTIAL_INDEX:limit_reached'));
-        assert.ok(payload.warnings.includes('SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE'));
+        assert.ok(warningCodes(payload).includes('SEARCH_PARTIAL_INDEX:limit_reached'));
+        assert.ok(warningCodes(payload).includes('SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE'));
 
         const rawResponse = await handlers.handleSearchCode({
             path: repoPath,
@@ -174,8 +180,8 @@ test('handleSearchCode warns when returning results from a partial limit_reached
         assert.equal(rawPayload.resultMode, 'raw');
         assert.ok(Array.isArray(rawPayload.results));
         assert.ok(rawPayload.results.length > 0);
-        assert.ok(rawPayload.warnings.includes('SEARCH_PARTIAL_INDEX:limit_reached'));
-        assert.ok(rawPayload.warnings.includes('SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE'));
+        assert.ok(warningCodes(rawPayload).includes('SEARCH_PARTIAL_INDEX:limit_reached'));
+        assert.ok(warningCodes(rawPayload).includes('SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE'));
     });
 });
 
@@ -216,6 +222,65 @@ test('handleSearchCode returns stale-local not_indexed when completion marker is
         assert.equal(payload.reason, 'not_indexed');
         assert.equal(payload.hints?.staleLocal?.completionProof, 'missing_marker_doc');
         assert.equal(payload.hints?.create?.args?.path, repoPath);
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.equal(payload.recommendedNextAction?.args?.action, 'create');
+        assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
+    });
+});
+
+test('handleSearchCode reruns tracked-root readiness after freshness before returning results', async () => {
+    await withTempRepo(async (repoPath) => {
+        let markerCalls = 0;
+        let ensureFreshnessCalls = 0;
+        let semanticSearchCalls = 0;
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                semanticSearchCalls += 1;
+                return baseSearchResult();
+            },
+            getIndexCompletionMarker: async () => {
+                markerCalls += 1;
+                return markerCalls === 1 ? buildMarker(repoPath) : null;
+            }
+        } as any;
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            getCodebaseInfo: () => ({ status: 'indexed' }),
+            getCodebaseStatus: () => 'indexed',
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as any;
+        const syncManager = {
+            ensureFreshness: async () => {
+                ensureFreshnessCalls += 1;
+                return {
+                    mode: 'skipped_recent',
+                    checkedAt: '2026-02-28T08:00:00.000Z',
+                    thresholdMs: 180000
+                };
+            }
+        } as any;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'run',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'not_indexed');
+        assert.equal(payload.hints?.staleLocal?.completionProof, 'missing_marker_doc');
+        assert.equal(ensureFreshnessCalls, 1);
+        assert.equal(markerCalls, 2);
+        assert.equal(semanticSearchCalls, 0);
     });
 });
 
@@ -260,6 +325,9 @@ test('handleSearchCode maps completion proof fingerprint mismatch to requires_re
         assert.equal(payload.status, 'requires_reindex');
         assert.equal(payload.reason, 'requires_reindex');
         assert.equal(payload.hints?.reindex?.args?.path, repoPath);
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.equal(payload.recommendedNextAction?.args?.action, 'reindex');
+        assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
     });
 });
 
@@ -333,6 +401,9 @@ test('handleSearchCode fails closed when the configured vector backend collectio
         assert.equal(payload.reason, 'not_indexed');
         assert.match(payload.message, /vector collection is missing from the configured vector backend/i);
         assert.equal(payload.hints?.create?.args?.path, repoPath);
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.equal(payload.recommendedNextAction?.args?.action, 'create');
+        assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
         assert.equal(semanticSearchCalls, 0);
         assert.equal(ensureFreshnessCalls, 0);
         assert.equal(removedCodebasePath, repoPath);
@@ -687,9 +758,61 @@ test('handleGetIndexingStatus reports stale local indexed snapshot as not indexe
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const text = response.content[0]?.text || '';
-        assert.match(text, /is not indexed/i);
+        assert.match(text, /stale local index metadata/i);
         assert.match(text, /completion proof is missing or invalid/i);
         assert.match(text, /reason: missing_marker_doc/i);
+    });
+});
+
+test('handleGetIndexingStatus returns not_indexed when search collection readiness is gone locally', async () => {
+    await withTempRepo(async (repoPath) => {
+        let removedCodebasePath: string | null = null;
+        let saveCalls = 0;
+        let unwatchCalls = 0;
+
+        const context = {
+            getVectorStore: () => ({
+                hasCollection: async () => false
+            }),
+            resolveCollectionName: () => 'satori_repo_missing_collection',
+            getIndexCompletionMarker: async () => buildMarker(repoPath)
+        } as any;
+        const codebaseInfo = {
+            status: 'indexed',
+            lastUpdated: '2026-02-28T08:00:00.000Z',
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified'
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => codebaseInfo,
+            getCodebaseStatus: () => 'indexed',
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            removeCodebaseCompletely: (codebasePath: string) => {
+                removedCodebasePath = codebasePath;
+            },
+            saveCodebaseSnapshot: () => {
+                saveCalls += 1;
+            }
+        } as any;
+        const syncManager = {
+            unwatchCodebase: async () => {
+                unwatchCalls += 1;
+            }
+        } as any;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'not_indexed');
+        assert.match(payload.humanText || '', /vector collection is missing from the configured vector backend/i);
+        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
+        assert.equal(removedCodebasePath, repoPath);
+        assert.equal(saveCalls, 1);
+        assert.equal(unwatchCalls, 1);
     });
 });
 
@@ -782,5 +905,81 @@ test('handleIndexCodebase create proceeds when snapshot is indexed but completio
         assert.equal(response.isError, undefined);
         assert.match(response.content[0]?.text || '', /Started background indexing/i);
         assert.equal(startedBackgroundIndexing, true);
+    });
+});
+
+test('handleIndexCodebase recovers marker-backed mismatch without restarting indexing when snapshot is missing', async () => {
+    await withTempRepo(async (repoPath) => {
+        const indexedFingerprint: IndexFingerprint = {
+            ...RUNTIME_FINGERPRINT,
+            embeddingModel: 'voyage-code-3'
+        };
+        let currentInfo: any = undefined;
+        let startedBackgroundIndexing = false;
+        let collectionLimitCalls = 0;
+        let setIndexedCalls = 0;
+        let saveCalls = 0;
+
+        const context = {
+            getVectorStore: () => ({
+                checkCollectionLimit: async () => {
+                    collectionLimitCalls += 1;
+                    return true;
+                }
+            }),
+            getIndexCompletionMarker: async () => ({
+                kind: 'satori_index_completion_v1',
+                codebasePath: repoPath,
+                fingerprint: indexedFingerprint,
+                indexedFiles: 169,
+                totalChunks: 728,
+                completedAt: '2026-02-28T08:00:00.000Z',
+                runId: 'run_test'
+            }),
+            addCustomExtensions: () => undefined,
+            addCustomIgnorePatterns: () => undefined,
+            clearIndexCompletionMarker: async () => undefined
+        } as any;
+        const snapshotManager = {
+            getIndexingCodebases: () => [],
+            getCodebaseInfo: () => currentInfo,
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => 'not_found',
+            setCodebaseIndexed: (_path: string, stats: any, indexFingerprint: IndexFingerprint) => {
+                setIndexedCalls += 1;
+                currentInfo = {
+                    status: 'indexed',
+                    indexedFiles: stats.indexedFiles,
+                    totalChunks: stats.totalChunks,
+                    indexStatus: 'completed',
+                    indexFingerprint,
+                    fingerprintSource: 'verified',
+                    lastUpdated: new Date().toISOString()
+                };
+            },
+            setCodebaseIndexing: () => undefined,
+            saveCodebaseSnapshot: () => {
+                saveCalls += 1;
+            }
+        } as any;
+        const syncManager = {
+            unregisterCodebaseWatcher: async () => undefined
+        } as any;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as any).startBackgroundIndexing = async () => {
+            startedBackgroundIndexing = true;
+        };
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+
+        assert.equal(payload.status, 'requires_reindex');
+        assert.equal(payload.reason, 'requires_reindex');
+        assert.match(payload.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
+        assert.equal((payload.hints?.runtimeMismatch as any)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3');
+        assert.equal(startedBackgroundIndexing, false);
+        assert.equal(collectionLimitCalls, 0);
+        assert.equal(setIndexedCalls, 1);
+        assert.equal(saveCalls, 1);
     });
 });

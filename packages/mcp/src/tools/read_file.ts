@@ -70,6 +70,10 @@ type ReadFileIndexingBlock = {
 const READ_FILE_DISCOVERY_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed', 'indexing']);
 const READ_FILE_RESOLVE_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed']);
 
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
 function toReadFileSearchableStatus(status: unknown): ReadFileSearchableStatus | undefined {
     if (status === 'indexed' || status === 'sync_completed' || status === 'indexing') {
         return status;
@@ -368,7 +372,8 @@ export const readFileTool: McpTool = {
                             file: relativeFile,
                             ...(parsedOutline?.outline ? { matches: parsedOutline.outline.symbols } : {}),
                             ...(parsedOutline?.warnings ? { warnings: parsedOutline.warnings } : {}),
-                            ...(parsedOutline?.hints ? { hints: parsedOutline.hints } : {})
+                            ...(parsedOutline?.hints ? { hints: parsedOutline.hints } : {}),
+                            ...(parsedOutline?.indexingFailure ? { indexingFailure: parsedOutline.indexingFailure } : {})
                         };
                         return {
                             content: [{
@@ -477,9 +482,9 @@ export const readFileTool: McpTool = {
                     text: JSON.stringify(payload, null, 2)
                 }]
             };
-        } catch (error: any) {
+        } catch (error) {
             return {
-                content: [{ type: "text", text: `Error reading file: ${error.message}` }],
+                content: [{ type: "text", text: `Error reading file: ${errorMessage(error)}` }],
                 isError: true
             };
         }

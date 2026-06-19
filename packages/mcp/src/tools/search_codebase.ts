@@ -21,6 +21,10 @@ interface SearchDiagnostics {
     rerankerUsed?: boolean;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
 function getProfile(ctx: ToolContext): string {
     const locality = ctx.capabilities.getEmbeddingLocality();
     const profile = ctx.capabilities.getPerformanceProfile();
@@ -57,8 +61,11 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
         resultsReturned: 0,
     };
 
-    const metaDiagnostics = (response as any)?.meta?.searchDiagnostics;
-    if (metaDiagnostics && typeof metaDiagnostics === "object") {
+    const responseMeta = isRecord(response.meta) ? response.meta : null;
+    const metaDiagnostics = responseMeta && isRecord(responseMeta.searchDiagnostics)
+        ? responseMeta.searchDiagnostics
+        : null;
+    if (metaDiagnostics) {
         const afterFilter = safeNumber(metaDiagnostics.resultsAfterFilter, 0);
         return {
             resultsBeforeFilter: safeNumber(metaDiagnostics.resultsBeforeFilter, afterFilter),
@@ -81,18 +88,23 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
 
     try {
         const parsed = JSON.parse(text);
-        const results = Array.isArray(parsed?.results) ? parsed.results.length : 0;
+        const parsedRecord = isRecord(parsed) ? parsed : null;
+        const results = Array.isArray(parsedRecord?.results) ? parsedRecord.results.length : 0;
+        const freshnessDecision = isRecord(parsedRecord?.freshnessDecision) ? parsedRecord.freshnessDecision : null;
+        const hints = isRecord(parsedRecord?.hints) ? parsedRecord.hints : null;
+        const debugSearch = isRecord(hints?.debugSearch) ? hints.debugSearch : null;
+        const rerank = isRecord(debugSearch?.rerank) ? debugSearch.rerank : null;
         return {
-            resultsBeforeFilter: safeNumber(parsed?.resultsBeforeFilter, results),
-            resultsAfterFilter: safeNumber(parsed?.resultsAfterFilter, results),
-            excludedByIgnore: safeNumber(parsed?.excludedByIgnore, 0),
+            resultsBeforeFilter: safeNumber(parsedRecord?.resultsBeforeFilter, results),
+            resultsAfterFilter: safeNumber(parsedRecord?.resultsAfterFilter, results),
+            excludedByIgnore: safeNumber(parsedRecord?.excludedByIgnore, 0),
             resultsReturned: results,
-            freshnessMode: typeof parsed?.freshnessDecision?.mode === "string" ? parsed.freshnessDecision.mode : undefined,
-            searchPassCount: safeNumber(parsed?.searchPassCount, 0),
-            searchPassSuccessCount: safeNumber(parsed?.searchPassSuccessCount, 0),
-            searchPassFailureCount: safeNumber(parsed?.searchPassFailureCount, 0),
-            rerankerAttempted: parsed?.hints?.debugSearch?.rerank?.attempted === true,
-            rerankerUsed: parsed?.hints?.debugSearch?.rerank?.applied === true,
+            freshnessMode: typeof freshnessDecision?.mode === "string" ? freshnessDecision.mode : undefined,
+            searchPassCount: safeNumber(parsedRecord?.searchPassCount, 0),
+            searchPassSuccessCount: safeNumber(parsedRecord?.searchPassSuccessCount, 0),
+            searchPassFailureCount: safeNumber(parsedRecord?.searchPassFailureCount, 0),
+            rerankerAttempted: rerank?.attempted === true,
+            rerankerUsed: rerank?.applied === true,
         };
     } catch {
         return fallback;
@@ -140,7 +152,7 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
 export const searchCodebaseTool: McpTool = {
     name: "search_codebase",
     description: () =>
-        "Unified semantic search with runtime-first defaults (start with scope=\"runtime\"), grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\\\ to keep literals). For high-precision queries such as exact identifiers, quoted literal phrases, and strict path filters, search_codebase can use an exact registry fast path or add a bounded tracked-file lexical recovery pass when semantic retrieval under-delivers. Use debug:true for explainability payloads, including exactRegistry, phaseTimingsMs, trackedLexical, ranking provenance, and response hints for remediation (.satoriignore noise handling, navigation fallback, reindex guidance).",
+        "Unified semantic search with runtime-first defaults (start with scope=\"runtime\"), grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\\\ to keep literals). For high-precision queries such as exact identifiers, quoted literal phrases, and strict path filters, search_codebase can use an exact registry fast path or add a bounded tracked-file lexical recovery pass when semantic retrieval under-delivers. Grouped results expose legacy span plus explicit previewSpan/symbolSpan metadata, structured warnings, recommendedNextAction, per-result capabilities/fallbacks, executable nextActions/navigationFallbacks, and remediation hints such as .satoriignore noise handling. Use debug:true for explainability payloads, including debugSummary, exactRegistry, phaseTimingsMs, trackedLexical, and ranking provenance.",
     inputSchemaZod: (ctx: ToolContext) => buildSearchSchema(ctx),
     execute: async (args: unknown, ctx: ToolContext) => {
         const schema = buildSearchSchema(ctx);

@@ -17,7 +17,7 @@ import {
     IndexFingerprint,
 } from "../config.js";
 
-type AccessGateReason = 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';
+export type AccessGateReason = 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';
 type MergeClass = 'searchable' | 'terminal_bad' | 'active';
 
 function isSearchableStatus(status: CodebaseInfo['status']): boolean {
@@ -1025,6 +1025,26 @@ export class SnapshotManager {
         this.refreshDerivedState();
     }
 
+    private recoverCodebaseFromResolvedFingerprintMismatch(codebasePath: string, info: CodebaseInfoRequiresReindex): void {
+        const recovered: CodebaseInfoSyncCompleted = {
+            status: 'sync_completed',
+            added: 0,
+            removed: 0,
+            modified: 0,
+            totalChanges: 0,
+            lastUpdated: new Date().toISOString(),
+            indexFingerprint: info.indexFingerprint,
+            fingerprintSource: info.fingerprintSource,
+            callGraphSidecar: info.callGraphSidecar,
+            indexManifest: info.indexManifest,
+            ignoreRulesVersion: info.ignoreRulesVersion,
+            ignoreControlSignature: info.ignoreControlSignature,
+        };
+        this.codebaseInfoMap.set(codebasePath, recovered);
+        this.markDirty();
+        this.refreshDerivedState();
+    }
+
     public setCodebaseCallGraphSidecar(codebasePath: string, sidecar: CallGraphSidecarInfo): void {
         const existing = this.codebaseInfoMap.get(codebasePath);
         if (!existing) {
@@ -1193,6 +1213,17 @@ export class SnapshotManager {
         }
 
         if (info.status === 'requires_reindex') {
+            if (
+                info.reindexReason === 'fingerprint_mismatch'
+                && info.indexFingerprint
+                && fingerprintsEqual(info.indexFingerprint, this.runtimeFingerprint)
+            ) {
+                this.recoverCodebaseFromResolvedFingerprintMismatch(codebasePath, info);
+                return {
+                    allowed: true,
+                    changed: true,
+                };
+            }
             return {
                 allowed: false,
                 changed: false,
@@ -1231,10 +1262,9 @@ export class SnapshotManager {
             const message =
                 `Index fingerprint mismatch. Indexed with ${fingerprintSummary(info.indexFingerprint)}, ` +
                 `current runtime is ${fingerprintSummary(this.runtimeFingerprint)}.`;
-            this.setCodebaseRequiresReindex(codebasePath, 'fingerprint_mismatch', message);
             return {
                 allowed: false,
-                changed: true,
+                changed: false,
                 reason: 'fingerprint_mismatch',
                 message
             };

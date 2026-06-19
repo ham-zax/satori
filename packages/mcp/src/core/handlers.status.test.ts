@@ -60,7 +60,7 @@ test('handleGetIndexingStatus includes fingerprint diagnostics for requires_rein
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const text = response.content[0]?.text || '';
 
-        assert.match(text, /must be rebuilt/i);
+        assert.match(text, /restart Satori with VoyageAI\/voyage-4-lite\/1024\/Milvus\/dense_v3/i);
         assert.match(text, /Runtime fingerprint: VoyageAI\/voyage-4-large\/1024\/Milvus\/hybrid_v3/i);
         assert.match(text, /Indexed fingerprint: VoyageAI\/voyage-4-lite\/1024\/Milvus\/dense_v3/i);
         assert.match(text, /Fingerprint source: verified/i);
@@ -103,7 +103,7 @@ test('handleGetIndexingStatus keeps rich humanText but emits compact machine JSO
         assert.ok(payload.humanText.length > payload.message.length);
         assert.match(payload.message, /Legacy fingerprint mismatch/i);
         assert.doesNotMatch(payload.message, /Runtime fingerprint/i);
-        assert.match(payload.humanText, /must be rebuilt/i);
+        assert.match(payload.humanText, /restart Satori with VoyageAI\/voyage-4-lite\/1024\/Milvus\/dense_v3/i);
         assert.match(payload.humanText, /Runtime fingerprint: VoyageAI\/voyage-4-large\/1024\/Milvus\/hybrid_v3/i);
         assert.match(payload.humanText, /Indexed fingerprint: VoyageAI\/voyage-4-lite\/1024\/Milvus\/dense_v3/i);
     });

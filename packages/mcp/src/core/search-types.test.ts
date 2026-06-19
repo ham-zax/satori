@@ -129,6 +129,40 @@ test("navigation response contracts include call_graph non-ok envelopes", () => 
     ]);
 });
 
+test("navigation response contracts include structured suppressed call_graph edge notes", () => {
+    const payload: CallGraphResponseEnvelope = {
+        status: "ok",
+        supported: true,
+        path: "/repo",
+        symbolRef: { file: "src/phases.py", symbolId: "syminst_build" },
+        direction: "callers",
+        depth: 1,
+        limit: 20,
+        nodes: [],
+        edges: [],
+        notes: [{
+            type: "suppressed_edge",
+            file: "src/phases.py",
+            startLine: 66,
+            symbolId: "syminst_attach",
+            symbolLabel: "function _attach_entry_telemetry(",
+            confidence: 0.35,
+            detail: "Suppressed low-confidence caller candidate from function _attach_entry_telemetry(",
+        }],
+        notesTruncated: false,
+        totalNoteCount: 1,
+        returnedNoteCount: 1,
+        sidecar: {
+            builtAt: "2026-01-01T00:00:00.000Z",
+            nodeCount: 0,
+            edgeCount: 0,
+        }
+    };
+
+    assert.equal(payload.notes[0]?.type, "suppressed_edge");
+    assert.equal(payload.notes[0]?.symbolId, "syminst_attach");
+});
+
 // @ts-expect-error missing_sidecar is a legacy CallGraphSidecarManager reason, not a current public CallGraphHint reason.
 const legacyMissingSidecarHint: CallGraphHint = { supported: false, reason: "missing_sidecar" };
 void legacyMissingSidecarHint;

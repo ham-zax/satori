@@ -89,6 +89,39 @@ export interface SearchNextActions {
     callGraph?: SearchNextActionCallGraph;
 }
 
+export type SearchActionTool = "read_file" | "file_outline" | "call_graph" | "search_codebase" | "manage_index";
+
+export interface SearchRecommendedNextAction {
+    resultIndex?: number;
+    tool: SearchActionTool;
+    args: Record<string, unknown>;
+    reason: string;
+}
+
+export interface SearchResultFallback {
+    when: string;
+    tool: SearchActionTool;
+    args: Record<string, unknown>;
+    reason: string;
+}
+
+export type SearchCapabilityConfidence = "high" | "medium" | "low" | "unavailable";
+
+export interface SearchResultCapabilities {
+    openSymbol: SearchCapabilityConfidence;
+    callGraphCallers: SearchCapabilityConfidence;
+    callGraphCallees: SearchCapabilityConfidence;
+    semanticMatch: SearchCapabilityConfidence;
+}
+
+export interface SearchWarningDetail {
+    code: string;
+    severity: "info" | "caution" | "degraded" | "blocking";
+    blocksUse: boolean;
+    message: string;
+    action?: string;
+}
+
 export interface SearchChunkResult {
     kind: "chunk";
     file: string;
@@ -133,9 +166,11 @@ export interface SearchGroupResult {
     groupId: string;
     file: string;
     span: SearchSpan;
+    previewSpan?: SearchSpan;
+    symbolSpan?: SearchSpan;
     language: string;
     symbolId?: string;
-    symbolLabel: string | null;
+    symbolLabel: string;
     symbolKey?: string;
     symbolInstanceId?: string;
     symbolKind?: string;
@@ -147,6 +182,9 @@ export interface SearchGroupResult {
     callGraphHint: CallGraphHint;
     navigationFallback?: SearchNavigationFallback;
     nextActions?: SearchNextActions;
+    recommendedNextAction?: SearchRecommendedNextAction;
+    fallbacks?: SearchResultFallback[];
+    capabilities: SearchResultCapabilities;
     preview: string;
     debug?: {
         representativeChunkCount: number;
@@ -361,6 +399,10 @@ export interface SearchDebugHint {
             kind: "call" | "import" | "dynamic";
             confidence: number;
         }>;
+        totalFiles?: number;
+        totalSymbols?: number;
+        totalDirectCallers?: number;
+        truncated?: boolean;
     };
     rerank?: {
         enabledByPolicy: boolean;
@@ -390,6 +432,13 @@ export interface SearchResponseHints extends Record<string, unknown> {
     navigation?: SearchNavigationHint;
     noiseMitigation?: SearchNoiseMitigationHint;
     debugSearch?: SearchDebugHint;
+    debugSummary?: {
+        retrieval: string;
+        freshness: FreshnessDecision["mode"] | "skipped_requires_reindex" | "skipped_indexing" | "unknown";
+        dirtyFiles: number;
+        rerank: string;
+        changedCodeTruncated?: boolean;
+    };
     verification?: {
         generatedArtifacts?: {
             reason: "generated_outputs_present";
@@ -411,10 +460,17 @@ export type NonOkReason =
     | "indexing"
     | "requires_reindex"
     | "partial_index_navigation_unavailable"
+    | "index_failed"
     | "not_indexed"
     | NavigationUnavailableReason
     | "missing_provider_config"
     | "vector_backend_unavailable";
+
+export interface IndexingFailureMetadata {
+    errorMessage: string | null;
+    lastAttemptedPercentage: number | null;
+    lastUpdated: string | null;
+}
 
 interface SearchBaseResponseEnvelope {
     status: "ok" | "requires_reindex" | "not_indexed" | "not_ready";
@@ -427,10 +483,12 @@ interface SearchBaseResponseEnvelope {
     limit: number;
     freshnessDecision: FreshnessDecision | { mode: "skipped_requires_reindex" | "skipped_indexing" } | null;
     freshnessSummary?: SearchFreshnessSummary;
-    warnings?: string[];
+    warnings?: SearchWarningDetail[];
+    recommendedNextAction?: SearchRecommendedNextAction;
     message?: string;
     hints?: SearchResponseHints;
     compatibility?: FingerprintCompatibilityDiagnostics;
+    indexingFailure?: IndexingFailureMetadata;
 }
 
 export interface SearchGroupedResponseEnvelope extends SearchBaseResponseEnvelope {
@@ -486,6 +544,7 @@ export interface FileOutlineResponseEnvelope {
     warnings?: string[];
     message?: string;
     hints?: Record<string, unknown>;
+    indexingFailure?: IndexingFailureMetadata;
 }
 
 export type CallGraphDirection = "callers" | "callees" | "both";
@@ -502,6 +561,7 @@ export type CallGraphResponseReason =
     | NavigationUnavailableReason
     | "invalid_symbol_ref"
     | "indexing"
+    | "index_failed"
     | "not_indexed"
     | "requires_reindex"
     | "partial_index_navigation_unavailable";
@@ -527,10 +587,12 @@ export interface CallGraphEdgeResult {
 }
 
 export interface CallGraphNoteResult {
-    type: "unresolved_edge" | "dynamic_edge" | "missing_symbol_metadata";
+    type: "unresolved_edge" | "dynamic_edge" | "missing_symbol_metadata" | "suppressed_edge";
     file: string;
     startLine: number;
     symbolId?: string;
+    symbolLabel?: string;
+    confidence?: number;
     detail: string;
 }
 
@@ -579,6 +641,7 @@ export interface CallGraphTraversalResponseEnvelope {
     message?: string;
     hints?: NavigationToolHints;
     compatibility?: FingerprintCompatibilityDiagnostics;
+    indexingFailure?: IndexingFailureMetadata;
     indexing?: {
         progressPct: number | null;
         lastUpdated: string | null;
@@ -596,6 +659,7 @@ export interface ReadFileOpenSymbolResponseEnvelope {
     matches?: unknown[];
     warnings?: string[];
     hints?: NavigationToolHints;
+    indexingFailure?: IndexingFailureMetadata;
 }
 
 export type ReadFileAnnotatedOutlineStatus = "ok" | "requires_reindex" | "unsupported" | "ambiguous";

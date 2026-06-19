@@ -521,6 +521,33 @@ test('buildSymbolRecordsForFile normalizes parent identity away from display sig
     assert.notEqual(firstChild.symbolInstanceId, secondChild.symbolInstanceId);
 });
 
+test('buildSymbolRecordsForFile drops normalized self breadcrumbs from long fallback labels', () => {
+    const records = buildSymbolRecordsForFile({
+        relativePath: 'src/phases.py',
+        language: 'python',
+        content: 'def _attach_entry_telemetry(trade, signal, entry_decision, pending):\n    return None\n',
+        fileHash: 'file-hash',
+        extractorVersion: 'extractor-v1',
+        chunks: [{
+            content: 'def _attach_entry_telemetry(trade, signal, entry_decision, pending):\n    return None',
+            metadata: {
+                startLine: 1,
+                endLine: 2,
+                language: 'python',
+                filePath: 'src/phases.py',
+                symbolLabel: 'function _attach_entry_telemetry( trade, signal, entry_decision, pending )',
+                breadcrumbs: ['function _attach_entry_telemetry( trade, signal, entry_decision, pending...'],
+            },
+        }],
+    });
+
+    const attach = records.find((record) => record.name === '_attach_entry_telemetry');
+
+    assert.ok(attach);
+    assert.deepEqual(attach.parentQualifiedNamePath, []);
+    assert.equal(attach.qualifiedName, '_attach_entry_telemetry');
+});
+
 test('buildSymbolRecordsForFile strips type-like suffixes from class and interface names', () => {
     const records = buildSymbolRecordsForFile({
         relativePath: 'src/models.py',

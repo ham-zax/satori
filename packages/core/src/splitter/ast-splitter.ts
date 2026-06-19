@@ -44,11 +44,22 @@ type TextSymbolCandidate = {
     definitionLine?: number;
 };
 
+interface RecursiveFallbackSplitter {
+    split(code: string, language: string, filePath?: string): Promise<CodeChunk[]>;
+    setChunkSize(chunkSize: number): void;
+    setChunkOverlap(chunkOverlap: number): void;
+}
+
+type LanguageConfig = {
+    parser: unknown;
+    nodeTypes: string[];
+};
+
 export class AstCodeSplitter implements Splitter {
     private chunkSize: number = 2500;
     private chunkOverlap: number = 300;
     private parser: Parser;
-    private langchainFallback: any; // Compatibility-named recursive fallback splitter
+    private langchainFallback: RecursiveFallbackSplitter; // Compatibility-named recursive fallback splitter
 
     constructor(chunkSize?: number, chunkOverlap?: number) {
         if (chunkSize) this.chunkSize = chunkSize;
@@ -57,7 +68,7 @@ export class AstCodeSplitter implements Splitter {
 
         // Initialize fallback splitter
         const { LangChainCodeSplitter } = require('./langchain-splitter');
-        this.langchainFallback = new LangChainCodeSplitter(chunkSize, chunkOverlap);
+        this.langchainFallback = new LangChainCodeSplitter(chunkSize, chunkOverlap) as RecursiveFallbackSplitter;
     }
 
     async split(code: string, language: string, filePath?: string): Promise<CodeChunk[]> {
@@ -109,8 +120,8 @@ export class AstCodeSplitter implements Splitter {
         this.langchainFallback.setChunkOverlap(chunkOverlap);
     }
 
-    private getLanguageConfig(language: string): { parser: any; nodeTypes: string[] } | null {
-        const langMap: Record<string, { parser: any; nodeTypes: string[] }> = {
+    private getLanguageConfig(language: string): LanguageConfig | null {
+        const langMap: Record<string, LanguageConfig> = {
             javascript: { parser: JavaScript, nodeTypes: SPLITTABLE_NODE_TYPES.javascript },
             typescript: { parser: TypeScript, nodeTypes: SPLITTABLE_NODE_TYPES.typescript },
             python: { parser: Python, nodeTypes: SPLITTABLE_NODE_TYPES.python },
@@ -270,7 +281,7 @@ export class AstCodeSplitter implements Splitter {
             const metadata = { ...chunks[i].metadata };
 
             // Add overlap from previous chunk
-            if (i > 0 && this.chunkOverlap > 0) {
+            if (i > 0 && this.chunkOverlap > 0 && this.shouldApplyOverlap(chunks[i - 1], chunks[i])) {
                 const prevChunk = chunks[i - 1];
                 const overlapText = prevChunk.content.slice(-this.chunkOverlap);
                 content = overlapText + '\n' + content;
@@ -284,6 +295,21 @@ export class AstCodeSplitter implements Splitter {
         }
 
         return overlappedChunks;
+    }
+
+    private shouldApplyOverlap(previousChunk: CodeChunk, currentChunk: CodeChunk): boolean {
+        const previousHasSymbol = Boolean(previousChunk.metadata.symbolId || previousChunk.metadata.symbolLabel);
+        const currentHasSymbol = Boolean(currentChunk.metadata.symbolId || currentChunk.metadata.symbolLabel);
+        if (!previousHasSymbol || !currentHasSymbol) {
+            return true;
+        }
+        if (previousChunk.metadata.symbolId && currentChunk.metadata.symbolId) {
+            return previousChunk.metadata.symbolId === currentChunk.metadata.symbolId;
+        }
+        if (previousChunk.metadata.symbolLabel && currentChunk.metadata.symbolLabel) {
+            return previousChunk.metadata.symbolLabel === currentChunk.metadata.symbolLabel;
+        }
+        return false;
     }
 
     private getLineCount(text: string): number {
@@ -418,30 +444,38 @@ export class AstCodeSplitter implements Splitter {
 
     private extractPythonSignature(node: Parser.SyntaxNode, code: string, kind: 'class' | 'function' | 'async function'): string {
         const raw = this.getNodeText(code, node);
+        const lines = raw.split('\n');
+        const header = this.collectPythonHeader(lines, 0, this.countPythonIndent(lines[0] || ''), 32);
+        if (header) {
+            const label = this.matchPythonDefinitionLabel(header);
+            if (label) {
+                return label;
+            }
+        }
         const firstLine = raw.split('\n')[0]?.trim() || '';
-        const header = (firstLine.endsWith(':') ? firstLine.slice(0, -1) : firstLine).replace(/\s+/g, ' ').trim();
-        if (!header) {
+        const fallbackHeader = (firstLine.endsWith(':') ? firstLine.slice(0, -1) : firstLine).replace(/\s+/g, ' ').trim();
+        if (!fallbackHeader) {
             return `${kind} <anonymous>`;
         }
         if (kind === 'class') {
-            return header.startsWith('class ') ? header : `class ${header}`;
+            return fallbackHeader.startsWith('class ') ? fallbackHeader : `class ${fallbackHeader}`;
         }
         if (kind === 'async function') {
-            if (header.startsWith('async def ')) {
-                return `async function ${header.replace(/^async def\s+/, '')}`;
+            if (fallbackHeader.startsWith('async def ')) {
+                return `async function ${fallbackHeader.replace(/^async def\s+/, '')}`;
             }
-            if (header.startsWith('def ')) {
-                return `async function ${header.replace(/^def\s+/, '')}`;
+            if (fallbackHeader.startsWith('def ')) {
+                return `async function ${fallbackHeader.replace(/^def\s+/, '')}`;
             }
-            return `async function ${header}`;
+            return `async function ${fallbackHeader}`;
         }
-        if (header.startsWith('async def ')) {
-            return `async function ${header.replace(/^async def\s+/, '')}`;
+        if (fallbackHeader.startsWith('async def ')) {
+            return `async function ${fallbackHeader.replace(/^async def\s+/, '')}`;
         }
-        if (header.startsWith('def ')) {
-            return `function ${header.replace(/^def\s+/, '')}`;
+        if (fallbackHeader.startsWith('def ')) {
+            return `function ${fallbackHeader.replace(/^def\s+/, '')}`;
         }
-        return `function ${header}`;
+        return `function ${fallbackHeader}`;
     }
 
     private getFunctionParameters(node: Parser.SyntaxNode, code: string): string {
@@ -714,9 +748,17 @@ export class AstCodeSplitter implements Splitter {
 
     private findPythonBlockEnd(lines: string[], definitionIndex: number, indent: number): number {
         let lastContentLine = definitionIndex + 1;
+        let headerComplete = this.isPythonHeaderTerminated((lines[definitionIndex] || '').trim());
         for (let index = definitionIndex + 1; index < lines.length; index++) {
             const line = lines[index] || '';
             const trimmed = line.trim();
+            if (!headerComplete) {
+                lastContentLine = index + 1;
+                if (this.isPythonHeaderTerminated(trimmed)) {
+                    headerComplete = true;
+                }
+                continue;
+            }
             if (trimmed.length === 0 || trimmed.startsWith('#')) {
                 continue;
             }

@@ -360,9 +360,13 @@ export function buildSymbolRecordsForFile(input: BuildSymbolRecordsForFileInput)
         const parentQualifiedNamePath = breadcrumbs.length > 0 && breadcrumbs[breadcrumbs.length - 1] === label
             ? breadcrumbs.slice(0, -1)
             : breadcrumbs;
-        const normalizedParentQualifiedNamePath = parentQualifiedNamePath
+        let normalizedParentQualifiedNamePath = parentQualifiedNamePath
             .map((breadcrumb) => toParentIdentitySegment(breadcrumb))
             .filter((breadcrumb): breadcrumb is string => Boolean(breadcrumb));
+        const selfParentSegment = `${parsed.kind} ${parsed.name}`;
+        if (normalizedParentQualifiedNamePath[normalizedParentQualifiedNamePath.length - 1] === selfParentSegment) {
+            normalizedParentQualifiedNamePath = normalizedParentQualifiedNamePath.slice(0, -1);
+        }
         const qualifiedName = buildQualifiedName(parsed.name, normalizedParentQualifiedNamePath);
         const span = buildLineSpan(chunk.metadata.startLine, chunk.metadata.endLine);
         const symbolKey = createSymbolKey({

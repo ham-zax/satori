@@ -67,6 +67,22 @@ class InMemoryVectorDatabase {
     return Array.from(this.collections.keys());
   }
 
+  filterDocuments(documents, filterExpr) {
+    let filtered = documents;
+    if ((filterExpr || '').includes('fileExtension != ".satori_meta"')) {
+      filtered = filtered.filter((doc) => doc.fileExtension !== '.satori_meta');
+    }
+    const idMatch = /^id == \"(.+)\"$/.exec(filterExpr || '');
+    if (idMatch) {
+      filtered = filtered.filter((doc) => doc.id === idMatch[1]);
+    }
+    const relativePathMatch = /^relativePath == \"(.+)\"$/.exec(filterExpr || '');
+    if (relativePathMatch) {
+      filtered = filtered.filter((doc) => doc.relativePath === relativePathMatch[1]);
+    }
+    return filtered;
+  }
+
   async insert(collectionName, documents) {
     const collection = this.collections.get(collectionName);
     if (!collection) throw new Error(`Collection not found: ${collectionName}`);
@@ -85,7 +101,7 @@ class InMemoryVectorDatabase {
     const threshold = options.threshold ?? 0;
     const topK = options.topK ?? 5;
 
-    const ranked = Array.from(collection.docs.values())
+    const ranked = this.filterDocuments(Array.from(collection.docs.values()), options.filterExpr)
       .map((document) => ({ document, score: cosineSimilarity(queryVector, document.vector) }))
       .filter((item) => item.score >= threshold)
       .sort((a, b) => b.score - a.score);
@@ -110,12 +126,7 @@ class InMemoryVectorDatabase {
   async query(collectionName, filter, outputFields, limit = 1000) {
     const collection = this.collections.get(collectionName);
     if (!collection) return [];
-    let docs = Array.from(collection.docs.values());
-
-    const match = /^relativePath == \"(.+)\"$/.exec(filter || '');
-    if (match) {
-      docs = docs.filter((doc) => doc.relativePath === match[1]);
-    }
+    const docs = this.filterDocuments(Array.from(collection.docs.values()), filter);
 
     const rows = docs.slice(0, limit).map((doc) => {
       const row = {};

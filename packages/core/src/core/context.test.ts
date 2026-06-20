@@ -95,6 +95,13 @@ class InMemoryVectorDatabase implements VectorDatabase {
             return [];
         }
         let documents = Array.from(collection.values());
+        if ((filterExpr || '').includes('fileExtension != ".satori_meta"')) {
+            documents = documents.filter((document) => document.fileExtension !== '.satori_meta');
+        }
+        const idMatch = /^id == "(.+)"$/.exec(filterExpr || '');
+        if (idMatch?.[1]) {
+            documents = documents.filter((document) => document.id === idMatch[1]);
+        }
         const relativePathMatch = /^relativePath == "(.+)"$/.exec(filterExpr || '');
         if (relativePathMatch?.[1]) {
             documents = documents.filter((document) => document.relativePath === relativePathMatch[1]);

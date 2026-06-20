@@ -34,8 +34,8 @@ Satori indexes a repository, keeps the index fresh, and gives agents a fixed six
 Install managed MCP config for every supported local client:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.4 install --client all
-npx -y @zokizuan/satori-cli@0.4.4 doctor
+npx -y @zokizuan/satori-cli@0.4.5 install --client all
+npx -y @zokizuan/satori-cli@0.4.5 doctor
 ```
 
 Supported installers: `codex`, `claude`, `opencode`, and `all`.
@@ -43,7 +43,7 @@ Supported installers: `codex`, `claude`, `opencode`, and `all`.
 Choose an index profile during install when the repo should not use the default safe-broad policy:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.4 install --client all --profile minimal
+npx -y @zokizuan/satori-cli@0.4.5 install --client all --profile minimal
 ```
 
 The installer writes or updates repo-local `satori.toml` in the current working directory:
@@ -102,7 +102,7 @@ If `manage_index` returns `reason="runtime_owner_conflict"`, restart all Satori 
 
 Satori needs an embedding provider and a Milvus-compatible vector store before indexing. MCP startup, `tools list`, and `doctor` do not require provider credentials; provider-backed tool calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 
-Run `npx -y @zokizuan/satori-cli@0.4.4 doctor` after setting env values to check the local setup before indexing.
+Run `npx -y @zokizuan/satori-cli@0.4.5 doctor` after setting env values to check the local setup before indexing.
 
 Installer config and runtime config are intentionally separate:
 
@@ -274,9 +274,9 @@ Use `pnpm run dev:install-local-mcp:no-build` after a previous build when you on
 
 Current release versions:
 
-- `@zokizuan/satori-core@1.6.2`
-- `@zokizuan/satori-mcp@4.11.6`
-- `@zokizuan/satori-cli@0.4.4`
+- `@zokizuan/satori-core@1.6.3`
+- `@zokizuan/satori-mcp@4.11.7`
+- `@zokizuan/satori-cli@0.4.5`
 
 Preflight before publishing:
 

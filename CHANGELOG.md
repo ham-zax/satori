@@ -5,10 +5,10 @@ All notable changes to this repository are documented in this file.
 ## Unreleased
 
 ### Release Versions
-- Repository version: `0.5.5`
-- `@zokizuan/satori-core`: `1.6.2`
-- `@zokizuan/satori-mcp`: `4.11.6`
-- `@zokizuan/satori-cli`: `0.4.4`
+- Repository version: `0.5.6`
+- `@zokizuan/satori-core`: `1.6.3`
+- `@zokizuan/satori-mcp`: `4.11.7`
+- `@zokizuan/satori-cli`: `0.4.5`
 
 ### Fixed
 - Prevented source-backed Python callee fallback from synthesizing cross-file edges for unbound bare calls such as builtins when no import or local binding evidence exists.

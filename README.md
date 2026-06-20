@@ -275,7 +275,7 @@ Use `pnpm run dev:install-local-mcp:no-build` after a previous build when you on
 Current release versions:
 
 - `@zokizuan/satori-core@1.6.2`
-- `@zokizuan/satori-mcp@4.11.5`
+- `@zokizuan/satori-mcp@4.11.6`
 - `@zokizuan/satori-cli@0.4.4`
 
 Preflight before publishing:

@@ -4,6 +4,15 @@ All notable changes to this repository are documented in this file.
 
 ## Unreleased
 
+### Release Versions
+- Repository version: `0.5.5`
+- `@zokizuan/satori-core`: `1.6.2`
+- `@zokizuan/satori-mcp`: `4.11.6`
+- `@zokizuan/satori-cli`: `0.4.4`
+
+### Fixed
+- Prevented source-backed Python callee fallback from synthesizing cross-file edges for unbound bare calls such as builtins when no import or local binding evidence exists.
+
 ### Changed
 - Updated `search_codebase` JSON envelopes with structured warning details, recommended next actions, per-result capability confidence, fallbacks, and compact debug summaries for agent decision-making.
 - Updated Satori installer guidance, packaged skills, docs, and landing pages to prefer semantic ownership discovery first, then follow recommended actions and deterministic proof navigation.

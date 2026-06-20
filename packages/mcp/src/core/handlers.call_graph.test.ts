@@ -709,6 +709,128 @@ test('handleCallGraph synthesizes source-backed Python callees when stored span 
     }));
 });
 
+test('handleCallGraph does not synthesize Python callee fallback for unbound cross-file bare calls', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        fs.mkdirSync(path.join(repoPath, 'src', 'cli'), { recursive: true });
+        fs.mkdirSync(path.join(repoPath, 'src', 'python', 'core'), { recursive: true });
+        const source = [
+            'def build_paper_runtime_harness_admission(values):',
+            '    unique_values = set(values)',
+            '    materialized_values = list(values)',
+            '    return external_helper(materialized_values)',
+            '',
+        ].join('\n');
+        const configSource = [
+            'class ConfigManager:',
+            '    def set(self, key, value):',
+            '        return None',
+            '',
+        ].join('\n');
+        const shadowSource = [
+            'class ShadowExecutionStore:',
+            '    def list(self):',
+            '        return []',
+            '',
+        ].join('\n');
+        const externalSource = [
+            'def external_helper(values):',
+            '    return values',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'phases.py'), source);
+        fs.writeFileSync(path.join(repoPath, 'src', 'cli', 'config.py'), configSource);
+        fs.writeFileSync(path.join(repoPath, 'src', 'python', 'core', 'helpers.py'), shadowSource);
+        fs.writeFileSync(path.join(repoPath, 'src', 'external.py'), externalSource);
+        const sourceHash = sha256Content(source);
+        const configHash = sha256Content(configSource);
+        const shadowHash = sha256Content(shadowSource);
+        const externalHash = sha256Content(externalSource);
+        const owner = createFunctionSymbol({
+            file: 'src/phases.py',
+            name: 'build_paper_runtime_harness_admission',
+            label: 'function build_paper_runtime_harness_admission(',
+            startLine: 1,
+            endLine: 1,
+            fileHash: sourceHash,
+            language: 'python',
+        });
+        const configSet = createFunctionSymbol({
+            file: 'src/cli/config.py',
+            name: 'set',
+            qualifiedName: 'ConfigManager.set',
+            label: 'method ConfigManager.set(',
+            startLine: 2,
+            endLine: 3,
+            fileHash: configHash,
+            language: 'python',
+            kind: 'method',
+        });
+        const shadowList = createFunctionSymbol({
+            file: 'src/python/core/helpers.py',
+            name: 'list',
+            qualifiedName: 'ShadowExecutionStore.list',
+            label: 'method ShadowExecutionStore.list(',
+            startLine: 2,
+            endLine: 3,
+            fileHash: shadowHash,
+            language: 'python',
+            kind: 'method',
+        });
+        const externalHelper = createFunctionSymbol({
+            file: 'src/external.py',
+            name: 'external_helper',
+            label: 'function external_helper(',
+            startLine: 1,
+            endLine: 2,
+            fileHash: externalHash,
+            language: 'python',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [owner, configSet, shadowList, externalHelper],
+            records: [],
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] })
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => []
+        } as unknown as HandlerSnapshotManager;
+
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/phases.py',
+                symbolId: owner.symbolInstanceId,
+                symbolLabel: owner.label,
+            },
+            direction: 'callees',
+            depth: 1,
+            limit: 20
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.supported, true);
+        assert.equal(payload.edges.length, 0);
+        assert.deepEqual(payload.nodes.map((node: CallGraphNodeView) => node.symbolId), [owner.symbolInstanceId]);
+        assert.ok(!payload.warnings?.some((warning: string) => warning.startsWith('SOURCE_BACKED_DYNAMIC_CALLEES:')));
+        assert.ok(!payload.notes.some((note: CallGraphNoteView) => note.type === 'dynamic_edge'));
+    }));
+});
+
 test('handleCallGraph surfaces suppressed low-confidence Python candidates and recovers callees when validated spans have no usable sidecar edge', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const source = [

@@ -29,8 +29,8 @@ type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
 type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
 type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
 type ToolTextResponse = { content?: Array<{ text?: string }> };
-type TestableToolHandlers = ToolHandlers & {
-    startBackgroundIndexing(codebasePath: string, forceReindex: boolean, writeCollectionName?: string): void | Promise<void>;
+type ToolHandlersTestOverrides = {
+    startBackgroundIndexing: (codebasePath: string, forceReindex: boolean, writeCollectionName?: string) => void | Promise<void>;
 };
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
@@ -97,7 +97,7 @@ function createHandlers(
     } as unknown as HandlerSyncManager;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-    (handlers as unknown as TestableToolHandlers).startBackgroundIndexing = () => undefined;
+    (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = () => undefined;
     return handlers;
 }
 

@@ -8,6 +8,23 @@ import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 import { SnapshotManager } from './snapshot.js';
 
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type ToolHandlersTestOverrides = {
+    startBackgroundIndexing: (codebasePath: string, forceReindex: boolean, writeCollectionName?: string) => Promise<void> | void;
+};
+type RuntimeMismatchHint = { indexedFingerprint?: string };
+type IndexedInfo = {
+    status: 'indexed';
+    indexedFiles: number;
+    totalChunks: number;
+    indexStatus: 'completed';
+    indexFingerprint?: IndexFingerprint;
+    fingerprintSource?: 'verified';
+    lastUpdated: string;
+};
+
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
@@ -87,21 +104,21 @@ test('handleSearchCode keeps status ok when completion-proof probe fails', async
             getIndexCompletionMarker: async () => {
                 throw new Error('marker backend unavailable');
             }
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseInfo: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: '2026-02-28T08:00:00.000Z',
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, () => Date.parse('2026-02-28T08:01:00.000Z'));
 
         const response = await handlers.handleSearchCode({
@@ -132,7 +149,7 @@ test('handleSearchCode warns when returning results from a partial limit_reached
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             semanticSearch: async () => baseSearchResult(),
             getIndexCompletionMarker: async () => buildMarker(repoPath)
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info }],
             getIndexedCodebases: () => [repoPath],
@@ -140,14 +157,14 @@ test('handleSearchCode warns when returning results from a partial limit_reached
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseInfo: () => info,
             getCodebaseStatus: () => 'indexed'
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: '2026-02-28T08:00:00.000Z',
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, () => Date.parse('2026-02-28T08:01:00.000Z'));
 
         const response = await handlers.handleSearchCode({
@@ -191,21 +208,21 @@ test('handleSearchCode returns stale-local not_indexed when completion marker is
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             semanticSearch: async () => baseSearchResult(),
             getIndexCompletionMarker: async () => null
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseInfo: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: '2026-02-28T08:00:00.000Z',
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleSearchCode({
@@ -244,7 +261,7 @@ test('handleSearchCode reruns tracked-root readiness after freshness before retu
                 markerCalls += 1;
                 return markerCalls === 1 ? buildMarker(repoPath) : null;
             }
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
             getIndexedCodebases: () => [repoPath],
@@ -252,7 +269,7 @@ test('handleSearchCode reruns tracked-root readiness after freshness before retu
             getCodebaseInfo: () => ({ status: 'indexed' }),
             getCodebaseStatus: () => 'indexed',
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => {
                 ensureFreshnessCalls += 1;
@@ -262,7 +279,7 @@ test('handleSearchCode reruns tracked-root readiness after freshness before retu
                     thresholdMs: 180000
                 };
             }
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleSearchCode({
@@ -294,7 +311,7 @@ test('handleSearchCode maps completion proof fingerprint mismatch to requires_re
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             semanticSearch: async () => baseSearchResult(),
             getIndexCompletionMarker: async () => buildMarker(repoPath, mismatchedFingerprint)
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
@@ -302,14 +319,14 @@ test('handleSearchCode maps completion proof fingerprint mismatch to requires_re
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseInfo: () => ({ status: 'indexed' }),
             getCodebaseStatus: () => 'indexed'
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: '2026-02-28T08:00:00.000Z',
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleSearchCode({
@@ -350,7 +367,7 @@ test('handleSearchCode fails closed when the configured vector backend collectio
                 return baseSearchResult();
             },
             getIndexCompletionMarker: async () => buildMarker(repoPath)
-        } as any;
+        } as unknown as HandlerContext;
 
         const codebaseInfo = {
             status: 'indexed',
@@ -371,7 +388,7 @@ test('handleSearchCode fails closed when the configured vector backend collectio
             saveCodebaseSnapshot: () => {
                 saveCalls += 1;
             }
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => {
                 ensureFreshnessCalls += 1;
@@ -384,7 +401,7 @@ test('handleSearchCode fails closed when the configured vector backend collectio
             unwatchCodebase: async () => {
                 unwatchCalls += 1;
             }
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSearchCode({
@@ -426,7 +443,7 @@ test('handleSearchCode does not enter freshness sync when completion-proof probe
             getIndexCompletionMarker: async () => {
                 throw new Error('marker backend unavailable');
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const codebaseInfo = {
             status: 'indexed',
@@ -443,7 +460,7 @@ test('handleSearchCode does not enter freshness sync when completion-proof probe
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             removeCodebaseCompletely: () => undefined,
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => {
                 ensureFreshnessCalls += 1;
@@ -454,7 +471,7 @@ test('handleSearchCode does not enter freshness sync when completion-proof probe
                 };
             },
             unwatchCodebase: async () => undefined
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSearchCode({
@@ -494,7 +511,7 @@ test('handleSearchCode does not clear snapshot readiness when vector collection 
                 return baseSearchResult();
             },
             getIndexCompletionMarker: async () => buildMarker(repoPath)
-        } as any;
+        } as unknown as HandlerContext;
 
         const codebaseInfo = {
             status: 'indexed',
@@ -515,7 +532,7 @@ test('handleSearchCode does not clear snapshot readiness when vector collection 
             saveCodebaseSnapshot: () => {
                 saveCalls += 1;
             }
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => {
                 ensureFreshnessCalls += 1;
@@ -528,7 +545,7 @@ test('handleSearchCode does not clear snapshot readiness when vector collection 
             unwatchCodebase: async () => {
                 unwatchCalls += 1;
             }
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const response = await handlers.handleSearchCode({
@@ -555,15 +572,15 @@ test('handleFileOutline returns stale-local not_indexed when completion marker i
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getIndexCompletionMarker: async () => null
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseCallGraphSidecar: () => undefined
-        } as any;
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -582,15 +599,15 @@ test('handleCallGraph returns stale-local not_indexed when completion marker is 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getIndexCompletionMarker: async () => null
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseCallGraphSidecar: () => undefined
-        } as any;
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -616,7 +633,7 @@ test('handleFileOutline returns not_indexed when search collection readiness is 
             }),
             resolveCollectionName: () => 'satori_repo_missing_collection',
             getIndexCompletionMarker: async () => buildMarker(repoPath)
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
             getIndexedCodebases: () => [repoPath],
@@ -626,10 +643,10 @@ test('handleFileOutline returns not_indexed when search collection readiness is 
             getCodebaseCallGraphSidecar: () => undefined,
             removeCodebaseCompletely: () => undefined,
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             unwatchCodebase: async () => undefined
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
@@ -654,7 +671,7 @@ test('handleCallGraph returns not_indexed when search collection readiness is go
             }),
             resolveCollectionName: () => 'satori_repo_missing_collection',
             getIndexCompletionMarker: async () => buildMarker(repoPath)
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
             getIndexedCodebases: () => [repoPath],
@@ -664,10 +681,10 @@ test('handleCallGraph returns not_indexed when search collection readiness is go
             getCodebaseCallGraphSidecar: () => undefined,
             removeCodebaseCompletely: () => undefined,
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             unwatchCodebase: async () => undefined
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleCallGraph({
@@ -712,14 +729,14 @@ test('handlers refresh persisted snapshot state before serving read paths', asyn
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             semanticSearch: async () => baseSearchResult()
-        } as any;
+        } as unknown as HandlerContext;
         const syncManager = {
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: '2026-02-28T08:00:00.000Z',
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, staleReader, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleSearchCode({
@@ -742,7 +759,7 @@ test('handleGetIndexingStatus reports stale local indexed snapshot as not indexe
     await withTempRepo(async (repoPath) => {
         const context = {
             getIndexCompletionMarker: async () => null
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseStatus: () => 'indexed',
@@ -753,8 +770,8 @@ test('handleGetIndexingStatus reports stale local indexed snapshot as not indexe
                 indexStatus: 'completed',
                 lastUpdated: '2026-02-28T08:00:00.000Z'
             })
-        } as any;
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const text = response.content[0]?.text || '';
@@ -776,7 +793,7 @@ test('handleGetIndexingStatus returns not_indexed when search collection readine
             }),
             resolveCollectionName: () => 'satori_repo_missing_collection',
             getIndexCompletionMarker: async () => buildMarker(repoPath)
-        } as any;
+        } as unknown as HandlerContext;
         const codebaseInfo = {
             status: 'indexed',
             lastUpdated: '2026-02-28T08:00:00.000Z',
@@ -795,12 +812,12 @@ test('handleGetIndexingStatus returns not_indexed when search collection readine
             saveCodebaseSnapshot: () => {
                 saveCalls += 1;
             }
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             unwatchCodebase: async () => {
                 unwatchCalls += 1;
             }
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
@@ -822,7 +839,7 @@ test('handleGetIndexingStatus keeps indexed status when marker probe fails', asy
             getIndexCompletionMarker: async () => {
                 throw new Error('probe down');
             }
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseStatus: () => 'indexed',
@@ -833,8 +850,8 @@ test('handleGetIndexingStatus keeps indexed status when marker probe fails', asy
                 indexStatus: 'completed',
                 lastUpdated: '2026-02-28T08:00:00.000Z'
             })
-        } as any;
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const text = response.content[0]?.text || '';
@@ -852,7 +869,7 @@ test('handleGetIndexingStatus preserves getIndexCompletionMarker receiver bindin
                 assert.equal(codebasePath, repoPath);
                 return this.marker;
             }
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseStatus: () => 'indexed',
@@ -863,8 +880,8 @@ test('handleGetIndexingStatus preserves getIndexCompletionMarker receiver bindin
                 indexStatus: 'completed',
                 lastUpdated: '2026-02-28T08:00:00.000Z'
             })
-        } as any;
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const text = response.content[0]?.text || '';
@@ -884,7 +901,7 @@ test('handleIndexCodebase create proceeds when snapshot is indexed but completio
             addCustomExtensions: () => undefined,
             addCustomIgnorePatterns: () => undefined,
             clearIndexCompletionMarker: async () => undefined
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexingCodebases: () => [],
             getCodebaseInfo: () => ({ status: 'indexed' }),
@@ -892,12 +909,12 @@ test('handleIndexCodebase create proceeds when snapshot is indexed but completio
             getCodebaseStatus: () => 'indexed',
             setCodebaseIndexing: () => undefined,
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             unregisterCodebaseWatcher: async () => undefined
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).startBackgroundIndexing = async () => {
+        (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = async () => {
             startedBackgroundIndexing = true;
         };
 
@@ -914,7 +931,7 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
             ...RUNTIME_FINGERPRINT,
             embeddingModel: 'voyage-code-3'
         };
-        let currentInfo: any = undefined;
+        let currentInfo: IndexedInfo | undefined = undefined;
         let startedBackgroundIndexing = false;
         let collectionLimitCalls = 0;
         let setIndexedCalls = 0;
@@ -939,13 +956,13 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
             addCustomExtensions: () => undefined,
             addCustomIgnorePatterns: () => undefined,
             clearIndexCompletionMarker: async () => undefined
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexingCodebases: () => [],
             getCodebaseInfo: () => currentInfo,
             getIndexedCodebases: () => [],
             getCodebaseStatus: () => 'not_found',
-            setCodebaseIndexed: (_path: string, stats: any, indexFingerprint: IndexFingerprint) => {
+            setCodebaseIndexed: (_path: string, stats: { indexedFiles: number; totalChunks: number }, indexFingerprint: IndexFingerprint) => {
                 setIndexedCalls += 1;
                 currentInfo = {
                     status: 'indexed',
@@ -961,12 +978,12 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
             saveCodebaseSnapshot: () => {
                 saveCalls += 1;
             }
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             unregisterCodebaseWatcher: async () => undefined
-        } as any;
+        } as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).startBackgroundIndexing = async () => {
+        (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = async () => {
             startedBackgroundIndexing = true;
         };
 
@@ -976,7 +993,7 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
         assert.equal(payload.status, 'requires_reindex');
         assert.equal(payload.reason, 'requires_reindex');
         assert.match(payload.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
-        assert.equal((payload.hints?.runtimeMismatch as any)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3');
+        assert.equal((payload.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3');
         assert.equal(startedBackgroundIndexing, false);
         assert.equal(collectionLimitCalls, 0);
         assert.equal(setIndexedCalls, 1);

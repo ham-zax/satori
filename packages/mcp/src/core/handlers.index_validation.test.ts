@@ -34,8 +34,8 @@ type BackendHintView = {
     retryable?: boolean;
     nextSteps?: string[];
 };
-type TestableToolHandlers = ToolHandlers & {
-    startBackgroundIndexing(codebasePath: string, forceReindex: boolean, writeCollectionName?: string): void | Promise<void>;
+type ToolHandlersTestOverrides = {
+    startBackgroundIndexing: (codebasePath: string, forceReindex: boolean, writeCollectionName?: string) => void | Promise<void>;
 };
 
 interface ValidationHarnessOptions {
@@ -141,7 +141,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
     } as unknown as HandlerSyncManager;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-    (handlers as unknown as TestableToolHandlers).startBackgroundIndexing = async () => undefined;
+    (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = async () => undefined;
     return { handlers, droppedCollections, snapshotEvents };
 }
 
@@ -368,7 +368,7 @@ test('handleIndexCodebase force reindex stages into a new generation without eag
             },
         });
         let startedArgs: [string, boolean, string | undefined] | null = null;
-        (handlers as unknown as TestableToolHandlers).startBackgroundIndexing = async (
+        (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = async (
             codebasePath: string,
             forceReindex: boolean,
             stagedCollectionName?: string

@@ -18,6 +18,105 @@ import {
 } from '@zokizuan/satori-core';
 import type { SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
 
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type HandlerCallGraphManager = NonNullable<ConstructorParameters<typeof ToolHandlers>[6]>;
+type HandlerReranker = NonNullable<ConstructorParameters<typeof ToolHandlers>[7]>;
+type SearchFixtureResult = {
+    content: string;
+    relativePath: string;
+    startLine: number;
+    endLine: number;
+    language: string;
+    score: number;
+    indexedAt: string;
+    symbolId?: string;
+    symbolLabel?: string;
+    symbolKey?: string;
+    symbolInstanceId?: string;
+    symbolKind?: string;
+    ownerSymbolKey?: string;
+    ownerSymbolInstanceId?: string;
+    breadcrumbs?: string[];
+    backendScore?: number;
+    backendScoreKind?: string;
+};
+type SidecarNodeFixture = {
+    symbolId: string;
+    symbolLabel?: string;
+    file: string;
+    language: string;
+    span: { startLine: number; endLine: number };
+};
+type SemanticSearchRequestView = {
+    codebasePath?: string;
+    query?: string;
+    topK?: number;
+    retrievalMode?: string;
+    scorePolicy?: unknown;
+};
+type ParsedSemanticSearchInvocation = {
+    root: string;
+    query: string;
+    topK: number;
+    request: SemanticSearchRequestView | null;
+};
+type SearchPayloadResultView = {
+    file?: string;
+    symbolId?: string;
+    symbolInstanceId?: string;
+    symbolLabel?: string;
+    debug?: {
+        lexicalScore?: number;
+        exactLexicalMatch?: boolean;
+        changedFilesMultiplier?: number;
+        provenance?: {
+            retrievalPasses?: string[];
+            exactMatchPinned?: boolean;
+            semanticCandidate?: boolean;
+            lexicalCandidate?: boolean;
+        };
+    };
+};
+type ChangedFilesState = { available: boolean; files: Set<string> };
+type ChangedFilesCacheEntry = ChangedFilesState & { expiresAtMs: number };
+type SearchFreshnessDecisionPayload = {
+    status: string;
+    reason?: string;
+    message: string;
+    hints?: {
+        reindex?: { tool?: string; args?: { action?: string } };
+        [key: string]: unknown;
+    };
+    recommendedNextAction?: { tool?: string; args?: { action?: string } };
+    results: SearchPayloadResultView[];
+};
+type MutableHandlerContext = HandlerContext & {
+    semanticSearch: (...args: unknown[]) => Promise<SearchFixtureResult[]> | SearchFixtureResult[];
+    getTrackedRelativePaths?: () => string[];
+    getActiveIgnorePatterns?: () => string[];
+    recreateSynchronizerForCodebase?: (repoPath: string) => Promise<void> | void;
+};
+type SortableGroupedSearchResult = {
+    file: string;
+    debug?: {
+        provenance?: {
+            exactMatchPinned?: boolean;
+        };
+    };
+    [key: string]: unknown;
+};
+type ToolHandlersTestOverrides = {
+    context: MutableHandlerContext;
+    syncManager: HandlerSyncManager;
+    getChangedFilesForCodebase: (repoPath: string) => ChangedFilesState;
+    parseGitStatusChangedPaths: (status: string) => Set<string>;
+    changedFilesCache: Map<string, ChangedFilesCacheEntry>;
+    validateCompletionProof: () => Promise<{ outcome: string }>;
+    sortGroupedSearchResults: (grouped: SortableGroupedSearchResult[], debug: boolean) => boolean;
+};
+
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
@@ -311,19 +410,19 @@ async function writeSearchNavigationSidecars(input: {
 
 function createHandlers(
     repoPath: string,
-    searchResults: any[],
-    reranker?: any,
+    searchResults: SearchFixtureResult[],
+    reranker?: HandlerReranker,
     options?: {
         gitignoreForceReloadEveryN?: number;
         sidecarReady?: boolean;
-        sidecarNodes?: any[];
+        sidecarNodes?: SidecarNodeFixture[];
         sidecarBuiltAt?: string;
     }
 ) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         semanticSearch: async () => searchResults
-    } as any;
+    } as unknown as HandlerContext;
 
     const snapshotManager = {
         getAllCodebases: () => [],
@@ -331,7 +430,7 @@ function createHandlers(
         getIndexingCodebases: () => [],
         getCodebaseCallGraphSidecar: () => options?.sidecarReady === false ? undefined : ({ version: 'v3' }),
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-    } as any;
+    } as unknown as HandlerSnapshotManager;
 
     const syncManager = {
         ensureFreshness: async () => ({
@@ -339,7 +438,7 @@ function createHandlers(
             checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
             thresholdMs: 180000
         })
-    } as any;
+    } as unknown as HandlerSyncManager;
 
     const capabilities = new CapabilityResolver({
         name: 'test',
@@ -373,7 +472,7 @@ function createHandlers(
                 edges: [],
                 notes: []
             })
-    } as any;
+    } as unknown as HandlerCallGraphManager;
 
     const handlers = new ToolHandlers(
         context,
@@ -389,20 +488,24 @@ function createHandlers(
     return handlers;
 }
 
-function parseSemanticSearchInvocation(args: any[]): { root: string; query: string; topK: number; request: any | null } {
+function parseSemanticSearchInvocation(args: unknown[]): ParsedSemanticSearchInvocation {
     if (args.length === 1 && args[0] && typeof args[0] === 'object') {
+        const request = args[0] as SemanticSearchRequestView;
         return {
-            root: args[0].codebasePath,
-            query: args[0].query,
-            topK: args[0].topK ?? 5,
-            request: args[0]
+            root: request.codebasePath ?? '',
+            query: request.query ?? '',
+            topK: request.topK ?? 5,
+            request
         };
     }
 
+    const root = typeof args[0] === 'string' ? args[0] : '';
+    const query = typeof args[1] === 'string' ? args[1] : '';
+    const topK = typeof args[2] === 'number' ? args[2] : 5;
     return {
-        root: args[0],
-        query: args[1],
-        topK: args[2] ?? 5,
+        root,
+        query,
+        topK,
         request: null
     };
 }
@@ -1067,7 +1170,7 @@ test('handleSearchCode supplements exact warning-code retrieval from tracked lex
             },
         ]);
 
-        (handlers as any).context.getTrackedRelativePaths = () => [relativePath];
+        (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => [relativePath];
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -1118,7 +1221,7 @@ test('handleSearchCode supplements quoted exact literal retrieval from tracked l
             },
         ]);
 
-        (handlers as any).context.getTrackedRelativePaths = () => [relativePath];
+        (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => [relativePath];
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -1176,11 +1279,11 @@ test('handleSearchCode exact registry fast path returns a grouped symbol without
                     return [];
                 }
             });
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 semanticSearchCalls += 1;
                 throw new Error('semanticSearch should not run for exact registry hits');
             };
-            (handlers as any).context.getTrackedRelativePaths = () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => {
                 throw new Error('tracked lexical scan should not run for exact registry hits');
             };
 
@@ -1245,7 +1348,7 @@ test('handleSearchCode does not shortcut vague one-word semantic queries through
 
             let semanticSearchCalls = 0;
             const handlers = createHandlers(repoPath, []);
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 semanticSearchCalls += 1;
                 return [];
             };
@@ -1278,7 +1381,7 @@ test('handleSearchCode explains exact registry fallback when the symbol registry
 
             let semanticSearchCalls = 0;
             const handlers = createHandlers(repoPath, []);
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 semanticSearchCalls += 1;
                 return [];
             };
@@ -1327,7 +1430,7 @@ test('handleSearchCode exact registry fast path uses normal runtime scope filter
 
             let semanticSearchCalls = 0;
             const handlers = createHandlers(repoPath, []);
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 semanticSearchCalls += 1;
                 return [];
             };
@@ -1396,7 +1499,7 @@ test('handleSearchCode exact registry fast path limits path-scoped lookup to the
             assert.ok(owner);
 
             const handlers = createHandlers(repoPath, []);
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 throw new Error('semanticSearch should not run for path-scoped exact registry hits');
             };
 
@@ -1444,11 +1547,11 @@ test('handleSearchCode exact registry miss still allows bounded tracked lexical 
 
             let semanticSearchCalls = 0;
             const handlers = createHandlers(repoPath, []);
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 semanticSearchCalls += 1;
                 return [];
             };
-            (handlers as any).context.getTrackedRelativePaths = () => [lexicalPath];
+            (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => [lexicalPath];
 
             const response = await handlers.handleSearchCode({
                 path: repoPath,
@@ -1496,7 +1599,7 @@ test('handleSearchCode exact symbolInstanceId fast path only uses current regist
             assert.ok(owner);
 
             const handlers = createHandlers(repoPath, []);
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 throw new Error('semanticSearch should not run for exact symbolInstanceId hits');
             };
 
@@ -1545,11 +1648,11 @@ test('handleSearchCode uses must-only exact identifier queries for exact registr
 
             let semanticSearchCalls = 0;
             const handlers = createHandlers(repoPath, []);
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 semanticSearchCalls += 1;
                 throw new Error('semanticSearch should not run for must-only exact identifier hits');
             };
-            (handlers as any).context.getTrackedRelativePaths = () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => {
                 throw new Error('tracked lexical scan should not run for must-only exact identifier hits');
             };
 
@@ -1616,7 +1719,7 @@ test('handleSearchCode ambiguous exact registry lookup falls back to existing se
                 symbolId: 'legacy_runTask',
                 symbolLabel: 'function runTask()',
             }]);
-            (handlers as any).context.semanticSearch = async () => {
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 semanticSearchCalls += 1;
                 return [{
                     content: 'export function runTask() { return "stack"; }',
@@ -1739,9 +1842,9 @@ test('sortGroupedSearchResults preserves exactMatchPinned provenance when exact 
                     },
                 },
             },
-        ] as any[];
+        ] as SortableGroupedSearchResult[];
 
-        const applied = (handlers as any).sortGroupedSearchResults(grouped, true);
+        const applied = (handlers as unknown as ToolHandlersTestOverrides).sortGroupedSearchResults(grouped, true);
         assert.equal(applied, true);
         assert.equal(grouped[0].file, 'docs/exact.md');
         assert.equal(grouped[0].debug?.provenance?.exactMatchPinned, true);
@@ -1762,7 +1865,7 @@ test('handleSearchCode debug exposes tracked lexical scan caps when the bounded 
         });
 
         const handlers = createHandlers(repoPath, []);
-        (handlers as any).context.getTrackedRelativePaths = () => trackedPaths;
+        (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => trackedPaths;
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -1830,8 +1933,8 @@ test('handleSearchCode tracked lexical supplement respects ignore rules and dete
 
         for (const testCase of cases) {
             const handlers = createHandlers(repoPath, []);
-            (handlers as any).context.getTrackedRelativePaths = () => [relativePath];
-            (handlers as any).context.getActiveIgnorePatterns = () => testCase.ignorePatterns || [];
+            (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => [relativePath];
+            (handlers as unknown as ToolHandlersTestOverrides).context.getActiveIgnorePatterns = () => testCase.ignorePatterns || [];
 
             const response = await handlers.handleSearchCode({
                 path: repoPath,
@@ -1854,7 +1957,7 @@ test('handleSearchCode tracked lexical supplement respects ignore rules and dete
 test('handleSearchCode ignores tracked lexical paths that resolve outside the repo root', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, []);
-        (handlers as any).context.getTrackedRelativePaths = () => ['../escape.ts'];
+        (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => ['../escape.ts'];
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -2871,7 +2974,7 @@ test('handleSearchCode runtime scope includes tests but excludes docs and artifa
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.resultMode, 'raw');
-        const files = payload.results.map((r: any) => r.file).sort();
+        const files = payload.results.map((r: SearchPayloadResultView) => r.file).sort();
         assert.deepEqual(files, ['src/reports/runtime-report-service.ts', 'src/runtime.test.ts', 'src/runtime.ts']);
     });
 });
@@ -2927,7 +3030,7 @@ test('handleSearchCode docs scope only returns docs and tests', async () => {
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        const files = payload.results.map((r: any) => r.file).sort();
+        const files = payload.results.map((r: SearchPayloadResultView) => r.file).sort();
         assert.deepEqual(files, ['docs/runtime-helper.ts', 'docs/runtime.md', 'src/runtime.test.ts']);
     });
 });
@@ -3010,15 +3113,15 @@ test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', asy
 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async (...args: any[]) => denseResults.slice(0, parseSemanticSearchInvocation(args).topK)
-        } as any;
+            semanticSearch: async (...args: unknown[]) => denseResults.slice(0, parseSemanticSearchInvocation(args).topK)
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -3026,7 +3129,7 @@ test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', asy
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -3063,15 +3166,15 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async (...args: any[]) => denseResults.slice(0, parseSemanticSearchInvocation(args).topK)
-        } as any;
+            semanticSearch: async (...args: unknown[]) => denseResults.slice(0, parseSemanticSearchInvocation(args).topK)
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -3079,7 +3182,7 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -3211,7 +3314,7 @@ test('handleSearchCode grouped diversity keeps multi-file coverage by default', 
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        const files = payload.results.map((result: any) => result.file);
+        const files = payload.results.map((result: SearchPayloadResultView) => result.file);
         assert.equal(files.includes('src/two.ts'), true);
         assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerFile, 2);
         assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerSymbol, 1);
@@ -3265,7 +3368,7 @@ test('handleSearchCode grouped diversity keeps distinct symbol instances that sh
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 2);
         assert.deepEqual(
-            payload.results.map((result: any) => result.symbolInstanceId),
+            payload.results.map((result: SearchPayloadResultView) => result.symbolInstanceId),
             ['owner_login_instance_a', 'owner_login_instance_b']
         );
     });
@@ -3298,7 +3401,7 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
             }
         ]);
 
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set(['src/changed.ts'])
         });
@@ -3350,7 +3453,7 @@ test('handleSearchCode freshness summary only marks changed-files boost applied 
             }
         ]);
 
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set(['src/dirty-but-not-returned.ts'])
         });
@@ -3391,10 +3494,10 @@ test('handleSearchCode exposes freshness summary and warns when dirty files were
             }
         ]);
 
-        (handlers as any).syncManager = {
+        (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
             ensureFreshness: async () => ({ mode: 'skipped_recent', changed: false })
         };
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set(['src/changed.ts'])
         });
@@ -3461,10 +3564,10 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence when in
             }
         ]);
 
-        (handlers as any).syncManager = {
+        (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
             ensureFreshness: async () => ({ mode: 'skipped_recent', changed: false })
         };
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set([relativePath])
         });
@@ -3514,14 +3617,14 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence after s
             }
         ]);
 
-        (handlers as any).syncManager = {
+        (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
             ensureFreshness: async () => ({
                 mode: 'synced',
                 changed: true,
                 stats: { added: 0, removed: 0, modified: 1 },
             })
         };
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set([relativePath])
         });
@@ -3577,15 +3680,15 @@ test('handleSearchCode supplements exact path-scoped tracked test evidence witho
             }
         ]);
 
-        (handlers as any).context.getTrackedRelativePaths = () => [relativePath, 'src/unrelated.ts'];
-        (handlers as any).syncManager = {
+        (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => [relativePath, 'src/unrelated.ts'];
+        (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
         };
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set<string>()
         });
@@ -3637,7 +3740,7 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
             encoderModel: 'voyage-4-large',
             encoderOutputDimension: 1024,
             milvusEndpoint: 'http://127.0.0.1:19530',
-        }) as any;
+        }) as unknown as MutableHandlerContext;
         await context.recreateSynchronizerForCodebase(repoPath);
         context.semanticSearch = async () => ([
             {
@@ -3659,7 +3762,7 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
             getIndexingCodebases: () => [],
             getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -3667,7 +3770,7 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(
             context,
@@ -3677,7 +3780,7 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
             CAPABILITIES_NO_RERANK,
             () => Date.parse('2026-01-01T01:00:00.000Z')
         );
-        (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -3718,7 +3821,7 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
                     symbolLabel: 'function changed()'
                 }
             ])
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
@@ -3726,7 +3829,7 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
             getIndexingCodebases: () => [],
             getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -3734,7 +3837,7 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const callGraphManager = {
             loadSidecar: () => ({
@@ -3765,7 +3868,7 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
                 ],
                 notes: []
             })
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
         const handlers = new ToolHandlers(
             context,
@@ -3776,7 +3879,7 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
             () => Date.parse('2026-01-01T01:00:00.000Z'),
             callGraphManager
         );
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set(['src/changed.ts'])
         });
@@ -3849,21 +3952,21 @@ test('handleSearchCode debug changed-code payload is capped with totals and trun
                     symbolLabel: 'function changed_0()'
                 }
             ])
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const syncManager = {
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 nodes: [...changedNodes, ...callerNodes],
@@ -3876,7 +3979,7 @@ test('handleSearchCode debug changed-code payload is capped with totals and trun
                 })),
                 notes: []
             })
-        } as any;
+        } as unknown as HandlerCallGraphManager;
         const handlers = new ToolHandlers(
             context,
             snapshotManager,
@@ -3886,7 +3989,7 @@ test('handleSearchCode debug changed-code payload is capped with totals and trun
             () => Date.parse('2026-01-01T01:00:00.000Z'),
             callGraphManager
         );
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set(changedFiles)
         });
@@ -3948,7 +4051,7 @@ test('handleSearchCode auto_changed_first skips boost when changed file set exce
             changedPaths.add(`src/extra-${i}.ts`);
         }
 
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: changedPaths
         });
@@ -3980,7 +4083,7 @@ test('handleSearchCode auto_changed_first skips boost when changed file set exce
 test('getChangedFilesForCodebase ignores untracked git status entries for deterministic boost input', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, []);
-        const parsed = (handlers as any).parseGitStatusChangedPaths([
+        const parsed = (handlers as unknown as ToolHandlersTestOverrides).parseGitStatusChangedPaths([
             ' M src/changed.ts',
             'R  src/old.ts -> src/renamed.ts',
             '?? .satori/mcp-codebase-snapshot.json',
@@ -3995,13 +4098,13 @@ test('getChangedFilesForCodebase reuses stale cache on git status failure to avo
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, []);
         const cacheKey = path.resolve(repoPath);
-        (handlers as any).changedFilesCache.set(cacheKey, {
+        (handlers as unknown as ToolHandlersTestOverrides).changedFilesCache.set(cacheKey, {
             expiresAtMs: 0,
             available: true,
             files: new Set(['src/changed.ts'])
         });
 
-        const state = (handlers as any).getChangedFilesForCodebase(repoPath);
+        const state = (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase(repoPath);
         assert.equal(state.available, true);
         assert.deepEqual(Array.from(state.files).sort(), ['src/changed.ts']);
     });
@@ -4175,14 +4278,14 @@ test('handleSearchCode marks rerank.enabled=false when reranker instance is miss
                     symbolLabel: 'one'
                 }
             ])
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -4190,7 +4293,7 @@ test('handleSearchCode marks rerank.enabled=false when reranker instance is miss
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const capabilities = new CapabilityResolver({
             name: 'test',
@@ -4973,7 +5076,7 @@ test('handleSearchCode does not boost dirty tests for non-test implementation qu
                 symbolLabel: 'function ensureCodexGuidanceHook(config)'
             }
         ]);
-        (handlers as any).getChangedFilesForCodebase = () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
             available: true,
             files: new Set(['packages/cli/src/install.test.ts'])
         });
@@ -5059,7 +5162,7 @@ test('handleSearchCode collapses duplicate declaration groups for reference-seek
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
-        const declarationHits = payload.results.filter((result: any) => result.file === 'src/hurst_gate.ts' && result.symbolLabel === 'class HurstGateState');
+        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.file === 'src/hurst_gate.ts' && result.symbolLabel === 'class HurstGateState');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -5169,7 +5272,7 @@ test('handleSearchCode collapses duplicate declaration groups for identifier que
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        const declarationHits = payload.results.filter((result: any) => result.file === 'src/hurst_gate.ts' && result.symbolLabel === 'class HurstGateState');
+        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.file === 'src/hurst_gate.ts' && result.symbolLabel === 'class HurstGateState');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -5344,7 +5447,7 @@ test('handleSearchCode reference-seeking function declarations do not receive us
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
-        const declaration = payload.results.find((result: any) => result.file === 'src/check_hurst_gate.ts');
+        const declaration = payload.results.find((result: SearchPayloadResultView) => result.file === 'src/check_hurst_gate.ts');
         assert.ok(declaration);
         assert.equal(declaration.debug?.lexicalScore < 0.05, true);
     });
@@ -5454,7 +5557,7 @@ test('handleSearchCode treats arrow function declarations as declarations for re
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
-        const declarationHits = payload.results.filter((result: any) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'const check_hurst_gate =');
+        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'const check_hurst_gate =');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -5502,7 +5605,7 @@ test('handleSearchCode treats arrow declarations with n-containing parameter nam
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
-        const declaration = payload.results.find((result: any) => result.file === 'src/check_hurst_gate.ts');
+        const declaration = payload.results.find((result: SearchPayloadResultView) => result.file === 'src/check_hurst_gate.ts');
         assert.ok(declaration);
         assert.equal(declaration.debug?.lexicalScore < 0.05, true);
     });
@@ -5563,7 +5666,7 @@ test('handleSearchCode collapses duplicate function declaration groups for refer
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        const declarationHits = payload.results.filter((result: any) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'function check_hurst_gate');
+        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'function check_hurst_gate');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -6330,7 +6433,7 @@ test('handleSearchCode emits fileOutlineWindow navigation fallback when sidecar 
                     indexedAt: '2026-01-01T00:30:00.000Z'
                 }
             ])
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
@@ -6338,7 +6441,7 @@ test('handleSearchCode emits fileOutlineWindow navigation fallback when sidecar 
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseCallGraphSidecar: () => ({ version: 'v3' })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -6346,7 +6449,7 @@ test('handleSearchCode emits fileOutlineWindow navigation fallback when sidecar 
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6396,7 +6499,7 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
                     indexedAt: '2026-01-01T00:30:00.000Z'
                 }
             ])
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
@@ -6404,7 +6507,7 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             getCodebaseCallGraphSidecar: sidecarForPath
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -6412,7 +6515,7 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6488,21 +6591,21 @@ test('handleSearchCode grouped sorting places null symbolLabel last for determin
 
 test('handleSearchCode builds explicit hybrid semantic search requests with topk_only policy', async () => {
     await withTempRepo(async (repoPath) => {
-        const calls: Array<{ root: string; query: string; topK: number; request: any | null }> = [];
+        const calls: ParsedSemanticSearchInvocation[] = [];
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async (...args: any[]) => {
+            semanticSearch: async (...args: unknown[]) => {
                 calls.push(parseSemanticSearchInvocation(args));
                 return [];
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -6510,7 +6613,7 @@ test('handleSearchCode builds explicit hybrid semantic search requests with topk
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6546,18 +6649,18 @@ test('handleSearchCode falls back to dense retrieval when hybrid mode is disable
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getIsHybrid: () => false,
-            semanticSearch: async (...args: any[]) => {
+            semanticSearch: async (...args: unknown[]) => {
                 calls.push(parseSemanticSearchInvocation(args));
                 return [];
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -6565,7 +6668,7 @@ test('handleSearchCode falls back to dense retrieval when hybrid mode is disable
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, DENSE_RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6601,7 +6704,7 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async (...args: any[]) => {
+            semanticSearch: async (...args: unknown[]) => {
                 const { query } = parseSemanticSearchInvocation(args);
                 const passId = query.includes('implementation runtime source entrypoint') ? 'expanded' : 'primary';
                 started.push(passId);
@@ -6621,14 +6724,14 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
                     symbolLabel: 'method validateSession(token: string)'
                 }];
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -6636,7 +6739,7 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6671,14 +6774,14 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
             semanticSearch: async () => {
                 throw new Error('backend unavailable');
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -6686,7 +6789,7 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6711,14 +6814,14 @@ test('handleSearchCode returns structured backend diagnostics when all semantic 
             semanticSearch: async () => {
                 throw new Error('16 UNAUTHENTICATED: The action is unavailable under current cluster status STOPPED.');
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -6726,7 +6829,7 @@ test('handleSearchCode returns structured backend diagnostics when all semantic 
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6758,7 +6861,7 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
         }, async () => {
             const context = {
                 getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-                semanticSearch: async (...args: any[]) => {
+                semanticSearch: async (...args: unknown[]) => {
                     const { query } = parseSemanticSearchInvocation(args);
                     if (query.includes('implementation runtime source entrypoint')) {
                         return [{
@@ -6785,14 +6888,14 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
                         symbolLabel: 'function primaryPass()'
                     }];
                 }
-            } as any;
+            } as unknown as HandlerContext;
 
             const snapshotManager = {
                 getAllCodebases: () => [],
                 getIndexedCodebases: () => [repoPath],
                 getIndexingCodebases: () => [],
                 ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-            } as any;
+            } as unknown as HandlerSnapshotManager;
 
             const syncManager = {
                 ensureFreshness: async () => ({
@@ -6800,7 +6903,7 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
                     checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                     thresholdMs: 180000
                 })
-            } as any;
+            } as unknown as HandlerSyncManager;
 
             const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6833,7 +6936,7 @@ test('handleSearchCode ignores fault injection env outside test mode', { concurr
         }, async () => {
             const context = {
                 getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-                semanticSearch: async (...args: any[]) => {
+                semanticSearch: async (...args: unknown[]) => {
                     const { query } = parseSemanticSearchInvocation(args);
                     if (query.includes('implementation runtime source entrypoint')) {
                         return [{
@@ -6860,14 +6963,14 @@ test('handleSearchCode ignores fault injection env outside test mode', { concurr
                         symbolLabel: 'function primaryPass()'
                     }];
                 }
-            } as any;
+            } as unknown as HandlerContext;
 
             const snapshotManager = {
                 getAllCodebases: () => [],
                 getIndexedCodebases: () => [repoPath],
                 getIndexingCodebases: () => [],
                 ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-            } as any;
+            } as unknown as HandlerSnapshotManager;
 
             const syncManager = {
                 ensureFreshness: async () => ({
@@ -6875,7 +6978,7 @@ test('handleSearchCode ignores fault injection env outside test mode', { concurr
                     checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                     thresholdMs: 180000
                 })
-            } as any;
+            } as unknown as HandlerSyncManager;
 
             const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6916,14 +7019,14 @@ test('handleSearchCode returns deterministic all-pass error when test fault inje
                     symbolId: 'sym_primary',
                     symbolLabel: 'function primaryPass()'
                 }]
-            } as any;
+            } as unknown as HandlerContext;
 
             const snapshotManager = {
                 getAllCodebases: () => [],
                 getIndexedCodebases: () => [repoPath],
                 getIndexingCodebases: () => [],
                 ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-            } as any;
+            } as unknown as HandlerSnapshotManager;
 
             const syncManager = {
                 ensureFreshness: async () => ({
@@ -6931,7 +7034,7 @@ test('handleSearchCode returns deterministic all-pass error when test fault inje
                     checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                     thresholdMs: 180000
                 })
-            } as any;
+            } as unknown as HandlerSyncManager;
 
             const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -6963,7 +7066,7 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             semanticSearch: async () => []
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{
@@ -6996,7 +7099,7 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
                 reason: 'fingerprint_mismatch',
                 message: 'Legacy fingerprint mismatch.',
             })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -7004,7 +7107,7 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -7033,7 +7136,7 @@ test('handleSearchCode requires_reindex payload includes compatibility diagnosti
 });
 
 async function runSearchFreshnessDecisionCase(
-    decision: any,
+    decision: Record<string, unknown>,
     expected: {
         status: string;
         reason?: string;
@@ -7041,7 +7144,7 @@ async function runSearchFreshnessDecisionCase(
         messageIncludes?: string;
         completionProofCalls?: number;
     }
-): Promise<any> {
+): Promise<SearchFreshnessDecisionPayload> {
     let semanticSearchCalls = 0;
     let ensureFreshnessCalls = 0;
     let completionProofCalls = 0;
@@ -7063,7 +7166,7 @@ async function runSearchFreshnessDecisionCase(
                     symbolLabel: 'function freshRuntime()'
                 }];
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const codebaseInfo = {
             status: 'indexed',
@@ -7078,17 +7181,17 @@ async function runSearchFreshnessDecisionCase(
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => {
                 ensureFreshnessCalls += 1;
                 return decision;
             }
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
-        (handlers as any).validateCompletionProof = async () => {
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => {
             completionProofCalls += 1;
             return { outcome: 'ok' };
         };
@@ -7207,7 +7310,7 @@ test('handleSearchCode not_indexed payload includes stable reason code', async (
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             semanticSearch: async () => []
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [],
@@ -7216,7 +7319,7 @@ test('handleSearchCode not_indexed payload includes stable reason code', async (
             getIndexedCodebases: () => [],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => ({
@@ -7224,7 +7327,7 @@ test('handleSearchCode not_indexed payload includes stable reason code', async (
                 checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
                 thresholdMs: 180000
             })
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
@@ -7261,7 +7364,7 @@ test('handleSearchCode failed-index payload preserves failure diagnostics', asyn
             semanticSearch: async () => {
                 throw new Error('semanticSearch should not run for failed indexes');
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: failedInfo }],
@@ -7270,13 +7373,13 @@ test('handleSearchCode failed-index payload preserves failure diagnostics', asyn
             getIndexedCodebases: () => [],
             getIndexingCodebases: () => [],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => {
                 throw new Error('ensureFreshness should not run for failed indexes');
             }
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-06-19T12:20:00.000Z'));
 
@@ -7312,7 +7415,7 @@ test('handleSearchCode indexing payload recommends manage_index status', async (
             semanticSearch: async () => {
                 throw new Error('semanticSearch should not run while indexing');
             }
-        } as any;
+        } as unknown as HandlerContext;
 
         const indexingInfo = {
             status: 'indexing',
@@ -7326,13 +7429,13 @@ test('handleSearchCode indexing payload recommends manage_index status', async (
             getIndexedCodebases: () => [],
             getIndexingCodebases: () => [repoPath],
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const syncManager = {
             ensureFreshness: async () => {
                 throw new Error('ensureFreshness should not run while indexing');
             }
-        } as any;
+        } as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 

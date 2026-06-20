@@ -6,6 +6,17 @@ import path from 'node:path';
 import { SyncManager } from './sync.js';
 
 type CodebaseStatus = 'indexed' | 'indexing' | 'indexfailed' | 'sync_completed' | 'requires_reindex' | 'not_found';
+type SyncContext = ConstructorParameters<typeof SyncManager>[0];
+type SyncSnapshotManager = ConstructorParameters<typeof SyncManager>[1];
+type SyncManagerTestAccess = {
+    watcherModeStarted: boolean;
+    watchers: Map<string, { close: () => Promise<void> | void }>;
+    debounceTimers: Map<string, NodeJS.Timeout>;
+    shouldIgnoreWatchPath(codebasePath: string, filePath: string): boolean;
+    isIgnoreRuleControlFile(relativePath: string): boolean;
+    touchWatchedCodebase(codebasePath: string): Promise<void>;
+    unwatchCodebase(codebasePath: string): Promise<void>;
+};
 
 function wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -91,12 +102,12 @@ test('watch-triggered sync is dropped for non-searchable statuses', async () => 
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexing']]);
     const context = createContext();
     const snapshot = createSnapshot(statusByPath);
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
 
-    (manager as any).watcherModeStarted = true;
+    (manager as unknown as SyncManagerTestAccess).watcherModeStarted = true;
     manager.scheduleWatcherSync(codebasePath, 'watch_event');
     await wait(80);
 
@@ -130,7 +141,7 @@ test('ensureFreshness clears core index artifacts when an indexed path is delete
         },
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -155,7 +166,7 @@ test('ensureFreshness treats satori.toml as an index-policy control file', async
     snapshot.setCodebaseIgnoreControlSignature(codebasePath, 'stale-signature');
     snapshot.setCodebaseIndexManifest(codebasePath, ['src/app.ts']);
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -171,12 +182,12 @@ test('watch-triggered sync coalesces burst changes into one sync', async () => {
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
     const context = createContext();
     const snapshot = createSnapshot(statusByPath);
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
 
-    (manager as any).watcherModeStarted = true;
+    (manager as unknown as SyncManagerTestAccess).watcherModeStarted = true;
     manager.scheduleWatcherSync(codebasePath, 'watch_event');
     manager.scheduleWatcherSync(codebasePath, 'watch_event');
     manager.scheduleWatcherSync(codebasePath, 'watch_event');
@@ -190,12 +201,12 @@ test('watch-triggered sync coalesces burst changes into one sync', async () => {
 test('stopWatcherMode closes active watchers and clears timers', async () => {
     const context = createContext();
     const snapshot = createSnapshot(new Map());
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
 
-    (manager as any).watcherModeStarted = true;
+    (manager as unknown as SyncManagerTestAccess).watcherModeStarted = true;
     let closeCalls = 0;
     const fakeWatcher = {
         close: async () => {
@@ -204,14 +215,14 @@ test('stopWatcherMode closes active watchers and clears timers', async () => {
     };
 
     const timer = setTimeout(() => { }, 2000);
-    (manager as any).watchers.set('/tmp/repo', fakeWatcher);
-    (manager as any).debounceTimers.set('/tmp/repo', timer);
+    (manager as unknown as SyncManagerTestAccess).watchers.set('/tmp/repo', fakeWatcher);
+    (manager as unknown as SyncManagerTestAccess).debounceTimers.set('/tmp/repo', timer);
 
     await manager.stopWatcherMode();
 
     assert.equal(closeCalls, 1);
-    assert.equal((manager as any).watchers.size, 0);
-    assert.equal((manager as any).debounceTimers.size, 0);
+    assert.equal((manager as unknown as SyncManagerTestAccess).watchers.size, 0);
+    assert.equal((manager as unknown as SyncManagerTestAccess).debounceTimers.size, 0);
 });
 
 test('watch filter allowlists root ignore controls and hidden supported files', async () => {
@@ -219,32 +230,32 @@ test('watch filter allowlists root ignore controls and hidden supported files', 
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
     const context = createContext();
     const snapshot = createSnapshot(statusByPath);
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
 
-    const shouldIgnore = (manager as any).shouldIgnoreWatchPath(
+    const shouldIgnore = (manager as unknown as SyncManagerTestAccess).shouldIgnoreWatchPath(
         codebasePath,
         path.join(codebasePath, '.satoriignore')
     );
     assert.equal(shouldIgnore, false);
 
-    const shouldIgnoreRootGitIgnore = (manager as any).shouldIgnoreWatchPath(
+    const shouldIgnoreRootGitIgnore = (manager as unknown as SyncManagerTestAccess).shouldIgnoreWatchPath(
         codebasePath,
         path.join(codebasePath, '.gitignore')
     );
     assert.equal(shouldIgnoreRootGitIgnore, false);
 
-    const shouldIgnoreHiddenSupportedFile = (manager as any).shouldIgnoreWatchPath(
+    const shouldIgnoreHiddenSupportedFile = (manager as unknown as SyncManagerTestAccess).shouldIgnoreWatchPath(
         codebasePath,
         path.join(codebasePath, '.hidden/runtime.ts')
     );
     assert.equal(shouldIgnoreHiddenSupportedFile, false);
 
-    assert.equal((manager as any).isIgnoreRuleControlFile('.gitignore'), true);
-    assert.equal((manager as any).isIgnoreRuleControlFile('.satoriignore'), true);
-    assert.equal((manager as any).isIgnoreRuleControlFile('nested/.gitignore'), false);
+    assert.equal((manager as unknown as SyncManagerTestAccess).isIgnoreRuleControlFile('.gitignore'), true);
+    assert.equal((manager as unknown as SyncManagerTestAccess).isIgnoreRuleControlFile('.satoriignore'), true);
+    assert.equal((manager as unknown as SyncManagerTestAccess).isIgnoreRuleControlFile('nested/.gitignore'), false);
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });
@@ -276,7 +287,7 @@ test('ensureFreshness baselines missing ignore signature only when no manifest o
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -315,7 +326,7 @@ test('ensureFreshness marks requires_reindex when incremental navigation recover
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -373,7 +384,7 @@ test('ensureFreshness reconciles missing ignore signature when an indexed manife
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -397,7 +408,7 @@ test('recordCurrentIgnoreControlSignature persists the current root ignore signa
     const snapshot = createSnapshot(statusByPath);
     const context = createContext();
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -419,7 +430,7 @@ test('ensureFreshness does not baseline ignore control signature for non-searcha
     const snapshot = createSnapshot(statusByPath);
     const context = createContext();
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -437,7 +448,7 @@ test('ensureFreshness returns skipped_indexing for actively indexing codebases',
     const snapshot = createSnapshot(statusByPath);
     const context = createContext();
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -488,7 +499,7 @@ test('ensureFreshness detects ignore control signature changes and reconciles be
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -559,7 +570,7 @@ test('ensureFreshness detects same-size ignore control content changes with unch
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -626,7 +637,7 @@ test('ensureFreshness coalesces non-watcher ignore signature reconciles while on
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: false,
     });
 
@@ -691,7 +702,7 @@ test('ignore-change reconciliation deletes newly ignored indexed paths and force
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
@@ -753,7 +764,7 @@ test('ignore-change reconciliation marks requires_reindex when sync fails after 
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
@@ -813,7 +824,7 @@ test('ignore-change reconcile uses manifest paths captured before reload even wh
         },
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
@@ -874,7 +885,7 @@ test('ignore-change reconciliation runs after in-flight sync and is not skipped 
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
@@ -929,7 +940,7 @@ test('ignore-change returns ignore_reload_failed with fallback sync when manifes
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
@@ -984,12 +995,12 @@ test('watch-triggered ignore_rules_changed event runs reconcile path', async () 
         }
     };
 
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
 
-    (manager as any).watcherModeStarted = true;
+    (manager as unknown as SyncManagerTestAccess).watcherModeStarted = true;
     manager.scheduleWatcherSync(codebasePath, 'ignore_rules_changed');
     await wait(100);
 
@@ -1006,12 +1017,12 @@ test('registering watcher does not increment ignore rules version', async () => 
     const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
     const context = createContext();
     const snapshot = createSnapshot(statusByPath);
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
 
-    (manager as any).watcherModeStarted = true;
+    (manager as unknown as SyncManagerTestAccess).watcherModeStarted = true;
     await manager.registerCodebaseWatcher(codebasePath);
     assert.equal(snapshot.getCodebaseIgnoreRulesVersion(codebasePath), undefined);
 
@@ -1029,14 +1040,14 @@ test('startWatcherMode does not automatically watch every indexed codebase from 
     ]);
     const context = createContext();
     const snapshot = createSnapshot(statusByPath);
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
 
     await manager.startWatcherMode();
 
-    assert.equal((manager as any).watchers.size, 0);
+    assert.equal((manager as unknown as SyncManagerTestAccess).watchers.size, 0);
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePathA, { recursive: true, force: true });
@@ -1052,23 +1063,23 @@ test('touchWatchedCodebase registers only explicitly touched codebases and unwat
     ]);
     const context = createContext();
     const snapshot = createSnapshot(statusByPath);
-    const manager = new SyncManager(context as any, snapshot as any, {
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
         watchEnabled: true,
         watchDebounceMs: 20,
     });
 
     await manager.startWatcherMode();
-    await (manager as any).touchWatchedCodebase(codebasePathA);
+    await (manager as unknown as SyncManagerTestAccess).touchWatchedCodebase(codebasePathA);
 
-    assert.equal((manager as any).watchers.has(codebasePathA), true);
-    assert.equal((manager as any).watchers.has(codebasePathB), false);
+    assert.equal((manager as unknown as SyncManagerTestAccess).watchers.has(codebasePathA), true);
+    assert.equal((manager as unknown as SyncManagerTestAccess).watchers.has(codebasePathB), false);
 
-    await (manager as any).touchWatchedCodebase(codebasePathB);
-    assert.equal((manager as any).watchers.has(codebasePathB), true);
+    await (manager as unknown as SyncManagerTestAccess).touchWatchedCodebase(codebasePathB);
+    assert.equal((manager as unknown as SyncManagerTestAccess).watchers.has(codebasePathB), true);
 
-    await (manager as any).unwatchCodebase(codebasePathA);
-    assert.equal((manager as any).watchers.has(codebasePathA), false);
-    assert.equal((manager as any).watchers.has(codebasePathB), true);
+    await (manager as unknown as SyncManagerTestAccess).unwatchCodebase(codebasePathA);
+    assert.equal((manager as unknown as SyncManagerTestAccess).watchers.has(codebasePathA), false);
+    assert.equal((manager as unknown as SyncManagerTestAccess).watchers.has(codebasePathB), true);
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePathA, { recursive: true, force: true });

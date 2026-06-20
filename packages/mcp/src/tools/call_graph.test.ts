@@ -59,3 +59,48 @@ test('call_graph keeps strict validation for invalid direction values', async ()
     assert.match(response.content[0]?.text || '', /Invalid arguments for 'call_graph'/);
     assert.match(response.content[0]?.text || '', /direction/);
 });
+
+test('call_graph uses provider vector context when available', async () => {
+    let requestedOperation: string | undefined;
+    let receivedArgs: Record<string, unknown> | undefined;
+    const providerContext = {
+        toolHandlers: {
+            handleCallGraph: async (args: Record<string, unknown>) => {
+                receivedArgs = args;
+                return {
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({ status: 'ok', supported: true, nodes: [], edges: [], notes: [] })
+                    }]
+                };
+            }
+        }
+    } as unknown as ToolContext;
+    const ctx = {
+        providerRuntime: {
+            requireToolContext: async (operation: string) => {
+                requestedOperation = operation;
+                return providerContext;
+            }
+        },
+        toolHandlers: {
+            handleCallGraph: async () => {
+                throw new Error('startup context should not handle call_graph when provider context is available');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: '/repo',
+        symbolRef: {
+            file: 'src/runtime.ts',
+            symbolId: 'sym_runtime_run'
+        },
+        direction: 'both'
+    }, ctx);
+
+    assert.equal(response.isError, undefined);
+    assert.equal(requestedOperation, 'vector_only');
+    assert.equal(receivedArgs?.path, '/repo');
+    assert.equal((receivedArgs?.symbolRef as { symbolId?: string } | undefined)?.symbolId, 'sym_runtime_run');
+});

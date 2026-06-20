@@ -76,3 +76,45 @@ test('file_outline delegates to handlers with parsed input', async () => {
     assert.equal(receivedArgs?.resolveMode, 'exact');
     assert.equal(receivedArgs?.symbolLabelExact, 'function run()');
 });
+
+test('file_outline uses provider vector context when available', async () => {
+    let requestedOperation: string | undefined;
+    let receivedArgs: Record<string, unknown> | undefined;
+    const providerContext = {
+        toolHandlers: {
+            handleFileOutline: async (args: Record<string, unknown>) => {
+                receivedArgs = args;
+                return {
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({ status: 'ok', path: '/repo', file: 'src/runtime.ts', outline: { symbols: [] }, hasMore: false })
+                    }]
+                };
+            }
+        }
+    } as unknown as ToolContext;
+    const ctx = {
+        providerRuntime: {
+            requireToolContext: async (operation: string) => {
+                requestedOperation = operation;
+                return providerContext;
+            }
+        },
+        toolHandlers: {
+            handleFileOutline: async () => {
+                throw new Error('startup context should not handle file_outline when provider context is available');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await fileOutlineTool.execute({
+        path: '/repo',
+        file: 'src/runtime.ts',
+        resolveMode: 'outline'
+    }, ctx);
+
+    assert.equal(response.isError, undefined);
+    assert.equal(requestedOperation, 'vector_only');
+    assert.equal(receivedArgs?.path, '/repo');
+    assert.equal(receivedArgs?.file, 'src/runtime.ts');
+});

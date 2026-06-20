@@ -501,6 +501,76 @@ test('read_file open_symbol treats symbolId as canonical symbolInstanceId on exa
     });
 });
 
+test('read_file open_symbol uses provider vector context when available', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+
+        let requestedOperation: string | undefined;
+        let receivedArgs: FileOutlineInput | undefined;
+        const providerContext = {
+            toolHandlers: {
+                handleFileOutline: async (args: FileOutlineInput) => {
+                    receivedArgs = args;
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'ok',
+                                path: repoPath,
+                                file: 'src/runtime.ts',
+                                outline: {
+                                    symbols: [{
+                                        symbolId: 'sym_runtime_instance',
+                                        symbolLabel: 'function run()',
+                                        span: { startLine: 2, endLine: 3 },
+                                        callGraphHint: {
+                                            supported: true,
+                                            symbolRef: { file: 'src/runtime.ts', symbolId: 'sym_runtime_instance' }
+                                        }
+                                    }]
+                                },
+                                hasMore: false
+                            })
+                        }]
+                    };
+                }
+            }
+        } as unknown as ToolContext;
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance'
+            }
+        }, 1000, {
+            providerRuntime: {
+                requireToolContext: async (operation: string) => {
+                    requestedOperation = operation;
+                    return providerContext;
+                }
+            },
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as unknown as SnapshotManagerLike,
+            toolHandlers: {
+                handleFileOutline: async () => {
+                    throw new Error('startup context should not resolve open_symbol when provider context is available');
+                }
+            } as unknown as ToolHandlersLike
+        });
+
+        assert.equal(response.isError, undefined);
+        assert.equal(response.content[0].text, 'line2\nline3');
+        assert.equal(requestedOperation, 'vector_only');
+        assert.equal(receivedArgs?.resolveMode, 'exact');
+        assert.equal(receivedArgs?.symbolIdExact, 'sym_runtime_instance');
+    });
+});
+
 test('read_file open_symbol opens source-repaired Python multiline function spans', async () => {
     await withTempStateRoot(async () => withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');

@@ -448,6 +448,44 @@ export class Context {
         });
     }
 
+    private getEmbeddingModelForFingerprint(): string {
+        const embeddingWithConfig = this.embedding as unknown as {
+            config?: {
+                model?: unknown;
+            };
+        };
+        const model = embeddingWithConfig.config?.model;
+        return typeof model === 'string' && model.trim().length > 0
+            ? model.trim()
+            : this.embedding.getProvider();
+    }
+
+    private buildIndexCompletionFingerprint(): IndexCompletionFingerprint {
+        return {
+            embeddingProvider: this.embedding.getProvider(),
+            embeddingModel: this.getEmbeddingModelForFingerprint(),
+            embeddingDimension: this.embedding.getDimension(),
+            vectorStoreProvider: 'Milvus',
+            schemaVersion: this.getIsHybrid() === true ? 'hybrid_v3' : 'dense_v3',
+        };
+    }
+
+    private async writeCompletedIndexMarker(
+        codebasePath: string,
+        indexedFiles: number,
+        totalChunks: number
+    ): Promise<void> {
+        await this.writeIndexCompletionMarker(codebasePath, {
+            kind: 'satori_index_completion_v1',
+            codebasePath: this.canonicalizeCodebasePath(codebasePath),
+            fingerprint: this.buildIndexCompletionFingerprint(),
+            indexedFiles,
+            totalChunks,
+            completedAt: new Date().toISOString(),
+            runId: crypto.randomUUID(),
+        });
+    }
+
     private async resolveActiveIndexedCollection(
         codebasePath: string
     ): Promise<{ collectionName: string; marker: IndexCompletionMarkerDocument } | null> {
@@ -577,6 +615,7 @@ export class Context {
 
         if (codeFiles.length === 0) {
             await this.clearSymbolRegistryForCodebase(codebasePath);
+            await this.writeCompletedIndexMarker(codebasePath, 0, 0);
             progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
             return { indexedFiles: 0, totalChunks: 0, status: 'completed' };
         }
@@ -610,6 +649,7 @@ export class Context {
 
         if (result.status === 'completed') {
             await this.writeSymbolRegistryForCompletedIndex(codebasePath, result.symbolRecords, result.symbolManifestFiles);
+            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks);
         } else {
             console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
         }

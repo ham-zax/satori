@@ -18,6 +18,18 @@ import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type HandlerCallGraphManager = NonNullable<ConstructorParameters<typeof ToolHandlers>[6]>;
+type HandlerNavigationStore = NonNullable<ConstructorParameters<typeof ToolHandlers>[9]>;
+type ToolHandlersTestOverrides = {
+    validateCompletionProof: (codebasePath: string) => Promise<unknown>;
+    buildRelationshipBackedCallGraph: (...args: unknown[]) => Promise<unknown>;
+};
+type CallGraphNoteView = { type?: string; detail?: string; symbolId?: string; symbolLabel?: string; file?: string; startLine?: number };
+type CallGraphNodeView = { symbolId?: string };
+
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
@@ -174,7 +186,7 @@ function createHandlers(repoPath: string) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         getVectorStore: () => ({ listCollections: async () => [] })
-    } as any;
+    } as unknown as HandlerContext;
 
     const snapshotManager = {
         getIndexedCodebases: () => [repoPath],
@@ -188,9 +200,9 @@ function createHandlers(repoPath: string) {
         }),
         saveCodebaseSnapshot: () => undefined,
         getAllCodebases: () => []
-    } as any;
+    } as unknown as HandlerSnapshotManager;
 
-    const syncManager = {} as any;
+    const syncManager = {} as unknown as HandlerSyncManager;
 
     const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
     return handlers;
@@ -248,7 +260,7 @@ test('handleCallGraph allows source-backed traversal under runtime fingerprint m
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] }),
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getAllCodebases: () => [{
@@ -272,7 +284,7 @@ test('handleCallGraph allows source-backed traversal under runtime fingerprint m
                 message: 'Index fingerprint mismatch.',
             }),
             saveCodebaseSnapshot: () => undefined,
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const navigationStore = {
             getSymbolsByFile: async () => ({
@@ -288,12 +300,12 @@ test('handleCallGraph allows source-backed traversal under runtime fingerprint m
                     manifest: { builtAt: new Date('2026-01-01T00:00:00.000Z').toISOString() },
                 },
             }),
-        } as any;
+        } as unknown as HandlerNavigationStore;
 
         const handlers = new ToolHandlers(
             context,
             snapshotManager,
-            {} as any,
+            {} as unknown as HandlerSyncManager,
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             () => Date.parse('2026-01-01T01:00:00.000Z'),
@@ -302,10 +314,10 @@ test('handleCallGraph allows source-backed traversal under runtime fingerprint m
             undefined,
             navigationStore,
         );
-        (handlers as any).validateCompletionProof = async () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({
             outcome: 'fingerprint_mismatch',
         });
-        (handlers as any).buildRelationshipBackedCallGraph = async () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).buildRelationshipBackedCallGraph = async () => ({
             supported: true,
             direction: 'callees',
             depth: 1,
@@ -350,7 +362,7 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getIndexedCodebases: () => [],
@@ -372,9 +384,9 @@ test('handleCallGraph returns requires_reindex when snapshot marks codebase bloc
                     lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString()
                 }
             }]
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const syncManager = {} as any;
+        const syncManager = {} as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleCallGraph({
@@ -408,7 +420,7 @@ test('handleCallGraph reports partial index navigation unavailable for limit_rea
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
@@ -421,9 +433,9 @@ test('handleCallGraph reports partial index navigation unavailable for limit_rea
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => [{ path: repoPath, info }]
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const syncManager = {} as any;
+        const syncManager = {} as unknown as HandlerSyncManager;
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleCallGraph({
@@ -454,7 +466,7 @@ test('handleCallGraph returns requires_reindex for indexed roots that only have 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
@@ -474,14 +486,14 @@ test('handleCallGraph returns requires_reindex for indexed roots that only have 
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const syncManager = {} as any;
+        const syncManager = {} as unknown as HandlerSyncManager;
         const callGraphManager = {
             queryGraph: () => {
                 throw new Error('legacy call graph fallback should not run');
             }
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
@@ -537,7 +549,7 @@ test('handleCallGraph traverses compatible relationship sidecars without requiri
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -548,14 +560,14 @@ test('handleCallGraph traverses compatible relationship sidecars without requiri
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             queryGraph: () => {
                 throw new Error('legacy call graph fallback should not run');
             }
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -653,7 +665,7 @@ test('handleCallGraph synthesizes source-backed Python callees when stored span 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -664,9 +676,9 @@ test('handleCallGraph synthesizes source-backed Python callees when stored span 
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -759,7 +771,7 @@ test('handleCallGraph surfaces suppressed low-confidence Python candidates and r
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -770,9 +782,9 @@ test('handleCallGraph surfaces suppressed low-confidence Python candidates and r
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const calleesResponse = await handlers.handleCallGraph({
             path: repoPath,
@@ -795,7 +807,7 @@ test('handleCallGraph surfaces suppressed low-confidence Python candidates and r
         assert.equal(calleesPayload.edges[0].site.startLine, 10);
         assert.ok(calleesPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
         assert.ok(calleesPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLEES:1'));
-        assert.ok(calleesPayload.notes.some((note: any) => (
+        assert.ok(calleesPayload.notes.some((note: CallGraphNoteView) => (
             note.type === 'suppressed_edge'
             && note.symbolId === build.symbolInstanceId
             && note.symbolLabel === build.label
@@ -803,7 +815,7 @@ test('handleCallGraph surfaces suppressed low-confidence Python candidates and r
             && note.startLine === 10
             && note.detail.includes('src/phases.py:10')
         )));
-        assert.ok(calleesPayload.notes.some((note: any) => note.type === 'dynamic_edge'));
+        assert.ok(calleesPayload.notes.some((note: CallGraphNoteView) => note.type === 'dynamic_edge'));
 
         const callersResponse = await handlers.handleCallGraph({
             path: repoPath,
@@ -827,11 +839,11 @@ test('handleCallGraph surfaces suppressed low-confidence Python candidates and r
         assert.ok(callersPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
         assert.ok(callersPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLERS:1'));
         assert.deepEqual(
-            callersPayload.nodes.map((node: any) => node.symbolId).sort(),
+            callersPayload.nodes.map((node: CallGraphNodeView) => node.symbolId).sort(),
             [attach.symbolInstanceId, build.symbolInstanceId].sort()
         );
         assert.equal(callersPayload.sidecar.nodeCount, callersPayload.nodes.length);
-        assert.ok(callersPayload.notes.some((note: any) => (
+        assert.ok(callersPayload.notes.some((note: CallGraphNoteView) => (
             note.type === 'suppressed_edge'
             && note.symbolId === attach.symbolInstanceId
             && note.symbolLabel === attach.label
@@ -839,7 +851,7 @@ test('handleCallGraph surfaces suppressed low-confidence Python candidates and r
             && note.startLine === 10
             && note.detail.includes('src/phases.py:10')
         )));
-        assert.ok(callersPayload.notes.some((note: any) => (
+        assert.ok(callersPayload.notes.some((note: CallGraphNoteView) => (
             note.type === 'dynamic_edge'
             && note.symbolId === attach.symbolInstanceId
         )));
@@ -908,7 +920,7 @@ test('handleCallGraph does not synthesize Python caller fallback when the suppre
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -919,9 +931,9 @@ test('handleCallGraph does not synthesize Python caller fallback when the suppre
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const callersResponse = await handlers.handleCallGraph({
             path: repoPath,
             symbolRef: {
@@ -939,12 +951,12 @@ test('handleCallGraph does not synthesize Python caller fallback when the suppre
         assert.equal(callersPayload.edges.length, 0);
         assert.ok(callersPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
         assert.ok(!callersPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLERS:1'));
-        assert.ok(callersPayload.notes.some((note: any) => (
+        assert.ok(callersPayload.notes.some((note: CallGraphNoteView) => (
             note.type === 'suppressed_edge'
             && note.symbolId === attach.symbolInstanceId
             && note.detail.includes('src/phases.py:4')
         )));
-        assert.ok(!callersPayload.notes.some((note: any) => note.type === 'dynamic_edge'));
+        assert.ok(!callersPayload.notes.some((note: CallGraphNoteView) => note.type === 'dynamic_edge'));
     }));
 });
 
@@ -1010,7 +1022,7 @@ test('handleCallGraph does not synthesize Python caller fallback when the record
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1021,9 +1033,9 @@ test('handleCallGraph does not synthesize Python caller fallback when the record
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const callersResponse = await handlers.handleCallGraph({
             path: repoPath,
             symbolRef: {
@@ -1041,12 +1053,12 @@ test('handleCallGraph does not synthesize Python caller fallback when the record
         assert.equal(callersPayload.edges.length, 0);
         assert.ok(callersPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
         assert.ok(!callersPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLERS:1'));
-        assert.ok(callersPayload.notes.some((note: any) => (
+        assert.ok(callersPayload.notes.some((note: CallGraphNoteView) => (
             note.type === 'suppressed_edge'
             && note.symbolId === attach.symbolInstanceId
             && note.detail.includes('src/phases.py:3')
         )));
-        assert.ok(!callersPayload.notes.some((note: any) => note.type === 'dynamic_edge'));
+        assert.ok(!callersPayload.notes.some((note: CallGraphNoteView) => note.type === 'dynamic_edge'));
     }));
 });
 
@@ -1115,7 +1127,7 @@ test('handleCallGraph does not synthesize Python caller fallback when the valida
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1126,9 +1138,9 @@ test('handleCallGraph does not synthesize Python caller fallback when the valida
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const callersResponse = await handlers.handleCallGraph({
             path: repoPath,
             symbolRef: {
@@ -1146,12 +1158,12 @@ test('handleCallGraph does not synthesize Python caller fallback when the valida
         assert.equal(callersPayload.edges.length, 0);
         assert.ok(callersPayload.warnings.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
         assert.ok(!callersPayload.warnings.includes('SOURCE_BACKED_DYNAMIC_CALLERS:1'));
-        assert.ok(callersPayload.notes.some((note: any) => (
+        assert.ok(callersPayload.notes.some((note: CallGraphNoteView) => (
             note.type === 'suppressed_edge'
             && note.symbolId === attach.symbolInstanceId
             && note.detail.includes('src/phases.py:5')
         )));
-        assert.ok(!callersPayload.notes.some((note: any) => note.type === 'dynamic_edge'));
+        assert.ok(!callersPayload.notes.some((note: CallGraphNoteView) => note.type === 'dynamic_edge'));
     }));
 });
 
@@ -1190,7 +1202,7 @@ test('handleCallGraph does not accept legacy v3 symbol ids as steady-state exact
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1209,7 +1221,7 @@ test('handleCallGraph does not accept legacy v3 symbol ids as steady-state exact
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 formatVersion: 'v3',
@@ -1226,9 +1238,9 @@ test('handleCallGraph does not accept legacy v3 symbol ids as steady-state exact
             queryGraph: () => {
                 throw new Error('legacy call graph fallback should not run');
             }
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1285,7 +1297,7 @@ test('handleCallGraph does not accept symbolKey as a steady-state exact input', 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1296,9 +1308,9 @@ test('handleCallGraph does not accept symbolKey as a steady-state exact input', 
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1339,7 +1351,7 @@ test('handleCallGraph returns the relationship-backed root node with no edges wh
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1358,7 +1370,7 @@ test('handleCallGraph returns the relationship-backed root node with no edges wh
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 formatVersion: 'v3',
@@ -1375,9 +1387,9 @@ test('handleCallGraph returns the relationship-backed root node with no edges wh
             queryGraph: () => {
                 throw new Error('legacy call graph fallback should not run');
             },
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1440,7 +1452,7 @@ test('handleCallGraph does not merge legacy notes or test references into relati
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1459,7 +1471,7 @@ test('handleCallGraph does not merge legacy notes or test references into relati
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 formatVersion: 'v3',
@@ -1476,9 +1488,9 @@ test('handleCallGraph does not merge legacy notes or test references into relati
             queryGraph: () => {
                 throw new Error('legacy call graph fallback should not run');
             },
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1590,7 +1602,7 @@ test('handleCallGraph includes import/export-backed cross-file CALLS v0 edges in
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1601,14 +1613,14 @@ test('handleCallGraph includes import/export-backed cross-file CALLS v0 edges in
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             queryGraph: () => {
                 throw new Error('legacy call graph fallback should not run');
             }
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1730,7 +1742,7 @@ test('handleCallGraph includes Python relative-import-backed cross-file CALLS v0
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1741,14 +1753,14 @@ test('handleCallGraph includes Python relative-import-backed cross-file CALLS v0
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             queryGraph: () => {
                 throw new Error('legacy call graph fallback should not run');
             }
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
         const calleesResponse = await handlers.handleCallGraph({
             path: repoPath,
@@ -1772,7 +1784,7 @@ test('handleCallGraph includes Python relative-import-backed cross-file CALLS v0
         assert.equal(calleesPayload.edges[0].confidence, 0.65);
         assert.ok(!calleesPayload.warnings?.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
         assert.ok(!calleesPayload.warnings?.includes('SOURCE_BACKED_DYNAMIC_CALLEES:1'));
-        assert.ok(!calleesPayload.notes.some((note: any) => note.type === 'suppressed_edge'));
+        assert.ok(!calleesPayload.notes.some((note: CallGraphNoteView) => note.type === 'suppressed_edge'));
 
         const callersResponse = await handlers.handleCallGraph({
             path: repoPath,
@@ -1795,7 +1807,7 @@ test('handleCallGraph includes Python relative-import-backed cross-file CALLS v0
         assert.equal(callersPayload.edges[0].site.startLine, 4);
         assert.equal(callersPayload.edges[0].confidence, 0.65);
         assert.ok(!callersPayload.warnings?.includes('RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:1'));
-        assert.ok(!callersPayload.notes.some((note: any) => note.type === 'suppressed_edge'));
+        assert.ok(!callersPayload.notes.some((note: CallGraphNoteView) => note.type === 'suppressed_edge'));
     }));
 });
 
@@ -1818,7 +1830,7 @@ test('handleCallGraph maps missing_symbol to status not_found', async () => {
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1829,9 +1841,9 @@ test('handleCallGraph maps missing_symbol to status not_found', async () => {
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1874,7 +1886,7 @@ test('handleCallGraph maps unsupported_language to status unsupported', async ()
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [repoPath],
             getCodebaseInfo: () => undefined,
@@ -1885,9 +1897,9 @@ test('handleCallGraph maps unsupported_language to status unsupported', async ()
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => []
-        } as any;
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (handlers as any).validateCompletionProof = async () => ({ outcome: 'valid' });
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1912,7 +1924,7 @@ test('handleCallGraph returns not_ready envelope when codebase is indexing', asy
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
 
         const snapshotManager = {
             getIndexedCodebases: () => [],
@@ -1937,9 +1949,9 @@ test('handleCallGraph returns not_ready envelope when codebase is indexing', asy
                     lastUpdated: '2026-02-27T23:57:03.000Z'
                 }
             }]
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,
@@ -1975,7 +1987,7 @@ test('handleCallGraph failed-index payload preserves failure diagnostics', async
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({ listCollections: async () => [] })
-        } as any;
+        } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexedCodebases: () => [],
             getIndexingCodebases: () => [],
@@ -1988,9 +2000,9 @@ test('handleCallGraph failed-index payload preserves failure diagnostics', async
             }),
             saveCodebaseSnapshot: () => undefined,
             getAllCodebases: () => [{ path: repoPath, info: failedInfo }]
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
-        const handlers = new ToolHandlers(context, snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleCallGraph({
             path: repoPath,

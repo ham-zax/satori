@@ -761,9 +761,9 @@ test('read_file open_symbol opens a Rust symbol by symbolInstanceId through exac
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as any,
+            } as unknown as SnapshotManagerLike,
             toolHandlers: {
-                handleFileOutline: async (args: any) => {
+                handleFileOutline: async (args: FileOutlineInput) => {
                     assert.equal(args.resolveMode, 'exact');
                     assert.equal(args.symbolIdExact, 'rust_push_instance');
                     return {
@@ -789,7 +789,7 @@ test('read_file open_symbol opens a Rust symbol by symbolInstanceId through exac
                         }]
                     };
                 }
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         assert.equal(response.isError, undefined);
@@ -813,9 +813,9 @@ test('read_file open_symbol returns not_found for a stale symbolInstanceId witho
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as any,
+            } as unknown as SnapshotManagerLike,
             toolHandlers: {
-                handleFileOutline: async (args: any) => {
+                handleFileOutline: async (args: FileOutlineInput) => {
                     assert.equal(args.resolveMode, 'exact');
                     assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
                     return {
@@ -831,7 +831,7 @@ test('read_file open_symbol returns not_found for a stale symbolInstanceId witho
                         }]
                     };
                 }
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         assert.equal(response.isError, true);
@@ -859,9 +859,9 @@ test('read_file open_symbol does not bypass exact resolution when stale symbolIn
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as any,
+            } as unknown as SnapshotManagerLike,
             toolHandlers: {
-                handleFileOutline: async (args: any) => {
+                handleFileOutline: async (args: FileOutlineInput) => {
                     assert.equal(args.resolveMode, 'exact');
                     assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
                     return {
@@ -877,7 +877,7 @@ test('read_file open_symbol does not bypass exact resolution when stale symbolIn
                         }]
                     };
                 }
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         assert.equal(response.isError, true);
@@ -903,9 +903,9 @@ test('read_file open_symbol returns requires_reindex for stale symbolInstanceId 
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as any,
+            } as unknown as SnapshotManagerLike,
             toolHandlers: {
-                handleFileOutline: async (args: any) => {
+                handleFileOutline: async (args: FileOutlineInput) => {
                     assert.equal(args.resolveMode, 'exact');
                     assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
                     return {
@@ -927,7 +927,7 @@ test('read_file open_symbol returns requires_reindex for stale symbolInstanceId 
                         }]
                     };
                 }
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         assert.equal(response.isError, true);
@@ -962,10 +962,10 @@ test('read_file open_symbol returns not_indexed when delegated exact navigation 
             getCodebaseCallGraphSidecar: () => undefined,
             removeCodebaseCompletely: () => undefined,
             saveCodebaseSnapshot: () => undefined
-        } as any;
+        } as unknown as SnapshotManagerLike;
         const syncManager = {
             unwatchCodebase: async () => undefined
-        } as any;
+        } as unknown as SyncManagerLike;
         const handlerContext = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             getVectorStore: () => ({
@@ -973,7 +973,7 @@ test('read_file open_symbol returns not_indexed when delegated exact navigation 
             }),
             resolveCollectionName: () => 'satori_repo_missing_collection',
             getIndexCompletionMarker: async () => buildMarker(repoPath)
-        } as any;
+        } as unknown as HandlerContext;
         const toolHandlers = new ToolHandlers(handlerContext, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await runReadFile({
@@ -1015,8 +1015,8 @@ test('read_file open_symbol preserves failed-index diagnostics from delegated ex
                     path: repoPath,
                     info: { status: 'indexed' }
                 }]
-            } as any,
-            syncManager: {} as any,
+            } as unknown as SnapshotManagerLike,
+            syncManager: {} as unknown as SyncManagerLike,
             toolHandlers: {
                 handleFileOutline: async () => ({
                     content: [{
@@ -1044,7 +1044,7 @@ test('read_file open_symbol preserves failed-index diagnostics from delegated ex
                         })
                     }]
                 })
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         assert.equal(response.isError, true);
@@ -1092,7 +1092,7 @@ test('read_file open_symbol returns explicit error on ambiguous symbol resolutio
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as any,
+            } as unknown as SnapshotManagerLike,
             toolHandlers: {
                 handleFileOutline: async () => ({
                     content: [{
@@ -1112,7 +1112,7 @@ test('read_file open_symbol returns explicit error on ambiguous symbol resolutio
                         })
                     }]
                 })
-            } as any
+            } as unknown as ToolHandlersLike
         });
 
         assert.equal(response.isError, true);
@@ -1133,7 +1133,7 @@ test('read_file open_symbol unresolved root returns structured runnable nextStep
         }, 1000, {
             snapshotManager: {
                 getAllCodebases: () => []
-            } as any
+            } as unknown as SnapshotManagerLike
         });
 
         assert.equal(response.isError, true);
@@ -1161,7 +1161,7 @@ test('read_file annotated mode ignores non-searchable candidate roots in nextSte
                 getAllCodebases: () => [
                     { path: repoPath, info: { status: 'requires_reindex' } }
                 ]
-            } as any
+            } as unknown as SnapshotManagerLike
         });
 
         const payload = JSON.parse(response.content[0].text);
@@ -1190,7 +1190,7 @@ test('read_file open_symbol request is blocked with not_ready when parent codeba
                 getAllCodebases: () => [
                     { path: repoPath, info: { status: 'indexing' } }
                 ]
-            } as any
+            } as unknown as SnapshotManagerLike
         });
 
         assert.equal(response.isError, undefined);

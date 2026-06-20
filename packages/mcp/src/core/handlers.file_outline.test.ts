@@ -21,6 +21,16 @@ import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 
+type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
+type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
+type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
+type HandlerCallGraphManager = NonNullable<ConstructorParameters<typeof ToolHandlers>[6]>;
+type HandlerNavigationStore = NonNullable<ConstructorParameters<typeof ToolHandlers>[9]>;
+type ToolHandlersTestOverrides = {
+    validateCompletionProof: (codebasePath: string) => Promise<unknown>;
+};
+type SnapshotStub = Record<string, unknown>;
+
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
@@ -98,11 +108,11 @@ async function withNavigationEnv<T>(
     }
 }
 
-function baseContext() {
+function baseContext(): HandlerContext {
     return {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         getVectorStore: () => ({ listCollections: async () => [] })
-    } as any;
+    } as unknown as HandlerContext;
 }
 
 function createTestSymbol(input: {
@@ -189,14 +199,14 @@ async function writeTestSymbolRegistry(repoPath: string, symbols: SymbolRecord[]
     return { registry, result };
 }
 
-function baseSnapshotManager(repoPath: string) {
+function baseSnapshotManager(repoPath: string): SnapshotStub {
     return {
         getIndexedCodebases: () => [repoPath],
         getCodebaseInfo: () => undefined,
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
         saveCodebaseSnapshot: () => undefined,
         getAllCodebases: () => []
-    } as any;
+    };
 }
 
 function sha256Content(content: string): string {
@@ -208,8 +218,8 @@ test('handleFileOutline returns requires_reindex when sidecar metadata is missin
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -259,7 +269,7 @@ test('handleFileOutline allows source-backed navigation under runtime fingerprin
                 message: 'Index fingerprint mismatch.',
             }),
             saveCodebaseSnapshot: () => undefined,
-        } as any;
+        } as unknown as HandlerSnapshotManager;
 
         const navigationStore = {
             getSymbolsByFile: async () => ({
@@ -274,12 +284,12 @@ test('handleFileOutline allows source-backed navigation under runtime fingerprin
                     manifest: { builtAt: new Date('2026-01-01T00:00:00.000Z').toISOString() },
                 },
             }),
-        } as any;
+        } as unknown as HandlerNavigationStore;
 
         const handlers = new ToolHandlers(
             baseContext(),
             snapshotManager,
-            {} as any,
+            {} as unknown as HandlerSyncManager,
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             () => Date.parse('2026-01-01T01:00:00.000Z'),
@@ -288,7 +298,7 @@ test('handleFileOutline allows source-backed navigation under runtime fingerprin
             undefined,
             navigationStore,
         );
-        (handlers as any).validateCompletionProof = async () => ({
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({
             outcome: 'fingerprint_mismatch',
         });
 
@@ -329,8 +339,8 @@ test('handleFileOutline returns requires_reindex, not unsupported, for Go/Rust w
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         for (const file of ['src/service.go', 'src/stack.rs']) {
             const response = await handlers.handleFileOutline({ path: repoPath, file });
@@ -357,8 +367,8 @@ test('handleFileOutline reports partial index navigation unavailable for limit_r
             getCodebaseInfo: () => info,
             getAllCodebases: () => [{ path: repoPath, info }],
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -394,8 +404,8 @@ test('handleFileOutline returns not_ready envelope when codebase is indexing', a
                 lastUpdated: '2026-02-27T23:57:03.000Z'
             }),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -429,8 +439,8 @@ test('handleFileOutline failed-index payload preserves failure diagnostics', asy
             getCodebaseInfo: () => failedInfo,
             getCodebaseStatus: () => 'indexfailed',
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {}, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -462,7 +472,7 @@ test('handleFileOutline returns unsupported for unsupported file extensions', as
                 noteCount: 0,
                 fingerprint: RUNTIME_FINGERPRINT
             }),
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 formatVersion: 'v3',
@@ -473,12 +483,12 @@ test('handleFileOutline returns unsupported for unsupported file extensions', as
                 edges: [],
                 notes: []
             })
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
         const handlers = new ToolHandlers(
             baseContext(),
             snapshotManager,
-            {} as any,
+            {} as unknown as HandlerSyncManager,
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             () => Date.parse('2026-01-01T01:00:00.000Z'),
@@ -501,8 +511,8 @@ test('handleFileOutline supports JavaScript extensions for sidecar-backed outlin
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -538,8 +548,8 @@ test('handleFileOutline returns registry-backed outline when call graph sidecar 
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -618,8 +628,8 @@ test('handleFileOutline repairs stale Python multiline-signature spans from sour
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -662,8 +672,8 @@ test('handleFileOutline returns relationship-backed call graph hints when legacy
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -712,8 +722,8 @@ test('handleFileOutline returns Go symbols without enabling call_graph even when
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const outlineResponse = await handlers.handleFileOutline({
             path: repoPath,
@@ -780,8 +790,8 @@ test('handleFileOutline returns Rust symbols without enabling call_graph even wh
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const outlineResponse = await handlers.handleFileOutline({
             path: repoPath,
@@ -853,8 +863,8 @@ test('handleFileOutline relationship-backed callGraphHint works end to end with 
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const outlineResponse = await handlers.handleFileOutline({
             path: repoPath,
@@ -937,11 +947,11 @@ test('handleFileOutline explicit sqlite backend does not serve navigation after 
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const handlers = new ToolHandlers(
             baseContext(),
             snapshotManager,
-            {} as any,
+            {} as unknown as HandlerSyncManager,
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             undefined,
@@ -1044,8 +1054,8 @@ test('handleFileOutline env-selected sqlite backend does not serve navigation af
             const snapshotManager = {
                 ...baseSnapshotManager(repoPath),
                 getCodebaseCallGraphSidecar: () => undefined,
-            } as any;
-            const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+            } as unknown as HandlerSnapshotManager;
+            const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
             const warnings: string[] = [];
             const previousWarn = console.warn;
@@ -1156,18 +1166,18 @@ test('handleFileOutline can read registry-backed outline from an injected naviga
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const handlers = new ToolHandlers(
             baseContext(),
             snapshotManager,
-            {} as any,
+            {} as unknown as HandlerSyncManager,
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             undefined,
             undefined,
             undefined,
             undefined,
-            fakeNavigationStore as any
+            fakeNavigationStore as unknown as HandlerNavigationStore
         );
 
         const response = await handlers.handleFileOutline({
@@ -1207,8 +1217,8 @@ test('handleFileOutline registry exact mode resolves a unique symbolInstanceId',
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1248,8 +1258,8 @@ test('handleFileOutline registry exact mode returns ambiguous for duplicate exac
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1289,7 +1299,7 @@ test('handleFileOutline registry-backed outline emits symbolInstanceId call grap
                 noteCount: 0,
                 fingerprint: RUNTIME_FINGERPRINT
             }),
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 formatVersion: 'v3',
@@ -1302,12 +1312,12 @@ test('handleFileOutline registry-backed outline emits symbolInstanceId call grap
                 edges: [],
                 notes: []
             })
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
         const handlers = new ToolHandlers(
             baseContext(),
             snapshotManager,
-            {} as any,
+            {} as unknown as HandlerSyncManager,
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             () => Date.parse('2026-01-01T01:00:00.000Z'),
@@ -1351,7 +1361,7 @@ test('handleFileOutline registry exact mode does not resolve legacy call graph s
                 noteCount: 0,
                 fingerprint: RUNTIME_FINGERPRINT
             }),
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 formatVersion: 'v3',
@@ -1364,12 +1374,12 @@ test('handleFileOutline registry exact mode does not resolve legacy call graph s
                 edges: [],
                 notes: []
             })
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
         const handlers = new ToolHandlers(
             baseContext(),
             snapshotManager,
-            {} as any,
+            {} as unknown as HandlerSyncManager,
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             () => Date.parse('2026-01-01T01:00:00.000Z'),
@@ -1404,8 +1414,8 @@ test('handleFileOutline registry exact mode does not treat symbolKey as an exact
         const snapshotManager = {
             ...baseSnapshotManager(repoPath),
             getCodebaseCallGraphSidecar: () => undefined,
-        } as any;
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES);
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,
@@ -1454,7 +1464,7 @@ test('handleFileOutline returns unsupported graph hints when relationship sideca
                 noteCount: 0,
                 fingerprint: RUNTIME_FINGERPRINT
             }),
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 formatVersion: 'v3',
@@ -1467,12 +1477,12 @@ test('handleFileOutline returns unsupported graph hints when relationship sideca
                 edges: [],
                 notes: []
             })
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
         const handlers = new ToolHandlers(
             baseContext(),
             snapshotManager,
-            {} as any,
+            {} as unknown as HandlerSyncManager,
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             () => Date.parse('2026-01-01T01:00:00.000Z'),
@@ -1505,7 +1515,7 @@ test('handleFileOutline returns not_found for missing files under root', async (
                 noteCount: 0,
                 fingerprint: RUNTIME_FINGERPRINT
             }),
-        } as any;
+        } as unknown as HandlerSnapshotManager;
         const callGraphManager = {
             loadSidecar: () => ({
                 formatVersion: 'v3',
@@ -1516,9 +1526,9 @@ test('handleFileOutline returns not_found for missing files under root', async (
                 edges: [],
                 notes: []
             })
-        } as any;
+        } as unknown as HandlerCallGraphManager;
 
-        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as any, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
+        const handlers = new ToolHandlers(baseContext(), snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
         const response = await handlers.handleFileOutline({
             path: repoPath,

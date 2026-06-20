@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { McpTool, ToolContext, formatZodError } from './types.js';
+import { resolveVectorBackedToolContext } from './provider-context.js';
 
 const fileOutlineInputSchema = z.object({
     path: z.string().min(1).describe('ABSOLUTE path to the indexed codebase root.'),
@@ -38,6 +39,15 @@ export const fileOutlineTool: McpTool = {
             };
         }
 
-        return ctx.toolHandlers.handleFileOutline(parsed.data);
+        const executionContext = await resolveVectorBackedToolContext(ctx, {
+            tool: 'file_outline',
+            path: parsed.data.path,
+            file: parsed.data.file,
+        });
+        if (!executionContext.ok) {
+            return executionContext.response;
+        }
+
+        return executionContext.context.toolHandlers.handleFileOutline(parsed.data);
     }
 };

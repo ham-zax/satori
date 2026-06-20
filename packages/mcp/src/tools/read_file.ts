@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { isLanguageCapabilitySupportedForExtension } from "@zokizuan/satori-core";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
+import { resolveVectorBackedToolContext } from "./provider-context.js";
 import { ensureAbsolutePath } from "../utils.js";
 import type {
     ReadFileAnnotatedOutlineStatus,
@@ -355,7 +356,17 @@ export const readFileTool: McpTool = {
                         };
                     }
 
-                    const outlineResponse = await ctx.toolHandlers.handleFileOutline({
+                    const executionContext = await resolveVectorBackedToolContext(ctx, {
+                        tool: "read_file",
+                        path: resolvedRoot,
+                        file: relativeFile,
+                        messagePrefix: "Cannot resolve open_symbol because navigation readiness could not be verified.",
+                    });
+                    if (!executionContext.ok) {
+                        return executionContext.response;
+                    }
+
+                    const outlineResponse = await executionContext.context.toolHandlers.handleFileOutline({
                         path: resolvedRoot,
                         file: relativeFile,
                         resolveMode: "exact",
@@ -440,26 +451,40 @@ export const readFileTool: McpTool = {
                 };
             } else {
                 try {
-                    const outlineResponse = await ctx.toolHandlers.handleFileOutline({
+                    const executionContext = await resolveVectorBackedToolContext(ctx, {
+                        tool: "read_file",
                         path: resolvedRoot,
                         file: relativeFile,
-                        start_line: totalLines === 0 ? undefined : startLine,
-                        end_line: totalLines === 0 ? undefined : endLine,
+                        messagePrefix: "Annotated outline metadata is unavailable because navigation readiness could not be verified.",
                     });
-                    const parsedOutline = JSON.parse(outlineResponse.content?.[0]?.text || "{}");
-                    const status = parsedOutline?.status;
-                    if (status === "ok" || status === "requires_reindex" || status === "unsupported" || status === "ambiguous") {
-                        outlineStatus = status;
-                    } else {
+                    if (!executionContext.ok) {
+                        const parsedFailure = JSON.parse(executionContext.response.content?.[0]?.text || "{}");
                         outlineStatus = "requires_reindex";
-                    }
-                    outline = outlineStatus === "ok" && parsedOutline?.outline ? parsedOutline.outline : null;
-                    hasMore = parsedOutline?.hasMore === true;
-                    if (Array.isArray(parsedOutline?.warnings)) {
-                        warnings = parsedOutline.warnings.filter((item: unknown): item is string => typeof item === "string");
-                    }
-                    if (parsedOutline?.hints && typeof parsedOutline.hints === "object") {
-                        hints = parsedOutline.hints;
+                        if (parsedFailure?.hints && typeof parsedFailure.hints === "object") {
+                            hints = parsedFailure.hints;
+                        }
+                    } else {
+                        const outlineResponse = await executionContext.context.toolHandlers.handleFileOutline({
+                            path: resolvedRoot,
+                            file: relativeFile,
+                            start_line: totalLines === 0 ? undefined : startLine,
+                            end_line: totalLines === 0 ? undefined : endLine,
+                        });
+                        const parsedOutline = JSON.parse(outlineResponse.content?.[0]?.text || "{}");
+                        const status = parsedOutline?.status;
+                        if (status === "ok" || status === "requires_reindex" || status === "unsupported" || status === "ambiguous") {
+                            outlineStatus = status;
+                        } else {
+                            outlineStatus = "requires_reindex";
+                        }
+                        outline = outlineStatus === "ok" && parsedOutline?.outline ? parsedOutline.outline : null;
+                        hasMore = parsedOutline?.hasMore === true;
+                        if (Array.isArray(parsedOutline?.warnings)) {
+                            warnings = parsedOutline.warnings.filter((item: unknown): item is string => typeof item === "string");
+                        }
+                        if (parsedOutline?.hints && typeof parsedOutline.hints === "object") {
+                            hints = parsedOutline.hints;
+                        }
                     }
                 } catch {
                     outlineStatus = "requires_reindex";

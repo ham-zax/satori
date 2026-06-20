@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { McpTool, ToolContext, formatZodError } from './types.js';
+import { resolveVectorBackedToolContext } from './provider-context.js';
 
 const symbolRefSchema = z.object({
     file: z.string().min(1).describe('Relative file path from the codebase root.'),
@@ -46,6 +47,15 @@ export const callGraphTool: McpTool = {
             };
         }
 
-        return ctx.toolHandlers.handleCallGraph(parsed.data);
+        const executionContext = await resolveVectorBackedToolContext(ctx, {
+            tool: 'call_graph',
+            path: parsed.data.path,
+            symbolRef: parsed.data.symbolRef,
+        });
+        if (!executionContext.ok) {
+            return executionContext.response;
+        }
+
+        return executionContext.context.toolHandlers.handleCallGraph(parsed.data);
     }
 };

@@ -564,7 +564,9 @@ export type CallGraphResponseReason =
     | "index_failed"
     | "not_indexed"
     | "requires_reindex"
-    | "partial_index_navigation_unavailable";
+    | "partial_index_navigation_unavailable"
+    | "missing_provider_config"
+    | "vector_backend_unavailable";
 
 export interface CallGraphNodeResult {
     symbolId: string;

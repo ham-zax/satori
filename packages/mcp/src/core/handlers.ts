@@ -178,6 +178,16 @@ const SEARCH_AGENT_FIT_SCHEMA_DEMOTION = 0.80;
 const SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION = 0.70;
 const SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_MIXED = 0.80;
 const SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_SEMANTIC = 0.55;
+const PYTHON_DIRECT_CALL_CONTROL_KEYWORDS = new Set(['if', 'for', 'while', 'return', 'class', 'def']);
+const PYTHON_BUILTIN_CALL_NAMES = new Set([
+    '__import__', 'abs', 'all', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray', 'bytes',
+    'callable', 'chr', 'classmethod', 'compile', 'complex', 'delattr', 'dict', 'dir', 'divmod',
+    'enumerate', 'eval', 'exec', 'filter', 'float', 'format', 'frozenset', 'getattr', 'globals',
+    'hasattr', 'hash', 'help', 'hex', 'id', 'input', 'int', 'isinstance', 'issubclass', 'iter',
+    'len', 'list', 'locals', 'map', 'max', 'memoryview', 'min', 'next', 'object', 'oct', 'open',
+    'ord', 'pow', 'print', 'property', 'range', 'repr', 'reversed', 'round', 'set', 'setattr',
+    'slice', 'sorted', 'staticmethod', 'str', 'sum', 'super', 'tuple', 'type', 'vars', 'zip',
+]);
 type CallGraphUnavailableReason = Extract<CallGraphHint, { supported: false }>['reason'];
 // Recovery probe threshold for "likely interrupted" indexing states.
 // Keep this shorter than snapshot merge stale semantics for better operator UX.
@@ -6639,15 +6649,25 @@ export class ToolHandlers {
         });
     }
 
-    private extractDirectCallNamesFromLine(line: string): string[] {
+    private extractDirectCallNamesFromLine(line: string, options: {
+        includeAttributeCalls?: boolean;
+        ignoredNames?: ReadonlySet<string>;
+    } = {}): string[] {
         const names: string[] = [];
         const seen = new Set<string>();
-        const ignored = new Set(['if', 'for', 'while', 'return', 'class', 'def']);
+        const includeAttributeCalls = options.includeAttributeCalls ?? true;
         const directCallRegex = /\b([A-Za-z_][\w]*)\s*\(/g;
         for (const match of line.matchAll(directCallRegex)) {
             const name = match[1] || '';
             const key = name.toLowerCase();
-            if (!name || ignored.has(key) || seen.has(key)) {
+            const prefix = line.slice(0, match.index).trimEnd();
+            if (
+                !name
+                || PYTHON_DIRECT_CALL_CONTROL_KEYWORDS.has(key)
+                || options.ignoredNames?.has(key)
+                || (!includeAttributeCalls && prefix.endsWith('.'))
+                || seen.has(key)
+            ) {
                 continue;
             }
             seen.add(key);
@@ -6658,7 +6678,10 @@ export class ToolHandlers {
 
     private resolveUnambiguousDirectCallTarget(
         source: SymbolRecord,
-        candidates: SymbolRecord[]
+        candidates: SymbolRecord[],
+        options: {
+            allowCrossFileCandidate?: boolean;
+        } = {}
     ): SymbolRecord | undefined {
         const nonSelfCandidates = candidates.filter((candidate) => candidate.symbolInstanceId !== source.symbolInstanceId);
         const sameFileCandidates = nonSelfCandidates.filter((candidate) => candidate.file === source.file);
@@ -6666,6 +6689,9 @@ export class ToolHandlers {
             return sameFileCandidates[0];
         }
         if (sameFileCandidates.length > 1) {
+            return undefined;
+        }
+        if (options.allowCrossFileCandidate === false) {
             return undefined;
         }
         return nonSelfCandidates.length === 1 ? nonSelfCandidates[0] : undefined;
@@ -6711,10 +6737,14 @@ export class ToolHandlers {
             if (line.trim().length === 0 || /^\s*(?:async\s+def|def|class)\s+/.test(line)) {
                 continue;
             }
-            for (const callName of this.extractDirectCallNamesFromLine(line)) {
+            for (const callName of this.extractDirectCallNamesFromLine(line, {
+                includeAttributeCalls: false,
+                ignoredNames: PYTHON_BUILTIN_CALL_NAMES,
+            })) {
                 const target = this.resolveUnambiguousDirectCallTarget(
                     source,
-                    targetsByName.get(callName.toLowerCase()) || []
+                    targetsByName.get(callName.toLowerCase()) || [],
+                    { allowCrossFileCandidate: false }
                 );
                 if (!target) {
                     continue;
@@ -6818,7 +6848,9 @@ export class ToolHandlers {
                 continue;
             }
 
-            const verifiedTarget = this.extractDirectCallNamesFromLine(siteLine.replace(/#.*$/, ''))
+            const verifiedTarget = this.extractDirectCallNamesFromLine(siteLine.replace(/#.*$/, ''), {
+                ignoredNames: PYTHON_BUILTIN_CALL_NAMES,
+            })
                 .map((callName) => this.resolveUnambiguousDirectCallTarget(
                     repairedSource,
                     targetsByName.get(callName.toLowerCase()) || []

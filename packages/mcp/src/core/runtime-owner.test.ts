@@ -19,6 +19,7 @@ const FINGERPRINT: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3',
 };
+const CURRENT_SATORI_VERSION = '4.11.6';
 
 function withTempState<T>(fn: (stateDir: string) => Promise<T> | T): Promise<T> {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-runtime-owner-'));
@@ -57,7 +58,7 @@ function writeOwners(stateDir: string, owners: RuntimeOwnerRecord[]): void {
 function ownerRecord(
     pid: number,
     identity = buildRuntimeOwnerIdentity({
-        satoriVersion: '4.11.5',
+        satoriVersion: CURRENT_SATORI_VERSION,
         runtimeFingerprint: FINGERPRINT,
         configSource: 'env',
         configSummary: {
@@ -97,7 +98,7 @@ test('runtime owner startup registers current owner and prunes dead owner', asyn
         const registry = new RuntimeOwnerRegistry({
             stateDir,
             identity: buildRuntimeOwnerIdentity({
-                satoriVersion: '4.11.5',
+                satoriVersion: CURRENT_SATORI_VERSION,
                 runtimeFingerprint: FINGERPRINT,
                 configSource: 'env',
                 configSummary: {
@@ -128,7 +129,7 @@ test('same runtime owner identity does not block mutation', async () => {
         const other = snapshot(202);
         const current = snapshot(101);
         const identity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -162,7 +163,7 @@ test('current owner startedAt stays stable while lastSeenAt updates', async () =
         let clock = 2_000;
         const current = snapshot(101);
         const identity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -203,7 +204,7 @@ test('different runtime fingerprint blocks create reindex sync and clear', async
             embeddingModel: 'voyage-code-3',
         };
         const otherIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: otherFingerprint,
             configSource: 'env',
             configSummary: {
@@ -217,7 +218,7 @@ test('different runtime fingerprint blocks create reindex sync and clear', async
             }
         });
         const currentIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -270,7 +271,7 @@ test('different Satori version blocks mutation', async () => {
             }
         });
         const currentIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -305,7 +306,7 @@ test('different config identity blocks mutation even with matching fingerprint',
         const other = snapshot(202);
         const current = snapshot(101);
         const otherIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -319,7 +320,7 @@ test('different config identity blocks mutation even with matching fingerprint',
             }
         });
         const currentIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -365,7 +366,7 @@ test('PID reuse is pruned instead of treated as a live Satori owner', async () =
         });
         const current = snapshot(101);
         const identity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -419,7 +420,7 @@ test('PID existence alone is not enough fallback identity evidence', async () =>
             }
         });
         const currentIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -477,7 +478,7 @@ test('matching fallback command evidence keeps live owner when processStartTime 
             }
         });
         const currentIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -537,7 +538,7 @@ test('matching processStartTime keeps live owner despite cmd formatting drift', 
             }
         });
         const currentIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {
@@ -576,7 +577,7 @@ test('stale owner records are pruned and do not block mutation', async () => {
             embeddingModel: 'voyage-code-3',
         };
         const otherIdentity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: otherFingerprint,
             configSource: 'env',
             configSummary: {
@@ -596,7 +597,7 @@ test('stale owner records are pruned and do not block mutation', async () => {
         const registry = new RuntimeOwnerRegistry({
             stateDir,
             identity: buildRuntimeOwnerIdentity({
-                satoriVersion: '4.11.5',
+                satoriVersion: CURRENT_SATORI_VERSION,
                 runtimeFingerprint: FINGERPRINT,
                 configSource: 'env',
                 configSummary: {
@@ -629,7 +630,7 @@ test('corrupt owners file is quarantined during startup registration', async () 
         const registry = new RuntimeOwnerRegistry({
             stateDir,
             identity: buildRuntimeOwnerIdentity({
-                satoriVersion: '4.11.5',
+                satoriVersion: CURRENT_SATORI_VERSION,
                 runtimeFingerprint: FINGERPRINT,
                 configSource: 'env',
                 configSummary: {
@@ -663,7 +664,7 @@ test('corrupt owners file fails closed during mutation check', async () => {
         const registry = new RuntimeOwnerRegistry({
             stateDir,
             identity: buildRuntimeOwnerIdentity({
-                satoriVersion: '4.11.5',
+                satoriVersion: CURRENT_SATORI_VERSION,
                 runtimeFingerprint: FINGERPRINT,
                 configSource: 'env',
                 configSummary: {
@@ -701,7 +702,7 @@ test('metadata-less stale lock is not broken at the normal stale threshold', asy
         const registry = new RuntimeOwnerRegistry({
             stateDir,
             identity: buildRuntimeOwnerIdentity({
-                satoriVersion: '4.11.5',
+                satoriVersion: CURRENT_SATORI_VERSION,
                 runtimeFingerprint: FINGERPRINT,
                 configSource: 'env',
                 configSummary: {
@@ -729,7 +730,7 @@ test('metadata-less stale lock is not broken at the normal stale threshold', asy
 test('two startup simulations keep owners.json valid and preserve both live owners', async () => {
     await withTempState((stateDir) => {
         const identity = buildRuntimeOwnerIdentity({
-            satoriVersion: '4.11.5',
+            satoriVersion: CURRENT_SATORI_VERSION,
             runtimeFingerprint: FINGERPRINT,
             configSource: 'env',
             configSummary: {

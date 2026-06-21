@@ -917,7 +917,7 @@ export class ToolHandlers {
         }
         const normalizedGenerationId = generationId
             .trim()
-            .replace(/[^a-zA-Z0-9_-]+/g, '_')
+            .replace(/[^a-zA-Z0-9_]+/g, '_')
             .replace(/^_+|_+$/g, '');
         return `${this.resolveCollectionName(codebasePath)}__gen_${normalizedGenerationId || 'run'}`;
     }

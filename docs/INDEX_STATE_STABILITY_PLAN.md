@@ -19,6 +19,7 @@ Safe Simplify (selected): foreground paths must not perform destructive cloud-de
 5. Side effects occur only on explicit lifecycle actions (`manage_index create|reindex|sync|clear`), never from passive reads.
 6. Cloud collection existence is never considered completion proof; only marker-doc validation is.
 7. Foreground read stability includes `list_codebases`; it must remain read-only and membership-stable under transient cloud errors.
+8. Compatibility hold: `search_codebase` remains the one existing sync-on-read exception. It may run `ensureFreshness(...)`, but it must still rerun tracked-root readiness and fail closed before emitting results.
 
 ## Scope
 - `packages/mcp/src/core/handlers.ts`
@@ -37,10 +38,12 @@ Safe Simplify (selected): foreground paths must not perform destructive cloud-de
 ### 1) Enforce non-mutating foreground behavior
 Remove implicit destructive reconcile calls from:
 - `handleIndexCodebase`
-- `handleSearchCode`
 - `handleFileOutline`
 - `handleCallGraph`
 - treat `list_codebases` as foreground read: no destructive reconcile/prune path is allowed directly or indirectly
+
+Compatibility note:
+- `handleSearchCode` is not converted to a fully read-only path in this plan. It keeps the existing `ensureFreshness(...)` sync-on-read behavior while the rest of the foreground surface remains non-mutating.
 
 ### 2) Introduce one shared completion-proof validator
 Add a helper used by all relevant handlers:

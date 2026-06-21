@@ -8,7 +8,7 @@ import {
 } from "@zokizuan/satori-core";
 import type { SnapshotManager } from "./snapshot.js";
 import type { SyncManager } from "./sync.js";
-import { ManageIndexAction, type ManageReindexPreflightOutcome } from "./manage-types.js";
+import { ManageIndexAction } from "./manage-types.js";
 import type { CompletionProofValidationResult } from "./completion-proof.js";
 import {
     classifyVectorBackendError,
@@ -16,6 +16,7 @@ import {
 } from "./backend-diagnostics.js";
 import type { IndexFingerprint } from "../config.js";
 import { ensureAbsolutePath, trackCodebasePath } from "../utils.js";
+import type { ReindexPreflightResult } from "./working-tree-state.js";
 
 type ToolTextResponse = {
     content: Array<{ type: "text"; text: string }>;
@@ -42,13 +43,6 @@ type ReindexCodebaseArgs = {
 type IndexProfileView = {
     profile: string;
     configPath?: string;
-};
-
-type ReindexPreflightResult = {
-    outcome: ManageReindexPreflightOutcome;
-    warnings: string[];
-    confidence: "high" | "low";
-    probeFailed?: boolean;
 };
 
 type ManageIndexingHandlersHost = {

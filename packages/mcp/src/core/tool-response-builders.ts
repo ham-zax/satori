@@ -1,5 +1,12 @@
+import type { VectorBackendDiagnostic } from "./backend-diagnostics.js";
 import type { CallGraphDirection, CallGraphSymbolRef } from "./call-graph.js";
 import type { CompletionProofReason } from "./completion-proof.js";
+import type {
+    ManageIndexAction,
+    ManageIndexReason,
+    ManageIndexResponseEnvelope,
+    ManageIndexStatus,
+} from "./manage-types.js";
 import type { SearchGroupBy, SearchResultMode, SearchScope } from "./search-constants.js";
 import type {
     CallGraphResponseEnvelope,
@@ -13,6 +20,8 @@ import type {
     SearchResponseEnvelope,
 } from "./search-types.js";
 import type { FreshnessDecision } from "./sync.js";
+import type { WarningCode } from "./warnings.js";
+import type { ReindexPreflightResult } from "./working-tree-state.js";
 
 type SearchContext = {
     path: string;
@@ -55,6 +64,108 @@ export type ToolResponseBuildersHost = {
 
 export class ToolResponseBuilders {
     constructor(private readonly host: ToolResponseBuildersHost) {}
+
+    private buildCompactManageMessage(humanText: string): string {
+        const firstLine = humanText
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find((line) => line.length > 0);
+        if (!firstLine) {
+            return "";
+        }
+        return firstLine.length > 240
+            ? `${firstLine.slice(0, 237)}...`
+            : firstLine;
+    }
+
+    public buildManageResponseEnvelope(
+        action: ManageIndexAction,
+        codebasePath: string,
+        status: ManageIndexStatus,
+        humanText: string,
+        options: {
+            reason?: ManageIndexReason;
+            code?: ManageIndexResponseEnvelope["code"];
+            warnings?: WarningCode[];
+            hints?: Record<string, unknown>;
+            preflight?: ReindexPreflightResult;
+            message?: string;
+        } = {},
+    ): ManageIndexResponseEnvelope {
+        const envelope: ManageIndexResponseEnvelope = {
+            tool: "manage_index",
+            version: 1,
+            action,
+            path: codebasePath,
+            status,
+            message: options.message || this.buildCompactManageMessage(humanText),
+            humanText,
+        };
+        if (options.reason) {
+            envelope.reason = options.reason;
+        }
+        if (options.code) {
+            envelope.code = options.code;
+        }
+        if (Array.isArray(options.warnings) && options.warnings.length > 0) {
+            envelope.warnings = [...new Set(options.warnings)];
+        }
+        if (options.hints && Object.keys(options.hints).length > 0) {
+            envelope.hints = options.hints;
+        }
+        if (options.preflight) {
+            envelope.preflight = {
+                outcome: options.preflight.outcome,
+                confidence: options.preflight.confidence,
+                probeFailed: options.preflight.probeFailed === true,
+            };
+        }
+        return envelope;
+    }
+
+    public manageResponseFromEnvelope(
+        envelope: ManageIndexResponseEnvelope,
+    ): { content: Array<{ type: "text"; text: string }> } {
+        return {
+            content: [{
+                type: "text",
+                text: JSON.stringify(envelope),
+            }],
+        };
+    }
+
+    public manageResponse(
+        action: ManageIndexAction,
+        codebasePath: string,
+        status: ManageIndexStatus,
+        humanText: string,
+        options: {
+            reason?: ManageIndexReason;
+            code?: ManageIndexResponseEnvelope["code"];
+            warnings?: WarningCode[];
+            hints?: Record<string, unknown>;
+            preflight?: ReindexPreflightResult;
+            message?: string;
+        } = {},
+    ): { content: Array<{ type: "text"; text: string }> } {
+        return this.manageResponseFromEnvelope(
+            this.buildManageResponseEnvelope(action, codebasePath, status, humanText, options),
+        );
+    }
+
+    public manageVectorBackendResponse(
+        action: ManageIndexAction,
+        codebasePath: string,
+        diagnostic: VectorBackendDiagnostic,
+        humanText = diagnostic.message,
+    ): { content: Array<{ type: "text"; text: string }> } {
+        return this.manageResponse(action, codebasePath, "error", humanText, {
+            reason: "vector_backend_unavailable",
+            code: diagnostic.code,
+            message: diagnostic.message,
+            hints: diagnostic.hints,
+        });
+    }
 
     public buildRequiresReindexPayload(
         codebasePath: string,

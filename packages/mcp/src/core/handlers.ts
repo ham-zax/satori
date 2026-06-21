@@ -52,11 +52,7 @@ import {
 } from "./search-types.js";
 import {
     ManageIndexAction,
-    ManageIndexReason,
-    ManageIndexResponseEnvelope,
-    ManageIndexStatus,
 } from "./manage-types.js";
-import { type WarningCode } from "./warnings.js";
 import {
     CallGraphDirection,
     CallGraphEdge,
@@ -428,14 +424,245 @@ export class ToolHandlers {
         this.reranker = reranker || null;
         this.gitignoreForceReloadEveryN = Math.max(1, Math.trunc(gitignoreForceReloadEveryN));
         this.navigationStore = navigationStore;
-        this.searchQuerySupport = new SearchQuerySupport(this as unknown as ConstructorParameters<typeof SearchQuerySupport>[0]);
-        this.trackedRootReadiness = new TrackedRootReadiness(this as unknown as ConstructorParameters<typeof TrackedRootReadiness>[0]);
-        this.navigationHandlers = new NavigationHandlers(this as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
-        this.manageMaintenanceHandlers = new ManageMaintenanceHandlers(this as unknown as ConstructorParameters<typeof ManageMaintenanceHandlers>[0]);
-        this.manageIndexingHandlers = new ManageIndexingHandlers(this as unknown as ConstructorParameters<typeof ManageIndexingHandlers>[0]);
-        this.vectorBackendMaintenance = new VectorBackendMaintenance(this as unknown as ConstructorParameters<typeof VectorBackendMaintenance>[0]);
-        this.relationshipBackedCallGraph = new RelationshipBackedCallGraph(this as unknown as ConstructorParameters<typeof RelationshipBackedCallGraph>[0]);
-        this.toolResponseBuilders = new ToolResponseBuilders(this as unknown as ConstructorParameters<typeof ToolResponseBuilders>[0]);
+        const searchQuerySupportHost: ConstructorParameters<typeof SearchQuerySupport>[0] = {
+            normalizeSearchPath: this.normalizeSearchPath.bind(this),
+            hasPathSegment: this.hasPathSegment.bind(this),
+            isGeneratedPath: this.isGeneratedPath.bind(this),
+            isTestPath: this.isTestPath.bind(this),
+            isFixturePath: this.isFixturePath.bind(this),
+            isDocPath: this.isDocPath.bind(this),
+            getContextActiveIgnorePatterns: this.getContextActiveIgnorePatterns.bind(this),
+            getContextTrackedRelativePaths: this.getContextTrackedRelativePaths.bind(this),
+            classifyPathCategory: this.classifyPathCategory.bind(this),
+            shouldIncludeCategoryInScope: this.shouldIncludeCategoryInScope.bind(this),
+            getSyncWatchDebounceMs: this.getSyncWatchDebounceMs.bind(this),
+            capabilities: this.capabilities,
+            runtimeFingerprint: this.runtimeFingerprint,
+            reranker: this.reranker,
+            rootGitignoreMatcherCache: this.rootGitignoreMatcherCache,
+            gitignoreForceReloadEveryN: this.gitignoreForceReloadEveryN,
+        };
+        this.searchQuerySupport = new SearchQuerySupport(searchQuerySupportHost);
+
+        const toolResponseBuildersHost: ConstructorParameters<typeof ToolResponseBuilders>[0] = {
+            buildManageIndexRecommendedAction: this.buildManageIndexRecommendedAction.bind(this),
+            buildCreateHint: this.buildCreateHint.bind(this),
+            buildReindexHint: this.buildReindexHint.bind(this),
+            buildStatusHint: this.buildStatusHint.bind(this),
+            buildStaleLocalHint: this.buildStaleLocalHint.bind(this),
+            buildStaleLocalMessage: this.buildStaleLocalMessage.bind(this),
+            buildIndexingMetadata: this.buildIndexingMetadata.bind(this),
+            buildCompatibilityDiagnostics: this.buildCompatibilityDiagnostics.bind(this),
+            buildRuntimeMismatchHint: this.buildRuntimeMismatchHint.bind(this),
+            isRuntimeFingerprintMismatch: this.isRuntimeFingerprintMismatch.bind(this),
+            summarizeFingerprint: this.summarizeFingerprint.bind(this),
+        };
+        this.toolResponseBuilders = new ToolResponseBuilders(toolResponseBuildersHost);
+
+        const getSnapshotAllCodebaseInfoEntries = (): Array<{ path: string; info: CodebaseInfo }> => this.getSnapshotAllCodebases()
+            .map((entry) => ({ path: entry.path, info: entry.info as unknown as CodebaseInfo }));
+        const getSnapshotAllCodebasePaths = (): string[] => this.getSnapshotAllCodebases()
+            .map((entry) => entry.path);
+        const buildRequiresReindexFileOutlinePayloadForNavigation = (
+            codebasePath: string,
+            args: Record<string, unknown>,
+            detail?: string,
+            reason?: string,
+        ): object => this.buildRequiresReindexFileOutlinePayload(
+            codebasePath,
+            args as unknown as FileOutlineInput,
+            detail,
+            reason as NonOkReason | undefined,
+        );
+        const buildStaleSymbolRefFileOutlinePayloadForNavigation = (
+            codebasePath: string,
+            args: Record<string, unknown>,
+            detail?: string,
+        ): FileOutlineResponseEnvelope => this.buildStaleSymbolRefFileOutlinePayload(
+            codebasePath,
+            args as unknown as FileOutlineInput,
+            detail,
+        );
+
+        const trackedRootReadinessHost: ConstructorParameters<typeof TrackedRootReadiness>[0] = {
+            refreshSnapshotStateFromDisk: this.refreshSnapshotStateFromDisk.bind(this),
+            isPathWithinCodebase: this.isPathWithinCodebase.bind(this),
+            getTrackedRootEntryForPath: this.getTrackedRootEntryForPath.bind(this),
+            getMatchingBlockedRoot: this.getMatchingBlockedRoot.bind(this),
+            getSnapshotAllCodebases: getSnapshotAllCodebaseInfoEntries,
+            getSnapshotIndexedCodebases: this.getSnapshotIndexedCodebases.bind(this),
+            getSnapshotIndexingCodebases: this.getSnapshotIndexingCodebases.bind(this),
+            getSnapshotCodebaseInfo: this.getSnapshotCodebaseInfo.bind(this),
+            getSnapshotCodebaseStatus: this.getSnapshotCodebaseStatus.bind(this),
+            enforceFingerprintGate: this.enforceFingerprintGate.bind(this),
+            validateCompletionProof: (codebasePath: string) => this.validateCompletionProof(codebasePath),
+            probeLocalSearchCollectionState: this.probeLocalSearchCollectionState.bind(this),
+            markCodebaseSearchStateMissing: this.markCodebaseSearchStateMissing.bind(this),
+            buildCreateHint: this.buildCreateHint.bind(this),
+            buildStatusHint: this.buildStatusHint.bind(this),
+            buildManageIndexRecommendedAction: this.buildManageIndexRecommendedAction.bind(this),
+            buildStaleLocalMessage: this.buildStaleLocalMessage.bind(this),
+        };
+        this.trackedRootReadiness = new TrackedRootReadiness(trackedRootReadinessHost);
+
+        const vectorBackendMaintenanceHost: ConstructorParameters<typeof VectorBackendMaintenance>[0] = {
+            context: this.context,
+            snapshotManager: this.snapshotManager,
+            getSnapshotAllCodebases: this.getSnapshotAllCodebases.bind(this),
+            resolveCollectionName: this.resolveCollectionName.bind(this),
+            markCodebaseCleared: this.markCodebaseCleared.bind(this),
+            saveSnapshotIfSupported: this.saveSnapshotIfSupported.bind(this),
+            unwatchCodebase: this.unwatchCodebase.bind(this),
+        };
+        this.vectorBackendMaintenance = new VectorBackendMaintenance(vectorBackendMaintenanceHost);
+
+        const relationshipBackedCallGraphHost: ConstructorParameters<typeof RelationshipBackedCallGraph>[0] = {
+            navigationStore: this.navigationStore,
+            callGraphManager: this.callGraphManager,
+            snapshotManager: this.snapshotManager,
+            saveSnapshotIfSupported: this.saveSnapshotIfSupported.bind(this),
+            getContextActiveIgnorePatterns: this.getContextActiveIgnorePatterns.bind(this),
+        };
+        this.relationshipBackedCallGraph = new RelationshipBackedCallGraph(relationshipBackedCallGraphHost);
+
+        const navigationHandlersHost: ConstructorParameters<typeof NavigationHandlers>[0] = {
+            navigationStore: this.navigationStore,
+            trackedRootReadiness: this.trackedRootReadiness,
+            stringifyToolJson: this.stringifyToolJson.bind(this),
+            normalizeRelativeFilePath: this.normalizeRelativeFilePath.bind(this),
+            buildInvalidFileOutlineRequestPayload: this.buildInvalidFileOutlineRequestPayload.bind(this),
+            buildRequiresReindexFileOutlinePayload: buildRequiresReindexFileOutlinePayloadForNavigation,
+            buildNotIndexedFileOutlinePayload: this.buildNotIndexedFileOutlinePayload.bind(this),
+            buildNotReadyFileOutlinePayload: this.buildNotReadyFileOutlinePayload.bind(this),
+            withProofDebugHint: this.withProofDebugHint.bind(this),
+            isPartialIndexNavigationUnavailable: this.isPartialIndexNavigationUnavailable.bind(this),
+            getRegistryFileFreshness: this.getRegistryFileFreshness.bind(this),
+            buildStaleSymbolRefFileOutlinePayload: buildStaleSymbolRefFileOutlinePayloadForNavigation,
+            loadRegistryValidatedCallGraphSidecar: this.loadRegistryValidatedCallGraphSidecar.bind(this),
+            buildRegistrySymbolCallGraphHint: this.buildRegistrySymbolCallGraphHint.bind(this),
+            buildOutlineSpanWarningCodes: this.buildOutlineSpanWarningCodes.bind(this),
+            touchWatchedCodebase: this.touchWatchedCodebase.bind(this),
+            getOutlineStatusForLanguage: this.getOutlineStatusForLanguage.bind(this),
+            buildInvalidCallGraphRequestPayload: this.buildInvalidCallGraphRequestPayload.bind(this),
+            buildRequiresReindexCallGraphPayload: this.buildRequiresReindexCallGraphPayload.bind(this),
+            buildNotReadyCallGraphPayload: this.buildNotReadyCallGraphPayload.bind(this),
+            buildNotIndexedCallGraphPayload: this.buildNotIndexedCallGraphPayload.bind(this),
+            isCallGraphLanguageSupported: this.isCallGraphLanguageSupported.bind(this),
+            isSha256HexHash: this.isSha256HexHash.bind(this),
+            buildStaleSymbolRefCallGraphPayload: this.buildStaleSymbolRefCallGraphPayload.bind(this),
+            buildRelationshipBackedCallGraph: (input) => this.buildRelationshipBackedCallGraph(input as {
+                codebaseRoot: string;
+                registry: SymbolRegistry;
+                registryManifestHash: string;
+                resolvedSymbol: SymbolRecord;
+                sourceSpanRepair?: PythonSourceBackedSpanRepair;
+                direction: CallGraphDirection;
+                depth: number;
+                limit: number;
+            }),
+        };
+        this.navigationHandlers = new NavigationHandlers(navigationHandlersHost);
+
+        const manageMaintenanceHandlersHost: ConstructorParameters<typeof ManageMaintenanceHandlers>[0] = {
+            context: this.context,
+            snapshotManager: this.snapshotManager,
+            syncManager: this.syncManager,
+            trackedRootReadiness: this.trackedRootReadiness,
+            getSnapshotAllCodebases: getSnapshotAllCodebasePaths,
+            getSnapshotIndexedCodebases: this.getSnapshotIndexedCodebases.bind(this),
+            getSnapshotIndexingCodebases: this.getSnapshotIndexingCodebases.bind(this),
+            getSnapshotCodebaseStatus: this.getSnapshotCodebaseStatus.bind(this),
+            getSnapshotCodebaseInfo: this.getSnapshotCodebaseInfo.bind(this),
+            buildRuntimeOwnerConflictResponseIfBlocked: this.buildRuntimeOwnerConflictResponseIfBlocked.bind(this),
+            recoverStaleIndexingStateIfNeeded: this.recoverStaleIndexingStateIfNeeded.bind(this),
+            manageResponse: this.toolResponseBuilders.manageResponse.bind(this.toolResponseBuilders),
+            buildCreateHint: this.buildCreateHint.bind(this),
+            buildManageActionBlockedMessage: this.buildManageActionBlockedMessage.bind(this),
+            buildStatusHint: this.buildStatusHint.bind(this),
+            getManageRetryAfterMs: this.getManageRetryAfterMs.bind(this),
+            buildIndexingMetadata: this.buildIndexingMetadata.bind(this),
+            markCodebaseCleared: this.markCodebaseCleared.bind(this),
+            resolveCollectionName: this.resolveCollectionName.bind(this),
+            clearIndexingStats: this.clearIndexingStats.bind(this),
+            saveSnapshotIfSupported: this.saveSnapshotIfSupported.bind(this),
+            unwatchCodebase: this.unwatchCodebase.bind(this),
+            refreshSnapshotStateFromDisk: this.refreshSnapshotStateFromDisk.bind(this),
+            buildReindexInstruction: this.buildReindexInstruction.bind(this),
+            buildCompatibilityStatusLines: this.buildCompatibilityStatusLines.bind(this),
+            buildManageRequiresReindexHints: this.buildManageRequiresReindexHints.bind(this),
+            buildStaleLocalHint: this.buildStaleLocalHint.bind(this),
+            buildStaleLocalMessage: this.buildStaleLocalMessage.bind(this),
+            enforceFingerprintGate: this.enforceFingerprintGate.bind(this),
+            buildReindexHint: this.buildReindexHint.bind(this),
+            touchWatchedCodebase: this.touchWatchedCodebase.bind(this),
+            manageVectorBackendResponse: this.toolResponseBuilders.manageVectorBackendResponse.bind(this.toolResponseBuilders),
+        };
+        this.manageMaintenanceHandlers = new ManageMaintenanceHandlers(manageMaintenanceHandlersHost);
+
+        const getManageIndexingContext = () => this.context;
+        const getManageIndexingSnapshotManager = () => this.snapshotManager;
+        const getManageIndexingSyncManager = () => this.syncManager;
+        const getManageIndexingRuntimeFingerprint = () => this.runtimeFingerprint;
+        const getManageIndexingStartBackgroundIndexing = () => (this as unknown as {
+            startBackgroundIndexing?: (
+                codebasePath: string,
+                forceReindex: boolean,
+                writeCollectionName?: string,
+            ) => Promise<void> | void;
+        }).startBackgroundIndexing;
+        const manageIndexingHandlersHost: ConstructorParameters<typeof ManageIndexingHandlers>[0] = {
+            get context() {
+                return getManageIndexingContext();
+            },
+            get snapshotManager() {
+                return getManageIndexingSnapshotManager();
+            },
+            get syncManager() {
+                return getManageIndexingSyncManager();
+            },
+            get runtimeFingerprint() {
+                return getManageIndexingRuntimeFingerprint();
+            },
+            get startBackgroundIndexing() {
+                return getManageIndexingStartBackgroundIndexing();
+            },
+            manageResponse: this.toolResponseBuilders.manageResponse.bind(this.toolResponseBuilders),
+            buildRuntimeOwnerConflictResponseIfBlocked: this.buildRuntimeOwnerConflictResponseIfBlocked.bind(this),
+            recoverStaleIndexingStateIfNeeded: this.recoverStaleIndexingStateIfNeeded.bind(this),
+            getSnapshotIndexingCodebases: this.getSnapshotIndexingCodebases.bind(this),
+            getSnapshotCodebaseInfo: this.getSnapshotCodebaseInfo.bind(this),
+            getSnapshotIndexedCodebases: this.getSnapshotIndexedCodebases.bind(this),
+            buildManageActionBlockedMessage: this.buildManageActionBlockedMessage.bind(this),
+            buildStatusHint: this.buildStatusHint.bind(this),
+            getManageRetryAfterMs: this.getManageRetryAfterMs.bind(this),
+            buildIndexingMetadata: this.buildIndexingMetadata.bind(this),
+            buildReindexInstruction: this.buildReindexInstruction.bind(this),
+            buildManageRequiresReindexHints: this.buildManageRequiresReindexHints.bind(this),
+            validateCompletionProof: (codebasePath: string) => this.validateCompletionProof(codebasePath),
+            recoverIndexedSnapshotFromCompletionProof: this.recoverIndexedSnapshotFromCompletionProof.bind(this),
+            isZillizBackend: this.isZillizBackend.bind(this),
+            resolveCollectionName: this.resolveCollectionName.bind(this),
+            dropZillizCollectionForCreate: this.dropZillizCollectionForCreate.bind(this),
+            resolveStagedCollectionName: this.resolveStagedCollectionName.bind(this),
+            buildCollectionLimitMessage: this.buildCollectionLimitMessage.bind(this),
+            manageVectorBackendResponse: this.toolResponseBuilders.manageVectorBackendResponse.bind(this.toolResponseBuilders),
+            saveSnapshotIfSupported: this.saveSnapshotIfSupported.bind(this),
+            touchWatchedCodebase: this.touchWatchedCodebase.bind(this),
+            setWriteCollectionOverride: this.setWriteCollectionOverride.bind(this),
+            loadIndexProfileForCodebase: this.loadIndexProfileForCodebase.bind(this),
+            getContextActiveIgnorePatterns: this.getContextActiveIgnorePatterns.bind(this),
+            getContextIndexedExtensions: this.getContextIndexedExtensions.bind(this),
+            canonicalizeCodebasePath: this.canonicalizeCodebasePath.bind(this),
+            writeIndexCompletionMarker: this.writeIndexCompletionMarker.bind(this),
+            pruneIndexedCollectionFamily: this.pruneIndexedCollectionFamily.bind(this),
+            getContextTrackedRelativePaths: this.getContextTrackedRelativePaths.bind(this),
+            setIndexingStats: this.setIndexingStats.bind(this),
+            rebuildCallGraphForIndex: this.rebuildCallGraphForIndex.bind(this),
+            getSnapshotIndexingProgress: this.getSnapshotIndexingProgress.bind(this),
+            clearIndexCompletionMarker: this.clearIndexCompletionMarker.bind(this),
+            evaluateReindexPreflight: this.evaluateReindexPreflight.bind(this),
+        };
+        this.manageIndexingHandlers = new ManageIndexingHandlers(manageIndexingHandlersHost);
         console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`);
     }
 
@@ -743,108 +970,8 @@ export class ToolHandlers {
         this.snapshotCapabilities().markCodebaseCleared?.(codebasePath, collectionName);
     }
 
-    private buildManageResponseEnvelope(
-        action: ManageIndexAction,
-        codebasePath: string,
-        status: ManageIndexStatus,
-        humanText: string,
-        options: {
-            reason?: ManageIndexReason;
-            code?: ManageIndexResponseEnvelope["code"];
-            warnings?: WarningCode[];
-            hints?: Record<string, unknown>;
-            preflight?: ReindexPreflightResult;
-            message?: string;
-        } = {}
-    ): ManageIndexResponseEnvelope {
-        const envelope: ManageIndexResponseEnvelope = {
-            tool: "manage_index",
-            version: 1,
-            action,
-            path: codebasePath,
-            status,
-            message: options.message || this.buildCompactManageMessage(humanText),
-            humanText,
-        };
-        if (options.reason) {
-            envelope.reason = options.reason;
-        }
-        if (options.code) {
-            envelope.code = options.code;
-        }
-        if (Array.isArray(options.warnings) && options.warnings.length > 0) {
-            envelope.warnings = [...new Set(options.warnings)];
-        }
-        if (options.hints && Object.keys(options.hints).length > 0) {
-            envelope.hints = options.hints;
-        }
-        if (options.preflight) {
-            envelope.preflight = {
-                outcome: options.preflight.outcome,
-                confidence: options.preflight.confidence,
-                probeFailed: options.preflight.probeFailed === true,
-            };
-        }
-        return envelope;
-    }
-
-    private buildCompactManageMessage(humanText: string): string {
-        const firstLine = humanText
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .find((line) => line.length > 0);
-        if (!firstLine) {
-            return "";
-        }
-        return firstLine.length > 240
-            ? `${firstLine.slice(0, 237)}...`
-            : firstLine;
-    }
-
     private stringifyToolJson(payload: unknown): string {
         return JSON.stringify(payload);
-    }
-
-    private manageResponseFromEnvelope(envelope: ManageIndexResponseEnvelope): { content: Array<{ type: "text"; text: string }> } {
-        return {
-            content: [{
-                type: "text",
-                text: this.stringifyToolJson(envelope)
-            }]
-        };
-    }
-
-    private manageResponse(
-        action: ManageIndexAction,
-        codebasePath: string,
-        status: ManageIndexStatus,
-        humanText: string,
-        options: {
-            reason?: ManageIndexReason;
-            code?: ManageIndexResponseEnvelope["code"];
-            warnings?: WarningCode[];
-            hints?: Record<string, unknown>;
-            preflight?: ReindexPreflightResult;
-            message?: string;
-        } = {}
-    ): { content: Array<{ type: "text"; text: string }> } {
-        return this.manageResponseFromEnvelope(
-            this.buildManageResponseEnvelope(action, codebasePath, status, humanText, options)
-        );
-    }
-
-    private manageVectorBackendResponse(
-        action: ManageIndexAction,
-        codebasePath: string,
-        diagnostic: VectorBackendDiagnostic,
-        humanText = diagnostic.message
-    ): { content: Array<{ type: "text"; text: string }> } {
-        return this.manageResponse(action, codebasePath, "error", humanText, {
-            reason: "vector_backend_unavailable",
-            code: diagnostic.code,
-            message: diagnostic.message,
-            hints: diagnostic.hints
-        });
     }
 
     private async buildRuntimeOwnerConflictResponseIfBlocked(
@@ -868,7 +995,7 @@ export class ToolHandlers {
     ): { content: Array<{ type: "text"; text: string }> } {
         const message = result.message
             || "Index mutation is blocked because multiple Satori runtimes with different fingerprints/configs are active.";
-        return this.manageResponse(action, codebasePath, "blocked", message, {
+        return this.toolResponseBuilders.manageResponse(action, codebasePath, "blocked", message, {
             reason: "runtime_owner_conflict",
             hints: {
                 runtimeOwners: result.conflictingOwners || [],
@@ -1200,93 +1327,6 @@ export class ToolHandlers {
         } catch (error) {
             console.warn(`[SEARCH-READINESS] Failed to unwatch stale codebase '${codebasePath}': ${formatUnknownError(error)}`);
         }
-    }
-
-    private buildMissingLocalCollectionMessage(codebasePath: string, requestedPath: string, collectionName?: string): string {
-        return this.trackedRootReadiness.buildMissingLocalCollectionMessage(codebasePath, requestedPath, collectionName);
-    }
-
-    private buildMissingLocalCollectionSearchPayload(
-        codebasePath: string,
-        searchContext: {
-            path: string;
-            query: string;
-            scope: SearchScope;
-            groupBy: SearchGroupBy;
-            resultMode: SearchResultMode;
-            limit: number;
-        },
-        collectionName?: string
-    ): SearchResponseEnvelope {
-        return this.trackedRootReadiness.buildMissingLocalCollectionSearchPayload(codebasePath, searchContext, collectionName);
-    }
-
-    private buildIndexFailedSearchPayload(
-        codebasePath: string,
-        searchContext: {
-            path: string;
-            query: string;
-            scope: SearchScope;
-            groupBy: SearchGroupBy;
-            resultMode: SearchResultMode;
-            limit: number;
-        },
-        info: TrackedCodebaseInfo
-    ): SearchResponseEnvelope {
-        return this.trackedRootReadiness.buildIndexFailedSearchPayload(codebasePath, searchContext, info);
-    }
-
-    private buildIndexFailedFileOutlinePayload(
-        codebasePath: string,
-        requestedPath: string,
-        file: string,
-        info: TrackedCodebaseInfo
-    ): FileOutlineResponseEnvelope {
-        return this.trackedRootReadiness.buildIndexFailedFileOutlinePayload(codebasePath, requestedPath, file, info);
-    }
-
-    private buildIndexFailedCallGraphPayload(
-        codebasePath: string,
-        context: {
-            path: string;
-            symbolRef: CallGraphSymbolRef;
-            direction: CallGraphDirection;
-            depth: number;
-            limit: number;
-        },
-        info: TrackedCodebaseInfo
-    ): CallGraphResponseEnvelope {
-        return this.trackedRootReadiness.buildIndexFailedCallGraphPayload(codebasePath, context, info);
-    }
-
-    private buildMissingLocalCollectionFileOutlinePayload(
-        codebasePath: string,
-        requestedPath: string,
-        file: string,
-        collectionName?: string
-    ): FileOutlineResponseEnvelope {
-        return this.trackedRootReadiness.buildMissingLocalCollectionFileOutlinePayload(codebasePath, requestedPath, file, collectionName);
-    }
-
-    private buildMissingLocalCollectionCallGraphPayload(
-        codebasePath: string,
-        context: {
-            path: string;
-            symbolRef: CallGraphSymbolRef;
-            direction: CallGraphDirection;
-            depth: number;
-            limit: number;
-        },
-        collectionName?: string
-    ): CallGraphResponseEnvelope {
-        return this.trackedRootReadiness.buildMissingLocalCollectionCallGraphPayload(codebasePath, context, collectionName);
-    }
-
-    private async prepareTrackedRootForRead(
-        absolutePath: string,
-        accessMode: 'semantic' | 'navigation' = 'semantic'
-    ) {
-        return this.trackedRootReadiness.prepareTrackedRootForRead(absolutePath, accessMode);
     }
 
     private summarizeFingerprint(fingerprint: IndexFingerprint): string {
@@ -2064,16 +2104,17 @@ export class ToolHandlers {
                 resultMode: input.resultMode,
                 limit: input.limit,
             }, {
+                trackedRootReadiness: this.trackedRootReadiness,
                 prepareInitialTrackedRootRead: async (absolutePath) => {
                     const prepareReadStartedAtMs = this.searchPhaseNowMs();
-                    const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
+                    const trackedRootState = await this.trackedRootReadiness.prepareTrackedRootForRead(absolutePath);
                     this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
                     return trackedRootState;
                 },
                 preparePostFreshnessTrackedRootRead: (absolutePath) => this.measureSearchPhase(
                     phaseTimings,
                     'prepareRead',
-                    () => this.prepareTrackedRootForRead(absolutePath)
+                    () => this.trackedRootReadiness.prepareTrackedRootForRead(absolutePath)
                 ),
                 ensureSearchFreshness: (effectiveRoot) => this.measureSearchPhase(
                     phaseTimings,
@@ -2097,16 +2138,6 @@ export class ToolHandlers {
                 buildNotReadySearchPayload: (codebasePath, searchContext) => this.buildNotReadySearchPayload(
                     codebasePath,
                     searchContext
-                ),
-                buildIndexFailedSearchPayload: (codebasePath, searchContext, info) => this.buildIndexFailedSearchPayload(
-                    codebasePath,
-                    searchContext,
-                    info
-                ),
-                buildMissingLocalCollectionSearchPayload: (codebasePath, searchContext, collectionName) => this.buildMissingLocalCollectionSearchPayload(
-                    codebasePath,
-                    searchContext,
-                    collectionName
                 ),
                 buildFreshnessBlockedSearchPayload: (codebasePath, freshnessDecision, searchContext) => this.buildFreshnessBlockedSearchPayload(
                     codebasePath,

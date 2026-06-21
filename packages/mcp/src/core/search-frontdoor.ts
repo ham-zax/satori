@@ -9,6 +9,7 @@ import type {
 import type { FreshnessDecision } from "./sync.js";
 import type {
     CompletionProbeDebugHint,
+    TrackedRootReadiness,
     TrackedRootEntry,
     TrackedRootReadinessState,
 } from "./tracked-root-readiness.js";
@@ -39,6 +40,10 @@ export type SearchFrontDoorBlocked = {
 export type SearchFrontDoorOutcome = SearchFrontDoorReady | SearchFrontDoorBlocked;
 
 export type SearchFrontDoorHost = {
+    trackedRootReadiness: Pick<
+        TrackedRootReadiness,
+        "buildIndexFailedSearchPayload" | "buildMissingLocalCollectionSearchPayload"
+    >;
     prepareInitialTrackedRootRead: (absolutePath: string) => Promise<TrackedRootReadinessState>;
     preparePostFreshnessTrackedRootRead: (absolutePath: string) => Promise<TrackedRootReadinessState>;
     ensureSearchFreshness: (effectiveRoot: string) => Promise<FreshnessDecision>;
@@ -57,16 +62,6 @@ export type SearchFrontDoorHost = {
     buildNotReadySearchPayload: (
         codebasePath: string,
         searchContext: SearchFrontDoorSearchContext,
-    ) => SearchResponseEnvelope;
-    buildIndexFailedSearchPayload: (
-        codebasePath: string,
-        searchContext: SearchFrontDoorSearchContext,
-        info: Extract<TrackedRootReadinessState, { state: "index_failed" }>["info"],
-    ) => SearchResponseEnvelope;
-    buildMissingLocalCollectionSearchPayload: (
-        codebasePath: string,
-        searchContext: SearchFrontDoorSearchContext,
-        collectionName?: string,
     ) => SearchResponseEnvelope;
     buildFreshnessBlockedSearchPayload: (
         codebasePath: string,
@@ -121,7 +116,7 @@ function buildBlockedReadinessPayload(
     }
 
     if (state.state === "index_failed") {
-        return host.buildIndexFailedSearchPayload(state.codebasePath, searchContext, state.info);
+        return host.trackedRootReadiness.buildIndexFailedSearchPayload(state.codebasePath, searchContext, state.info);
     }
 
     if (state.state === "not_indexed") {
@@ -174,7 +169,7 @@ function buildBlockedReadinessPayload(
     }
 
     return host.withProofDebugHint(
-        host.buildMissingLocalCollectionSearchPayload(
+        host.trackedRootReadiness.buildMissingLocalCollectionSearchPayload(
             state.codebasePath,
             searchContext,
             state.collectionName,

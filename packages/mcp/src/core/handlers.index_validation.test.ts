@@ -47,6 +47,7 @@ interface ValidationHarnessOptions {
     hasIndexedCollectionImpl?: (codebasePath: string) => Promise<boolean>;
     hasCollectionImpl?: (collectionName: string) => Promise<boolean>;
     dropCollectionImpl?: (collectionName: string) => Promise<void>;
+    omitStagedCollectionResolver?: boolean;
 }
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
@@ -112,8 +113,10 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         },
         getVectorStore: () => vectorStore,
         resolveCollectionName,
-        resolveStagedCollectionName: (codebasePath: string, generationId: string) =>
-            `${resolveCollectionName(codebasePath)}__gen_${generationId}`,
+        ...(!options.omitStagedCollectionResolver ? {
+            resolveStagedCollectionName: (codebasePath: string, generationId: string) =>
+                `${resolveCollectionName(codebasePath)}__gen_${generationId}`,
+        } : {}),
         addCustomExtensions: () => undefined,
         addCustomIgnorePatterns: () => undefined,
         clearIndex: async () => undefined,
@@ -389,6 +392,35 @@ test('handleIndexCodebase force reindex stages into a new generation without eag
         assert.match(String(startedArgs?.[2] || ''), new RegExp(`^${modernCollection}__gen_run_`));
         assert.deepEqual(droppedCollections, []);
         assert.deepEqual(snapshotEvents.removed, []);
+    });
+});
+
+test('handleIndexCodebase fallback staged collection names stay backend-safe when no context resolver is provided', async () => {
+    await withTempRepo(async (repoPath) => {
+        const { handlers } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => true,
+            omitStagedCollectionResolver: true,
+        });
+        let startedArgs: [string, boolean, string | undefined] | null = null;
+        (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = async (
+            codebasePath: string,
+            forceReindex: boolean,
+            stagedCollectionName?: string
+        ) => {
+            startedArgs = [codebasePath, forceReindex, stagedCollectionName];
+        };
+
+        const response = await handlers.handleIndexCodebase({
+            path: repoPath,
+            force: true,
+        });
+
+        const envelope = parseManageEnvelope(response);
+        assert.equal(envelope.status, 'ok');
+        assert.ok(startedArgs);
+        assert.match(String(startedArgs?.[2] || ''), /^hybrid_code_chunks_[0-9a-f]{8}__gen_run_[A-Za-z0-9_]+$/);
+        assert.equal(String(startedArgs?.[2] || '').includes('-'), false);
     });
 });
 

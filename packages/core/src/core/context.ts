@@ -545,7 +545,7 @@ export class Context {
     public resolveStagedCollectionName(codebasePath: string, generationId: string): string {
         const normalizedGenerationId = generationId
             .trim()
-            .replace(/[^a-zA-Z0-9_-]+/g, '_')
+            .replace(/[^a-zA-Z0-9_]+/g, '_')
             .replace(/^_+|_+$/g, '');
         if (normalizedGenerationId.length === 0) {
             throw new Error('generationId must contain at least one alphanumeric character.');

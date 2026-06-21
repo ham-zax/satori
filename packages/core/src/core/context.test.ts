@@ -181,6 +181,25 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 }
 
+test('Context.resolveStagedCollectionName normalizes staged generation ids to backend-safe underscores', () => {
+    const context = new Context({
+        embedding: new TestEmbedding(),
+        vectorDatabase: new InMemoryVectorDatabase(),
+    });
+
+    const stagedName = context.resolveStagedCollectionName(
+        '/home/hamza/repo/promptready_extension',
+        'run_f1a58f3d-6096-41e3-971c-870112e40210',
+    );
+
+    assert.match(stagedName, /^hybrid_code_chunks_[0-9a-f]{8}__gen_run_[A-Za-z0-9_]+$/);
+    assert.equal(stagedName.includes('-'), false);
+    assert.equal(
+        stagedName.endsWith('run_f1a58f3d_6096_41e3_971c_870112e40210'),
+        true,
+    );
+});
+
 test('Context.getIgnorePatternsFromFile preserves gitignore-significant spaces', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ignore-parser-'));
     const ignorePath = path.join(tempDir, '.gitignore');

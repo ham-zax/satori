@@ -1,7 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
 import ignore from "ignore";
 import {
     Context,
@@ -23,16 +22,10 @@ import { SyncManager, type FreshnessDecision } from "./sync.js";
 import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint, type CodebaseInfo } from "../config.js";
 import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
-    SEARCH_CHANGED_FIRST_MULTIPLIER,
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_MAX_CANDIDATES,
     SEARCH_MUST_RETRY_ROUNDS,
     SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N,
-    SEARCH_RERANK_DOC_MAX_CHARS,
-    SEARCH_RERANK_DOC_MAX_LINES,
-    SEARCH_RERANK_RRF_K,
-    SEARCH_RERANK_TOP_K,
-    SEARCH_RERANK_WEIGHT,
     PathCategory,
     SearchGroupBy,
     SearchRankingMode,
@@ -62,9 +55,8 @@ import {
     ManageIndexReason,
     ManageIndexResponseEnvelope,
     ManageIndexStatus,
-    ManageReindexPreflightOutcome,
 } from "./manage-types.js";
-import { WARNING_CODES, WarningCode } from "./warnings.js";
+import { type WarningCode } from "./warnings.js";
 import {
     CallGraphDirection,
     CallGraphEdge,
@@ -82,12 +74,7 @@ import {
     resolveSearchOwnerFromRegistry as resolveSearchOwnerFromRegistryWithRepair,
 } from "./search-owner-resolution.js";
 import {
-    buildNavigationFallback as buildSearchNavigationFallback,
     buildRegistrySymbolCallGraphHint as buildSearchRegistrySymbolCallGraphHint,
-    buildRelationshipCallGraphHint as buildSearchRelationshipCallGraphHint,
-    buildSearchGroupCallGraphHint as buildSearchGroupNavigationCallGraphHint,
-    buildSearchNextActions as buildSearchNavigationNextActions,
-    shouldAllowPreviewReadFallback as shouldAllowSearchPreviewReadFallback,
 } from "./search-navigation.js";
 import {
     buildChangedCodeDebug as buildSearchChangedCodeDebug,
@@ -104,14 +91,6 @@ import {
     buildOutlineSpanWarningCodes as buildSearchOutlineSpanWarningCodes,
     normalizeSearchSymbolLabel as normalizeSearchSymbolLabelHelper,
 } from "./search-response-helpers.js";
-import {
-    buildRawSearchResults as buildRawSearchResultsHelper,
-    buildVisibleGroupedSearchResults as buildVisibleGroupedSearchResultsHelper,
-} from "./search-group-results.js";
-import {
-    buildGroupedSearchEnvelope as buildGroupedSearchEnvelopeHelper,
-    buildRawSearchEnvelope as buildRawSearchEnvelopeHelper,
-} from "./search-response-envelopes.js";
 import { runSearchFrontDoor } from "./search-frontdoor.js";
 import {
     classifyPathCategory,
@@ -132,6 +111,14 @@ import { ManageIndexingHandlers } from "./manage-indexing-handlers.js";
 import { VectorBackendMaintenance } from "./vector-backend-maintenance.js";
 import { RelationshipBackedCallGraph } from "./relationship-backed-call-graph.js";
 import { ToolResponseBuilders } from "./tool-response-builders.js";
+import {
+    evaluateReindexPreflight as evaluateReindexPreflightHelper,
+    getChangedFilesForCodebase as getChangedFilesForCodebaseHelper,
+    getWorkingTreeChangedPathsForPreflight as getWorkingTreeChangedPathsForPreflightHelper,
+    parseGitStatusChangedPaths as parseGitStatusChangedPathsHelper,
+    type ChangedFilesCacheEntry,
+    type ReindexPreflightResult,
+} from "./working-tree-state.js";
 import type {
     CompletionProofReason,
     CompletionProofValidationResult
@@ -146,16 +133,15 @@ import type {
     VectorBackendDiagnostic
 } from "./backend-diagnostics.js";
 import {
-    findExactRegistryMatch,
-    shouldAttemptExactRegistryLookup,
     type ExactRegistryLookupDebug,
 } from "./search/exact-registry.js";
-import { buildExactRegistryHitEnvelope } from "./search-exact-registry-hit.js";
 import {
     runSearchExecution,
     type SearchDiagnostics,
     type SearchFilterSummary,
 } from "./search-execution.js";
+import { runExactRegistryFastPath } from "./search-exact-fast-path.js";
+import { finalizeSearchResults } from "./search-result-finalization.js";
 import type {
     SearchQueryPlan,
     SearchResultLike,
@@ -297,13 +283,6 @@ type GitignoreMatcherCacheEntry = {
     checksSinceReload: number;
 };
 
-type ReindexPreflightResult = {
-    outcome: ManageReindexPreflightOutcome;
-    warnings: WarningCode[];
-    confidence: "high" | "low";
-    probeFailed?: boolean;
-};
-
 type CompletionProbeDebugHint = {
     ok: false;
     reason: "probe_failed";
@@ -413,11 +392,7 @@ export class ToolHandlers {
     private readonly callGraphManager: CallGraphSidecarManager;
     private readonly reranker: VoyageAIReranker | null;
     private readonly navigationStore: NavigationStore;
-    private readonly changedFilesCache = new Map<string, {
-        expiresAtMs: number;
-        available: boolean;
-        files: Set<string>;
-    }>();
+    private readonly changedFilesCache = new Map<string, ChangedFilesCacheEntry>();
     private readonly rootGitignoreMatcherCache = new Map<string, GitignoreMatcherCacheEntry>();
     private readonly gitignoreForceReloadEveryN: number;
     private readonly searchQuerySupport: SearchQuerySupport;
@@ -1622,141 +1597,6 @@ export class ToolHandlers {
         return {};
     }
 
-    private buildSearchExcludeMatcher(
-        excludePatterns: unknown,
-        effectiveRoot: string,
-        absoluteSearchPath: string
-    ): { matcher?: ReturnType<typeof ignore>; warning?: string } {
-        if (!Array.isArray(excludePatterns) || excludePatterns.length === 0) {
-            return {};
-        }
-
-        const rawPatterns = excludePatterns
-            .filter((value): value is string => typeof value === 'string')
-            .map((value) => value.trim())
-            .filter((v: string) => v.length > 0);
-        if (rawPatterns.length === 0) {
-            return {};
-        }
-
-        const unique: string[] = [];
-        const seen = new Set<string>();
-        for (const p of rawPatterns) {
-            if (!seen.has(p)) {
-                seen.add(p);
-                unique.push(p);
-            }
-        }
-
-        const searchRel = path
-            .relative(effectiveRoot, absoluteSearchPath)
-            .replace(/\\/g, '/')
-            .replace(/^\/+|\/+$/g, '');
-        const needsSubdirPrefix = searchRel.length > 0 && effectiveRoot !== absoluteSearchPath;
-        const normalizedPatterns: string[] = [];
-        const invalidPatterns: string[] = [];
-        for (const rawPattern of unique) {
-            let pattern = rawPattern.replace(/\\/g, '/').trim();
-            if (!pattern) {
-                continue;
-            }
-
-            const isNegation = pattern.startsWith('!');
-            if (isNegation) {
-                pattern = pattern.slice(1);
-            }
-
-            const anchored = pattern.startsWith('/');
-            pattern = pattern.replace(/^\.\/+/, '').replace(/^\/+/, '');
-            if (!pattern) {
-                invalidPatterns.push(rawPattern);
-                continue;
-            }
-
-            if (needsSubdirPrefix && !anchored) {
-                pattern = `${searchRel}/${pattern}`.replace(/\/+/g, '/');
-            }
-
-            normalizedPatterns.push(isNegation ? `!${pattern}` : pattern);
-        }
-
-        if (normalizedPatterns.length === 0) {
-            return {
-                warning: invalidPatterns.length > 0
-                    ? `Note: excludePatterns ignored (invalid patterns): ${JSON.stringify(invalidPatterns)}.`
-                    : undefined
-            };
-        }
-
-        try {
-            const matcher = ignore();
-            matcher.add(normalizedPatterns);
-            return {
-                matcher,
-                warning: invalidPatterns.length > 0
-                    ? `Note: excludePatterns partially applied. Ignored (invalid patterns): ${JSON.stringify(invalidPatterns)}.`
-                    : undefined
-            };
-        } catch (error: unknown) {
-            const parseError = formatUnknownError(error);
-            const invalidNote = invalidPatterns.length > 0
-                ? ` Ignored patterns: ${JSON.stringify(invalidPatterns)}.`
-                : '';
-            return {
-                warning: `Note: excludePatterns ignored due to invalid pattern syntax: ${parseError}.${invalidNote}`
-            };
-        }
-    }
-
-    private applySearchExcludeMatcher(
-        searchResults: SearchResultLike[],
-        matcher: ReturnType<typeof ignore> | undefined
-    ): SearchResultLike[] {
-        if (!matcher || searchResults.length === 0) {
-            return searchResults;
-        }
-
-        return searchResults.filter((result) => {
-            if (!result || typeof result.relativePath !== 'string') {
-                return true;
-            }
-
-            const normalizedPath = result.relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
-            if (!normalizedPath || normalizedPath.startsWith('..')) {
-                return true;
-            }
-
-            return !matcher.ignores(normalizedPath);
-        });
-    }
-
-    private normalizeBreadcrumbs(breadcrumbs: unknown): string[] {
-        if (!Array.isArray(breadcrumbs)) {
-            return [];
-        }
-        return breadcrumbs
-            .filter((crumb): crumb is string => typeof crumb === 'string')
-            .map((crumb) => crumb.trim())
-            .filter((crumb) => crumb.length > 0)
-            .slice(-2);
-    }
-
-    private getBreadcrumbMergeKey(breadcrumbs: unknown): string {
-        return this.normalizeBreadcrumbs(breadcrumbs).join(' > ');
-    }
-
-    private formatScopeLine(breadcrumbs: unknown): string {
-        const normalized = this.normalizeBreadcrumbs(breadcrumbs);
-
-        if (normalized.length === 0) {
-            return '';
-        }
-
-        const joined = normalized.join(' > ');
-        const capped = joined.length > 220 ? `${joined.slice(0, 217)}...` : joined;
-        return `   🧬 Scope: ${capped}\n`;
-    }
-
     private normalizeSearchPath(relativePath: string): string {
         return normalizeSearchPathHelper(relativePath);
     }
@@ -1789,160 +1629,29 @@ export class ToolHandlers {
         stdout: string,
         options: { includeUntracked?: boolean } = {}
     ): Set<string> {
-        const includeUntracked = options.includeUntracked === true;
-        const files = new Set<string>();
-        const lines = stdout.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.length > 0);
-        for (const line of lines) {
-            if (line.length < 4) {
-                continue;
-            }
-            const status = line.slice(0, 2);
-            if (status === '!!') {
-                continue;
-            }
-            if (status === '??' && !includeUntracked) {
-                continue;
-            }
-
-            let rawPath = line.slice(3).trim();
-            if (rawPath.length === 0) {
-                continue;
-            }
-
-            if (rawPath.includes(" -> ")) {
-                const parts = rawPath.split(" -> ");
-                rawPath = parts[parts.length - 1].trim();
-            }
-
-            if (rawPath.startsWith("\"") && rawPath.endsWith("\"") && rawPath.length >= 2) {
-                rawPath = rawPath.slice(1, -1).replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
-            }
-
-            const normalizedPath = rawPath.replace(/\\/g, "/").replace(/^\/+/, "");
-            if (normalizedPath.length === 0 || normalizedPath.startsWith("..")) {
-                continue;
-            }
-
-            files.add(normalizedPath);
-        }
-        return files;
+        return parseGitStatusChangedPathsHelper(stdout, options);
     }
 
     private getChangedFilesForCodebase(codebasePath: string): { available: boolean; files: Set<string> } {
-        const cacheKey = path.resolve(codebasePath);
-        const nowMs = this.now();
-        const cached = this.changedFilesCache.get(cacheKey);
-        if (cached && cached.expiresAtMs > nowMs) {
-            return { available: cached.available, files: new Set(cached.files) };
-        }
-
-        try {
-            const stdout = execFileSync(
-                "git",
-                ["-C", cacheKey, "status", "--porcelain", "--untracked-files=no"],
-                { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
-            );
-
-            const files = this.parseGitStatusChangedPaths(stdout, { includeUntracked: false });
-
-            this.changedFilesCache.set(cacheKey, {
-                expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
-                available: true,
-                files,
-            });
-            return { available: true, files };
-        } catch {
-            if (cached) {
-                this.changedFilesCache.set(cacheKey, {
-                    expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
-                    available: cached.available,
-                    files: new Set(cached.files),
-                });
-                return { available: cached.available, files: new Set(cached.files) };
-            }
-            this.changedFilesCache.set(cacheKey, {
-                expiresAtMs: nowMs + SEARCH_CHANGED_FILES_CACHE_TTL_MS,
-                available: false,
-                files: new Set<string>(),
-            });
-            return { available: false, files: new Set<string>() };
-        }
+        return getChangedFilesForCodebaseHelper({
+            codebasePath,
+            nowMs: this.now(),
+            changedFilesCache: this.changedFilesCache,
+            ttlMs: SEARCH_CHANGED_FILES_CACHE_TTL_MS,
+        });
     }
 
     private getWorkingTreeChangedPathsForPreflight(codebasePath: string): { available: boolean; probeFailed: boolean; files: Set<string> } {
-        try {
-            const stdout = execFileSync(
-                "git",
-                ["-C", codebasePath, "status", "--porcelain"],
-                { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
-            );
-            const files = this.parseGitStatusChangedPaths(stdout, { includeUntracked: true });
-            return { available: true, probeFailed: false, files };
-        } catch {
-            return { available: false, probeFailed: true, files: new Set<string>() };
-        }
+        return getWorkingTreeChangedPathsForPreflightHelper(codebasePath);
     }
 
     private evaluateReindexPreflight(codebasePath: string): ReindexPreflightResult {
-        const currentStatus = this.getSnapshotCodebaseStatus(codebasePath);
-        const isIndexedLikeStatus = currentStatus === 'indexed' || currentStatus === 'sync_completed';
-        if (currentStatus === 'requires_reindex') {
-            return {
-                outcome: 'reindex_required',
-                warnings: [],
-                confidence: 'high',
-            };
-        }
-
-        const gate = this.ensureSnapshotFingerprintCompatibility(codebasePath);
-        if (!gate.allowed || gate.changed || !!gate.reason) {
-            return {
-                outcome: 'reindex_required',
-                warnings: [],
-                confidence: 'high',
-            };
-        }
-
-        const workingTree = this.getWorkingTreeChangedPathsForPreflight(codebasePath);
-        if (!workingTree.available || workingTree.probeFailed) {
-            return {
-                outcome: 'probe_failed',
-                warnings: [WARNING_CODES.IGNORE_POLICY_PROBE_FAILED],
-                confidence: 'low',
-                probeFailed: true,
-            };
-        }
-
-        const changedFiles = [...workingTree.files];
-        if (changedFiles.length === 0) {
-            return {
-                outcome: 'unknown',
-                warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
-                confidence: 'low',
-            };
-        }
-
-        const ignoreOnlySet = new Set(['.gitignore', '.satoriignore', 'satori.toml']);
-        if (changedFiles.every((changedFile) => ignoreOnlySet.has(changedFile))) {
-            if (!isIndexedLikeStatus) {
-                return {
-                    outcome: 'unknown',
-                    warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
-                    confidence: 'low',
-                };
-            }
-            return {
-                outcome: 'reindex_unnecessary_ignore_only',
-                warnings: [WARNING_CODES.REINDEX_UNNECESSARY_IGNORE_ONLY],
-                confidence: 'high',
-            };
-        }
-
-        return {
-            outcome: 'unknown',
-            warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
-            confidence: 'low',
-        };
+        return evaluateReindexPreflightHelper({
+            codebasePath,
+            currentStatus: this.getSnapshotCodebaseStatus(codebasePath),
+            ensureFingerprintCompatibility: (value) => this.ensureSnapshotFingerprintCompatibility(value),
+            getWorkingTreeChangedPathsForPreflight: (value) => this.getWorkingTreeChangedPathsForPreflight(value),
+        });
     }
 
     private parseIndexedAtMs(indexedAt?: string): number | undefined {
@@ -2021,17 +1730,6 @@ export class ToolHandlers {
         };
     }
 
-    private buildRelationshipCallGraphHint(input: {
-        file: string;
-        language: string;
-        symbolId: string;
-        symbolLabel?: string;
-        span: { startLine: number; endLine: number };
-        sidecarBuiltAt?: string;
-    }): CallGraphHint {
-        return buildSearchRelationshipCallGraphHint(input, this.getSearchNavigationHelpers());
-    }
-
     private sanitizeIndexedRelativeFilePath(relativeFilePath: string): string | undefined {
         const normalized = this.normalizeRelativeFilePath(relativeFilePath);
         if (!normalized || path.isAbsolute(normalized)) {
@@ -2062,51 +1760,6 @@ export class ToolHandlers {
             isCallGraphLanguageSupported: (language: string, file: string) => this.isCallGraphLanguageSupported(language, file),
             getOutlineStatusForLanguage: (relativeFilePath: string) => this.getOutlineStatusForLanguage(relativeFilePath),
         };
-    }
-
-    private shouldAllowPreviewReadFallback(
-        callGraphHint: CallGraphHint,
-        hasOpenSymbol: boolean
-    ): boolean {
-        return shouldAllowSearchPreviewReadFallback(callGraphHint, hasOpenSymbol);
-    }
-
-    private buildNavigationFallback(
-        codebaseRoot: string,
-        relativeFilePath: string,
-        previewSpan: SearchSpan,
-        callGraphHint: CallGraphHint,
-        sidecarReadyForOutline: boolean,
-        allowPreviewReadFallback: boolean
-    ): SearchGroupResult['navigationFallback'] | undefined {
-        return buildSearchNavigationFallback(
-            codebaseRoot,
-            relativeFilePath,
-            previewSpan,
-            callGraphHint,
-            sidecarReadyForOutline,
-            allowPreviewReadFallback,
-            this.getSearchNavigationHelpers(),
-        );
-    }
-
-    private buildSearchNextActions(
-        codebaseRoot: string,
-        relativeFilePath: string,
-        span: SearchSpan,
-        callGraphHint: CallGraphHint,
-        sidecarReadyForOutline: boolean,
-        registrySymbol?: SymbolRecord
-    ): SearchGroupResult['nextActions'] | undefined {
-        return buildSearchNavigationNextActions(
-            codebaseRoot,
-            relativeFilePath,
-            span,
-            callGraphHint,
-            sidecarReadyForOutline,
-            registrySymbol,
-            this.getSearchNavigationHelpers(),
-        );
     }
 
     private buildChangedCodeDebug(
@@ -2256,24 +1909,6 @@ export class ToolHandlers {
         }
     ): CallGraphHint {
         return buildSearchRegistrySymbolCallGraphHint(symbol, file, navigationState, this.getSearchNavigationHelpers());
-    }
-
-    private buildSearchGroupCallGraphHint(input: {
-        file: string;
-        language: string;
-        span: SearchSpan;
-        symbolLabel?: string;
-        ownerSymbolInstanceId?: string;
-        registrySymbol?: SymbolRecord;
-        registryLoaded?: boolean;
-        registryUnavailableReason?: CallGraphUnavailableReason;
-        navigationState: {
-            relationshipReady: boolean;
-            relationshipBuiltAt?: string;
-            relationshipUnavailableReason?: CallGraphUnavailableReason;
-        };
-    }): CallGraphHint {
-        return buildSearchGroupNavigationCallGraphHint(input, this.getSearchNavigationHelpers());
     }
 
     private buildOutlineSpanWarningCodes(repair: PythonSourceBackedSpanRepair | undefined): string[] {
@@ -2570,171 +2205,65 @@ export class ToolHandlers {
                 exactMatchPinningApplied: false,
                 registryRepairGroupCount: 0,
             };
-            let exactRegistryDebug: ExactRegistryLookupDebug | undefined;
-            let searchSymbolRegistry: SymbolRegistry | undefined;
-            let searchSymbolRegistryManifestHash: string | undefined;
-            let searchSymbolRegistryUnavailableReason: CallGraphUnavailableReason | undefined;
-            let exactRegistryFallbackForTrackedLexical = false;
-
-            const hasExactPathFilter = parsedOperators.path.some((pattern) => {
-                const normalized = this.searchQuerySupport.normalizeRelativePathForIgnoreCheck(pattern);
-                return Boolean(normalized && this.searchQuerySupport.isExactSearchPathFilter(normalized));
+            const exactFastPath = await runExactRegistryFastPath({
+                absolutePath,
+                effectiveRoot,
+                query: input.query,
+                scope: input.scope,
+                groupBy: input.groupBy,
+                resultMode: input.resultMode,
+                limit: input.limit,
+                debug: Boolean(input.debug),
+                rankingMode: input.rankingMode,
+                semanticQuery,
+                parsedOperators,
+                queryPlan,
+                freshnessDecision,
+                freshnessSummary: initialFreshnessSummary,
+                proofDebugHint,
+                partialIndexSearchWarnings,
+                phaseTimings,
+                candidateLimit,
+                maxAttempts,
+                operatorSummary: initialOperatorSummary,
+                filterSummary: initialFilterSummary,
+                changedFilesState: initialChangedFilesState,
+                debugChangedFilesState: initialDebugChangedFilesState,
+                changedFilesCount: initialChangedFilesCount,
+                changedFilesBoostSkippedForLargeChangeSet: initialChangedFilesBoostSkippedForLargeChangeSet,
+                dirtyFilesNotFreshened: initialDirtyFilesNotFreshened,
+                rankingProvenance: initialRankingProvenance,
+                previewMaxChars: SEARCH_GROUP_PREVIEW_MAX_CHARS,
+            }, {
+                searchQuerySupport: this.searchQuerySupport,
+                measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
+                loadRegistryManifest: (normalizedRootPath) => this.navigationStore.getManifest({ normalizedRootPath }),
+                loadRegistryValidatedCallGraphSidecar: (exactInput) => this.loadRegistryValidatedCallGraphSidecar(exactInput),
+                buildChangedCodeDebug: (codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(codebaseRoot, changedFilesState),
+                buildGeneratedArtifactsVerificationHint: (codebaseRoot, results) => this.buildGeneratedArtifactsVerificationHint(codebaseRoot, results),
+                getSearchNavigationHelpers: () => this.getSearchNavigationHelpers(),
+                now: this.now,
             });
-            const exactRegistryEligible = input.resultMode === 'grouped'
-                && input.groupBy === 'symbol'
-                && shouldAttemptExactRegistryLookup({
-                    semanticQuery,
-                    intent: queryPlan.intent,
-                    lexicalTerms: queryPlan.lexicalTerms.map((term) => term.value),
-                    quotedLiteralPhrases: queryPlan.quotedLiteralPhrases,
-                    hasExactPathFilter,
-                });
+            let exactRegistryDebug: ExactRegistryLookupDebug | undefined = exactFastPath.exactRegistryDebug;
+            let searchSymbolRegistry: SymbolRegistry | undefined = exactFastPath.searchSymbolRegistry;
+            let searchSymbolRegistryManifestHash: string | undefined = exactFastPath.searchSymbolRegistryManifestHash;
+            let exactRegistryFallbackForTrackedLexical = exactFastPath.exactRegistryFallbackForTrackedLexical;
 
-            if (exactRegistryEligible) {
-                exactRegistryFallbackForTrackedLexical = true;
-                const registryState = await this.measureSearchPhase(
-                    phaseTimings,
-                    'registryLoad',
-                    () => this.navigationStore.getManifest({ normalizedRootPath: effectiveRoot })
-                );
-                if (registryState.status === 'ok') {
-                    searchSymbolRegistry = registryState.registry;
-                    searchSymbolRegistryManifestHash = registryState.manifestHash;
-                    const exactRegistryMatch = await this.measureSearchPhase(phaseTimings, 'exactRegistry', async () => findExactRegistryMatch({
-                        registry: registryState.registry,
-                        semanticQuery,
-                        intent: queryPlan.intent,
-                        lexicalTerms: queryPlan.lexicalTerms.map((term) => term.value),
-                        quotedLiteralPhrases: queryPlan.quotedLiteralPhrases,
-                        operators: {
-                            path: [...parsedOperators.path],
-                        },
-                        filterSymbol: this.searchQuerySupport.buildExactRegistrySymbolFilter({
-                            scope: input.scope,
-                            parsedOperators,
-                        }),
-                    }));
-                    exactRegistryDebug = exactRegistryMatch.debug;
-
-                    if (exactRegistryMatch.status === 'hit') {
-                        const exactRegistryRerankDecision = this.searchQuerySupport.resolveRerankDecision(input.scope, queryPlan);
-                        const callGraphNavigationState = await this.measureSearchPhase(
-                            phaseTimings,
-                            'navigationValidation',
-                            () => this.loadRegistryValidatedCallGraphSidecar({
-                                codebaseRoot: effectiveRoot,
-                                registryManifestHash: registryState.manifestHash,
-                            })
-                        );
-                        const exactGroupingStartedAtMs = this.searchPhaseNowMs();
-                        const envelope = buildExactRegistryHitEnvelope({
-                            codebaseRoot: effectiveRoot,
-                            absolutePath,
-                            query: input.query,
-                            scope: input.scope,
-                            groupBy: input.groupBy,
-                            limit: input.limit,
-                            freshnessDecision,
-                            freshnessSummary: initialFreshnessSummary,
-                            proofDebugHint,
-                            symbol: exactRegistryMatch.symbol,
-                            indexedAt: registryState.registry.manifest.builtAt || null,
-                            navigationState: callGraphNavigationState,
-                            navigationWarning: callGraphNavigationState.warning,
-                            sidecarReadyForOutline: true,
-                            debug: Boolean(input.debug),
-                            debugInput: {
-                                queryIntent: {
-                                    classification: queryPlan.intent,
-                                    confidence: queryPlan.confidence,
-                                    reasons: [...queryPlan.reasons],
-                                    lexicalTerms: queryPlan.lexicalTerms.map((term) => term.value),
-                                    semanticQuery,
-                                },
-                                retrieval: {
-                                    mode: queryPlan.retrievalMode,
-                                    scorePolicyKind: queryPlan.scorePolicyKind,
-                                    backendScoreKinds: [],
-                                },
-                                rankingProvenance: {
-                                    ...initialRankingProvenance,
-                                    semanticPassesUsed: [],
-                                    lexicalPassesUsed: [],
-                                    livePathSupplementUsed: false,
-                                    lexicalFileScanUsed: false,
-                                    rerankApplied: false,
-                                    exactMatchPinningApplied: false,
-                                    registryRepairGroupCount: 0,
-                                },
-                                phaseTimingsMs: phaseTimings,
-                                candidateLimit,
-                                mustRetryApplied: parsedOperators.must.length > 0,
-                                maxAttempts,
-                                operatorSummary: initialOperatorSummary,
-                                filterSummary: initialFilterSummary,
-                                changedFilesBoost: {
-                                    enabled: input.rankingMode === 'auto_changed_first',
-                                    applied: false,
-                                    available: initialChangedFilesState.available,
-                                    changedCount: initialChangedFilesCount,
-                                    maxChangedFilesForBoost: SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
-                                    skippedForLargeChangeSet: initialChangedFilesBoostSkippedForLargeChangeSet,
-                                    multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
-                                    boostedCandidates: 0,
-                                },
-                                ...(initialDebugChangedFilesState ? {
-                                    changedCode: this.buildChangedCodeDebug(effectiveRoot, initialDebugChangedFilesState),
-                                } : {}),
-                                rerank: {
-                                    enabledByPolicy: exactRegistryRerankDecision.enabledByPolicy,
-                                    skippedByScopeDocs: exactRegistryRerankDecision.skippedByScopeDocs,
-                                    skippedByIdentifierIntent: exactRegistryRerankDecision.skippedByIdentifierIntent,
-                                    capabilityPresent: exactRegistryRerankDecision.capabilityPresent,
-                                    rerankerPresent: exactRegistryRerankDecision.rerankerPresent,
-                                    enabled: false,
-                                    attempted: false,
-                                    applied: false,
-                                    exactMatchPinningEnabled: exactRegistryRerankDecision.exactMatchPinningEnabled,
-                                    exactMatchPinningApplied: false,
-                                    candidatesIn: 1,
-                                    candidatesReranked: 0,
-                                    topK: SEARCH_RERANK_TOP_K,
-                                    rankK: SEARCH_RERANK_RRF_K,
-                                    weight: SEARCH_RERANK_WEIGHT,
-                                    docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
-                                    docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
-                                },
-                                exactRegistry: exactRegistryDebug,
-                            },
-                            now: this.now,
-                            previewMaxChars: SEARCH_GROUP_PREVIEW_MAX_CHARS,
-                            navigationHelpers: this.getSearchNavigationHelpers(),
-                            partialIndexSearchWarnings,
-                            dirtyFilesNotFreshened: initialDirtyFilesNotFreshened,
-                            changedFilesBoostSkippedForLargeChangeSet: initialChangedFilesBoostSkippedForLargeChangeSet,
-                            buildNoiseMitigationHint: (files) => this.searchQuerySupport.buildNoiseMitigationHint(effectiveRoot, files, input.scope),
-                            buildGeneratedArtifactsVerificationHint: (results) => this.buildGeneratedArtifactsVerificationHint(effectiveRoot, results),
-                        });
-                        this.addSearchPhaseTiming(phaseTimings, 'grouping', exactGroupingStartedAtMs);
-
-                        await this.touchWatchedCodebase(effectiveRoot);
-                        return {
-                            content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
-                            meta: {
-                                searchDiagnostics: {
-                                    ...searchDiagnostics,
-                                    resultsBeforeFilter: exactRegistryMatch.debug.inspectedSymbolCount,
-                                    resultsAfterFilter: 1,
-                                    searchPassCount: 0,
-                                    searchPassSuccessCount: 0,
-                                    searchPassFailureCount: 0,
-                                }
-                            }
-                        };
+            if (exactFastPath.kind === 'handled') {
+                await this.touchWatchedCodebase(effectiveRoot);
+                return {
+                    content: [{ type: "text", text: this.stringifyToolJson(exactFastPath.envelope) }],
+                    meta: {
+                        searchDiagnostics: {
+                            ...searchDiagnostics,
+                            resultsBeforeFilter: exactFastPath.resultsBeforeFilter,
+                            resultsAfterFilter: exactFastPath.resultsAfterFilter,
+                            searchPassCount: 0,
+                            searchPassSuccessCount: 0,
+                            searchPassFailureCount: 0,
+                        }
                     }
-                } else {
-                    exactRegistryDebug = this.searchQuerySupport.buildUnavailableExactRegistryDebug(registryState.reason);
-                }
+                };
             }
 
             const execution = await runSearchExecution({
@@ -2746,7 +2275,7 @@ export class ToolHandlers {
                 semanticQuery,
                 parsedOperators,
                 queryPlan,
-                exactRegistryEligible,
+                exactRegistryEligible: exactRegistryFallbackForTrackedLexical,
                 exactRegistryFallbackForTrackedLexical,
                 freshnessMode: freshnessDecision.mode,
             }, {
@@ -2790,256 +2319,43 @@ export class ToolHandlers {
                 };
             }
 
-            let {
-                scored,
-                operatorSummary,
-                filterSummary,
-                freshnessSummary,
-                trackedLexicalDebug,
-                candidateLimit: executedCandidateLimit,
-                attemptsUsed,
-                searchWarnings,
-                passesUsed,
-                backendScoreKinds,
-                exactMatchPinningApplied,
-                boostedCandidates,
-                changedFilesState,
-                debugChangedFilesState,
-                changedFilesCount,
-                changedFilesBoostSkippedForLargeChangeSet,
-                rankingProvenance,
-                rerankerAttempted,
-                rerankerApplied,
-                rerankerFailurePhase,
-                rerankerCandidatesIn,
-                rerankerCandidatesReranked,
-            } = execution;
-            freshnessSummary = {
-                ...freshnessSummary,
-                lastSyncAt: typeof freshnessDecision.lastSyncAt === 'string' ? freshnessDecision.lastSyncAt : null,
-            };
-            candidateLimit = executedCandidateLimit;
-            const rerankDecision = this.searchQuerySupport.resolveRerankDecision(input.scope, queryPlan);
-            const mustApplied = parsedOperators.must.length > 0;
-            const mustSatisfied = !mustApplied || scored.length > 0;
-            let finalizedSearchWarnings = Array.from(new Set([
-                ...searchWarnings,
-                ...partialIndexSearchWarnings,
-            ])).sort();
-
-            const debugHintBase: SearchDebugHint | undefined = input.debug
-                ? {
-                    queryIntent: {
-                        classification: queryPlan.intent,
-                        confidence: queryPlan.confidence,
-                        reasons: [...queryPlan.reasons],
-                        lexicalTerms: queryPlan.lexicalTerms.map((term) => term.value),
-                        semanticQuery,
-                    },
-                    retrieval: {
-                        mode: queryPlan.retrievalMode,
-                        scorePolicyKind: queryPlan.scorePolicyKind,
-                        backendScoreKinds: Array.from(backendScoreKinds).sort(),
-                    },
-                    rankingProvenance,
-                    ...(trackedLexicalDebug ? { trackedLexical: trackedLexicalDebug } : {}),
-                    ...(exactRegistryDebug ? { exactRegistry: exactRegistryDebug } : {}),
-                    phaseTimingsMs: phaseTimings,
-                    passesUsed: Array.from(passesUsed).sort(),
-                    candidateLimit,
-                    mustRetry: {
-                        attempts: attemptsUsed,
-                        maxAttempts,
-                        applied: mustApplied,
-                        satisfied: mustSatisfied,
-                        finalCount: scored.length,
-                    },
-                    operatorSummary,
-                    filterSummary,
-                    changedFilesBoost: {
-                        enabled: input.rankingMode === 'auto_changed_first',
-                        applied: boostedCandidates > 0,
-                        available: changedFilesState.available,
-                        changedCount: changedFilesCount,
-                        maxChangedFilesForBoost: SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
-                        skippedForLargeChangeSet: changedFilesBoostSkippedForLargeChangeSet,
-                        multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
-                        boostedCandidates,
-                    },
-                    ...(debugChangedFilesState ? {
-                        changedCode: this.buildChangedCodeDebug(effectiveRoot, debugChangedFilesState),
-                    } : {}),
-                    rerank: {
-                        enabledByPolicy: rerankDecision.enabledByPolicy,
-                        skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
-                        skippedByIdentifierIntent: rerankDecision.skippedByIdentifierIntent,
-                        capabilityPresent: rerankDecision.capabilityPresent,
-                        rerankerPresent: rerankDecision.rerankerPresent,
-                        enabled: rerankDecision.enabled,
-                        attempted: rerankerAttempted,
-                        applied: rerankerApplied,
-                        exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
-                        exactMatchPinningApplied,
-                        candidatesIn: rerankerCandidatesIn,
-                        candidatesReranked: rerankerCandidatesReranked,
-                        topK: SEARCH_RERANK_TOP_K,
-                        rankK: SEARCH_RERANK_RRF_K,
-                        weight: SEARCH_RERANK_WEIGHT,
-                        docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
-                        docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
-                        ...(rerankerFailurePhase ? { errorCode: 'RERANKER_FAILED', failurePhase: rerankerFailurePhase } : {}),
-                    },
-                }
-                : undefined;
-
-            if (input.resultMode === 'raw') {
-                const rawResults = buildRawSearchResultsHelper({
-                    scored,
-                    limit: input.limit,
-                    debug: Boolean(input.debug),
-                    now: this.now,
-                });
-                const noiseMitigationHint = this.searchQuerySupport.buildNoiseMitigationHint(effectiveRoot, rawResults.map((result) => result.file), input.scope);
-                const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, rawResults.map((result) => ({
-                    file: result.file,
-                    span: result.span,
-                })));
-                const envelope = buildRawSearchEnvelopeHelper({
-                    codebaseRoot: effectiveRoot,
-                    absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    limit: input.limit,
-                    freshnessDecision,
-                    freshnessSummary,
-                    warnings: finalizedSearchWarnings,
-                    debugHint: debugHintBase,
-                    proofDebugHint,
-                    noiseMitigationHint,
-                    generatedArtifactsHint,
-                    results: rawResults,
-                });
-
-                await this.touchWatchedCodebase(effectiveRoot);
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
-                    meta: { searchDiagnostics }
-                };
-            }
-
-            const needsRegistryRepair = input.groupBy === 'symbol'
-                && scored.some((candidate) => !candidate.result.ownerSymbolKey || !candidate.result.ownerSymbolInstanceId);
-            if (input.groupBy === 'symbol' && !searchSymbolRegistry) {
-                const registryState = await this.measureSearchPhase(
-                    phaseTimings,
-                    'registryLoad',
-                    () => this.navigationStore.getManifest({ normalizedRootPath: effectiveRoot })
-                );
-                if (registryState.status === 'ok') {
-                    searchSymbolRegistry = registryState.registry;
-                    searchSymbolRegistryManifestHash = registryState.manifestHash;
-                } else if (registryState.status === 'missing') {
-                    searchSymbolRegistryUnavailableReason = 'missing_symbol_registry';
-                } else if (registryState.status === 'incompatible' && needsRegistryRepair) {
-                    const payload = this.buildRequiresReindexPayload(
-                        effectiveRoot,
-                        `Symbol registry is incompatible: ${registryState.reason}`,
-                        {
-                            path: absolutePath,
-                            query: input.query,
-                            scope: input.scope,
-                            groupBy: input.groupBy,
-                            resultMode: input.resultMode,
-                            limit: input.limit
-                        }
-                    ) as unknown as SearchResponseEnvelope;
-                    return {
-                        content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                        meta: { searchDiagnostics }
-                    };
-                } else if (registryState.status === 'incompatible') {
-                    searchSymbolRegistryUnavailableReason = 'incompatible_symbol_registry';
-                    searchWarnings.push(`SEARCH_SYMBOL_REGISTRY_UNAVAILABLE:${registryState.status}`);
-                    finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
-                }
-            }
-
-            const callGraphNavigationState = await this.measureSearchPhase(
-                phaseTimings,
-                'navigationValidation',
-                () => this.loadRegistryValidatedCallGraphSidecar({
-                    codebaseRoot: effectiveRoot,
-                    registryManifestHash: searchSymbolRegistryManifestHash,
-                    registryUnavailableReason: searchSymbolRegistryUnavailableReason,
-                })
-            );
-            if (callGraphNavigationState.warning) {
-                searchWarnings.push(`SEARCH_${callGraphNavigationState.warning}`);
-                finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
-            }
-            const groupingStartedAtMs = this.searchPhaseNowMs();
-            const groupedSearchResults = buildVisibleGroupedSearchResultsHelper({
-                scored,
-                codebaseRoot: effectiveRoot,
-                query: input.query,
-                scope: input.scope,
-                groupBy: input.groupBy,
-                limit: input.limit,
-                queryPlan,
-                mustMatchesFirst: parsedOperators.must.length > 0,
-                registry: searchSymbolRegistry,
-                registryUnavailableReason: searchSymbolRegistryUnavailableReason,
-                navigationState: callGraphNavigationState,
-                sidecarReadyForOutline: Boolean(searchSymbolRegistryManifestHash),
-                debug: Boolean(input.debug),
-                now: this.now,
-                previewMaxChars: SEARCH_GROUP_PREVIEW_MAX_CHARS,
-                navigationHelpers: this.getSearchNavigationHelpers(),
-                parseIndexedAtMs: (indexedAt?: string) => this.parseIndexedAtMs(indexedAt),
-                resolveOwner: (result) => this.resolveSearchOwnerFromRegistry(result as SearchResultLike, searchSymbolRegistry, queryPlan),
-            });
-            this.addSearchPhaseTiming(phaseTimings, 'grouping', groupingStartedAtMs);
-            if (groupedSearchResults.warnings.length > 0) {
-                finalizedSearchWarnings = Array.from(new Set([
-                    ...finalizedSearchWarnings,
-                    ...groupedSearchResults.warnings,
-                ])).sort();
-            }
-            if (groupedSearchResults.exactMatchPinningApplied) {
-                exactMatchPinningApplied = true;
-                rankingProvenance.exactMatchPinningApplied = true;
-            }
-            rankingProvenance.registryRepairGroupCount += groupedSearchResults.registryRepairGroupCount;
-
-            const visibleGroupedResults = groupedSearchResults.visibleResults;
-            const noiseMitigationHint = this.searchQuerySupport.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file), input.scope);
-            const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, visibleGroupedResults.map((result) => ({
-                file: result.file,
-                span: result.span,
-            })));
-            const groupedDebugHint = debugHintBase
-                ? {
-                    ...debugHintBase,
-                    diversitySummary: groupedSearchResults.diversitySummary,
-                } satisfies SearchDebugHint
-                : undefined;
-
-            const envelope = buildGroupedSearchEnvelopeHelper({
-                codebaseRoot: effectiveRoot,
+            const envelope = await finalizeSearchResults({
                 absolutePath,
+                effectiveRoot,
                 query: input.query,
                 scope: input.scope,
                 groupBy: input.groupBy,
+                resultMode: input.resultMode,
                 limit: input.limit,
+                debug: Boolean(input.debug),
+                rankingMode: input.rankingMode,
                 freshnessDecision,
-                freshnessSummary,
-                warnings: finalizedSearchWarnings,
-                debugHint: groupedDebugHint,
+                freshnessSummary: {
+                    ...execution.freshnessSummary,
+                    lastSyncAt: typeof freshnessDecision.lastSyncAt === 'string' ? freshnessDecision.lastSyncAt : null,
+                },
                 proofDebugHint,
-                noiseMitigationHint,
-                generatedArtifactsHint,
-                results: visibleGroupedResults,
+                partialIndexSearchWarnings,
+                phaseTimings,
+                parsedOperators,
+                queryPlan,
+                maxAttempts,
+                exactRegistryDebug,
+                searchSymbolRegistry,
+                searchSymbolRegistryManifestHash,
+                execution,
+            }, {
+                searchQuerySupport: this.searchQuerySupport,
+                measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
+                loadRegistryManifest: (normalizedRootPath) => this.navigationStore.getManifest({ normalizedRootPath }),
+                loadRegistryValidatedCallGraphSidecar: (finalizationInput) => this.loadRegistryValidatedCallGraphSidecar(finalizationInput),
+                buildRequiresReindexPayload: (codebasePath, detail, searchContext) => this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope,
+                buildChangedCodeDebug: (codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(codebaseRoot, changedFilesState),
+                buildGeneratedArtifactsVerificationHint: (codebaseRoot, results) => this.buildGeneratedArtifactsVerificationHint(codebaseRoot, results),
+                getSearchNavigationHelpers: () => this.getSearchNavigationHelpers(),
+                parseIndexedAtMs: (indexedAt?: string) => this.parseIndexedAtMs(indexedAt),
+                resolveSearchOwnerFromRegistry: (result, registry, plan) => this.resolveSearchOwnerFromRegistry(result, registry, plan),
+                now: this.now,
             });
 
             await this.touchWatchedCodebase(effectiveRoot);

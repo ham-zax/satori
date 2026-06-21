@@ -113,7 +113,8 @@ type ToolHandlersTestOverrides = {
     getChangedFilesForCodebase: (repoPath: string) => ChangedFilesState;
     parseGitStatusChangedPaths: (status: string) => Set<string>;
     changedFilesCache: Map<string, ChangedFilesCacheEntry>;
-    validateCompletionProof: () => Promise<{ outcome: string }>;
+    validateCompletionProof: () => Promise<{ outcome: string; reason?: string }>;
+    probeLocalSearchCollectionState: (codebasePath: string) => Promise<{ state: string; collectionName?: string }>;
     sortGroupedSearchResults: (grouped: SortableGroupedSearchResult[], debug: boolean) => boolean;
 };
 
@@ -7303,6 +7304,155 @@ test('handleSearchCode allows successful coalesced freshness reuse', async () =>
     });
 
     assert.equal(payload.results.length, 1);
+});
+
+test('handleSearchCode fails closed when readiness degrades to stale_local after freshness', async () => {
+    let semanticSearchCalls = 0;
+    let ensureFreshnessCalls = 0;
+    let completionProofCalls = 0;
+
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                semanticSearchCalls += 1;
+                throw new Error('semanticSearch should not run after post-freshness stale_local degradation');
+            }
+        } as unknown as HandlerContext;
+
+        const codebaseInfo = {
+            status: 'indexed',
+            lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified'
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
+            getCodebaseInfo: () => codebaseInfo,
+            getCodebaseStatus: () => 'indexed',
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as unknown as HandlerSnapshotManager;
+
+        const syncManager = {
+            ensureFreshness: async () => {
+                ensureFreshnessCalls += 1;
+                return {
+                    mode: 'synced',
+                    checkedAt: '2026-01-01T00:00:00.000Z',
+                    thresholdMs: 180000,
+                    changed: false,
+                    lastSyncAt: '2026-01-01T00:00:00.000Z'
+                };
+            }
+        } as unknown as HandlerSyncManager;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => {
+            completionProofCalls += 1;
+            return completionProofCalls === 1
+                ? { outcome: 'valid' }
+                : { outcome: 'stale_local', reason: 'missing_marker_doc' };
+        };
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(ensureFreshnessCalls, 1);
+        assert.equal(completionProofCalls, 2);
+        assert.equal(semanticSearchCalls, 0);
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'not_indexed');
+        assert.match(String(payload.message || ''), /stale local index metadata/i);
+        assert.equal(payload.hints?.staleLocal?.completionProof, 'missing_marker_doc');
+        assert.equal(payload.hints?.create?.tool, 'manage_index');
+        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'create', path: repoPath });
+    });
+});
+
+test('handleSearchCode fails closed when collection disappears after freshness recheck', async () => {
+    let semanticSearchCalls = 0;
+    let ensureFreshnessCalls = 0;
+    let collectionProbeCalls = 0;
+
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                semanticSearchCalls += 1;
+                throw new Error('semanticSearch should not run after post-freshness missing collection degradation');
+            }
+        } as unknown as HandlerContext;
+
+        const codebaseInfo = {
+            status: 'indexed',
+            lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified'
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
+            getCodebaseInfo: () => codebaseInfo,
+            getCodebaseStatus: () => 'indexed',
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as unknown as HandlerSnapshotManager;
+
+        const syncManager = {
+            ensureFreshness: async () => {
+                ensureFreshnessCalls += 1;
+                return {
+                    mode: 'synced',
+                    checkedAt: '2026-01-01T00:00:00.000Z',
+                    thresholdMs: 180000,
+                    changed: false,
+                    lastSyncAt: '2026-01-01T00:00:00.000Z'
+                };
+            }
+        } as unknown as HandlerSyncManager;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({ outcome: 'valid' });
+        (handlers as unknown as ToolHandlersTestOverrides).probeLocalSearchCollectionState = async () => {
+            collectionProbeCalls += 1;
+            return collectionProbeCalls === 1
+                ? { state: 'ready', collectionName: 'test_collection' }
+                : { state: 'missing', collectionName: 'test_collection' };
+        };
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(ensureFreshnessCalls, 1);
+        assert.equal(collectionProbeCalls, 2);
+        assert.equal(semanticSearchCalls, 0);
+        assert.equal(payload.status, 'not_indexed');
+        assert.equal(payload.reason, 'not_indexed');
+        assert.match(String(payload.message || ''), /stale local index metadata/i);
+        assert.match(String(payload.message || ''), /test_collection/i);
+        assert.equal(payload.hints?.create?.tool, 'manage_index');
+        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
+        assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
+        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'create', path: repoPath });
+    });
 });
 
 test('handleSearchCode not_indexed payload includes stable reason code', async () => {

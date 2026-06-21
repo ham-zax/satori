@@ -214,6 +214,16 @@ Behavior:
 - Effect: sync-on-read + multi-pass retrieval + deterministic post-processing.
 - Effect detail: `search_codebase` remains the only sync-on-read exception in the MCP read surface. It resolves the candidate tracked root, runs freshness, reruns tracked-root readiness, and fails closed if readiness degraded before final result emission.
 - Effect detail: when semantic retrieval under-delivers, exact identifiers, exact path filters, and quoted literal phrases may trigger a bounded tracked-file lexical recovery pass before final ranking/grouping.
+- Front-door contract:
+  1. validate requested `path` exists and is a directory
+  2. run semantic tracked-root readiness
+  3. fail closed immediately on blocked readiness
+  4. capture `effectiveRoot`, proof debug hint, and partial-index warning state
+  5. run `ensureFreshness(effectiveRoot, 3 * 60 * 1000)`
+  6. apply freshness blocked-envelope rules
+  7. rerun semantic tracked-root readiness
+  8. fail closed if readiness degraded after freshness
+  9. only then continue into retrieval/ranking/grouping
 - Observability: envelope + debug hints.
 - Determinism: explicit comparator chains and bounded loops.
 - Performance: bounded candidates, TTL cache, rerank top-K, coalesced freshness.

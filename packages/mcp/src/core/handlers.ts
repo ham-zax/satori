@@ -7,54 +7,34 @@ import {
     Context,
     COLLECTION_LIMIT_MESSAGE,
     type IndexCompletionMarkerDocument,
-    type SemanticSearchResult,
-    type VectorDatabase,
     createRuntimeNavigationStore,
     type NavigationStore,
     VoyageAIReranker,
-    RemoteCollectionDeletePendingError,
-    deleteCollectionWithVerification,
-    getGraphNeighbors,
-    getLanguageIdFromFilename,
     getSupportedExtensionsForCapability,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForFilename,
     isLanguageCapabilitySupportedForLanguage,
-    resolveOwnerSymbolForChunk,
 } from "@zokizuan/satori-core";
-import type { CodeChunk, RelationshipRecord, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
 import { AccessGateReason, SnapshotManager } from "./snapshot.js";
-import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "../utils.js";
+import { ensureAbsolutePath } from "../utils.js";
 import { SyncManager, type FreshnessDecision } from "./sync.js";
 import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint, type CodebaseInfo } from "../config.js";
 import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
-    SEARCH_DIVERSITY_MAX_PER_FILE,
-    SEARCH_DIVERSITY_MAX_PER_SYMBOL,
-    SEARCH_DIVERSITY_RELAXED_FILE_CAP,
     SEARCH_MAX_CANDIDATES,
-    SEARCH_MUST_RETRY_MULTIPLIER,
     SEARCH_MUST_RETRY_ROUNDS,
-    SEARCH_NOISE_HINT_PATTERNS,
     SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N,
-    SEARCH_NOISE_HINT_THRESHOLD,
-    SEARCH_NOISE_HINT_TOP_K,
-    SEARCH_OPERATOR_PREFIX_MAX_CHARS,
-    SEARCH_PROXIMITY_WINDOW,
     SEARCH_RERANK_DOC_MAX_CHARS,
     SEARCH_RERANK_DOC_MAX_LINES,
     SEARCH_RERANK_RRF_K,
     SEARCH_RERANK_TOP_K,
     SEARCH_RERANK_WEIGHT,
-    SEARCH_RRF_K,
-    SCOPE_PATH_MULTIPLIERS,
-    STALENESS_THRESHOLDS_MS,
     PathCategory,
     SearchGroupBy,
-    SearchNoiseCategory,
     SearchRankingMode,
     SearchResultMode,
     SearchScope
@@ -68,23 +48,14 @@ import {
     FileOutlineInput,
     FileOutlineResponseEnvelope,
     FileOutlineStatus,
-    FileOutlineSymbolResult,
-    IndexingFailureMetadata,
     NonOkReason,
-    SearchChunkResult,
-    SearchCapabilityConfidence,
     SearchDebugHint,
     SearchGroupResult,
     SearchFreshnessSummary,
-    SearchNoiseMitigationHint,
-    SearchOperatorSummary,
     SearchRecommendedNextAction,
     SearchRequestInput,
     SearchResponseEnvelope,
-    SearchResultCapabilities,
     SearchSpan,
-    SearchWarningDetail,
-    StalenessBucket
 } from "./search-types.js";
 import {
     ManageIndexAction,
@@ -104,6 +75,63 @@ import {
     CallGraphTestReference,
 } from "./call-graph.js";
 import { decideInterruptedIndexingRecovery } from "./indexing-recovery.js";
+import {
+    type PythonSourceBackedSpanRepair,
+} from "./python-call-fallback.js";
+import {
+    resolveSearchOwnerFromRegistry as resolveSearchOwnerFromRegistryWithRepair,
+} from "./search-owner-resolution.js";
+import {
+    buildNavigationFallback as buildSearchNavigationFallback,
+    buildRegistrySymbolCallGraphHint as buildSearchRegistrySymbolCallGraphHint,
+    buildRelationshipCallGraphHint as buildSearchRelationshipCallGraphHint,
+    buildSearchGroupCallGraphHint as buildSearchGroupNavigationCallGraphHint,
+    buildSearchNextActions as buildSearchNavigationNextActions,
+    shouldAllowPreviewReadFallback as shouldAllowSearchPreviewReadFallback,
+} from "./search-navigation.js";
+import {
+    buildChangedCodeDebug as buildSearchChangedCodeDebug,
+    buildGeneratedArtifactsVerificationHint as buildSearchGeneratedArtifactsVerificationHint,
+} from "./search-debug-helpers.js";
+import {
+    sortGroupedSearchResults as sortGroupedSearchResultsHelper,
+} from "./search-group-ordering.js";
+import {
+    compareNullableNumbersAsc as compareNullableNumbersAscHelper,
+    compareNullableStringsAsc as compareNullableStringsAscHelper,
+} from "./search-grouping.js";
+import {
+    buildOutlineSpanWarningCodes as buildSearchOutlineSpanWarningCodes,
+    normalizeSearchSymbolLabel as normalizeSearchSymbolLabelHelper,
+} from "./search-response-helpers.js";
+import {
+    buildRawSearchResults as buildRawSearchResultsHelper,
+    buildVisibleGroupedSearchResults as buildVisibleGroupedSearchResultsHelper,
+} from "./search-group-results.js";
+import {
+    buildGroupedSearchEnvelope as buildGroupedSearchEnvelopeHelper,
+    buildRawSearchEnvelope as buildRawSearchEnvelopeHelper,
+} from "./search-response-envelopes.js";
+import { runSearchFrontDoor } from "./search-frontdoor.js";
+import {
+    classifyPathCategory,
+    hasPathSegment as hasSearchPathSegment,
+    isDocPath as isSearchDocPath,
+    isFixturePath as isSearchFixturePath,
+    isGeneratedPath as isSearchGeneratedPath,
+    isTestPath as isSearchTestPath,
+    isWriterActionTerm as isWriterActionTermHelper,
+    normalizeSearchPath as normalizeSearchPathHelper,
+    shouldIncludeCategoryInScope,
+} from "./search-ranking-policy.js";
+import { SearchQuerySupport } from "./search-query-support.js";
+import { TrackedRootReadiness } from "./tracked-root-readiness.js";
+import { NavigationHandlers } from "./navigation-handlers.js";
+import { ManageMaintenanceHandlers } from "./manage-maintenance-handlers.js";
+import { ManageIndexingHandlers } from "./manage-indexing-handlers.js";
+import { VectorBackendMaintenance } from "./vector-backend-maintenance.js";
+import { RelationshipBackedCallGraph } from "./relationship-backed-call-graph.js";
+import { ToolResponseBuilders } from "./tool-response-builders.js";
 import type {
     CompletionProofReason,
     CompletionProofValidationResult
@@ -122,119 +150,32 @@ import {
     shouldAttemptExactRegistryLookup,
     type ExactRegistryLookupDebug,
 } from "./search/exact-registry.js";
+import { buildExactRegistryHitEnvelope } from "./search-exact-registry-hit.js";
+import {
+    runSearchExecution,
+    type SearchDiagnostics,
+    type SearchFilterSummary,
+} from "./search-execution.js";
+import type {
+    SearchQueryPlan,
+    SearchResultLike,
+} from "./search-lexical-scoring.js";
 import type {
     RuntimeOwnerMutationAction,
     RuntimeOwnerMutationGate,
     RuntimeOwnerMutationGateResult,
 } from "./runtime-owner.js";
 
-const COLLECTION_LIMIT_PATTERNS = [
-    /exceeded the limit number of collections/i,
-    /collection limit/i,
-    /too many collections/i,
-    /quota.*collection/i,
-];
-
-const SATORI_COLLECTION_PREFIXES = ['code_chunks_', 'hybrid_code_chunks_'];
-const ZILLIZ_FREE_TIER_COLLECTION_LIMIT = 5;
-const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability('fileOutline');
-const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
-const SEARCH_OPERATOR_KEYS = new Set(['lang', 'path', '-path', 'must', 'exclude']);
-const SEARCH_QUERY_STOPWORDS = new Set([
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'find', 'for', 'from', 'how',
-    'in', 'is', 'it', 'logic', 'of', 'or', 'the', 'to', 'used', 'uses', 'using',
-    'what', 'where', 'which', 'who', 'why'
-]);
-const NAVIGATION_FALLBACK_MESSAGE = 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.';
-const PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL = 'Partial index/search data may exist, but navigation sidecars were not published because indexing stopped before completion.';
 const SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING = 'SEARCH_PARTIAL_INDEX:limit_reached';
 const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = 'SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE';
-const SEARCH_NAVIGATION_NEXT_STEP = 'Use recommendedNextAction when present. Call call_graph only when nextActions.callGraph is present and callGraphHint.supported=true.';
 const SEARCH_GROUP_PREVIEW_MAX_CHARS = 800;
-const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES = 256 * 1024;
-const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_FILES = 8;
-const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_RESULTS = 8;
-const SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES = 2;
-const SEARCH_TRACKED_LEXICAL_MAX_BYTES = 192 * 1024;
-const SEARCH_TRACKED_LEXICAL_MAX_FILES = 128;
-const SEARCH_TRACKED_LEXICAL_MAX_RESULTS = 16;
-const SEARCH_TRACKED_LEXICAL_CONTEXT_LINES = 2;
-const SEARCH_TRACKED_LEXICAL_TOTAL_BYTES = 2 * 1024 * 1024;
 const SEARCH_DEBUG_CHANGED_CODE_MAX_FILES = 10;
 const SEARCH_DEBUG_CHANGED_CODE_MAX_SYMBOLS = 20;
 const SEARCH_DEBUG_CHANGED_CODE_MAX_DIRECT_CALLERS = 20;
-const SEARCH_AGENT_FIT_NEUTRAL = 1.0;
-const SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER = 1.25;
-const SEARCH_AGENT_FIT_TEST_DEMOTION_RUNTIME = 0.45;
-const SEARCH_AGENT_FIT_TEST_DEMOTION_MIXED = 0.65;
-const SEARCH_AGENT_FIT_IMPLEMENTATION_TEST_DEMOTION = 0.25;
-const SEARCH_AGENT_FIT_IMPLEMENTATION_SYMBOL_MULTIPLIER = 1.25;
-const SEARCH_AGENT_FIT_IMPLEMENTATION_CHUNK_MULTIPLIER = 1.15;
-const SEARCH_AGENT_FIT_SCRIPT_IMPLEMENTATION_MULTIPLIER = 1.30;
-const SEARCH_AGENT_FIT_WRITER_OWNER_MULTIPLIER = 2.25;
-const SEARCH_AGENT_FIT_WRITER_NON_OWNER_DEMOTION = 0.55;
-const SEARCH_AGENT_FIT_TYPE_DEMOTION = 0.72;
-const SEARCH_AGENT_FIT_SCHEMA_DEMOTION = 0.80;
-const SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION = 0.70;
-const SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_MIXED = 0.80;
-const SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_SEMANTIC = 0.55;
-const PYTHON_DIRECT_CALL_CONTROL_KEYWORDS = new Set(['if', 'for', 'while', 'return', 'class', 'def']);
-const PYTHON_BUILTIN_CALL_NAMES = new Set([
-    '__import__', 'abs', 'all', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray', 'bytes',
-    'callable', 'chr', 'classmethod', 'compile', 'complex', 'delattr', 'dict', 'dir', 'divmod',
-    'enumerate', 'eval', 'exec', 'filter', 'float', 'format', 'frozenset', 'getattr', 'globals',
-    'hasattr', 'hash', 'help', 'hex', 'id', 'input', 'int', 'isinstance', 'issubclass', 'iter',
-    'len', 'list', 'locals', 'map', 'max', 'memoryview', 'min', 'next', 'object', 'oct', 'open',
-    'ord', 'pow', 'print', 'property', 'range', 'repr', 'reversed', 'round', 'set', 'setattr',
-    'slice', 'sorted', 'staticmethod', 'str', 'sum', 'super', 'tuple', 'type', 'vars', 'zip',
-]);
 type CallGraphUnavailableReason = Extract<CallGraphHint, { supported: false }>['reason'];
 // Recovery probe threshold for "likely interrupted" indexing states.
 // Keep this shorter than snapshot merge stale semantics for better operator UX.
 const STALE_INDEXING_RECOVERY_GRACE_MS = 2 * 60_000;
-
-type ParsedSearchOperators = {
-    semanticQuery: string;
-    prefixBlockChars: number;
-    lang: string[];
-    path: string[];
-    excludePath: string[];
-    must: string[];
-    exclude: string[];
-};
-
-type SearchCandidate = {
-    result: SearchResultLike;
-    baseScore: number;
-    backendScore: number;
-    backendScoreKind: 'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown';
-    backendScoreKindsSeen: Array<'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown'>;
-    fusionScore: number;
-    lexicalScore: number;
-    finalScore: number;
-    pathCategory: PathCategory;
-    pathMultiplier: number;
-    changedFilesMultiplier: number;
-    agentFitMultiplier: number;
-    agentFitReason: string;
-    passesMatchedMust: boolean;
-    exactLexicalMatch: boolean;
-    exactMatchPinned: boolean;
-    rerankAdjusted: boolean;
-    retrievalPasses: string[];
-};
-
-type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'fallback';
-type SearchSpanValidation = 'verified' | 'unverified' | 'not_applicable';
-
-type PythonSourceBackedSpanRepair = {
-    symbol: SymbolRecord;
-    attempted: boolean;
-    validated: boolean;
-    repaired: boolean;
-    startBeforeDefinition: boolean;
-    endTruncated: boolean;
-};
 
 type SearchPhaseTimingKey =
     | 'prepareRead'
@@ -249,54 +190,13 @@ type SearchPhaseTimingKey =
 
 type SearchPhaseTimings = Record<SearchPhaseTimingKey, number>;
 
-type TrackedLexicalSearchDebug = {
-    enabled: boolean;
-    trackedPathCount: number;
-    filesConsidered: number;
-    filesScanned: number;
-    bytesRead: number;
-    cappedByFiles: boolean;
-    cappedByBytes: boolean;
-    returnedResults: number;
-};
+type SearchOwnerSource = 'owner_metadata' | 'registry_repair' | 'fallback';
 
 type SearchOwnerResolution = {
     ownerSymbolKey?: string;
     ownerSymbolInstanceId?: string;
     symbolKind?: string;
     ownerSource?: Extract<SearchOwnerSource, 'owner_metadata' | 'registry_repair'>;
-};
-
-type SearchQueryIntent = 'identifier' | 'semantic' | 'mixed' | 'uncertain';
-type SearchIntentConfidence = 'high' | 'medium' | 'low';
-type SearchLexicalTermKind = 'whole' | 'fragment';
-
-type SearchLexicalTerm = {
-    value: string;
-    kind: SearchLexicalTermKind;
-};
-
-type SearchQueryPlan = {
-    semanticQuery: string;
-    intent: SearchQueryIntent;
-    confidence: SearchIntentConfidence;
-    reasons: string[];
-    quotedLiteralPhrases: string[];
-    referenceSeeking: boolean;
-    testSeeking: boolean;
-    implementationSeeking: boolean;
-    writerSeeking: boolean;
-    lexicalTerms: SearchLexicalTerm[];
-    retrievalMode: 'dense' | 'lexical' | 'hybrid';
-    scorePolicyKind: 'dense_similarity_min' | 'topk_only';
-    lexicalWeight: number;
-    exactMatchPinningEnabled: boolean;
-    rerankAllowed: boolean;
-};
-
-type SearchLexicalEvidence = {
-    score: number;
-    exactLexicalMatch: boolean;
 };
 
 type CodebaseStatus = CodebaseInfo['status'];
@@ -321,14 +221,6 @@ type TrackedRootEntry = {
     info: TrackedCodebaseInfo;
 };
 
-type SearchResultLike = Partial<SemanticSearchResult> & {
-    relativePath: string;
-    startLine?: number;
-    endLine?: number;
-    startByte?: unknown;
-    endByte?: unknown;
-};
-
 type IndexCompletionMarkerContext = {
     getIndexCompletionMarker?: (codebasePath: string) => Promise<IndexCompletionMarkerDocument | null>;
     writeIndexCompletionMarker?: (codebasePath: string, marker: IndexCompletionMarkerDocument) => Promise<void>;
@@ -340,10 +232,6 @@ type ToolTextResponse = {
     content: Array<{ type: "text"; text: string }>;
     isError?: boolean;
 };
-
-type ChangedCodeDebug = NonNullable<SearchDebugHint['changedCode']>;
-type ChangedCodeDebugSymbol = ChangedCodeDebug['symbols'][number];
-type ChangedCodeDebugDirectCaller = ChangedCodeDebug['directCallers'][number];
 
 type IndexCodebaseArgs = {
     path: string;
@@ -399,30 +287,6 @@ type SnapshotManagerCapabilities = {
     saveCodebaseSnapshot?: () => void;
 };
 
-type SourceBackedPythonCallFallback = {
-    edges: CallGraphEdge[];
-    symbols: SymbolRecord[];
-    notes: CallGraphNote[];
-};
-
-type SearchFilterSummary = {
-    removedByScope: number;
-    removedByLanguage: number;
-    removedByPathInclude: number;
-    removedByPathExclude: number;
-    removedByMust: number;
-    removedByExclude: number;
-};
-
-type SearchDiversitySummary = {
-    maxPerFile: number;
-    maxPerSymbol: number;
-    relaxedFileCap: number;
-    skippedByFileCap: number;
-    skippedBySymbolCap: number;
-    usedRelaxedCap: boolean;
-};
-
 type GitignoreMatcherCacheState = "ready" | "absent" | "error";
 
 type GitignoreMatcherCacheEntry = {
@@ -446,25 +310,6 @@ type CompletionProbeDebugHint = {
     message: string;
     action: string;
 };
-
-interface CandidateCollection {
-    name: string;
-    createdAt?: string;
-    codebasePath?: string;
-    isTargetCollection: boolean;
-    sortTimestampMs?: number;
-}
-
-interface CollectionDetailsView {
-    name: string;
-    createdAt?: string;
-}
-
-interface VectorStoreBackendInfoView {
-    provider: 'milvus' | 'zilliz';
-    transport: 'grpc' | 'rest';
-    address?: string;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -556,22 +401,6 @@ function formatUnknownError(error: unknown): string {
     }
 }
 
-function isCollectionLimitError(error: unknown): boolean {
-    if (error === COLLECTION_LIMIT_MESSAGE) {
-        return true;
-    }
-    const message = formatUnknownError(error);
-    if (message === COLLECTION_LIMIT_MESSAGE) {
-        return true;
-    }
-    return COLLECTION_LIMIT_PATTERNS.some((pattern) => pattern.test(message));
-}
-
-function isBackendTimeoutError(error: unknown): boolean {
-    const message = formatUnknownError(error);
-    return /DEADLINE_EXCEEDED|deadline exceeded|timeout|timed out/i.test(message);
-}
-
 export class ToolHandlers {
     private context: Context;
     private snapshotManager: SnapshotManager;
@@ -591,6 +420,14 @@ export class ToolHandlers {
     }>();
     private readonly rootGitignoreMatcherCache = new Map<string, GitignoreMatcherCacheEntry>();
     private readonly gitignoreForceReloadEveryN: number;
+    private readonly searchQuerySupport: SearchQuerySupport;
+    private readonly trackedRootReadiness: TrackedRootReadiness;
+    private readonly navigationHandlers: NavigationHandlers;
+    private readonly manageMaintenanceHandlers: ManageMaintenanceHandlers;
+    private readonly manageIndexingHandlers: ManageIndexingHandlers;
+    private readonly vectorBackendMaintenance: VectorBackendMaintenance;
+    private readonly relationshipBackedCallGraph: RelationshipBackedCallGraph;
+    private readonly toolResponseBuilders: ToolResponseBuilders;
 
     constructor(
         context: Context,
@@ -616,7 +453,23 @@ export class ToolHandlers {
         this.reranker = reranker || null;
         this.gitignoreForceReloadEveryN = Math.max(1, Math.trunc(gitignoreForceReloadEveryN));
         this.navigationStore = navigationStore;
+        this.searchQuerySupport = new SearchQuerySupport(this as unknown as ConstructorParameters<typeof SearchQuerySupport>[0]);
+        this.trackedRootReadiness = new TrackedRootReadiness(this as unknown as ConstructorParameters<typeof TrackedRootReadiness>[0]);
+        this.navigationHandlers = new NavigationHandlers(this as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+        this.manageMaintenanceHandlers = new ManageMaintenanceHandlers(this as unknown as ConstructorParameters<typeof ManageMaintenanceHandlers>[0]);
+        this.manageIndexingHandlers = new ManageIndexingHandlers(this as unknown as ConstructorParameters<typeof ManageIndexingHandlers>[0]);
+        this.vectorBackendMaintenance = new VectorBackendMaintenance(this as unknown as ConstructorParameters<typeof VectorBackendMaintenance>[0]);
+        this.relationshipBackedCallGraph = new RelationshipBackedCallGraph(this as unknown as ConstructorParameters<typeof RelationshipBackedCallGraph>[0]);
+        this.toolResponseBuilders = new ToolResponseBuilders(this as unknown as ConstructorParameters<typeof ToolResponseBuilders>[0]);
         console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`);
+    }
+
+    private setIndexingStats(stats: { indexedFiles: number; totalChunks: number } | null): void {
+        this.indexingStats = stats;
+    }
+
+    private clearIndexingStats(): void {
+        this.indexingStats = null;
     }
 
     private createSearchPhaseTimings(): SearchPhaseTimings {
@@ -838,6 +691,10 @@ export class ToolHandlers {
 
     private saveSnapshotIfSupported(): void {
         this.snapshotCapabilities().saveCodebaseSnapshot?.();
+    }
+
+    private canonicalizeCodebasePath(codebasePath: string): string {
+        return this.searchQuerySupport.canonicalizeCodebasePath(codebasePath);
     }
 
     private fallbackCollectionName(codebasePath: string): string {
@@ -1298,47 +1155,6 @@ export class ToolHandlers {
         };
     }
 
-    private resolveTrackedRoot(
-        absolutePath: string,
-        statuses: CodebaseStatus[]
-    ): TrackedRootEntry | null {
-        const statusSet = new Set(statuses);
-        const allEntries = this.getSnapshotAllCodebases();
-
-        const mergedByPath = new Map<string, TrackedRootEntry>();
-        for (const entry of allEntries) {
-            if (!entry || typeof entry.path !== 'string' || !entry.info) {
-                continue;
-            }
-            mergedByPath.set(entry.path, { path: entry.path, info: entry.info as unknown as TrackedCodebaseInfo });
-        }
-
-        for (const codebasePath of this.getSnapshotIndexedCodebases()) {
-            if (!mergedByPath.has(codebasePath)) {
-                mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexed', lastUpdated: new Date(0).toISOString() } });
-            }
-        }
-
-        for (const codebasePath of this.getSnapshotIndexingCodebases()) {
-            if (!mergedByPath.has(codebasePath)) {
-                mergedByPath.set(codebasePath, { path: codebasePath, info: { status: 'indexing', lastUpdated: new Date(0).toISOString() } });
-            }
-        }
-
-        const directEntry = this.getTrackedRootEntryForPath(absolutePath);
-        if (directEntry && !mergedByPath.has(directEntry.path)) {
-            mergedByPath.set(directEntry.path, directEntry);
-        }
-
-        const matches = Array.from(mergedByPath.values())
-            .filter((entry) => statusSet.has(entry.info.status) && this.isPathWithinCodebase(absolutePath, entry.path))
-            .sort((a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path));
-        if (matches.length === 0) {
-            return null;
-        }
-        return matches[0];
-    }
-
     private async probeLocalSearchCollectionState(codebasePath: string): Promise<{
         state: 'ready' | 'missing' | 'unknown';
         collectionName?: string;
@@ -1412,13 +1228,7 @@ export class ToolHandlers {
     }
 
     private buildMissingLocalCollectionMessage(codebasePath: string, requestedPath: string, collectionName?: string): string {
-        const requestedPathDetail = requestedPath !== codebasePath
-            ? ` Requested path: '${requestedPath}'.`
-            : '';
-        const collectionDetail = collectionName
-            ? ` Vector collection is missing from the configured vector backend ('${collectionName}').`
-            : ' Vector collection is missing from the configured vector backend.';
-        return `Codebase '${codebasePath}' has stale local index metadata.${collectionDetail}${requestedPathDetail} Read paths fail closed and will not rebuild implicitly. Run manage_index with {"action":"create","path":"${codebasePath}"} to restore local readiness.`;
+        return this.trackedRootReadiness.buildMissingLocalCollectionMessage(codebasePath, requestedPath, collectionName);
     }
 
     private buildMissingLocalCollectionSearchPayload(
@@ -1433,55 +1243,7 @@ export class ToolHandlers {
         },
         collectionName?: string
     ): SearchResponseEnvelope {
-        return {
-            status: "not_indexed",
-            reason: "not_indexed",
-            codebasePath,
-            path: searchContext.path,
-            query: searchContext.query,
-            scope: searchContext.scope,
-            groupBy: searchContext.groupBy,
-            resultMode: searchContext.resultMode,
-            limit: searchContext.limit,
-            freshnessDecision: null,
-            message: this.buildMissingLocalCollectionMessage(codebasePath, searchContext.path, collectionName),
-            recommendedNextAction: this.buildManageIndexRecommendedAction(
-                "create",
-                codebasePath,
-                "Restore index readiness because local metadata points at a missing configured vector backend collection."
-            ),
-            hints: {
-                create: this.buildCreateHint(codebasePath)
-            },
-            results: []
-        } as SearchResponseEnvelope;
-    }
-
-    private buildIndexingFailureMetadata(info: TrackedCodebaseInfo): IndexingFailureMetadata {
-        return {
-            errorMessage: typeof info.errorMessage === 'string' ? info.errorMessage : null,
-            lastAttemptedPercentage: typeof info.lastAttemptedPercentage === 'number' && Number.isFinite(info.lastAttemptedPercentage)
-                ? Number(info.lastAttemptedPercentage)
-                : null,
-            lastUpdated: typeof info.lastUpdated === 'string' ? info.lastUpdated : null
-        };
-    }
-
-    private buildIndexFailedMessage(codebasePath: string, requestedPath: string, info: TrackedCodebaseInfo): string {
-        const failure = this.buildIndexingFailureMetadata(info);
-        const requestedPathDetail = requestedPath !== codebasePath
-            ? ` Requested path: '${requestedPath}'.`
-            : '';
-        const errorDetail = failure.errorMessage
-            ? ` Error: ${failure.errorMessage}`
-            : ' Error: unknown indexing failure.';
-        const progressDetail = failure.lastAttemptedPercentage !== null
-            ? ` Failed at: ${failure.lastAttemptedPercentage.toFixed(1)}% progress.`
-            : '';
-        const updatedDetail = failure.lastUpdated
-            ? ` Failed at: ${failure.lastUpdated}.`
-            : '';
-        return `Codebase '${codebasePath}' has a failed indexing attempt.${requestedPathDetail}${errorDetail}${progressDetail}${updatedDetail} Satori will not serve semantic results from an unproven partial index. Run manage_index with {"action":"create","path":"${codebasePath}"} to restart indexing for this failed state.`;
+        return this.trackedRootReadiness.buildMissingLocalCollectionSearchPayload(codebasePath, searchContext, collectionName);
     }
 
     private buildIndexFailedSearchPayload(
@@ -1496,30 +1258,7 @@ export class ToolHandlers {
         },
         info: TrackedCodebaseInfo
     ): SearchResponseEnvelope {
-        return {
-            status: "not_indexed",
-            reason: "index_failed",
-            codebasePath,
-            path: searchContext.path,
-            query: searchContext.query,
-            scope: searchContext.scope,
-            groupBy: searchContext.groupBy,
-            resultMode: searchContext.resultMode,
-            limit: searchContext.limit,
-            freshnessDecision: null,
-            message: this.buildIndexFailedMessage(codebasePath, searchContext.path, info),
-            indexingFailure: this.buildIndexingFailureMetadata(info),
-            recommendedNextAction: this.buildManageIndexRecommendedAction(
-                "create",
-                codebasePath,
-                "Restart indexing because the previous attempt failed before completion marker proof."
-            ),
-            hints: {
-                create: this.buildCreateHint(codebasePath),
-                status: this.buildStatusHint(codebasePath)
-            },
-            results: []
-        } as SearchResponseEnvelope;
+        return this.trackedRootReadiness.buildIndexFailedSearchPayload(codebasePath, searchContext, info);
     }
 
     private buildIndexFailedFileOutlinePayload(
@@ -1528,21 +1267,7 @@ export class ToolHandlers {
         file: string,
         info: TrackedCodebaseInfo
     ): FileOutlineResponseEnvelope {
-        return {
-            status: 'not_indexed',
-            reason: 'index_failed',
-            path: requestedPath,
-            codebaseRoot: codebasePath,
-            file,
-            outline: null,
-            hasMore: false,
-            message: this.buildIndexFailedMessage(codebasePath, requestedPath, info),
-            indexingFailure: this.buildIndexingFailureMetadata(info),
-            hints: {
-                create: this.buildCreateHint(codebasePath),
-                status: this.buildStatusHint(codebasePath)
-            }
-        } as FileOutlineResponseEnvelope;
+        return this.trackedRootReadiness.buildIndexFailedFileOutlinePayload(codebasePath, requestedPath, file, info);
     }
 
     private buildIndexFailedCallGraphPayload(
@@ -1556,26 +1281,7 @@ export class ToolHandlers {
         },
         info: TrackedCodebaseInfo
     ): CallGraphResponseEnvelope {
-        return {
-            status: 'not_indexed',
-            supported: false,
-            reason: 'index_failed',
-            path: context.path,
-            codebaseRoot: codebasePath,
-            symbolRef: context.symbolRef,
-            direction: context.direction,
-            depth: context.depth,
-            limit: context.limit,
-            nodes: [],
-            edges: [],
-            notes: [],
-            message: this.buildIndexFailedMessage(codebasePath, context.path, info),
-            indexingFailure: this.buildIndexingFailureMetadata(info),
-            hints: {
-                create: this.buildCreateHint(codebasePath),
-                status: this.buildStatusHint(codebasePath)
-            }
-        };
+        return this.trackedRootReadiness.buildIndexFailedCallGraphPayload(codebasePath, context, info);
     }
 
     private buildMissingLocalCollectionFileOutlinePayload(
@@ -1584,18 +1290,7 @@ export class ToolHandlers {
         file: string,
         collectionName?: string
     ): FileOutlineResponseEnvelope {
-        return {
-            status: 'not_indexed',
-            reason: 'not_indexed',
-            path: requestedPath,
-            file,
-            outline: null,
-            hasMore: false,
-            message: this.buildMissingLocalCollectionMessage(codebasePath, requestedPath, collectionName),
-            hints: {
-                create: this.buildCreateHint(codebasePath)
-            }
-        };
+        return this.trackedRootReadiness.buildMissingLocalCollectionFileOutlinePayload(codebasePath, requestedPath, file, collectionName);
     }
 
     private buildMissingLocalCollectionCallGraphPayload(
@@ -1609,138 +1304,14 @@ export class ToolHandlers {
         },
         collectionName?: string
     ): CallGraphResponseEnvelope {
-        return {
-            status: 'not_indexed',
-            supported: false,
-            reason: 'not_indexed',
-            path: context.path,
-            codebaseRoot: codebasePath,
-            symbolRef: context.symbolRef,
-            direction: context.direction,
-            depth: context.depth,
-            limit: context.limit,
-            nodes: [],
-            edges: [],
-            notes: [],
-            message: this.buildMissingLocalCollectionMessage(codebasePath, context.path, collectionName),
-            hints: {
-                create: this.buildCreateHint(codebasePath)
-            }
-        };
+        return this.trackedRootReadiness.buildMissingLocalCollectionCallGraphPayload(codebasePath, context, collectionName);
     }
 
     private async prepareTrackedRootForRead(
         absolutePath: string,
         accessMode: 'semantic' | 'navigation' = 'semantic'
-    ): Promise<
-        | { state: 'ready'; root: TrackedRootEntry; proofDebugHint?: CompletionProbeDebugHint }
-        | { state: 'requires_reindex'; codebasePath: string; message?: string }
-        | { state: 'indexing'; codebasePath: string }
-        | { state: 'index_failed'; codebasePath: string; info: TrackedCodebaseInfo }
-        | { state: 'not_indexed' }
-        | { state: 'stale_local'; codebasePath: string; reason: CompletionProofReason }
-        | { state: 'missing_collection'; codebasePath: string; collectionName?: string; proofDebugHint?: CompletionProbeDebugHint }
-    > {
-        this.refreshSnapshotStateFromDisk();
-
-        const blockedRoot = this.getMatchingBlockedRoot(absolutePath);
-        if (blockedRoot) {
-            return {
-                state: 'requires_reindex',
-                codebasePath: blockedRoot.path,
-                message: blockedRoot.message
-            };
-        }
-
-        const searchableRoot = this.resolveTrackedRoot(absolutePath, ['indexed', 'sync_completed']);
-        const indexingRoot = this.resolveTrackedRoot(absolutePath, ['indexing']);
-        const failedRoot = this.resolveTrackedRoot(absolutePath, ['indexfailed']);
-
-        if (
-            failedRoot
-            && (!searchableRoot || failedRoot.path.length >= searchableRoot.path.length)
-            && (!indexingRoot || failedRoot.path.length >= indexingRoot.path.length)
-        ) {
-            return {
-                state: 'index_failed',
-                codebasePath: failedRoot.path,
-                info: failedRoot.info
-            };
-        }
-
-        if (!searchableRoot && indexingRoot) {
-            return {
-                state: 'indexing',
-                codebasePath: indexingRoot.path
-            };
-        }
-
-        if (!searchableRoot) {
-            return {
-                state: 'not_indexed'
-            };
-        }
-
-        const effectiveRoot = searchableRoot.path;
-        const gateResult = this.enforceFingerprintGate(effectiveRoot);
-        if (gateResult.blockedResponse) {
-            if (accessMode === 'navigation' && gateResult.reason === 'fingerprint_mismatch') {
-                // Navigation sidecars are source-backed and can still be safe under a runtime-model mismatch.
-            } else {
-                return {
-                    state: 'requires_reindex',
-                    codebasePath: effectiveRoot,
-                    message: gateResult.message
-                };
-            }
-        }
-
-        const completionProof = await this.validateCompletionProof(effectiveRoot);
-        if (completionProof.outcome === 'fingerprint_mismatch') {
-            if (accessMode === 'navigation') {
-                // Completion proof mismatch blocks semantic/vector search, not source-backed navigation.
-            } else {
-                return {
-                    state: 'requires_reindex',
-                    codebasePath: effectiveRoot,
-                    message: 'Completion proof fingerprint does not match the current runtime fingerprint.'
-                };
-            }
-        }
-
-        if (completionProof.outcome === 'stale_local') {
-            return {
-                state: 'stale_local',
-                codebasePath: effectiveRoot,
-                reason: completionProof.reason || 'missing_marker_doc'
-            };
-        }
-
-        const proofDebugHint: CompletionProbeDebugHint | undefined = completionProof.outcome === 'probe_failed'
-            ? {
-                ok: false,
-                reason: 'probe_failed',
-                message: 'Completion proof could not be checked, so readiness is based on the local snapshot state.',
-                action: 'If navigation looks stale or inconsistent, run manage_index status and then reindex only when the response asks for it.',
-            }
-            : undefined;
-
-        const collectionState = await this.probeLocalSearchCollectionState(effectiveRoot);
-        if (collectionState.state === 'missing') {
-            await this.markCodebaseSearchStateMissing(effectiveRoot);
-            return {
-                state: 'missing_collection',
-                codebasePath: effectiveRoot,
-                collectionName: collectionState.collectionName,
-                proofDebugHint
-            };
-        }
-
-        return {
-            state: 'ready',
-            root: searchableRoot,
-            proofDebugHint
-        };
+    ) {
+        return this.trackedRootReadiness.prepareTrackedRootForRead(absolutePath, accessMode);
     }
 
     private summarizeFingerprint(fingerprint: IndexFingerprint): string {
@@ -1829,76 +1400,7 @@ export class ToolHandlers {
             limit: number;
         }
     ): Record<string, unknown> {
-        const detailLine = detail ? `${detail}\n\n` : '';
-        const base = searchContext ? {
-            path: searchContext.path,
-            query: searchContext.query,
-            scope: searchContext.scope,
-            groupBy: searchContext.groupBy,
-            resultMode: searchContext.resultMode,
-            limit: searchContext.limit,
-        } : {};
-        const compatibility = this.buildCompatibilityDiagnostics(codebasePath);
-        const runtimeMismatch = this.isRuntimeFingerprintMismatch(compatibility);
-        const message = runtimeMismatch
-            ? (() => {
-                const indexedFingerprint = compatibility.indexedFingerprint
-                    ? this.summarizeFingerprint(compatibility.indexedFingerprint)
-                    : 'the indexed runtime fingerprint';
-                const runtimeFingerprint = this.summarizeFingerprint(compatibility.runtimeFingerprint);
-                return `${detailLine}The current Satori runtime does not match the existing index at '${codebasePath}'. Recovery: restart Satori with ${indexedFingerprint} to reuse the current index. Reindex only if you intentionally want to migrate this repo to ${runtimeFingerprint}.`;
-            })()
-            : `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {\"action\":\"reindex\",\"path\":\"${codebasePath}\"}.`;
-        return {
-            ...base,
-            status: "requires_reindex",
-            reason: "requires_reindex" as NonOkReason,
-            codebasePath,
-            results: [],
-            freshnessDecision: {
-                mode: "skipped_requires_reindex"
-            },
-            message,
-            recommendedNextAction: runtimeMismatch
-                ? this.buildManageIndexRecommendedAction(
-                    "status",
-                    codebasePath,
-                    "Inspect the indexed/runtime fingerprints, then restart a matching runtime unless you intend to migrate the index."
-                )
-                : this.buildManageIndexRecommendedAction(
-                    "reindex",
-                    codebasePath,
-                    "Rebuild the incompatible index before retrying search."
-                ),
-            hints: {
-                ...(runtimeMismatch ? {
-                    status: this.buildStatusHint(codebasePath),
-                    runtimeMismatch: this.buildRuntimeMismatchHint(codebasePath, compatibility),
-                } : {}),
-                reindex: this.buildReindexHint(codebasePath)
-            },
-            compatibility
-        };
-    }
-
-    private buildRequiresReindexSearchResponse(
-        codebasePath: string,
-        detail?: string,
-        searchContext?: {
-            path: string;
-            query: string;
-            scope: SearchScope;
-            groupBy: SearchGroupBy;
-            resultMode: SearchResultMode;
-            limit: number;
-        }
-    ): { content: Array<{ type: string; text: string }> } {
-        return {
-            content: [{
-                type: "text",
-                text: this.stringifyToolJson(this.buildRequiresReindexPayload(codebasePath, detail, searchContext))
-            }]
-        };
+        return this.toolResponseBuilders.buildRequiresReindexPayload(codebasePath, detail, searchContext);
     }
 
     private buildRequiresReindexCallGraphPayload(
@@ -1921,29 +1423,7 @@ export class ToolHandlers {
             | "incompatible_relationship_sidecar"
         > = "requires_reindex"
     ): CallGraphResponseEnvelope {
-        const detailLine = detail ? `${detail}\n\n` : '';
-        return {
-            status: "requires_reindex",
-            supported: false,
-            reason,
-            path: context.path,
-            codebasePath,
-            symbolRef: context.symbolRef,
-            direction: context.direction,
-            depth: context.depth,
-            limit: context.limit,
-            nodes: [],
-            edges: [],
-            notes: [],
-            freshnessDecision: {
-                mode: "skipped_requires_reindex"
-            },
-            message: `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
-            hints: {
-                reindex: this.buildReindexHint(codebasePath)
-            },
-            compatibility: this.buildCompatibilityDiagnostics(codebasePath)
-        };
+        return this.toolResponseBuilders.buildRequiresReindexCallGraphPayload(codebasePath, detail, context, reason);
     }
 
     private buildNotReadySearchPayload(
@@ -1957,34 +1437,7 @@ export class ToolHandlers {
             limit: number;
         }
     ): SearchResponseEnvelope {
-        return {
-            status: "not_ready",
-            reason: "indexing",
-            codebasePath,
-            path: searchContext.path,
-            query: searchContext.query,
-            scope: searchContext.scope,
-            groupBy: searchContext.groupBy,
-            resultMode: searchContext.resultMode,
-            limit: searchContext.limit,
-            freshnessDecision: {
-                mode: "skipped_indexing"
-            },
-            message: `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry.`,
-            recommendedNextAction: this.buildManageIndexRecommendedAction(
-                "status",
-                codebasePath,
-                "Check indexing progress before retrying search."
-            ),
-            hints: {
-                status: this.buildStatusHint(codebasePath),
-                debugIndexing: {
-                    completionProof: "marker_doc"
-                }
-            },
-            indexing: this.buildIndexingMetadata(codebasePath),
-            results: []
-        } as SearchResponseEnvelope;
+        return this.toolResponseBuilders.buildNotReadySearchPayload(codebasePath, searchContext);
     }
 
     private buildFreshnessBlockedSearchPayload(
@@ -1999,82 +1452,7 @@ export class ToolHandlers {
             limit: number;
         }
     ): SearchResponseEnvelope | null {
-        switch (freshnessDecision.mode) {
-            case 'skipped_indexing':
-                return this.buildNotReadySearchPayload(codebasePath, searchContext);
-
-            case 'skipped_requires_reindex': {
-                const detail = freshnessDecision.errorMessage
-                    ? `Search blocked because this codebase requires reindex (${freshnessDecision.errorMessage}).`
-                    : 'Search blocked because this codebase requires reindex.';
-                const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
-                return {
-                    ...payload,
-                    freshnessDecision
-                };
-            }
-
-            case 'skipped_missing_path':
-                return {
-                    status: "not_indexed",
-                    reason: "not_indexed",
-                    codebasePath,
-                    path: searchContext.path,
-                    query: searchContext.query,
-                    scope: searchContext.scope,
-                    groupBy: searchContext.groupBy,
-                    resultMode: searchContext.resultMode,
-                    limit: searchContext.limit,
-                    freshnessDecision,
-                    message: `Indexed codebase path '${codebasePath}' no longer exists. Search cannot serve stale vector results for this path.`,
-                    recommendedNextAction: this.buildManageIndexRecommendedAction(
-                        "create",
-                        searchContext.path,
-                        "Recreate the index for the requested path after the previously indexed root disappeared."
-                    ),
-                    hints: {
-                        create: this.buildCreateHint(searchContext.path)
-                    },
-                    results: []
-                } as SearchResponseEnvelope;
-
-            case 'ignore_reload_failed': {
-                const fallbackLine = freshnessDecision.fallbackSyncExecuted
-                    ? ' Fallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
-                    : '';
-                const detail = `Search blocked because ignore-rule reconciliation failed (${freshnessDecision.errorMessage || 'unknown_ignore_reload_error'}).${fallbackLine}`;
-                const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
-                return {
-                    ...payload,
-                    freshnessDecision
-                };
-            }
-
-            case 'coalesced':
-                if (typeof freshnessDecision.errorMessage === 'string'
-                    && freshnessDecision.errorMessage.trim().length > 0) {
-                    const fallbackLine = freshnessDecision.fallbackSyncExecuted
-                        ? ' Fallback incremental sync was executed, but freshness still could not be proven.'
-                        : '';
-                    const detail = `Search blocked because coalesced in-flight sync failed (${freshnessDecision.errorMessage}).${fallbackLine}`;
-                    const payload = this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope;
-                    return {
-                        ...payload,
-                        freshnessDecision
-                    };
-                }
-                return null;
-
-            case 'synced':
-            case 'skipped_recent':
-            case 'reconciled_ignore_change':
-                return null;
-
-            default: {
-                const exhaustive: never = freshnessDecision.mode;
-                return exhaustive;
-            }
-        }
+        return this.toolResponseBuilders.buildFreshnessBlockedSearchPayload(codebasePath, freshnessDecision, searchContext);
     }
 
     private buildVectorBackendSearchPayload(
@@ -2088,21 +1466,7 @@ export class ToolHandlers {
             limit: number;
         }
     ): SearchResponseEnvelope {
-        return {
-            status: "not_ready",
-            reason: "vector_backend_unavailable",
-            code: diagnostic.code,
-            path: searchContext.path,
-            query: searchContext.query,
-            scope: searchContext.scope,
-            groupBy: searchContext.groupBy,
-            resultMode: searchContext.resultMode,
-            limit: searchContext.limit,
-            freshnessDecision: null,
-            message: diagnostic.message,
-            hints: diagnostic.hints,
-            results: []
-        } as SearchResponseEnvelope;
+        return this.toolResponseBuilders.buildVectorBackendSearchPayload(diagnostic, searchContext);
     }
 
     private buildInvalidSearchRequestPayload(
@@ -2118,39 +1482,11 @@ export class ToolHandlers {
         status: SearchResponseEnvelope["status"] = "not_ready",
         reason?: NonOkReason
     ): SearchResponseEnvelope {
-        return {
-            status,
-            ...(reason ? { reason } : {}),
-            path: searchContext.path,
-            query: searchContext.query,
-            scope: searchContext.scope,
-            groupBy: searchContext.groupBy,
-            resultMode: searchContext.resultMode,
-            limit: searchContext.limit,
-            freshnessDecision: null,
-            message,
-            results: []
-        } as SearchResponseEnvelope;
+        return this.toolResponseBuilders.buildInvalidSearchRequestPayload(searchContext, message, status, reason);
     }
 
     private buildNotReadyFileOutlinePayload(codebasePath: string, file: string, requestedPath: string): FileOutlineResponseEnvelope & Record<string, unknown> {
-        return {
-            status: 'not_ready',
-            reason: 'indexing',
-            path: requestedPath,
-            codebaseRoot: codebasePath,
-            file,
-            outline: null,
-            hasMore: false,
-            message: `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry file outline.`,
-            hints: {
-                status: this.buildStatusHint(codebasePath),
-                debugIndexing: {
-                    completionProof: "marker_doc"
-                }
-            },
-            indexing: this.buildIndexingMetadata(codebasePath)
-        };
+        return this.toolResponseBuilders.buildNotReadyFileOutlinePayload(codebasePath, file, requestedPath);
     }
 
     private buildNotIndexedFileOutlinePayload(
@@ -2158,33 +1494,7 @@ export class ToolHandlers {
         requestedPath: string,
         staleLocal?: { codebaseRoot: string; reason: CompletionProofReason }
     ): FileOutlineResponseEnvelope & Record<string, unknown> {
-        if (staleLocal) {
-            return {
-                status: 'not_indexed',
-                reason: 'not_indexed',
-                path: requestedPath,
-                file,
-                outline: null,
-                hasMore: false,
-                message: this.buildStaleLocalMessage(staleLocal.codebaseRoot, requestedPath, staleLocal.reason),
-                hints: {
-                    create: this.buildCreateHint(staleLocal.codebaseRoot),
-                    staleLocal: this.buildStaleLocalHint(staleLocal.codebaseRoot, staleLocal.reason)
-                }
-            };
-        }
-        return {
-            status: 'not_indexed',
-            reason: 'not_indexed',
-            path: requestedPath,
-            file,
-            outline: null,
-            hasMore: false,
-            message: `Codebase '${requestedPath}' (or any parent) is not indexed.`,
-            hints: {
-                create: this.buildCreateHint(requestedPath)
-            }
-        };
+        return this.toolResponseBuilders.buildNotIndexedFileOutlinePayload(file, requestedPath, staleLocal);
     }
 
     private buildInvalidFileOutlineRequestPayload(
@@ -2194,15 +1504,7 @@ export class ToolHandlers {
         status: FileOutlineStatus = "not_ready",
         reason?: NonOkReason
     ): FileOutlineResponseEnvelope {
-        return {
-            status,
-            ...(reason ? { reason } : {}),
-            path: requestedPath,
-            file,
-            outline: null,
-            hasMore: false,
-            message
-        };
+        return this.toolResponseBuilders.buildInvalidFileOutlineRequestPayload(requestedPath, file, message, status, reason);
     }
 
     private buildNotIndexedCallGraphPayload(
@@ -2215,31 +1517,7 @@ export class ToolHandlers {
         },
         staleLocal?: { codebaseRoot: string; reason: CompletionProofReason }
     ): CallGraphResponseEnvelope {
-        const baseHints: Record<string, unknown> = staleLocal
-            ? {
-                create: this.buildCreateHint(staleLocal.codebaseRoot),
-                staleLocal: this.buildStaleLocalHint(staleLocal.codebaseRoot, staleLocal.reason)
-            }
-            : {
-                create: this.buildCreateHint(context.path)
-            };
-        return {
-            status: 'not_indexed',
-            supported: false,
-            reason: 'not_indexed',
-            path: context.path,
-            symbolRef: context.symbolRef,
-            direction: context.direction,
-            depth: context.depth,
-            limit: context.limit,
-            nodes: [],
-            edges: [],
-            notes: [],
-            message: staleLocal
-                ? this.buildStaleLocalMessage(staleLocal.codebaseRoot, context.path, staleLocal.reason)
-                : `Codebase '${context.path}' (or any parent) is not indexed.`,
-            hints: baseHints
-        };
+        return this.toolResponseBuilders.buildNotIndexedCallGraphPayload(context, staleLocal);
     }
 
     private buildNotReadyCallGraphPayload(
@@ -2252,31 +1530,7 @@ export class ToolHandlers {
             limit: number;
         }
     ): CallGraphResponseEnvelope {
-        return {
-            status: "not_ready",
-            supported: false,
-            reason: "indexing",
-            path: context.path,
-            codebaseRoot: codebasePath,
-            symbolRef: context.symbolRef,
-            direction: context.direction,
-            depth: context.depth,
-            limit: context.limit,
-            nodes: [],
-            edges: [],
-            notes: [],
-            freshnessDecision: {
-                mode: "skipped_indexing"
-            },
-            message: `Codebase '${codebasePath}' is currently indexing. Wait for indexing to complete, then retry.`,
-            hints: {
-                status: this.buildStatusHint(codebasePath),
-                debugIndexing: {
-                    completionProof: "marker_doc"
-                }
-            },
-            indexing: this.buildIndexingMetadata(codebasePath)
-        };
+        return this.toolResponseBuilders.buildNotReadyCallGraphPayload(codebasePath, context);
     }
 
     private buildInvalidCallGraphRequestPayload(
@@ -2291,23 +1545,7 @@ export class ToolHandlers {
         status: CallGraphResponseStatus = "not_ready",
         reason?: CallGraphResponseReason
     ): CallGraphResponseEnvelope {
-        return {
-            status,
-            supported: false,
-            ...(reason ? { reason } : {}),
-            path: context.path,
-            symbolRef: context.symbolRef,
-            direction: context.direction,
-            depth: context.depth,
-            limit: context.limit,
-            nodes: [],
-            edges: [],
-            notes: [],
-            notesTruncated: false,
-            totalNoteCount: 0,
-            returnedNoteCount: 0,
-            message
-        };
+        return this.toolResponseBuilders.buildInvalidCallGraphRequestPayload(context, message, status, reason);
     }
 
     private getMatchingBlockedRoot(absolutePath: string): { path: string; message?: string } | null {
@@ -2520,1536 +1758,31 @@ export class ToolHandlers {
     }
 
     private normalizeSearchPath(relativePath: string): string {
-        return relativePath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+        return normalizeSearchPathHelper(relativePath);
     }
 
     private hasPathSegment(normalizedPath: string, segment: string): boolean {
-        return normalizedPath === segment
-            || normalizedPath.startsWith(`${segment}/`)
-            || normalizedPath.includes(`/${segment}/`);
-    }
-
-    private hasLeadingPathSegment(normalizedPath: string, segment: string): boolean {
-        return normalizedPath === segment || normalizedPath.startsWith(`${segment}/`);
+        return hasSearchPathSegment(normalizedPath, segment);
     }
 
     private isTestPath(normalizedPath: string): boolean {
-        return this.hasPathSegment(normalizedPath, 'test')
-            || this.hasPathSegment(normalizedPath, 'tests')
-            || this.hasPathSegment(normalizedPath, '__tests__')
-            || /\.test\.[^/]+$/.test(normalizedPath)
-            || /\.spec\.[^/]+$/.test(normalizedPath);
+        return isSearchTestPath(normalizedPath);
     }
 
     private isDocPath(normalizedPath: string): boolean {
-        return this.hasPathSegment(normalizedPath, 'docs')
-            || this.hasPathSegment(normalizedPath, 'doc')
-            || this.hasPathSegment(normalizedPath, 'documentation')
-            || this.hasPathSegment(normalizedPath, 'guide')
-            || this.hasPathSegment(normalizedPath, 'guides')
-            || normalizedPath.endsWith('.md')
-            || normalizedPath.endsWith('.mdx')
-            || normalizedPath.endsWith('.rst')
-            || normalizedPath.endsWith('.adoc')
-            || normalizedPath.endsWith('.txt');
+        return isSearchDocPath(normalizedPath);
     }
 
     private isGeneratedPath(normalizedPath: string): boolean {
-        return this.hasPathSegment(normalizedPath, 'dist')
-            || this.hasPathSegment(normalizedPath, 'build')
-            || this.hasPathSegment(normalizedPath, 'coverage')
-            || this.hasPathSegment(normalizedPath, '.next')
-            || this.hasPathSegment(normalizedPath, '.output')
-            || this.hasPathSegment(normalizedPath, 'generated')
-            || normalizedPath.endsWith('.min.js')
-            || normalizedPath.endsWith('.min.css');
+        return isSearchGeneratedPath(normalizedPath);
     }
 
     private isFixturePath(normalizedPath: string): boolean {
-        return this.hasPathSegment(normalizedPath, 'fixtures')
-            || this.hasPathSegment(normalizedPath, '__fixtures__');
-    }
-
-    private isArtifactPath(normalizedPath: string): boolean {
-        return this.hasLeadingPathSegment(normalizedPath, 'reports')
-            || this.hasLeadingPathSegment(normalizedPath, 'report')
-            || this.hasLeadingPathSegment(normalizedPath, 'investigations')
-            || this.hasLeadingPathSegment(normalizedPath, 'investigation')
-            || this.hasPathSegment(normalizedPath, '.codebase-memory')
-            || this.hasPathSegment(normalizedPath, '.satori');
-    }
-
-    private isLandingPath(normalizedPath: string): boolean {
-        return this.hasPathSegment(normalizedPath, 'satori-landing')
-            || this.hasPathSegment(normalizedPath, 'landing')
-            || this.hasPathSegment(normalizedPath, 'landing-page');
-    }
-
-    private isExamplePath(normalizedPath: string): boolean {
-        return this.hasPathSegment(normalizedPath, 'examples')
-            || this.hasPathSegment(normalizedPath, 'example')
-            || this.hasPathSegment(normalizedPath, 'demo')
-            || this.hasPathSegment(normalizedPath, 'samples')
-            || this.hasPathSegment(normalizedPath, 'sample');
-    }
-
-    private isAdapterPath(normalizedPath: string): boolean {
-        return this.hasPathSegment(normalizedPath, 'adapters')
-            || this.hasPathSegment(normalizedPath, 'adapter')
-            || this.hasPathSegment(normalizedPath, 'tools')
-            || this.hasPathSegment(normalizedPath, 'cli');
-    }
-
-    private isEntrypointPath(normalizedPath: string): boolean {
-        const entryNames = ['main.', 'index.', 'app.', 'server.', 'cli.', 'entry.'];
-        const baseName = normalizedPath.split('/').pop() || '';
-        return entryNames.some((prefix) => baseName.startsWith(prefix));
-    }
-
-    private isScriptRuntimePath(normalizedPath: string): boolean {
-        return normalizedPath === 'scripts' || normalizedPath.startsWith('scripts/');
+        return isSearchFixturePath(normalizedPath);
     }
 
     private classifyPathCategory(relativePath: string): PathCategory {
-        const normalized = this.normalizeSearchPath(relativePath);
-        if (this.isGeneratedPath(normalized)) return 'generated';
-        if (this.isFixturePath(normalized)) return 'fixture';
-        if (this.isLandingPath(normalized)) return 'landing';
-        if (this.isArtifactPath(normalized)) return 'artifact';
-        if (this.isTestPath(normalized)) return 'tests';
-        if (this.isDocPath(normalized)) return 'docs';
-        if (this.isExamplePath(normalized)) return 'example';
-        if (this.isScriptRuntimePath(normalized)) return 'scriptRuntime';
-        if (this.isAdapterPath(normalized)) return 'adapter';
-        if (this.isEntrypointPath(normalized)) return 'entrypoint';
-        if (normalized.includes('/src/core/') || normalized.includes('/core/')) return 'core';
-        if (normalized.includes('/src/')) return 'srcRuntime';
-        return 'neutral';
-    }
-
-    private classifyNoiseCategory(relativePath: string): SearchNoiseCategory {
-        const normalized = this.normalizeSearchPath(relativePath);
-
-        // Deterministic precedence: generated > tests > fixtures > docs > runtime.
-        if (this.isGeneratedPath(normalized)
-            || this.hasPathSegment(normalized, 'coverage')
-            || this.hasPathSegment(normalized, 'dist')
-            || this.hasPathSegment(normalized, 'build')
-            || this.hasPathSegment(normalized, '.output')) return 'generated';
-        if (this.isTestPath(normalized)) return 'tests';
-        if (this.isFixturePath(normalized)) return 'fixtures';
-        if (this.isDocPath(normalized)) return 'docs';
-        return 'runtime';
-    }
-
-    private roundRatio(value: number): number {
-        return Math.round(value * 100) / 100;
-    }
-
-    private normalizeRelativePathForIgnoreCheck(relativePath: string): string | null {
-        if (typeof relativePath !== 'string') {
-            return null;
-        }
-        const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
-        if (normalized.length === 0 || normalized === '.') {
-            return null;
-        }
-        if (
-            normalized.startsWith('..')
-            || normalized.includes('/../')
-            || path.posix.isAbsolute(normalized)
-            || path.win32.isAbsolute(normalized)
-        ) {
-            return null;
-        }
-        return normalized;
-    }
-
-    private isExactSearchPathFilter(pattern: string): boolean {
-        return !/[!*?[\]{}]/.test(pattern) && !pattern.endsWith('/');
-    }
-
-    private activeIgnorePatternsExcludePath(codebaseRoot: string, relativePath: string): boolean {
-        const patterns = this.getContextActiveIgnorePatterns(codebaseRoot);
-        if (!Array.isArray(patterns) || patterns.length === 0) {
-            return false;
-        }
-
-        const normalized = this.normalizeRelativePathForIgnoreCheck(relativePath);
-        if (!normalized) {
-            return true;
-        }
-
-        try {
-            const matcher = ignore();
-            matcher.add(patterns.filter((pattern: unknown) => typeof pattern === 'string'));
-            if (matcher.ignores(normalized)) {
-                return true;
-            }
-            const withSlash = normalized.endsWith('/') ? normalized : `${normalized}/`;
-            return matcher.ignores(withSlash);
-        } catch {
-            return true;
-        }
-    }
-
-    private buildLivePathScopedSearchResults(input: {
-        effectiveRoot: string;
-        parsedOperators: ParsedSearchOperators;
-        queryPlan: SearchQueryPlan;
-        changedFiles: Set<string>;
-    }): SearchResultLike[] {
-        if (input.parsedOperators.path.length === 0 || input.changedFiles.size === 0) {
-            return [];
-        }
-
-        const results: SearchResultLike[] = [];
-        const seenPaths = new Set<string>();
-        const lexicalTerms = input.queryPlan.lexicalTerms
-            .map((term) => term.value.toLowerCase())
-            .filter((term) => term.length > 0);
-
-        for (const pattern of input.parsedOperators.path) {
-            if (results.length >= SEARCH_LIVE_PATH_SUPPLEMENT_MAX_RESULTS || seenPaths.size >= SEARCH_LIVE_PATH_SUPPLEMENT_MAX_FILES) {
-                break;
-            }
-
-            const normalized = this.normalizeRelativePathForIgnoreCheck(pattern);
-            if (!normalized || !this.isExactSearchPathFilter(normalized) || seenPaths.has(normalized)) {
-                continue;
-            }
-            seenPaths.add(normalized);
-
-            if (!input.changedFiles.has(normalized)) {
-                continue;
-            }
-            if (!isLanguageCapabilitySupportedForFilename(normalized, 'search')) {
-                continue;
-            }
-            if (this.activeIgnorePatternsExcludePath(input.effectiveRoot, normalized)) {
-                continue;
-            }
-
-            const absolutePath = path.resolve(input.effectiveRoot, normalized);
-            const rootPrefix = `${path.resolve(input.effectiveRoot)}${path.sep}`;
-            if (!absolutePath.startsWith(rootPrefix)) {
-                continue;
-            }
-
-            let stat: fs.Stats;
-            try {
-                stat = fs.statSync(absolutePath);
-            } catch {
-                continue;
-            }
-            if (!stat.isFile() || stat.size > SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES) {
-                continue;
-            }
-
-            let content: string;
-            try {
-                content = fs.readFileSync(absolutePath, 'utf8');
-            } catch {
-                continue;
-            }
-
-            const lowerContent = content.toLowerCase();
-            if (lexicalTerms.length > 0 && !lexicalTerms.some((term) => lowerContent.includes(term))) {
-                continue;
-            }
-
-            const lines = content.split(/\r?\n/);
-            const matchingLineIndex = lexicalTerms.length > 0
-                ? this.findBestLivePathLexicalLineIndex(lines, input.queryPlan.lexicalTerms)
-                : 0;
-            const anchorLineIndex = matchingLineIndex >= 0 ? matchingLineIndex : 0;
-            const startLine = Math.max(1, anchorLineIndex + 1 - SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES);
-            const endLine = Math.min(lines.length, anchorLineIndex + 1 + SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES);
-            const windowContent = lines.slice(startLine - 1, endLine).join('\n');
-
-            results.push({
-                content: windowContent,
-                relativePath: normalized,
-                startLine,
-                endLine,
-                language: getLanguageIdFromFilename(normalized, 'text'),
-                score: 1,
-                backendScore: 1,
-                backendScoreKind: 'lexical_rank',
-            });
-        }
-
-        return results;
-    }
-
-    private shouldRunTrackedLexicalSearch(input: {
-        parsedOperators: ParsedSearchOperators;
-        queryPlan: SearchQueryPlan;
-        exactRegistryFallback: boolean;
-    }): boolean {
-        if (input.queryPlan.lexicalTerms.length === 0 && input.queryPlan.quotedLiteralPhrases.length === 0) {
-            return false;
-        }
-        if (input.exactRegistryFallback) {
-            return true;
-        }
-        if (input.parsedOperators.path.some((pattern) => {
-            const normalized = this.normalizeRelativePathForIgnoreCheck(pattern);
-            return Boolean(normalized && this.isExactSearchPathFilter(normalized));
-        })) {
-            return true;
-        }
-        if (input.queryPlan.quotedLiteralPhrases.length > 0) {
-            return true;
-        }
-        const semanticQuery = input.queryPlan.semanticQuery.trim();
-        if (/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,}\b/.test(semanticQuery)) {
-            return true;
-        }
-        return /\b[A-Z][A-Z0-9_]*(?:WARNING|ERROR|CODE|STATUS|REASON)[A-Z0-9_]*\b/.test(semanticQuery);
-    }
-
-    private buildTrackedLexicalSearchResults(input: {
-        effectiveRoot: string;
-        parsedOperators: ParsedSearchOperators;
-        queryPlan: SearchQueryPlan;
-        scope: SearchScope;
-        limit: number;
-        exactRegistryFallback: boolean;
-    }): { results: SearchResultLike[]; debug: TrackedLexicalSearchDebug } {
-        const disabledDebug = (): TrackedLexicalSearchDebug => ({
-            enabled: false,
-            trackedPathCount: 0,
-            filesConsidered: 0,
-            filesScanned: 0,
-            bytesRead: 0,
-            cappedByFiles: false,
-            cappedByBytes: false,
-            returnedResults: 0,
-        });
-        if (!this.shouldRunTrackedLexicalSearch(input)) {
-            return { results: [], debug: disabledDebug() };
-        }
-
-        const trackedRelativePaths = this.getContextTrackedRelativePaths(input.effectiveRoot);
-        if (!Array.isArray(trackedRelativePaths) || trackedRelativePaths.length === 0) {
-            return { results: [], debug: disabledDebug() };
-        }
-        const debug: TrackedLexicalSearchDebug = {
-            enabled: true,
-            trackedPathCount: trackedRelativePaths.length,
-            filesConsidered: 0,
-            filesScanned: 0,
-            bytesRead: 0,
-            cappedByFiles: false,
-            cappedByBytes: false,
-            returnedResults: 0,
-        };
-
-        const normalizedExactPathFilters = new Set(
-            input.parsedOperators.path
-                .map((pattern) => this.normalizeRelativePathForIgnoreCheck(pattern))
-                .filter((pattern): pattern is string => Boolean(pattern && this.isExactSearchPathFilter(pattern)))
-        );
-        const lexicalTerms = input.queryPlan.lexicalTerms
-            .map((term) => term.value.toLowerCase())
-            .filter((term) => term.length > 0);
-        const normalizedPaths = trackedRelativePaths
-            .map((relativePath) => this.normalizeRelativePathForIgnoreCheck(relativePath))
-            .filter((relativePath): relativePath is string => Boolean(relativePath));
-        const uniquePaths = Array.from(new Set(normalizedPaths));
-        uniquePaths.sort((a, b) => {
-            const aExact = normalizedExactPathFilters.has(a) ? 1 : 0;
-            const bExact = normalizedExactPathFilters.has(b) ? 1 : 0;
-            if (aExact !== bExact) {
-                return bExact - aExact;
-            }
-            const aPathMatch = lexicalTerms.some((term) => a.toLowerCase().includes(term)) ? 1 : 0;
-            const bPathMatch = lexicalTerms.some((term) => b.toLowerCase().includes(term)) ? 1 : 0;
-            if (aPathMatch !== bPathMatch) {
-                return bPathMatch - aPathMatch;
-            }
-            return a.localeCompare(b);
-        });
-
-        const candidates: Array<{
-            relativePath: string;
-            score: number;
-            exactLexicalMatch: boolean;
-            startLine: number;
-            endLine: number;
-            content: string;
-            language: string;
-        }> = [];
-        let bytesRead = 0;
-        let filesScanned = 0;
-
-        for (const relativePath of uniquePaths) {
-            if (filesScanned >= SEARCH_TRACKED_LEXICAL_MAX_FILES) {
-                debug.cappedByFiles = true;
-                break;
-            }
-            if (bytesRead >= SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
-                debug.cappedByBytes = true;
-                break;
-            }
-            debug.filesConsidered += 1;
-            if (!isLanguageCapabilitySupportedForFilename(relativePath, 'search')) {
-                continue;
-            }
-            if (!this.shouldIncludeCategoryInScope(input.scope, this.classifyPathCategory(relativePath))) {
-                continue;
-            }
-            if (input.parsedOperators.lang.length > 0) {
-                const languageValue = getLanguageIdFromFilename(relativePath, 'text').toLowerCase();
-                if (!input.parsedOperators.lang.includes(languageValue)) {
-                    continue;
-                }
-            }
-            if (input.parsedOperators.path.length > 0 && !this.pathMatchesAnyPattern(relativePath, input.parsedOperators.path)) {
-                continue;
-            }
-            if (input.parsedOperators.excludePath.length > 0 && this.pathMatchesAnyPattern(relativePath, input.parsedOperators.excludePath)) {
-                continue;
-            }
-            if (this.activeIgnorePatternsExcludePath(input.effectiveRoot, relativePath)) {
-                continue;
-            }
-
-            const absolutePath = path.resolve(input.effectiveRoot, relativePath);
-            const rootPrefix = `${path.resolve(input.effectiveRoot)}${path.sep}`;
-            if (!absolutePath.startsWith(rootPrefix)) {
-                continue;
-            }
-
-            let stat: fs.Stats;
-            try {
-                stat = fs.statSync(absolutePath);
-            } catch {
-                continue;
-            }
-            if (!stat.isFile() || stat.size > SEARCH_TRACKED_LEXICAL_MAX_BYTES || bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
-                if (bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
-                    debug.cappedByBytes = true;
-                }
-                continue;
-            }
-
-            let content: string;
-            try {
-                content = fs.readFileSync(absolutePath, 'utf8');
-            } catch {
-                continue;
-            }
-            filesScanned += 1;
-            bytesRead += stat.size;
-            debug.filesScanned = filesScanned;
-            debug.bytesRead = bytesRead;
-
-            const lowerContent = content.toLowerCase();
-            const quickMatch = lexicalTerms.length === 0
-                || lexicalTerms.some((term) => lowerContent.includes(term) || relativePath.toLowerCase().includes(term));
-            if (!quickMatch) {
-                continue;
-            }
-
-            const lines = content.split(/\r?\n/);
-            let bestLineIndex = -1;
-            let bestScore = 0;
-            let bestExactLexicalMatch = false;
-            for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-                const evidence = this.scoreCandidateLexicalEvidence(input.queryPlan, {
-                    relativePath,
-                    content: lines[lineIndex],
-                    symbolLabel: '',
-                });
-                if (
-                    evidence.score > bestScore
-                    || (evidence.score === bestScore && evidence.exactLexicalMatch && !bestExactLexicalMatch)
-                ) {
-                    bestScore = evidence.score;
-                    bestExactLexicalMatch = evidence.exactLexicalMatch;
-                    bestLineIndex = lineIndex;
-                }
-            }
-
-            if (bestScore <= 0) {
-                continue;
-            }
-
-            const anchorLineIndex = bestLineIndex >= 0 ? bestLineIndex : 0;
-            const startLine = Math.max(1, anchorLineIndex + 1 - SEARCH_TRACKED_LEXICAL_CONTEXT_LINES);
-            const endLine = Math.min(lines.length, anchorLineIndex + 1 + SEARCH_TRACKED_LEXICAL_CONTEXT_LINES);
-            const windowContent = lines.slice(startLine - 1, endLine).join('\n');
-            const windowEvidence = this.scoreCandidateLexicalEvidence(input.queryPlan, {
-                relativePath,
-                content: windowContent,
-                symbolLabel: '',
-            });
-
-            candidates.push({
-                relativePath,
-                score: windowEvidence.score > 0 ? windowEvidence.score : bestScore,
-                exactLexicalMatch: windowEvidence.exactLexicalMatch || bestExactLexicalMatch,
-                startLine,
-                endLine,
-                content: windowContent,
-                language: getLanguageIdFromFilename(relativePath, 'text'),
-            });
-        }
-
-        candidates.sort((a, b) => {
-            if (a.exactLexicalMatch !== b.exactLexicalMatch) {
-                return a.exactLexicalMatch ? -1 : 1;
-            }
-            if (b.score !== a.score) {
-                return b.score - a.score;
-            }
-            const fileCmp = a.relativePath.localeCompare(b.relativePath);
-            if (fileCmp !== 0) {
-                return fileCmp;
-            }
-            return a.startLine - b.startLine;
-        });
-
-        const results = candidates.slice(0, Math.min(input.limit, SEARCH_TRACKED_LEXICAL_MAX_RESULTS)).map((candidate) => ({
-            content: candidate.content,
-            relativePath: candidate.relativePath,
-            startLine: candidate.startLine,
-            endLine: candidate.endLine,
-            language: candidate.language,
-            score: candidate.score,
-            backendScore: candidate.score,
-            backendScoreKind: 'lexical_rank' as const,
-        }));
-        debug.returnedResults = results.length;
-        return { results, debug };
-    }
-
-    private findBestLivePathLexicalLineIndex(lines: string[], lexicalTerms: SearchLexicalTerm[]): number {
-        const orderedTerms = [
-            ...lexicalTerms.filter((term) => term.kind === 'whole'),
-            ...lexicalTerms.filter((term) => term.kind !== 'whole'),
-        ].map((term) => term.value.toLowerCase()).filter((term) => term.length > 0);
-
-        for (const term of orderedTerms) {
-            const lineIndex = lines.findIndex((line) => line.toLowerCase().includes(term));
-            if (lineIndex >= 0) {
-                return lineIndex;
-            }
-        }
-
-        return -1;
-    }
-
-    private trimTrailingSeparators(inputPath: string): string {
-        const parsedRoot = path.parse(inputPath).root;
-        if (inputPath === parsedRoot) {
-            return inputPath;
-        }
-        return inputPath.replace(/[\\/]+$/, '');
-    }
-
-    private canonicalizeCodebasePath(codebasePath: string): string {
-        const resolved = path.resolve(codebasePath);
-        try {
-            const realPath = typeof fs.realpathSync.native === 'function'
-                ? fs.realpathSync.native(resolved)
-                : fs.realpathSync(resolved);
-            return this.trimTrailingSeparators(path.normalize(realPath));
-        } catch {
-            return this.trimTrailingSeparators(path.normalize(resolved));
-        }
-    }
-
-    private loadRootGitignoreMatcher(codebaseRoot: string): GitignoreMatcherCacheEntry {
-        const cacheKey = this.canonicalizeCodebasePath(codebaseRoot);
-        const gitignorePath = path.join(cacheKey, '.gitignore');
-        const existingFromCache = this.rootGitignoreMatcherCache.get(cacheKey);
-        const existing = existingFromCache || {
-            state: "absent" as GitignoreMatcherCacheState,
-            mtimeMs: null,
-            size: null,
-            matcher: null,
-            checksSinceReload: 0,
-        };
-        const hasExistingEntry = !!existingFromCache;
-
-        const nextChecks = existing.checksSinceReload + 1;
-        const forceReload = nextChecks >= this.gitignoreForceReloadEveryN;
-
-        if (!forceReload && existing.state === 'ready') {
-            try {
-                const stat = fs.statSync(gitignorePath);
-                const mtimeMs = Math.trunc(stat.mtimeMs);
-                const size = stat.size;
-                if (stat.isFile() && existing.mtimeMs === mtimeMs && existing.size === size && existing.matcher) {
-                    const retained = { ...existing, checksSinceReload: nextChecks };
-                    this.rootGitignoreMatcherCache.set(cacheKey, retained);
-                    return retained;
-                }
-            } catch {
-                // Fall through to reload path.
-            }
-        }
-
-        if (hasExistingEntry && !forceReload && (existing.state === 'absent' || existing.state === 'error')) {
-            const retained = { ...existing, checksSinceReload: nextChecks };
-            this.rootGitignoreMatcherCache.set(cacheKey, retained);
-            return retained;
-        }
-
-        try {
-            const stat = fs.statSync(gitignorePath);
-            if (!stat.isFile()) {
-                const absent = {
-                    state: "absent" as GitignoreMatcherCacheState,
-                    mtimeMs: null,
-                    size: null,
-                    matcher: null,
-                    checksSinceReload: 0,
-                };
-                this.rootGitignoreMatcherCache.set(cacheKey, absent);
-                return absent;
-            }
-
-            const mtimeMs = Math.trunc(stat.mtimeMs);
-            const size = stat.size;
-            const contents = fs.readFileSync(gitignorePath, 'utf8');
-            const matcher = ignore();
-            matcher.add(contents);
-
-            const ready = {
-                state: "ready" as GitignoreMatcherCacheState,
-                mtimeMs,
-                size,
-                matcher,
-                checksSinceReload: 0,
-            };
-            this.rootGitignoreMatcherCache.set(cacheKey, ready);
-            return ready;
-        } catch (error: unknown) {
-            const code = isRecord(error) && typeof error.code === 'string' ? error.code : '';
-            if (code === 'ENOENT' || code === 'ENOTDIR') {
-                const absent = {
-                    state: "absent" as GitignoreMatcherCacheState,
-                    mtimeMs: null,
-                    size: null,
-                    matcher: null,
-                    checksSinceReload: 0,
-                };
-                this.rootGitignoreMatcherCache.set(cacheKey, absent);
-                return absent;
-            }
-            const failed = {
-                state: "error" as GitignoreMatcherCacheState,
-                mtimeMs: null,
-                size: null,
-                matcher: null,
-                checksSinceReload: 0,
-            };
-            this.rootGitignoreMatcherCache.set(cacheKey, failed);
-            return failed;
-        }
-    }
-
-    private patternMatchesAnyPath(pattern: string, paths: string[]): boolean {
-        if (!Array.isArray(paths) || paths.length === 0) {
-            return false;
-        }
-        try {
-            const matcher = ignore();
-            matcher.add(pattern);
-            return paths.some((filePath) => matcher.ignores(filePath));
-        } catch {
-            return false;
-        }
-    }
-
-    private filterNoiseHintPatternsByRootGitignore(
-        codebaseRoot: string,
-        observedNoisyFiles: string[]
-    ): {
-        matcherState: GitignoreMatcherCacheState;
-        suggestedIgnorePatterns: string[];
-        coveredByRootGitignore: boolean;
-    } {
-        const normalizedObserved = Array.from(
-            new Set(
-                observedNoisyFiles
-                    .map((filePath) => this.normalizeRelativePathForIgnoreCheck(filePath))
-                    .filter((filePath): filePath is string => typeof filePath === 'string')
-            )
-        );
-
-        const baseline = [...SEARCH_NOISE_HINT_PATTERNS];
-        const cacheEntry = this.loadRootGitignoreMatcher(codebaseRoot);
-        if (cacheEntry.state !== 'ready' || !cacheEntry.matcher) {
-            return {
-                matcherState: cacheEntry.state,
-                suggestedIgnorePatterns: baseline,
-                coveredByRootGitignore: false,
-            };
-        }
-
-        const coveredByRootGitignore = normalizedObserved.some((filePath) => cacheEntry.matcher!.ignores(filePath));
-        const noisyFilesNotIgnored = normalizedObserved.filter((filePath) => !cacheEntry.matcher!.ignores(filePath));
-        const suggestedIgnorePatterns = SEARCH_NOISE_HINT_PATTERNS.filter((pattern) =>
-            this.patternMatchesAnyPath(pattern, noisyFilesNotIgnored)
-        );
-
-        return {
-            matcherState: cacheEntry.state,
-            suggestedIgnorePatterns,
-            coveredByRootGitignore,
-        };
-    }
-
-    private buildNoiseMitigationHint(
-        codebaseRoot: string,
-        filesInOrder: string[],
-        scope: SearchScope
-    ): SearchNoiseMitigationHint | undefined {
-        if (scope === 'docs') {
-            return undefined;
-        }
-        if (!Array.isArray(filesInOrder) || filesInOrder.length === 0) {
-            return undefined;
-        }
-
-        const topK = Math.min(SEARCH_NOISE_HINT_TOP_K, filesInOrder.length);
-        if (topK <= 0) {
-            return undefined;
-        }
-
-        const counts: Record<SearchNoiseCategory, number> = {
-            tests: 0,
-            fixtures: 0,
-            docs: 0,
-            generated: 0,
-            runtime: 0,
-        };
-        const observedNoisyFiles: string[] = [];
-
-        for (let i = 0; i < topK; i++) {
-            const filePath = filesInOrder[i];
-            const category = this.classifyNoiseCategory(filePath);
-            counts[category] += 1;
-            if (category !== 'runtime') {
-                const normalized = this.normalizeRelativePathForIgnoreCheck(filePath);
-                if (normalized) {
-                    observedNoisyFiles.push(normalized);
-                }
-            }
-        }
-
-        const noisyRatio = (counts.tests + counts.fixtures + counts.docs + counts.generated) / topK;
-        if (noisyRatio < SEARCH_NOISE_HINT_THRESHOLD) {
-            return undefined;
-        }
-
-        const ratios: Record<SearchNoiseCategory, number> = {
-            tests: this.roundRatio(counts.tests / topK),
-            fixtures: this.roundRatio(counts.fixtures / topK),
-            docs: this.roundRatio(counts.docs / topK),
-            generated: this.roundRatio(counts.generated / topK),
-            runtime: this.roundRatio(counts.runtime / topK),
-        };
-        const debounceMs = this.getSyncWatchDebounceMs();
-        const filtered = this.filterNoiseHintPatternsByRootGitignore(codebaseRoot, observedNoisyFiles);
-        const isRootCoveredMessageEligible = filtered.matcherState === 'ready' && filtered.coveredByRootGitignore && filtered.suggestedIgnorePatterns.length === 0;
-        const nextStepMiddle = filtered.suggestedIgnorePatterns.length > 0
-            ? 'If you edit ignores, add only patterns not already ignored by root .gitignore (root-only check), then run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.'
-            : (isRootCoveredMessageEligible
-                ? 'Top noisy files appear already covered by root .gitignore (root-only check); .satoriignore changes may be unnecessary. If you changed ignores, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.'
-                : 'If you edit ignores, run manage_index with {"action":"sync","path":"<same path used in search_codebase>"} for immediate convergence.');
-        const nextStep = `Use scope="runtime" to reduce noise. ${nextStepMiddle} Reindex is only required when you see requires_reindex (fingerprint mismatch).`;
-
-        return {
-            reason: 'top_results_noise_dominant',
-            topK,
-            ratios,
-            recommendedScope: 'runtime',
-            suggestedIgnorePatterns: [...filtered.suggestedIgnorePatterns],
-            debounceMs,
-            nextStep,
-        };
-    }
-
-    private tokenizeQueryPrefix(prefix: string): string[] {
-        const tokens: string[] = [];
-        let current = "";
-        let inQuotes = false;
-        let escaped = false;
-
-        for (let i = 0; i < prefix.length; i++) {
-            const ch = prefix[i];
-            if (escaped) {
-                current += ch;
-                escaped = false;
-                continue;
-            }
-
-            if (ch === "\\") {
-                current += ch;
-                escaped = true;
-                continue;
-            }
-
-            if (ch === "\"") {
-                inQuotes = !inQuotes;
-                current += ch;
-                continue;
-            }
-
-            if (!inQuotes && /\s/.test(ch)) {
-                if (current.length > 0) {
-                    tokens.push(current);
-                    current = "";
-                }
-                continue;
-            }
-
-            current += ch;
-        }
-
-        if (current.length > 0) {
-            tokens.push(current);
-        }
-
-        return tokens;
-    }
-
-    private unquoteOperatorValue(value: string): string {
-        const trimmed = value.trim();
-        if (trimmed.length < 2) {
-            return trimmed;
-        }
-
-        if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
-            const inner = trimmed.slice(1, -1);
-            return inner.replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
-        }
-
-        return trimmed;
-    }
-
-    private deriveOperatorOnlySemanticQuery(operators: ParsedSearchOperators): string | null {
-        if (operators.must.length !== 1) {
-            return null;
-        }
-
-        const mustValue = operators.must[0].trim();
-        if (/\s/.test(mustValue)) {
-            return null;
-        }
-
-        const symbolInstanceIdLike = /^syminst_[a-f0-9]{32}$/i.test(mustValue);
-        const identifierLike = /^[A-Za-z_$][A-Za-z0-9_$]*(?:(?:[.#:/-]|::)[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(mustValue);
-        const strongIdentifierSignal = /[A-Z_]/.test(mustValue) || /(?:\.|::|#|\/)/.test(mustValue);
-        if (symbolInstanceIdLike || (identifierLike && strongIdentifierSignal)) {
-            return mustValue;
-        }
-
-        return null;
-    }
-
-    private parseSearchOperators(query: string): ParsedSearchOperators {
-        const trimmedQuery = query.trim();
-        if (trimmedQuery.length === 0) {
-            return {
-                semanticQuery: "",
-                prefixBlockChars: 0,
-                lang: [],
-                path: [],
-                excludePath: [],
-                must: [],
-                exclude: [],
-            };
-        }
-
-        const maxPrefixChars = Math.min(SEARCH_OPERATOR_PREFIX_MAX_CHARS, query.length);
-        const prefixWindow = query.slice(0, maxPrefixChars);
-        const blankLineOffset = prefixWindow.indexOf("\n\n");
-        const prefixChars = blankLineOffset >= 0 ? blankLineOffset : maxPrefixChars;
-        const prefixBlock = query.slice(0, prefixChars);
-        const suffixText = blankLineOffset >= 0
-            ? query.slice(blankLineOffset + 2)
-            : query.slice(prefixChars);
-
-        const operators: ParsedSearchOperators = {
-            semanticQuery: "",
-            prefixBlockChars: prefixChars,
-            lang: [],
-            path: [],
-            excludePath: [],
-            must: [],
-            exclude: [],
-        };
-
-        const semanticTokens: string[] = [];
-        const tokens = this.tokenizeQueryPrefix(prefixBlock);
-        for (const token of tokens) {
-            if (token.startsWith("\\") && token.length > 1) {
-                semanticTokens.push(token.slice(1));
-                continue;
-            }
-
-            const separator = token.indexOf(":");
-            if (separator <= 0) {
-                semanticTokens.push(token);
-                continue;
-            }
-
-            const key = token.slice(0, separator);
-            if (!SEARCH_OPERATOR_KEYS.has(key)) {
-                semanticTokens.push(token);
-                continue;
-            }
-
-            const rawValue = token.slice(separator + 1);
-            const value = this.unquoteOperatorValue(rawValue);
-            if (value.length === 0) {
-                continue;
-            }
-
-            if (key === "lang") {
-                operators.lang.push(value.toLowerCase());
-                continue;
-            }
-            if (key === "path") {
-                operators.path.push(value.replace(/\\/g, "/"));
-                continue;
-            }
-            if (key === "-path") {
-                operators.excludePath.push(value.replace(/\\/g, "/"));
-                continue;
-            }
-            if (key === "must") {
-                operators.must.push(value);
-                continue;
-            }
-            if (key === "exclude") {
-                operators.exclude.push(value);
-                continue;
-            }
-
-            semanticTokens.push(token);
-        }
-
-        const semanticFromPrefix = semanticTokens.join(" ").trim();
-        const semanticSuffix = suffixText.trim();
-        const semanticParts = [semanticFromPrefix, semanticSuffix].filter((part) => part.length > 0);
-        operators.semanticQuery = semanticParts.length > 0
-            ? semanticParts.join("\n")
-            : (this.deriveOperatorOnlySemanticQuery(operators) || trimmedQuery);
-        return operators;
-    }
-
-    private tokenizeLexicalTerms(tokens: string[]): SearchLexicalTerm[] {
-        const terms = new Map<string, SearchLexicalTerm>();
-        const addTerm = (value: string, kind: SearchLexicalTermKind): void => {
-            const normalized = value
-                .replace(/^['"`]+|['"`]+$/g, '')
-                .replace(/[(){}\[\],;]+/g, ' ')
-                .trim()
-                .toLowerCase();
-            if (normalized.length === 0) {
-                return;
-            }
-
-            const existing = terms.get(normalized);
-            if (!existing || (existing.kind === 'fragment' && kind === 'whole')) {
-                terms.set(normalized, { value: normalized, kind });
-            }
-        };
-
-        for (const token of tokens) {
-            const trimmed = token.trim();
-            if (trimmed.length === 0) {
-                continue;
-            }
-
-            addTerm(trimmed, 'whole');
-
-            const expanded = trimmed
-                .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-                .replace(/[/\\._:-]+/g, ' ')
-                .replace(/[(){}\[\],;]+/g, ' ')
-                .toLowerCase();
-            for (const part of expanded.split(/\s+/)) {
-                const normalizedPart = part.trim();
-                if (normalizedPart.length >= 2) {
-                    addTerm(normalizedPart, 'fragment');
-                }
-            }
-        }
-
-        return Array.from(terms.values());
-    }
-
-    private isIdentifierLikeToken(token: string): boolean {
-        const trimmed = token.trim();
-        if (trimmed.length === 0) {
-            return false;
-        }
-
-        return /[A-Z]/.test(trimmed)
-            || /[_/\\.\-:]/.test(trimmed)
-            || /\d/.test(trimmed);
-    }
-
-    private extractQuotedLiteralPhrases(query: string): string[] {
-        const phrases = new Set<string>();
-        const pattern = /(["'`])([^"'`]+?)\1/g;
-        let match: RegExpExecArray | null;
-        while ((match = pattern.exec(query)) !== null) {
-            const normalized = match[2]
-                .trim()
-                .replace(/\s+/g, ' ')
-                .toLowerCase();
-            if (normalized.length >= 3) {
-                phrases.add(normalized);
-            }
-        }
-        return Array.from(phrases.values()).slice(0, 4);
-    }
-
-    private buildSearchQueryPlan(semanticQuery: string): SearchQueryPlan {
-        const hybridEnabled = this.runtimeFingerprint.schemaVersion.startsWith('hybrid');
-        const tokens = semanticQuery
-            .split(/\s+/)
-            .map((token) => token.trim())
-            .filter((token) => token.length > 0);
-        const normalizedQuery = semanticQuery.toLowerCase();
-        const normalizedTokens = tokens.map((token) => token.toLowerCase());
-        const identifierTokens = tokens.filter((token) => this.isIdentifierLikeToken(token));
-        const naturalLanguageTokens = tokens
-            .filter((token) => (
-                !this.isIdentifierLikeToken(token)
-                && (SEARCH_QUERY_STOPWORDS.has(token.toLowerCase()) || token.length >= 4)
-            ))
-            .map((token) => token.toLowerCase());
-        const singleBareLookup = tokens.length === 1
-            && /^[a-z][a-z0-9]{2,63}$/.test(tokens[0])
-            && !SEARCH_QUERY_STOPWORDS.has(normalizedTokens[0] || '');
-        const exactPinEligible = identifierTokens.some((token) => /[A-Z_]/.test(token));
-        const quotedLiteralPhrases = this.extractQuotedLiteralPhrases(semanticQuery);
-        const quotedLiteralSeeking = quotedLiteralPhrases.length > 0;
-        const lexicalSourceTokens = identifierTokens.length > 0 && naturalLanguageTokens.length > 0
-            ? tokens
-            : (identifierTokens.length > 0 ? identifierTokens : tokens);
-        const lexicalTerms = this
-            .tokenizeLexicalTerms(lexicalSourceTokens)
-            .filter((term) => !SEARCH_QUERY_STOPWORDS.has(term.value))
-            .slice(0, 8);
-        const explicitReferenceSeeking = /\b(used|uses|usage|reference|references|referenced|callers?|called|imports?|imported|instantiat(?:e|ed|ion))\b/.test(normalizedQuery)
-            || /\bwho\s+uses\b/.test(normalizedQuery);
-        const referenceSeeking = explicitReferenceSeeking
-            || /\bwhere\s+is\b/.test(normalizedQuery)
-            || /\bwho\s+uses\b/.test(normalizedQuery);
-        const testSeeking = /\b(test|tests|tested|testing|spec|specs|coverage|assert|asserts|assertion|assertions|fixture|fixtures|mock|mocks|mocked|stub|stubs)\b/.test(normalizedQuery)
-            || /\.test\b/.test(normalizedQuery)
-            || /\.spec\b/.test(normalizedQuery);
-        const writerSeeking = /\b(writes?|writing|written|updates?|updated|updating|creates?|created|creating|generates?|generated|generating|emits?|emitted|emitting|persists?|persisted|persisting|configures?|configured|configuring|installs?|installed|installing)\b/.test(normalizedQuery);
-        const implementationCue = /\b(implement|implements|implemented|implementation|owner|owning|built|build|builds|builder|construct|constructed|create|creates|created|install|installs|installed|emit|emits|emitted|producer|produces|normalize|normalizes|normalized|cap|caps|capped|script|scripts|check|checks|checked|wire|wired|assemble|assembles|assembled|decide|decides|decided|deciding|freshness|reconcile|reconciles|reconciled|reconciliation|control)\b/.test(normalizedQuery);
-        const ownerWhereSeeking = !explicitReferenceSeeking && /\bwhere\s+(?:does|is|are)\b/.test(normalizedQuery);
-        const implementationSeeking = !testSeeking && (implementationCue || ownerWhereSeeking || writerSeeking);
-
-        let intent: SearchQueryIntent = 'uncertain';
-        let confidence: SearchIntentConfidence = 'low';
-        const reasons: string[] = [];
-
-        if (identifierTokens.length > 0 && naturalLanguageTokens.length > 0) {
-            intent = 'mixed';
-            confidence = identifierTokens.length >= 2 ? 'high' : 'medium';
-            reasons.push('identifier_terms_present', 'natural_language_terms_present');
-        } else if (identifierTokens.length > 0) {
-            intent = 'identifier';
-            confidence = tokens.length === identifierTokens.length ? 'high' : 'medium';
-            reasons.push(tokens.length === 1 ? 'single_identifier_token' : 'identifier_tokens_present');
-        } else if (singleBareLookup) {
-            intent = 'uncertain';
-            confidence = 'medium';
-            reasons.push('single_term_lookup');
-        } else if (naturalLanguageTokens.length >= 2 || tokens.length >= 4) {
-            intent = 'semantic';
-            confidence = 'high';
-            reasons.push('natural_language_query');
-        } else {
-            reasons.push('ambiguous_short_query');
-        }
-        if (referenceSeeking) {
-            reasons.push('reference_seeking_query');
-        }
-        if (quotedLiteralSeeking) {
-            reasons.push('quoted_literal_query');
-        }
-        if (testSeeking) {
-            reasons.push('test_seeking_query');
-        }
-        if (implementationSeeking) {
-            reasons.push('implementation_seeking_query');
-        }
-        if (writerSeeking) {
-            reasons.push('writer_seeking_query');
-        }
-
-        return {
-            semanticQuery,
-            intent,
-            confidence,
-            reasons,
-            quotedLiteralPhrases,
-            referenceSeeking,
-            testSeeking,
-            implementationSeeking,
-            writerSeeking,
-            lexicalTerms,
-            retrievalMode: hybridEnabled
-                ? (intent === 'identifier' ? 'lexical' : 'hybrid')
-                : 'dense',
-            scorePolicyKind: 'topk_only',
-            lexicalWeight: quotedLiteralSeeking
-                ? 1.35
-                : intent === 'identifier'
-                ? 1.35
-                : intent === 'mixed'
-                    ? (referenceSeeking || implementationSeeking || writerSeeking ? 0.30 : 0.10)
-                    : intent === 'uncertain'
-                        ? 0.60
-                        : (referenceSeeking || implementationSeeking || writerSeeking ? 0.18 : 0.00),
-            exactMatchPinningEnabled: intent === 'identifier'
-                || quotedLiteralSeeking
-                || (writerSeeking && exactPinEligible),
-            rerankAllowed: intent !== 'identifier' && !quotedLiteralSeeking,
-        };
-    }
-
-    private escapeLexicalRegex(value: string): string {
-        return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-
-    private hasTokenBoundaryMatch(field: string, term: string): boolean {
-        if (!field || !term) {
-            return false;
-        }
-
-        const pattern = new RegExp(`(^|[^a-z0-9])${this.escapeLexicalRegex(term)}([^a-z0-9]|$)`, 'i');
-        return pattern.test(field);
-    }
-
-    private getReferenceUsageKind(content: string, term: string): 'executable' | 'import' | null {
-        if (!content || !term) {
-            return null;
-        }
-
-        const escaped = this.escapeLexicalRegex(term);
-        const executablePatterns = [
-            new RegExp(`\\bnew\\s+${escaped}\\b`, 'i'),
-            new RegExp(`\\b${escaped}\\s*\\(`, 'i'),
-            new RegExp(`\\b${escaped}\\b\\s*=`, 'i'),
-        ];
-        if (executablePatterns.some((pattern) => pattern.test(content))) {
-            return 'executable';
-        }
-
-        const importPatterns = [
-            new RegExp(`\\bimport\\s+.*\\b${escaped}\\b`, 'i'),
-            new RegExp(`\\bfrom\\s+.+\\s+import\\s+.*\\b${escaped}\\b`, 'i'),
-        ];
-        return importPatterns.some((pattern) => pattern.test(content)) ? 'import' : null;
-    }
-
-    private hasDeclarationMatch(content: string, term: string): boolean {
-        if (!content || !term) {
-            return false;
-        }
-
-        const escaped = this.escapeLexicalRegex(term);
-        const declarationPatterns = [
-            new RegExp(`\\bclass\\s+${escaped}\\b`, 'i'),
-            new RegExp(`\\bdef\\s+${escaped}\\b`, 'i'),
-            new RegExp(`\\bfunction\\s+${escaped}\\b`, 'i'),
-            new RegExp(`\\btype\\s+${escaped}\\b`, 'i'),
-            new RegExp(`\\binterface\\s+${escaped}\\b`, 'i'),
-            new RegExp(`\\benum\\s+${escaped}\\b`, 'i'),
-            new RegExp(`\\bstruct\\s+${escaped}\\b`, 'i'),
-            new RegExp(`\\b(?:const|let|var)\\s+${escaped}\\b\\s*=\\s*(?:async\\s+)?function\\b`, 'i'),
-            new RegExp(`\\b(?:const|let|var)\\s+${escaped}\\b\\s*=\\s*(?:async\\s*)?(?:\\([^)]*\\)|[a-z_$][\\w$]*)\\s*=>`, 'i'),
-        ];
-
-        return declarationPatterns.some((pattern) => pattern.test(content));
-    }
-
-    private getLexicalTermFactor(plan: SearchQueryPlan, term: SearchLexicalTerm): number {
-        if (term.kind === 'whole') {
-            return 1;
-        }
-        if (plan.referenceSeeking) {
-            return 0.18;
-        }
-        if (plan.intent === 'identifier') {
-            return 0.18;
-        }
-        return 0.35;
-    }
-
-    private isHighSignalStructuralAnchorTerm(term: SearchLexicalTerm): boolean {
-        if (term.kind !== 'whole') {
-            return false;
-        }
-        return (
-            (/[a-z]/.test(term.value) && /\d/.test(term.value))
-            || /[_/\\.\-:]/.test(term.value)
-        );
-    }
-
-    private extractNormalizedCandidateTokens(fields: string[]): string[] {
-        const tokens = new Set<string>();
-        for (const field of fields) {
-            for (const match of field.toLowerCase().matchAll(/[a-z0-9]+/g)) {
-                const token = match[0] || '';
-                if (token.length > 0) {
-                    tokens.add(token);
-                }
-            }
-        }
-        return Array.from(tokens.values());
-    }
-
-    private splitStructuralAnchorSegments(value: string): string[] {
-        return value.toLowerCase().match(/[a-z]+|\d+/g) || [];
-    }
-
-    private isSiblingStructuralAnchorNearMiss(queryAnchor: string, candidateToken: string): boolean {
-        const querySegments = this.splitStructuralAnchorSegments(queryAnchor);
-        const candidateSegments = this.splitStructuralAnchorSegments(candidateToken);
-        if (querySegments.length < 2 || querySegments.length !== candidateSegments.length) {
-            return false;
-        }
-
-        for (let index = 0; index < querySegments.length - 1; index += 1) {
-            if (querySegments[index] !== candidateSegments[index]) {
-                return false;
-            }
-        }
-
-        const queryLast = querySegments[querySegments.length - 1] || '';
-        const candidateLast = candidateSegments[candidateSegments.length - 1] || '';
-        if (queryLast === candidateLast || queryLast.length !== candidateLast.length) {
-            return false;
-        }
-
-        const queryLastIsDigits = /^\d+$/.test(queryLast);
-        const candidateLastIsDigits = /^\d+$/.test(candidateLast);
-        if (queryLastIsDigits !== candidateLastIsDigits) {
-            return false;
-        }
-
-        const queryLastIsLetters = /^[a-z]+$/.test(queryLast);
-        const candidateLastIsLetters = /^[a-z]+$/.test(candidateLast);
-        return queryLastIsLetters === candidateLastIsLetters;
-    }
-
-    private scoreCandidateLexicalEvidence(plan: SearchQueryPlan, result: SearchResultLike): SearchLexicalEvidence {
-        if (plan.lexicalTerms.length === 0 && plan.quotedLiteralPhrases.length === 0) {
-            return { score: 0, exactLexicalMatch: false };
-        }
-
-        const relativePath = typeof result?.relativePath === 'string' ? result.relativePath.toLowerCase() : '';
-        const symbolLabel = typeof result?.symbolLabel === 'string' ? result.symbolLabel.toLowerCase() : '';
-        const content = typeof result?.content === 'string' ? result.content.toLowerCase() : '';
-        const pathSegments = relativePath.split('/').filter((segment: string) => segment.length > 0);
-        const candidateTokens = this.extractNormalizedCandidateTokens([
-            symbolLabel,
-            relativePath,
-            content,
-        ]);
-
-        let score = 0;
-        let exactLexicalMatch = false;
-        const matchedWholeTerms = new Set<string>();
-        const matchedStructuralAnchorTerms = new Set<string>();
-        const matchedExactStructuralAnchorTerms = new Set<string>();
-
-        for (const phrase of plan.quotedLiteralPhrases) {
-            if (symbolLabel.includes(phrase)) {
-                score = Math.max(score, 1.75);
-                exactLexicalMatch = true;
-                continue;
-            }
-            if (pathSegments.some((segment: string) => segment.includes(phrase))) {
-                score = Math.max(score, 1.60);
-                exactLexicalMatch = true;
-                continue;
-            }
-            if (content.includes(phrase)) {
-                score = Math.max(score, 1.70);
-                exactLexicalMatch = true;
-            }
-        }
-
-        for (const term of plan.lexicalTerms) {
-            const usageKind = plan.referenceSeeking ? this.getReferenceUsageKind(content, term.value) : null;
-            const declarationMatch = plan.referenceSeeking && this.hasDeclarationMatch(content, term.value);
-            const termFactor = this.getLexicalTermFactor(plan, term);
-
-            if (usageKind === 'executable' && !declarationMatch) {
-                score = Math.max(score, 1.60 * termFactor);
-                continue;
-            }
-
-            if (usageKind === 'import' && !declarationMatch) {
-                score = Math.max(score, 0.75 * termFactor);
-                continue;
-            }
-
-            if (this.hasTokenBoundaryMatch(symbolLabel, term.value)) {
-                score = Math.max(score, (plan.referenceSeeking ? 0.02 : 1.30) * termFactor);
-                if (term.kind === 'whole') {
-                    matchedWholeTerms.add(term.value);
-                    if (this.isHighSignalStructuralAnchorTerm(term)) {
-                        matchedStructuralAnchorTerms.add(term.value);
-                        matchedExactStructuralAnchorTerms.add(term.value);
-                    }
-                }
-                if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
-                    exactLexicalMatch = true;
-                }
-                continue;
-            }
-
-            if (pathSegments.some((segment: string) => this.hasTokenBoundaryMatch(segment, term.value))) {
-                score = Math.max(score, (plan.referenceSeeking ? 0.02 : 1.20) * termFactor);
-                if (term.kind === 'whole') {
-                    matchedWholeTerms.add(term.value);
-                    if (this.isHighSignalStructuralAnchorTerm(term)) {
-                        matchedStructuralAnchorTerms.add(term.value);
-                        matchedExactStructuralAnchorTerms.add(term.value);
-                    }
-                }
-                if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
-                    exactLexicalMatch = true;
-                }
-                continue;
-            }
-
-            if (this.hasTokenBoundaryMatch(content, term.value)) {
-                score = Math.max(score, (plan.referenceSeeking ? (declarationMatch ? 0.10 : 1.25) : 0.90) * termFactor);
-                if (term.kind === 'whole') {
-                    matchedWholeTerms.add(term.value);
-                    if (this.isHighSignalStructuralAnchorTerm(term)) {
-                        matchedExactStructuralAnchorTerms.add(term.value);
-                    }
-                }
-                if ((!plan.referenceSeeking || plan.writerSeeking) && term.kind === 'whole') {
-                    exactLexicalMatch = true;
-                }
-                continue;
-            }
-
-            if (symbolLabel.includes(term.value)) {
-                score = Math.max(score, (plan.referenceSeeking ? 0.04 : 0.55) * termFactor);
-                if (term.kind === 'whole') {
-                    matchedWholeTerms.add(term.value);
-                }
-                continue;
-            }
-
-            if (relativePath.includes(term.value)) {
-                score = Math.max(score, (plan.referenceSeeking ? 0.04 : 0.45) * termFactor);
-                if (term.kind === 'whole') {
-                    matchedWholeTerms.add(term.value);
-                }
-                continue;
-            }
-
-            if (content.includes(term.value)) {
-                score = Math.max(score, (plan.referenceSeeking ? (declarationMatch ? 0.08 : 0.30) : 0.25) * termFactor);
-                if (term.kind === 'whole') {
-                    matchedWholeTerms.add(term.value);
-                }
-            }
-        }
-
-        const coverageBoost = Math.min(
-            matchedWholeTerms.size * (plan.implementationSeeking || plan.writerSeeking ? 0.18 : 0.08),
-            plan.implementationSeeking || plan.writerSeeking ? 0.54 : 0.24
-        );
-        const structuralAnchorBoost = matchedStructuralAnchorTerms.size > 0
-            && !plan.referenceSeeking
-            && !plan.writerSeeking
-            && (plan.intent === 'mixed' || plan.intent === 'semantic')
-            ? (plan.intent === 'mixed' ? 0.80 : 0.55)
-            : 0;
-        const structuralAnchorNearMissPenalty = !plan.referenceSeeking
-            && !plan.writerSeeking
-            && (plan.intent === 'mixed' || plan.intent === 'semantic')
-            && plan.lexicalTerms.some((term) => (
-                term.kind === 'whole'
-                && this.isHighSignalStructuralAnchorTerm(term)
-                && !matchedExactStructuralAnchorTerms.has(term.value)
-                && candidateTokens.some((candidateToken) => this.isSiblingStructuralAnchorNearMiss(term.value, candidateToken))
-            ))
-            ? (plan.intent === 'mixed'
-                ? SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_MIXED
-                : SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_SEMANTIC)
-            : 0;
-
-        return {
-            // Penalty is applied in the same pre-weight lexical stage as the structural-anchor boost.
-            score: (score + coverageBoost + structuralAnchorBoost - structuralAnchorNearMissPenalty) * plan.lexicalWeight,
-            exactLexicalMatch,
-        };
-    }
-
-    private pathMatchesAnyPattern(relativePath: string, patterns: string[]): boolean {
-        if (patterns.length === 0) return false;
-        const normalizedPath = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
-        for (const pattern of patterns) {
-            try {
-                const matcher = ignore();
-                matcher.add(pattern);
-                if (matcher.ignores(normalizedPath)) {
-                    return true;
-                }
-            } catch {
-                continue;
-            }
-        }
-        return false;
-    }
-
-    private buildSearchPathMatcher(patterns: string[]): (relativePath: string) => boolean {
-        if (patterns.length === 0) {
-            return () => false;
-        }
-        const matchers: Array<ReturnType<typeof ignore>> = [];
-        for (const pattern of patterns) {
-            try {
-                const matcher = ignore();
-                matcher.add(pattern);
-                matchers.push(matcher);
-            } catch {
-                continue;
-            }
-        }
-        if (matchers.length === 0) {
-            return () => false;
-        }
-        return (relativePath: string): boolean => {
-            const normalizedPath = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
-            return matchers.some((matcher) => matcher.ignores(normalizedPath));
-        };
-    }
-
-    private tokenMatchesAnyField(token: string, fields: string[]): boolean {
-        for (const field of fields) {
-            if (field.includes(token)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private resolveRerankDecision(scope: SearchScope, plan: SearchQueryPlan): {
-        enabledByPolicy: boolean;
-        skippedByScopeDocs: boolean;
-        skippedByIdentifierIntent: boolean;
-        capabilityPresent: boolean;
-        rerankerPresent: boolean;
-        enabled: boolean;
-        exactMatchPinningEnabled: boolean;
-    } {
-        const capabilityPresent = this.capabilities.hasReranker();
-        const enabledByPolicy = capabilityPresent && this.capabilities.getDefaultRerankEnabled();
-        const rerankerPresent = this.reranker !== null;
-        const skippedByScopeDocs = scope === 'docs';
-        const skippedByIdentifierIntent = !plan.rerankAllowed;
-        return {
-            enabledByPolicy,
-            skippedByScopeDocs,
-            skippedByIdentifierIntent,
-            capabilityPresent,
-            rerankerPresent,
-            enabled: enabledByPolicy && rerankerPresent && !skippedByScopeDocs && !skippedByIdentifierIntent,
-            exactMatchPinningEnabled: plan.exactMatchPinningEnabled,
-        };
-    }
-
-    private buildExactRegistrySymbolFilter(input: {
-        scope: SearchScope;
-        parsedOperators: ParsedSearchOperators;
-    }): (symbol: SymbolRecord) => boolean {
-        const includePathMatcher = this.buildSearchPathMatcher(input.parsedOperators.path);
-        const excludePathMatcher = this.buildSearchPathMatcher(input.parsedOperators.excludePath);
-        return (symbol: SymbolRecord): boolean => {
-            const relativePath = this.normalizeRelativePathForIgnoreCheck(symbol.file);
-            if (!relativePath) {
-                return false;
-            }
-            const category = this.classifyPathCategory(relativePath);
-            if (!this.shouldIncludeCategoryInScope(input.scope, category)) {
-                return false;
-            }
-            const languageValue = symbol.language.toLowerCase();
-            if (input.parsedOperators.lang.length > 0 && !input.parsedOperators.lang.includes(languageValue)) {
-                return false;
-            }
-            if (input.parsedOperators.path.length > 0 && !includePathMatcher(relativePath)) {
-                return false;
-            }
-            if (input.parsedOperators.excludePath.length > 0 && excludePathMatcher(relativePath)) {
-                return false;
-            }
-            const fields = [
-                symbol.label,
-                relativePath,
-                symbol.name,
-                symbol.qualifiedName,
-                ...symbol.parentQualifiedNamePath,
-            ];
-            if (!input.parsedOperators.must.every((token) => this.tokenMatchesAnyField(token, fields))) {
-                return false;
-            }
-            return !input.parsedOperators.exclude.some((token) => this.tokenMatchesAnyField(token, fields));
-        };
-    }
-
-    private buildUnavailableExactRegistryDebug(reason: string): ExactRegistryLookupDebug {
-        return {
-            attempted: true,
-            status: 'miss',
-            reason: 'registry_unavailable',
-            inspectedSymbolCount: 0,
-            filteredSymbolCount: 0,
-            registryUnavailableReason: reason,
-        };
-    }
-
-    private buildRerankDocument(result: SearchResultLike): string {
-        const relativePath = typeof result?.relativePath === 'string' ? result.relativePath : '';
-        const language = typeof result?.language === 'string' ? result.language : 'unknown';
-        const symbolLabel = typeof result?.symbolLabel === 'string' ? result.symbolLabel : '';
-        const content = typeof result?.content === 'string' ? result.content : '';
-        const contentLines = content.split(/\r?\n/).slice(0, SEARCH_RERANK_DOC_MAX_LINES);
-        let normalizedContent = contentLines.join('\n');
-        if (normalizedContent.length > SEARCH_RERANK_DOC_MAX_CHARS) {
-            normalizedContent = normalizedContent.slice(0, SEARCH_RERANK_DOC_MAX_CHARS);
-        }
-        return `${relativePath}\n${language}\n${symbolLabel}\n${normalizedContent}`;
-    }
-
-    private buildOperatorSummary(operators: ParsedSearchOperators): SearchOperatorSummary {
-        return {
-            prefixBlockChars: operators.prefixBlockChars,
-            lang: [...operators.lang],
-            path: [...operators.path],
-            excludePath: [...operators.excludePath],
-            must: [...operators.must],
-            exclude: [...operators.exclude],
-        };
+        return classifyPathCategory(relativePath);
     }
 
     private parseGitStatusChangedPaths(
@@ -4212,606 +1945,21 @@ export class ToolHandlers {
         };
     }
 
-    private applyGroupDiversity<T extends SearchGroupResult>(
-        grouped: T[],
-        limit: number,
-        groupBy: SearchGroupBy
-    ): { selected: T[]; summary: SearchDiversitySummary } {
-        const summary: SearchDiversitySummary = {
-            maxPerFile: SEARCH_DIVERSITY_MAX_PER_FILE,
-            maxPerSymbol: SEARCH_DIVERSITY_MAX_PER_SYMBOL,
-            relaxedFileCap: SEARCH_DIVERSITY_RELAXED_FILE_CAP,
-            skippedByFileCap: 0,
-            skippedBySymbolCap: 0,
-            usedRelaxedCap: false,
-        };
-
-        const selected: T[] = [];
-        const selectedIds = new Set<string>();
-        const fileCounts = new Map<string, number>();
-        const symbolCounts = new Map<string, number>();
-
-        const applyPass = (fileCap: number): void => {
-            for (const group of grouped) {
-                if (selected.length >= limit) {
-                    return;
-                }
-                if (selectedIds.has(group.groupId)) {
-                    continue;
-                }
-
-                const fileCount = fileCounts.get(group.file) || 0;
-                if (fileCount >= fileCap) {
-                    summary.skippedByFileCap += 1;
-                    continue;
-                }
-
-                const symbolDiversityKey = group.symbolInstanceId || group.symbolKey || group.symbolId;
-                if (groupBy === "symbol" && typeof symbolDiversityKey === "string") {
-                    const symbolCount = symbolCounts.get(symbolDiversityKey) || 0;
-                    if (symbolCount >= SEARCH_DIVERSITY_MAX_PER_SYMBOL) {
-                        summary.skippedBySymbolCap += 1;
-                        continue;
-                    }
-                    symbolCounts.set(symbolDiversityKey, symbolCount + 1);
-                }
-
-                selected.push(group);
-                selectedIds.add(group.groupId);
-                fileCounts.set(group.file, fileCount + 1);
-            }
-        };
-
-        applyPass(SEARCH_DIVERSITY_MAX_PER_FILE);
-        if (selected.length < Math.min(limit, grouped.length)) {
-            summary.usedRelaxedCap = true;
-            applyPass(SEARCH_DIVERSITY_RELAXED_FILE_CAP);
-        }
-
-        return { selected: selected.slice(0, limit), summary };
-    }
-
-    private shouldIncludeCategoryInScope(scope: SearchScope, category: PathCategory): boolean {
-        if (scope === 'runtime') {
-            return category !== 'docs'
-                && category !== 'generated'
-                && category !== 'artifact'
-                && category !== 'landing'
-                && category !== 'fixture';
-        }
-        if (scope === 'docs') {
-            return category === 'docs' || category === 'tests';
-        }
-        return true;
-    }
-
-    private isImplementationPathCategory(category: PathCategory): boolean {
-        return category === 'entrypoint'
-            || category === 'core'
-            || category === 'srcRuntime'
-            || category === 'scriptRuntime'
-            || category === 'adapter'
-            || category === 'neutral';
-    }
-
-    private shouldApplyChangedFilesBoost(category: PathCategory, plan: SearchQueryPlan): boolean {
-        if (category === 'tests') {
-            return plan.testSeeking;
-        }
-        return this.isImplementationPathCategory(category);
-    }
-
-    private classifyAgentFitSymbolRole(result: SearchResultLike): 'implementation' | 'type' | 'schema' | 'anonymous' | 'unknown' {
-        const label = typeof result?.symbolLabel === 'string'
-            ? result.symbolLabel.trim().toLowerCase()
-            : '';
-        const content = typeof result?.content === 'string'
-            ? result.content.slice(0, 400).toLowerCase()
-            : '';
-        const evidence = `${label}\n${content}`;
-
-        if (/<anonymous>/.test(evidence)) {
-            return 'anonymous';
-        }
-        if (/\b(?:schema|inputschema|outputschema|responseenvelope|requestinput)\b/.test(evidence)) {
-            return 'schema';
-        }
-        if (/^(?:interface|type|enum)\b/.test(label)) {
-            return 'type';
-        }
-        if (/^(?:async\s+)?(?:function|method|class|def)\b/.test(label)) {
-            return 'implementation';
-        }
-        if (/^(?:const|let|var)\s+[a-z0-9_$]+\s*=/.test(label)
-            && /\b(?:async\s+)?function\b|=>/.test(content)) {
-            return 'implementation';
-        }
-
-        return 'unknown';
-    }
-
-    private isWriterOwnerResult(result: SearchResultLike): boolean {
-        const label = typeof result?.symbolLabel === 'string'
-            ? result.symbolLabel.trim().toLowerCase()
-            : '';
-        const content = typeof result?.content === 'string'
-            ? result.content.slice(0, 800).toLowerCase()
-            : '';
-        const evidence = `${label}\n${content}`;
-
-        if (/^(?:async\s+)?(?:(?:function|method|const|let|var)\s+)?(?:[a-z0-9_$]+\.)*(?:write|update|build|prepare|generate|emit|install|configure|persist|create|ensure|set|save|add|remove|delete)[a-z0-9_$]*(?:\b|\()/.test(label)) {
-            return true;
-        }
-        return /\b(?:writefilesync|writefile|appendfile|mkdir|rename|unlink|rm|copyfile|lines\.splice)\b/.test(evidence);
-    }
-
-    private isStrongWriterOwnerResult(result: SearchResultLike): boolean {
-        const label = typeof result?.symbolLabel === 'string'
-            ? result.symbolLabel.trim().toLowerCase()
-            : '';
-        const content = typeof result?.content === 'string'
-            ? result.content.slice(0, 800).toLowerCase()
-            : '';
-        const evidence = `${label}\n${content}`;
-
-        if (/^(?:async\s+)?(?:(?:function|method|const|let|var)\s+)?(?:[a-z0-9_$]+\.)*(?:write|update|generate|emit|install|configure|persist|create|set|save|add|remove|delete)[a-z0-9_$]*(?:\b|\()/.test(label)) {
-            return true;
-        }
-        return /\b(?:writefilesync|writefile|appendfile|mkdir|rename|unlink|rm|copyfile|lines\.splice)\b/.test(evidence);
-    }
-
-    private isWriterActionTerm(term: string): boolean {
-        return /^(?:write|writes|writing|written|update|updates|updated|updating|create|creates|created|creating|generate|generates|generated|generating|emit|emits|emitted|emitting|persist|persists|persisted|persisting|configure|configures|configured|configuring|install|installs|installed|installing|build|builds|built|builder)$/.test(term);
-    }
-
-    private countCandidateDomainTermMatches(plan: SearchQueryPlan, result: SearchResultLike): number {
-        const content = typeof result?.content === 'string' ? result.content : '';
-        const label = typeof result?.symbolLabel === 'string' ? result.symbolLabel : '';
-        const relativePath = typeof result?.relativePath === 'string' ? result.relativePath : '';
-        const evidence = `${label}\n${relativePath}\n${content}`
-            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-            .replace(/[/\\._:-]+/g, ' ')
-            .toLowerCase();
-        const matched = new Set<string>();
-
-        for (const term of plan.lexicalTerms) {
-            if (term.kind !== 'whole' || this.isWriterActionTerm(term.value)) {
-                continue;
-            }
-            if (this.hasTokenBoundaryMatch(evidence, term.value)) {
-                matched.add(term.value);
-            }
-        }
-
-        return matched.size;
-    }
-
-    private resolveAgentFitMultiplier(
-        plan: SearchQueryPlan,
-        result: SearchResultLike,
-        category: PathCategory,
-        scope: SearchScope
-    ): { multiplier: number; reason: string } {
-        if (scope === 'docs') {
-            return { multiplier: SEARCH_AGENT_FIT_NEUTRAL, reason: 'docs_scope_neutral' };
-        }
-
-        if (category === 'tests') {
-            if (plan.testSeeking) {
-                return { multiplier: SEARCH_AGENT_FIT_TEST_INTENT_MULTIPLIER, reason: 'test_intent' };
-            }
-            if (plan.implementationSeeking) {
-                return {
-                    multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_TEST_DEMOTION,
-                    reason: 'implementation_query_test_demotion',
-                };
-            }
-            return {
-                multiplier: scope === 'mixed'
-                    ? SEARCH_AGENT_FIT_TEST_DEMOTION_MIXED
-                    : SEARCH_AGENT_FIT_TEST_DEMOTION_RUNTIME,
-                reason: 'test_without_test_intent',
-            };
-        }
-
-        const role = this.classifyAgentFitSymbolRole(result);
-        const domainTermMatches = plan.writerSeeking
-            ? this.countCandidateDomainTermMatches(plan, result)
-            : 0;
-        if (plan.writerSeeking) {
-            if (this.isWriterOwnerResult(result)
-                && this.isImplementationPathCategory(category)
-                && (domainTermMatches >= 2 || this.isStrongWriterOwnerResult(result))) {
-                return { multiplier: SEARCH_AGENT_FIT_WRITER_OWNER_MULTIPLIER, reason: 'writer_owner' };
-            }
-            if (role === 'implementation'
-                && this.isImplementationPathCategory(category)
-                && domainTermMatches >= 2) {
-                return { multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_SYMBOL_MULTIPLIER, reason: 'implementation_symbol' };
-            }
-            if (role === 'schema') {
-                return { multiplier: SEARCH_AGENT_FIT_SCHEMA_DEMOTION, reason: 'schema_not_owner' };
-            }
-            if (role === 'type') {
-                return { multiplier: SEARCH_AGENT_FIT_TYPE_DEMOTION, reason: 'type_not_owner' };
-            }
-            if (role === 'anonymous') {
-                return { multiplier: SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION, reason: 'anonymous_not_owner' };
-            }
-            return { multiplier: SEARCH_AGENT_FIT_WRITER_NON_OWNER_DEMOTION, reason: 'writer_query_non_writer' };
-        }
-        if (plan.implementationSeeking && category === 'scriptRuntime') {
-            return { multiplier: SEARCH_AGENT_FIT_SCRIPT_IMPLEMENTATION_MULTIPLIER, reason: 'script_implementation' };
-        }
-        if (plan.implementationSeeking && role === 'schema') {
-            return { multiplier: SEARCH_AGENT_FIT_SCHEMA_DEMOTION, reason: 'schema_not_owner' };
-        }
-        if (plan.implementationSeeking && role === 'type') {
-            return { multiplier: SEARCH_AGENT_FIT_TYPE_DEMOTION, reason: 'type_not_owner' };
-        }
-        if (plan.implementationSeeking && role === 'anonymous') {
-            return { multiplier: SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION, reason: 'anonymous_not_owner' };
-        }
-        if (plan.implementationSeeking && role === 'implementation') {
-            return { multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_SYMBOL_MULTIPLIER, reason: 'implementation_symbol' };
-        }
-        if (plan.implementationSeeking
-            && !result?.symbolLabel
-            && this.isImplementationPathCategory(category)) {
-            return { multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_CHUNK_MULTIPLIER, reason: 'implementation_chunk' };
-        }
-
-        return { multiplier: SEARCH_AGENT_FIT_NEUTRAL, reason: 'neutral' };
-    }
-
     private parseIndexedAtMs(indexedAt?: string): number | undefined {
         if (!indexedAt) return undefined;
         const parsed = Date.parse(indexedAt);
-        if (!Number.isFinite(parsed)) return undefined;
-        return parsed;
+        return Number.isFinite(parsed) ? parsed : undefined;
     }
 
-    private getStalenessBucket(indexedAt?: string): StalenessBucket {
-        const indexedAtMs = this.parseIndexedAtMs(indexedAt);
-        if (indexedAtMs === undefined) {
-            return 'unknown';
-        }
-        const ageMs = Math.max(0, this.now() - indexedAtMs);
-        if (ageMs <= STALENESS_THRESHOLDS_MS.fresh) return 'fresh';
-        if (ageMs <= STALENESS_THRESHOLDS_MS.aging) return 'aging';
-        return 'stale';
-    }
-
-    private compareNullableNumbersAsc(a?: number | null, b?: number | null): number {
-        const av = a === undefined || a === null ? Number.POSITIVE_INFINITY : a;
-        const bv = b === undefined || b === null ? Number.POSITIVE_INFINITY : b;
-        return av - bv;
-    }
-
-    private compareNullableStringsAsc(a?: string | null, b?: string | null): number {
-        if (!a && !b) return 0;
-        if (!a) return 1;
-        if (!b) return -1;
-        return a.localeCompare(b);
-    }
-
-    private compareSearchCandidates(a: SearchCandidate, b: SearchCandidate, options?: { exactMatchFirst?: boolean; mustMatchesFirst?: boolean }): number {
-        if (options?.mustMatchesFirst === true && a.passesMatchedMust !== b.passesMatchedMust) {
-            return a.passesMatchedMust ? -1 : 1;
-        }
-        if (options?.exactMatchFirst === true && a.exactLexicalMatch !== b.exactLexicalMatch) {
-            return a.exactLexicalMatch ? -1 : 1;
-        }
-        if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
-        const fileCmp = this.compareNullableStringsAsc(a.result.relativePath, b.result.relativePath);
-        if (fileCmp !== 0) return fileCmp;
-        const startCmp = this.compareNullableNumbersAsc(a.result.startLine, b.result.startLine);
-        if (startCmp !== 0) return startCmp;
-        const labelCmp = this.compareNullableStringsAsc(a.result.symbolLabel, b.result.symbolLabel);
-        if (labelCmp !== 0) return labelCmp;
-        return this.compareNullableStringsAsc(a.result.symbolId, b.result.symbolId);
-    }
-
-    private sortSearchCandidates(candidates: SearchCandidate[], exactMatchFirst: boolean, mustMatchesFirst = false): boolean {
-        const topWithoutPinning = candidates.length > 0
-            ? [...candidates].sort((a, b) => this.compareSearchCandidates(a, b, { mustMatchesFirst }))[0]
-            : undefined;
-        candidates.sort((a, b) => this.compareSearchCandidates(a, b, { exactMatchFirst, mustMatchesFirst }));
-        if (!exactMatchFirst || !topWithoutPinning || candidates.length === 0) {
-            return false;
-        }
-        const applied = topWithoutPinning.exactLexicalMatch !== candidates[0].exactLexicalMatch;
-        if (applied) {
-            candidates[0].exactMatchPinned = true;
-        }
-        return applied;
-    }
-
-    private compareGroupedSearchResults(
-        a: SearchGroupResult & { __exactLexicalMatch: boolean },
-        b: SearchGroupResult & { __exactLexicalMatch: boolean },
-    ): number {
-        if (b.score !== a.score) return b.score - a.score;
-        const fileCmp = a.file.localeCompare(b.file);
-        if (fileCmp !== 0) return fileCmp;
-        const spanCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
-        if (spanCmp !== 0) return spanCmp;
-        const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
-        if (labelCmp !== 0) return labelCmp;
-        return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
+    private shouldIncludeCategoryInScope(scope: SearchScope, category: PathCategory): boolean {
+        return shouldIncludeCategoryInScope(scope, category);
     }
 
     private sortGroupedSearchResults<T extends SearchGroupResult & { __exactLexicalMatch: boolean }>(
         results: T[],
         exactMatchPinningEnabled: boolean,
     ): boolean {
-        const topWithoutPinning = results.length > 0
-            ? [...results].sort((a, b) => this.compareGroupedSearchResults(a, b))[0]
-            : undefined;
-        results.sort((a, b) => {
-            if (exactMatchPinningEnabled && a.__exactLexicalMatch !== b.__exactLexicalMatch) {
-                return a.__exactLexicalMatch ? -1 : 1;
-            }
-            return this.compareGroupedSearchResults(a, b);
-        });
-        const applied = Boolean(
-            exactMatchPinningEnabled
-            && topWithoutPinning
-            && results.length > 0
-            && topWithoutPinning.__exactLexicalMatch !== results[0].__exactLexicalMatch
-        );
-        if (applied && results[0].debug?.provenance) {
-            results[0].debug.provenance.exactMatchPinned = true;
-        }
-        return applied;
-    }
-
-    private buildSearchCandidateProvenance(candidate: SearchCandidate, ownerSource: SearchOwnerSource = 'fallback') {
-        const retrievalPasses = [...candidate.retrievalPasses].sort();
-        const backendScoreKinds = [...candidate.backendScoreKindsSeen].sort();
-        return {
-            retrievalPasses,
-            backendScoreKinds,
-            semanticCandidate: retrievalPasses.some((passId) => passId === 'primary' || passId === 'expanded'),
-            lexicalCandidate: retrievalPasses.some((passId) => passId === 'lexical_files' || passId === 'live_path')
-                || backendScoreKinds.includes('lexical_rank'),
-            rerankAdjusted: candidate.rerankAdjusted,
-            exactMatchPinned: candidate.exactMatchPinned,
-            ownerRepairApplied: ownerSource === 'registry_repair',
-        };
-    }
-
-    private buildExactRegistryGroupResult(input: {
-        codebaseRoot: string;
-        symbol: SymbolRecord;
-        spanRepair?: PythonSourceBackedSpanRepair;
-        indexedAt: string | null;
-        callGraphNavigationState: {
-            relationshipReady: boolean;
-            relationshipBuiltAt?: string;
-            relationshipUnavailableReason?: CallGraphUnavailableReason;
-        };
-        sidecarReadyForOutline: boolean;
-        debug: boolean;
-    }): SearchGroupResult & { __exactLexicalMatch: boolean } {
-        const span: SearchSpan = {
-            startLine: input.symbol.span.startLine,
-            endLine: input.symbol.span.endLine,
-        };
-        const previewSpan: SearchSpan = {
-            startLine: span.startLine,
-            endLine: span.endLine,
-        };
-        const symbolSpan: SearchSpan = {
-            startLine: span.startLine,
-            endLine: span.endLine,
-        };
-        const callGraphHint = this.buildSearchGroupCallGraphHint({
-            file: input.symbol.file,
-            language: input.symbol.language,
-            span,
-            symbolLabel: this.normalizeSearchSymbolLabel(input.symbol.label) || input.symbol.label,
-            ownerSymbolInstanceId: input.symbol.symbolInstanceId,
-            registrySymbol: input.symbol,
-            registryLoaded: true,
-            navigationState: input.callGraphNavigationState,
-        });
-        const nextActions = this.buildSearchNextActions(
-            input.codebaseRoot,
-            input.symbol.file,
-            span,
-            callGraphHint,
-            input.sidecarReadyForOutline,
-            input.symbol
-        );
-        const navigationFallback = this.buildNavigationFallback(
-            input.codebaseRoot,
-            input.symbol.file,
-            previewSpan,
-            callGraphHint,
-            input.sidecarReadyForOutline,
-            this.shouldAllowPreviewReadFallback(callGraphHint, Boolean(nextActions?.openSymbol))
-        );
-        const capabilities = this.buildSearchResultCapabilities({
-            callGraphHint,
-            confidence: 'high',
-            hasOpenSymbol: Boolean(nextActions?.openSymbol),
-            hasReadFallback: Boolean(navigationFallback?.readSpan),
-            semanticMatch: 'medium',
-            spanValidation: input.spanRepair
-                ? (input.spanRepair.validated ? 'verified' : input.spanRepair.attempted ? 'unverified' : 'not_applicable')
-                : 'not_applicable',
-        });
-        const displaySymbolLabel = this.normalizeSearchSymbolLabel(input.symbol.label) || input.symbol.label;
-        const preview = [
-            displaySymbolLabel,
-            input.symbol.qualifiedName !== displaySymbolLabel ? input.symbol.qualifiedName : '',
-        ].filter(Boolean).join('\n');
-
-        return {
-            kind: "group",
-            groupId: input.symbol.symbolInstanceId,
-            file: input.symbol.file,
-            span,
-            previewSpan,
-            symbolSpan,
-            language: input.symbol.language,
-            symbolId: input.symbol.symbolInstanceId,
-            symbolLabel: displaySymbolLabel,
-            symbolKey: input.symbol.symbolKey,
-            symbolInstanceId: input.symbol.symbolInstanceId,
-            symbolKind: input.symbol.kind,
-            confidence: 'high',
-            score: 1,
-            indexedAt: input.indexedAt,
-            stalenessBucket: this.getStalenessBucket(input.indexedAt || undefined),
-            collapsedChunkCount: 1,
-            callGraphHint,
-            ...(navigationFallback ? { navigationFallback } : {}),
-            ...(nextActions ? { nextActions } : {}),
-            capabilities,
-            preview: truncateContent(preview, SEARCH_GROUP_PREVIEW_MAX_CHARS),
-            __exactLexicalMatch: true,
-            ...(input.debug ? {
-                debug: {
-                    representativeChunkCount: 1,
-                    pathCategory: this.classifyPathCategory(input.symbol.file),
-                    pathMultiplier: 1,
-                    topChunkScore: 1,
-                    lexicalScore: 1,
-                    changedFilesMultiplier: 1,
-                    agentFitMultiplier: 1,
-                    agentFitReason: 'exact_registry',
-                    matchesMust: true,
-                    exactLexicalMatch: true,
-                    provenance: {
-                        retrievalPasses: ['exact_registry'],
-                        backendScoreKinds: [],
-                        semanticCandidate: false,
-                        lexicalCandidate: false,
-                        rerankAdjusted: false,
-                        exactMatchPinned: false,
-                        ownerRepairApplied: Boolean(input.spanRepair?.repaired),
-                    },
-                }
-            } : {})
-        };
-    }
-
-    private isDeclarationSearchGroup(group: SearchGroupResult): boolean {
-        const label = (group.symbolLabel || '').trim().toLowerCase();
-        if (/^(class|type|interface|enum|struct|function|def)\b/.test(label)) {
-            return true;
-        }
-        if (/^(const|let|var)\s+[a-z0-9_$]+\s*=/.test(label)) {
-            return true;
-        }
-
-        const previewStart = (group.preview || '').slice(0, 240).toLowerCase();
-        return /\b(class|type|interface|enum|struct|function|def)\s+[a-z0-9_]/i.test(previewStart)
-            || /\b(?:const|let|var)\s+[a-z0-9_$]+\s*=\s*(?:async\s+)?function\b/i.test(previewStart)
-            || /\b(?:const|let|var)\s+[a-z0-9_$]+\s*=\s*(?:async\s*)?(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>/i.test(previewStart);
-    }
-
-    private normalizeDeclarationGroupKey(group: SearchGroupResult): string | null {
-        if (!group.file || !group.symbolLabel) {
-            return null;
-        }
-        if (!this.isDeclarationSearchGroup(group)) {
-            return null;
-        }
-
-        const normalizedLabel = group.symbolLabel
-            .toLowerCase()
-            .replace(/\s+/g, ' ')
-            .trim();
-        const ownerIdentity = group.symbolKey || group.symbolInstanceId;
-        return ownerIdentity
-            ? `${group.file}::${normalizedLabel}::${ownerIdentity}`
-            : `${group.file}::${normalizedLabel}`;
-    }
-
-    private collapseDuplicateDeclarationGroups<T extends SearchGroupResult>(groups: T[]): T[] {
-        const deduped = new Map<string, T>();
-        for (const group of groups) {
-            const key = this.normalizeDeclarationGroupKey(group);
-            if (!key) {
-                deduped.set(`unique:${deduped.size}`, group);
-                continue;
-            }
-
-            const existing = deduped.get(key);
-            if (!existing) {
-                deduped.set(key, group);
-                continue;
-            }
-
-            const existingComparable: SearchCandidate = {
-                result: {
-                    relativePath: existing.file,
-                    startLine: existing.span.startLine,
-                    endLine: existing.span.endLine,
-                    symbolId: existing.symbolId || undefined,
-                    symbolLabel: existing.symbolLabel || undefined,
-                },
-                baseScore: 0,
-                backendScore: 0,
-                backendScoreKind: 'unknown',
-                backendScoreKindsSeen: ['unknown'],
-                fusionScore: 0,
-                lexicalScore: existing.debug?.lexicalScore || 0,
-                finalScore: existing.score,
-                pathCategory: (existing.debug?.pathCategory as PathCategory | undefined) || 'neutral',
-                pathMultiplier: existing.debug?.pathMultiplier || 1,
-                changedFilesMultiplier: existing.debug?.changedFilesMultiplier || 1,
-                agentFitMultiplier: existing.debug?.agentFitMultiplier || SEARCH_AGENT_FIT_NEUTRAL,
-                agentFitReason: existing.debug?.agentFitReason || 'neutral',
-                passesMatchedMust: existing.debug?.matchesMust === true,
-                exactLexicalMatch: (existing as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
-                exactMatchPinned: existing.debug?.provenance?.exactMatchPinned === true,
-                rerankAdjusted: existing.debug?.provenance?.rerankAdjusted === true,
-                retrievalPasses: existing.debug?.provenance?.retrievalPasses || [],
-            };
-            const nextComparable: SearchCandidate = {
-                result: {
-                    relativePath: group.file,
-                    startLine: group.span.startLine,
-                    endLine: group.span.endLine,
-                    symbolId: group.symbolId || undefined,
-                    symbolLabel: group.symbolLabel || undefined,
-                },
-                baseScore: 0,
-                backendScore: 0,
-                backendScoreKind: 'unknown',
-                backendScoreKindsSeen: ['unknown'],
-                fusionScore: 0,
-                lexicalScore: group.debug?.lexicalScore || 0,
-                finalScore: group.score,
-                pathCategory: (group.debug?.pathCategory as PathCategory | undefined) || 'neutral',
-                pathMultiplier: group.debug?.pathMultiplier || 1,
-                changedFilesMultiplier: group.debug?.changedFilesMultiplier || 1,
-                agentFitMultiplier: group.debug?.agentFitMultiplier || SEARCH_AGENT_FIT_NEUTRAL,
-                agentFitReason: group.debug?.agentFitReason || 'neutral',
-                passesMatchedMust: group.debug?.matchesMust === true,
-                exactLexicalMatch: (group as T & { __exactLexicalMatch?: boolean }).__exactLexicalMatch === true,
-                exactMatchPinned: group.debug?.provenance?.exactMatchPinned === true,
-                rerankAdjusted: group.debug?.provenance?.rerankAdjusted === true,
-                retrievalPasses: group.debug?.provenance?.retrievalPasses || [],
-            };
-
-            if (this.compareSearchCandidates(nextComparable, existingComparable) < 0) {
-                deduped.set(key, group);
-                continue;
-            }
-        }
-
-        return Array.from(deduped.values());
-    }
-
-    private buildFallbackGroupId(relativePath: string, span: SearchSpan): string {
-        const payload = `${relativePath}:${span.startLine}-${span.endLine}`;
-        const digest = crypto.createHash('sha1').update(payload, 'utf8').digest('hex').slice(0, 16);
-        return `grp_${digest}`;
+        return sortGroupedSearchResultsHelper(results, exactMatchPinningEnabled);
     }
 
     private isCallGraphLanguageSupported(language: string, file?: string): boolean {
@@ -4881,34 +2029,7 @@ export class ToolHandlers {
         span: { startLine: number; endLine: number };
         sidecarBuiltAt?: string;
     }): CallGraphHint {
-        if (!this.isCallGraphLanguageSupported(input.language, input.file)) {
-            return { supported: false, reason: 'unsupported_language' };
-        }
-
-        const normalizedFile = this.sanitizeIndexedRelativeFilePath(input.file);
-        if (!normalizedFile) {
-            return { supported: false, reason: 'stale_symbol_ref' };
-        }
-
-        const validatedAt = new Date(this.now()).toISOString();
-        const safeStartLine = Math.max(1, Number(input.span.startLine));
-        const safeEndLine = Math.max(safeStartLine, Number(input.span.endLine));
-
-        return {
-            supported: true,
-            validated: true,
-            validatedAt,
-            sidecarBuiltAt: input.sidecarBuiltAt || validatedAt,
-            symbolRef: {
-                file: normalizedFile,
-                symbolId: input.symbolId,
-                ...(input.symbolLabel ? { symbolLabel: input.symbolLabel } : {}),
-                span: {
-                    startLine: safeStartLine,
-                    endLine: safeEndLine,
-                },
-            },
-        };
+        return buildSearchRelationshipCallGraphHint(input, this.getSearchNavigationHelpers());
     }
 
     private sanitizeIndexedRelativeFilePath(relativeFilePath: string): string | undefined {
@@ -4923,267 +2044,23 @@ export class ToolHandlers {
         return compact;
     }
 
-    private buildSearchOwnerChunk(result: SearchResultLike): CodeChunk | null {
-        const startLine = Number(result?.startLine);
-        const endLine = Number(result?.endLine);
-        if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
-            return null;
-        }
-
-        const metadata: CodeChunk['metadata'] = {
-            startLine: Math.max(1, startLine),
-            endLine: Math.max(Math.max(1, startLine), endLine),
-            language: typeof result?.language === 'string' ? result.language : undefined,
-            filePath: typeof result?.relativePath === 'string' ? result.relativePath : undefined,
-            symbolId: typeof result?.symbolId === 'string' ? result.symbolId : undefined,
-            symbolLabel: typeof result?.symbolLabel === 'string' ? result.symbolLabel : undefined,
-            symbolKind: typeof result?.symbolKind === 'string' ? result.symbolKind : undefined,
-        };
-        if (Number.isFinite(result?.startByte)) {
-            metadata.startByte = Number(result.startByte);
-        }
-        if (Number.isFinite(result?.endByte)) {
-            metadata.endByte = Number(result.endByte);
-        }
-
-        return {
-            content: String(result?.content || ''),
-            metadata,
-        };
-    }
-
-    private resolveBestOverlappingSearchSymbol(
-        fileSymbols: SymbolRecord[],
-        ownerChunk: CodeChunk,
-        plan: SearchQueryPlan
-    ): SymbolRecord | undefined {
-        const chunkStart = Math.max(1, Number(ownerChunk.metadata.startLine || 1));
-        const chunkEnd = Math.max(chunkStart, Number(ownerChunk.metadata.endLine || chunkStart));
-        const chunkLines = ownerChunk.content.split(/\r?\n/);
-        const normalizeSymbolEvidence = (value: string): string => value
-            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-            .replace(/[/\\._:-]+/g, ' ')
-            .toLowerCase();
-        const scored = fileSymbols
-            .filter((symbol) => symbol.kind !== 'file')
-            .filter((symbol) => symbol.span.startLine <= chunkEnd && chunkStart <= symbol.span.endLine)
-            .map((symbol) => {
-                const symbolName = normalizeSymbolEvidence(symbol.name);
-                const symbolIdentityEvidence = normalizeSymbolEvidence([
-                    symbol.name,
-                    symbol.qualifiedName,
-                    symbol.label,
-                ].join('\n'));
-                const symbolParentEvidence = normalizeSymbolEvidence(symbol.parentQualifiedNamePath.join('\n'));
-                const symbolRelativeStart = Math.max(0, symbol.span.startLine - chunkStart);
-                const symbolRelativeEnd = Math.max(symbolRelativeStart, symbol.span.endLine - chunkStart);
-                const symbolContent = chunkLines
-                    .slice(symbolRelativeStart, symbolRelativeEnd + 1)
-                    .join('\n')
-                    .toLowerCase();
-                const matchedDomainTerms = new Set<string>();
-                let symbolNameMatches = 0;
-                let identityMatches = 0;
-                let contentMatches = 0;
-                let strongIdentifierMatches = 0;
-                for (const term of plan.lexicalTerms) {
-                    if (term.kind !== 'whole' || this.isWriterActionTerm(term.value)) {
-                        continue;
-                    }
-                    const nameMatch = this.hasTokenBoundaryMatch(symbolName, term.value);
-                    const identityMatch = this.hasTokenBoundaryMatch(symbolIdentityEvidence, term.value);
-                    const parentMatch = this.hasTokenBoundaryMatch(symbolParentEvidence, term.value);
-                    const contentMatch = this.hasTokenBoundaryMatch(symbolContent, term.value);
-                    if (nameMatch) {
-                        symbolNameMatches += 1;
-                    }
-                    if (identityMatch || parentMatch) {
-                        identityMatches += 1;
-                    }
-                    if (contentMatch) {
-                        contentMatches += 1;
-                    }
-                    if (identityMatch || parentMatch || contentMatch) {
-                        matchedDomainTerms.add(term.value);
-                    }
-                    if (identityMatch && /[_/\\.:]/.test(term.value)) {
-                        strongIdentifierMatches += 1;
-                    }
-                }
-                return {
-                    symbol,
-                    lexicalMatches: matchedDomainTerms.size,
-                    symbolNameMatches,
-                    identityMatches,
-                    contentMatches,
-                    strongIdentifierMatches,
-                };
-            })
-            .filter((entry) => (
-                entry.lexicalMatches >= 2
-                || entry.symbolNameMatches > 0
-                || entry.strongIdentifierMatches > 0
-            ))
-            .sort((a, b) => {
-                if (b.lexicalMatches !== a.lexicalMatches) return b.lexicalMatches - a.lexicalMatches;
-                if (b.symbolNameMatches !== a.symbolNameMatches) return b.symbolNameMatches - a.symbolNameMatches;
-                if (b.identityMatches !== a.identityMatches) return b.identityMatches - a.identityMatches;
-                if (b.strongIdentifierMatches !== a.strongIdentifierMatches) return b.strongIdentifierMatches - a.strongIdentifierMatches;
-                if (b.contentMatches !== a.contentMatches) return b.contentMatches - a.contentMatches;
-                const aLines = a.symbol.span.endLine - a.symbol.span.startLine;
-                const bLines = b.symbol.span.endLine - b.symbol.span.startLine;
-                if (aLines !== bLines) return aLines - bLines;
-                const aDepth = a.symbol.parentQualifiedNamePath.length;
-                const bDepth = b.symbol.parentQualifiedNamePath.length;
-                if (aDepth !== bDepth) return bDepth - aDepth;
-                const startCmp = this.compareNullableNumbersAsc(a.symbol.span.startLine, b.symbol.span.startLine);
-                if (startCmp !== 0) return startCmp;
-                return this.compareNullableStringsAsc(a.symbol.symbolInstanceId, b.symbol.symbolInstanceId);
-            });
-
-        const [best, second] = scored;
-        if (best && second
-            && best.lexicalMatches === second.lexicalMatches
-            && best.symbolNameMatches === second.symbolNameMatches
-            && best.identityMatches === second.identityMatches
-            && best.strongIdentifierMatches === second.strongIdentifierMatches
-            && best.contentMatches === second.contentMatches) {
-            return undefined;
-        }
-        return scored[0]?.symbol;
-    }
-
     private resolveSearchOwnerFromRegistry(result: SearchResultLike, registry?: SymbolRegistry, plan?: SearchQueryPlan): SearchOwnerResolution {
-        const metadataOwnerKey = typeof result?.ownerSymbolKey === 'string' && result.ownerSymbolKey.length > 0
-            ? result.ownerSymbolKey
-            : undefined;
-        const metadataOwnerInstanceId = typeof result?.ownerSymbolInstanceId === 'string' && result.ownerSymbolInstanceId.length > 0
-            ? result.ownerSymbolInstanceId
-            : undefined;
-        const metadataSymbolKind = typeof result?.symbolKind === 'string' && result.symbolKind.length > 0
-            ? result.symbolKind
-            : undefined;
-
-        if (!registry) {
-            return metadataOwnerKey
-                ? {
-                    ownerSymbolKey: metadataOwnerKey,
-                    ownerSymbolInstanceId: metadataOwnerInstanceId,
-                    symbolKind: metadataSymbolKind,
-                    ownerSource: 'owner_metadata',
-                }
-                : {};
-        }
-
-        const normalizedFile = typeof result?.relativePath === 'string'
-            ? this.sanitizeIndexedRelativeFilePath(result.relativePath)
-            : undefined;
-        const fileSymbols = normalizedFile ? registry.symbolsByFile.get(normalizedFile) : undefined;
-        const ownerChunk = this.buildSearchOwnerChunk(result);
-
-        if (
-            metadataOwnerKey
-            && metadataOwnerInstanceId
-            && registry.symbolsByInstanceId.has(metadataOwnerInstanceId)
-        ) {
-            const owner = registry.symbolsByInstanceId.get(metadataOwnerInstanceId);
-            if (owner?.kind === 'file' && fileSymbols && ownerChunk && plan) {
-                const tighterOwner = this.resolveBestOverlappingSearchSymbol(fileSymbols, ownerChunk, plan);
-                if (tighterOwner && tighterOwner.symbolInstanceId !== metadataOwnerInstanceId) {
-                    return {
-                        ownerSymbolKey: tighterOwner.symbolKey,
-                        ownerSymbolInstanceId: tighterOwner.symbolInstanceId,
-                        symbolKind: tighterOwner.kind,
-                        ownerSource: 'registry_repair',
-                    };
-                }
-            }
-            return {
-                ownerSymbolKey: metadataOwnerKey,
-                ownerSymbolInstanceId: metadataOwnerInstanceId,
-                symbolKind: owner?.kind || metadataSymbolKind,
-                ownerSource: 'owner_metadata',
-            };
-        }
-
-        if (fileSymbols && ownerChunk) {
-            try {
-                if (plan) {
-                    const overlappingOwner = this.resolveBestOverlappingSearchSymbol(fileSymbols, ownerChunk, plan);
-                    if (overlappingOwner) {
-                        return {
-                            ownerSymbolKey: overlappingOwner.symbolKey,
-                            ownerSymbolInstanceId: overlappingOwner.symbolInstanceId,
-                            symbolKind: overlappingOwner.kind,
-                            ownerSource: 'registry_repair',
-                        };
-                    }
-                }
-                if (metadataOwnerKey) {
-                    const keyCandidates = fileSymbols.filter((symbol) => symbol.symbolKey === metadataOwnerKey);
-                    if (keyCandidates.length > 0) {
-                        const owner = resolveOwnerSymbolForChunk({
-                            chunk: ownerChunk,
-                            symbols: keyCandidates.some((symbol) => symbol.kind === 'file') ? keyCandidates : [
-                                ...fileSymbols.filter((symbol) => symbol.kind === 'file'),
-                                ...keyCandidates,
-                            ],
-                        });
-                        if (owner.symbolKey === metadataOwnerKey) {
-                            return {
-                                ownerSymbolKey: owner.symbolKey,
-                                ownerSymbolInstanceId: owner.symbolInstanceId,
-                                symbolKind: owner.kind,
-                                ownerSource: 'registry_repair',
-                            };
-                        }
-                    }
-                }
-
-                const owner = resolveOwnerSymbolForChunk({ chunk: ownerChunk, symbols: fileSymbols });
-                return {
-                    ownerSymbolKey: owner.symbolKey,
-                    ownerSymbolInstanceId: owner.symbolInstanceId,
-                    symbolKind: owner.kind,
-                    ownerSource: 'registry_repair',
-                };
-            } catch {
-                // Registry repair is a compatibility aid; fallback paths below preserve search usability.
-            }
-        }
-
-        return metadataOwnerKey
-            ? {
-                ownerSymbolKey: metadataOwnerKey,
-                ownerSymbolInstanceId: metadataOwnerInstanceId,
-                symbolKind: metadataSymbolKind,
-                ownerSource: 'owner_metadata',
-            }
-            : {};
+        return resolveSearchOwnerFromRegistryWithRepair({
+            result,
+            registry,
+            lexicalTerms: plan?.lexicalTerms,
+            sanitizeIndexedRelativeFilePath: (relativeFilePath: string) => this.sanitizeIndexedRelativeFilePath(relativeFilePath),
+            hasTokenBoundaryMatch: (haystack: string, needle: string) => this.searchQuerySupport.hasTokenBoundaryMatch(haystack, needle),
+            isWriterActionTerm: (value: string) => isWriterActionTermHelper(value),
+        });
     }
 
-    private buildSearchOpenSymbolAction(
-        codebaseRoot: string,
-        registrySymbol: SymbolRecord | undefined
-    ): NonNullable<NonNullable<SearchGroupResult['nextActions']>['openSymbol']> | undefined {
-        if (!registrySymbol || registrySymbol.kind === 'file') {
-            return undefined;
-        }
-
-        const normalizedFile = this.sanitizeIndexedRelativeFilePath(registrySymbol.file);
-        if (!normalizedFile) {
-            return undefined;
-        }
-
+    private getSearchNavigationHelpers() {
         return {
-            tool: 'read_file',
-            args: {
-                path: path.resolve(codebaseRoot, normalizedFile),
-                open_symbol: {
-                    symbolId: registrySymbol.symbolInstanceId,
-                    ...(registrySymbol.label ? { symbolLabel: registrySymbol.label } : {}),
-                }
-            }
+            now: () => this.now(),
+            sanitizeIndexedRelativeFilePath: (relativeFilePath: string) => this.sanitizeIndexedRelativeFilePath(relativeFilePath),
+            isCallGraphLanguageSupported: (language: string, file: string) => this.isCallGraphLanguageSupported(language, file),
+            getOutlineStatusForLanguage: (relativeFilePath: string) => this.getOutlineStatusForLanguage(relativeFilePath),
         };
     }
 
@@ -5191,11 +2068,7 @@ export class ToolHandlers {
         callGraphHint: CallGraphHint,
         hasOpenSymbol: boolean
     ): boolean {
-        if (callGraphHint.supported || hasOpenSymbol) {
-            return false;
-        }
-
-        return callGraphHint.reason === 'missing_symbol' || callGraphHint.reason === 'stale_symbol_ref';
+        return shouldAllowSearchPreviewReadFallback(callGraphHint, hasOpenSymbol);
     }
 
     private buildNavigationFallback(
@@ -5206,49 +2079,15 @@ export class ToolHandlers {
         sidecarReadyForOutline: boolean,
         allowPreviewReadFallback: boolean
     ): SearchGroupResult['navigationFallback'] | undefined {
-        if (callGraphHint.supported || !allowPreviewReadFallback) {
-            return undefined;
-        }
-
-        const normalizedFile = this.sanitizeIndexedRelativeFilePath(relativeFilePath);
-        if (!normalizedFile) {
-            return undefined;
-        }
-
-        const safeStartLine = Number.isFinite(previewSpan.startLine) ? Math.max(1, Number(previewSpan.startLine)) : 1;
-        const safeEndLine = Number.isFinite(previewSpan.endLine) ? Math.max(safeStartLine, Number(previewSpan.endLine)) : safeStartLine;
-        const absolutePath = path.resolve(codebaseRoot, normalizedFile);
-
-        const fallback: SearchGroupResult['navigationFallback'] = {
-            message: NAVIGATION_FALLBACK_MESSAGE,
-            context: {
-                codebaseRoot,
-                relativeFile: normalizedFile,
-            },
-            readSpan: {
-                tool: 'read_file',
-                args: {
-                    path: absolutePath,
-                    start_line: safeStartLine,
-                    end_line: safeEndLine,
-                }
-            }
-        };
-
-        if (sidecarReadyForOutline && this.getOutlineStatusForLanguage(normalizedFile) === 'ok') {
-            fallback.fileOutlineWindow = {
-                tool: 'file_outline',
-                args: {
-                    path: codebaseRoot,
-                    file: normalizedFile,
-                    start_line: safeStartLine,
-                    end_line: safeEndLine,
-                    resolveMode: 'outline',
-                }
-            };
-        }
-
-        return fallback;
+        return buildSearchNavigationFallback(
+            codebaseRoot,
+            relativeFilePath,
+            previewSpan,
+            callGraphHint,
+            sidecarReadyForOutline,
+            allowPreviewReadFallback,
+            this.getSearchNavigationHelpers(),
+        );
     }
 
     private buildSearchNextActions(
@@ -5259,216 +2098,44 @@ export class ToolHandlers {
         sidecarReadyForOutline: boolean,
         registrySymbol?: SymbolRecord
     ): SearchGroupResult['nextActions'] | undefined {
-        const openSymbol = this.buildSearchOpenSymbolAction(codebaseRoot, registrySymbol);
-        const nextActions: NonNullable<SearchGroupResult['nextActions']> = {};
-        if (openSymbol) {
-            nextActions.openSymbol = openSymbol;
-        }
-
-        if (!callGraphHint.supported) {
-            return Object.keys(nextActions).length > 0 ? nextActions : undefined;
-        }
-
-        const normalizedFile = this.sanitizeIndexedRelativeFilePath(callGraphHint.symbolRef.file || relativeFilePath);
-        if (!normalizedFile) {
-            return Object.keys(nextActions).length > 0 ? nextActions : undefined;
-        }
-
-        const actionSpan = callGraphHint.symbolRef.span || span;
-        const safeStartLine = Number.isFinite(actionSpan.startLine) ? Math.max(1, Number(actionSpan.startLine)) : 1;
-        const safeEndLine = Number.isFinite(actionSpan.endLine) ? Math.max(safeStartLine, Number(actionSpan.endLine)) : safeStartLine;
-        const symbolRef = {
-            ...callGraphHint.symbolRef,
-            file: normalizedFile,
-            span: {
-                startLine: safeStartLine,
-                endLine: safeEndLine,
-            }
-        };
-
-        nextActions.callGraph = {
-            tool: 'call_graph',
-            args: {
-                path: codebaseRoot,
-                symbolRef,
-                depth: 1,
-                limit: 20,
-            },
-            directions: ['callers', 'callees'],
-        };
-
-        if (openSymbol && sidecarReadyForOutline && this.getOutlineStatusForLanguage(normalizedFile) === 'ok') {
-            nextActions.outlineWindow = {
-                tool: 'file_outline',
-                args: {
-                    path: codebaseRoot,
-                    file: normalizedFile,
-                    start_line: safeStartLine,
-                    end_line: safeEndLine,
-                    resolveMode: 'outline',
-                }
-            };
-        }
-
-        return Object.keys(nextActions).length > 0 ? nextActions : undefined;
+        return buildSearchNavigationNextActions(
+            codebaseRoot,
+            relativeFilePath,
+            span,
+            callGraphHint,
+            sidecarReadyForOutline,
+            registrySymbol,
+            this.getSearchNavigationHelpers(),
+        );
     }
 
     private buildChangedCodeDebug(
         codebaseRoot: string,
         changedFilesState: { available: boolean; files: Set<string> }
     ): SearchDebugHint['changedCode'] | undefined {
-        if (!changedFilesState.available || changedFilesState.files.size === 0) {
-            return undefined;
-        }
-
-        const sidecar = this.callGraphManager.loadSidecar(codebaseRoot);
-        if (!sidecar || !Array.isArray(sidecar.nodes) || !Array.isArray(sidecar.edges)) {
-            return undefined;
-        }
-
-        const changedFiles = Array.from(changedFilesState.files)
-            .map((file) => this.normalizeRelativeFilePath(file))
-            .filter((file) => file.length > 0 && !file.startsWith('..') && !path.posix.isAbsolute(file))
-            .sort((a, b) => a.localeCompare(b));
-        const changedFileSet = new Set(changedFiles);
-        const nodeById = new Map<string, CallGraphNode>();
-        for (const node of sidecar.nodes) {
-            if (node && typeof node.symbolId === 'string') {
-                nodeById.set(node.symbolId, node);
-            }
-        }
-
-        const changedSymbols = sidecar.nodes
-            .filter((node) => node && typeof node.file === 'string' && changedFileSet.has(this.normalizeRelativeFilePath(node.file)))
-            .map((node): ChangedCodeDebugSymbol => {
-                const symbolLabel = this.normalizeSearchSymbolLabel(node.symbolLabel);
-                return {
-                    file: this.normalizeRelativeFilePath(node.file),
-                    symbolId: String(node.symbolId),
-                    ...(symbolLabel ? { symbolLabel } : {}),
-                    span: {
-                        startLine: Number.isFinite(node.span?.startLine) ? Number(node.span.startLine) : 1,
-                        endLine: Number.isFinite(node.span?.endLine) ? Number(node.span.endLine) : (Number.isFinite(node.span?.startLine) ? Number(node.span.startLine) : 1),
-                    }
-                };
-            })
-            .sort((a, b) => {
-                const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
-                if (fileCmp !== 0) return fileCmp;
-                const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
-                if (startCmp !== 0) return startCmp;
-                const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
-                if (labelCmp !== 0) return labelCmp;
-                return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
-            });
-
-        const changedSymbolIds = new Set(changedSymbols.map((symbol) => symbol.symbolId));
-        const directCallers = sidecar.edges
-            .filter((edge) => edge && changedSymbolIds.has(edge.dstSymbolId))
-            .map((edge): ChangedCodeDebugDirectCaller | null => {
-                const caller = nodeById.get(edge.srcSymbolId);
-                if (!caller) {
-                    return null;
-                }
-                const startLine = Number.isFinite(caller.span?.startLine) ? Number(caller.span.startLine) : 1;
-                const endLine = Number.isFinite(caller.span?.endLine) ? Number(caller.span.endLine) : startLine;
-                const callerSymbolLabel = this.normalizeSearchSymbolLabel(caller.symbolLabel);
-                return {
-                    targetSymbolId: String(edge.dstSymbolId),
-                    file: this.normalizeRelativeFilePath(caller.file),
-                    symbolId: String(caller.symbolId),
-                    ...(callerSymbolLabel ? { symbolLabel: callerSymbolLabel } : {}),
-                    span: {
-                        startLine,
-                        endLine,
-                    },
-                    site: {
-                        file: this.normalizeRelativeFilePath(edge.site?.file || caller.file),
-                        startLine: Number.isFinite(edge.site?.startLine) ? Number(edge.site.startLine) : startLine,
-                        ...(Number.isFinite(edge.site?.endLine) ? { endLine: Number(edge.site.endLine) } : {}),
-                    },
-                    kind: edge.kind === 'import' || edge.kind === 'dynamic' ? edge.kind : 'call',
-                    confidence: Number.isFinite(edge.confidence) ? Number(edge.confidence) : 0,
-                };
-            })
-            .filter((caller): caller is ChangedCodeDebugDirectCaller => Boolean(caller))
-            .sort((a, b) => {
-                const targetCmp = this.compareNullableStringsAsc(a.targetSymbolId, b.targetSymbolId);
-                if (targetCmp !== 0) return targetCmp;
-                const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
-                if (fileCmp !== 0) return fileCmp;
-                const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
-                if (startCmp !== 0) return startCmp;
-                const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
-                if (labelCmp !== 0) return labelCmp;
-                const symbolCmp = this.compareNullableStringsAsc(a.symbolId, b.symbolId);
-                if (symbolCmp !== 0) return symbolCmp;
-                return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
-            });
-
-        const files = changedFiles.slice(0, SEARCH_DEBUG_CHANGED_CODE_MAX_FILES);
-        const symbols = changedSymbols.slice(0, SEARCH_DEBUG_CHANGED_CODE_MAX_SYMBOLS);
-        const cappedDirectCallers = directCallers.slice(0, SEARCH_DEBUG_CHANGED_CODE_MAX_DIRECT_CALLERS);
-
-        return {
-            files,
-            symbols,
-            directCallers: cappedDirectCallers,
-            totalFiles: changedFiles.length,
-            totalSymbols: changedSymbols.length,
-            totalDirectCallers: directCallers.length,
-            truncated: files.length < changedFiles.length
-                || symbols.length < changedSymbols.length
-                || cappedDirectCallers.length < directCallers.length,
-        };
+        return buildSearchChangedCodeDebug({
+            sidecar: this.callGraphManager.loadSidecar(codebaseRoot),
+            changedFilesState,
+            normalizeRelativeFilePath: (relativeFilePath: string) => this.normalizeRelativeFilePath(relativeFilePath),
+            normalizeSearchSymbolLabel: (label) => normalizeSearchSymbolLabelHelper(label),
+            compareNullableStringsAsc: compareNullableStringsAscHelper,
+            compareNullableNumbersAsc: compareNullableNumbersAscHelper,
+            maxFiles: SEARCH_DEBUG_CHANGED_CODE_MAX_FILES,
+            maxSymbols: SEARCH_DEBUG_CHANGED_CODE_MAX_SYMBOLS,
+            maxDirectCallers: SEARCH_DEBUG_CHANGED_CODE_MAX_DIRECT_CALLERS,
+        });
     }
 
     private buildGeneratedArtifactsVerificationHint(
         codebaseRoot: string,
         results: Array<{ file: string; span: SearchSpan }>
     ): NonNullable<NonNullable<SearchResponseEnvelope['hints']>['verification']>['generatedArtifacts'] | undefined {
-        const byFile = new Map<string, SearchSpan>();
-
-        for (const result of results) {
-            const normalizedFile = this.sanitizeIndexedRelativeFilePath(result.file);
-            if (!normalizedFile) {
-                continue;
-            }
-            if (this.classifyNoiseCategory(normalizedFile) !== 'generated') {
-                continue;
-            }
-            const safeStartLine = Number.isFinite(result.span.startLine) ? Math.max(1, Number(result.span.startLine)) : 1;
-            const safeEndLine = Number.isFinite(result.span.endLine) ? Math.max(safeStartLine, Number(result.span.endLine)) : safeStartLine;
-            const existing = byFile.get(normalizedFile);
-            byFile.set(normalizedFile, existing
-                ? {
-                    startLine: Math.min(existing.startLine, safeStartLine),
-                    endLine: Math.max(existing.endLine, safeEndLine),
-                }
-                : { startLine: safeStartLine, endLine: safeEndLine });
-        }
-
-        const files = Array.from(byFile.keys()).sort((a, b) => a.localeCompare(b)).slice(0, 5);
-        if (files.length === 0) {
-            return undefined;
-        }
-
-        return {
-            reason: 'generated_outputs_present',
-            message: 'Generated or build output appeared in search context. Source matches do not prove generated output is current; verify the artifact directly when behavior depends on it.',
-            files,
-            nextSteps: files.map((file) => {
-                const span = byFile.get(file)!;
-                return {
-                    tool: 'read_file',
-                    args: {
-                        path: path.resolve(codebaseRoot, file),
-                        start_line: span.startLine,
-                        end_line: span.endLine,
-                    }
-                };
-            }),
-        };
+        return buildSearchGeneratedArtifactsVerificationHint({
+            codebaseRoot,
+            results,
+            sanitizeIndexedRelativeFilePath: (relativeFilePath: string) => this.sanitizeIndexedRelativeFilePath(relativeFilePath),
+            isGeneratedFile: (relativeFilePath: string) => this.searchQuerySupport.classifyNoiseCategory(relativeFilePath) === 'generated',
+        });
     }
 
     private normalizeRelativeFilePath(relativeFilePath: string): string {
@@ -5579,80 +2246,6 @@ export class ToolHandlers {
         return 'unsupported';
     }
 
-    private sortFileOutlineSymbols(symbols: FileOutlineSymbolResult[]): FileOutlineSymbolResult[] {
-        return [...symbols].sort((a, b) => {
-            const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
-            if (startCmp !== 0) return startCmp;
-            const endCmp = this.compareNullableNumbersAsc(a.span?.endLine, b.span?.endLine);
-            if (endCmp !== 0) return endCmp;
-            const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
-            if (labelCmp !== 0) return labelCmp;
-            return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
-        });
-    }
-
-    private sortRegistrySymbols(symbols: SymbolRecord[]): SymbolRecord[] {
-        return [...symbols].sort((a, b) => {
-            const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
-            if (startCmp !== 0) return startCmp;
-            const endCmp = this.compareNullableNumbersAsc(a.span?.endLine, b.span?.endLine);
-            if (endCmp !== 0) return endCmp;
-            const labelCmp = this.compareNullableStringsAsc(a.label, b.label);
-            if (labelCmp !== 0) return labelCmp;
-            return this.compareNullableStringsAsc(a.symbolInstanceId, b.symbolInstanceId);
-        });
-    }
-
-    private buildVisibleRegistrySymbolState(input: {
-        symbols: SymbolRecord[];
-        windowStart?: number;
-        windowEnd?: number;
-    }): {
-        hasExtractedSymbols: boolean;
-        visibleSymbols: SymbolRecord[];
-    } {
-        const hasExtractedSymbols = input.symbols.some((symbol) => symbol.kind !== 'file');
-        const visibleSymbols = input.symbols.filter((symbol) => {
-            if (hasExtractedSymbols && symbol.kind === 'file') {
-                return false;
-            }
-            if (!input.windowStart && !input.windowEnd) {
-                return true;
-            }
-            const startsBeforeWindowEnd = input.windowEnd === undefined || symbol.span.startLine <= input.windowEnd;
-            const endsAfterWindowStart = input.windowStart === undefined || symbol.span.endLine >= input.windowStart;
-            return startsBeforeWindowEnd && endsAfterWindowStart;
-        });
-
-        return {
-            hasExtractedSymbols,
-            visibleSymbols,
-        };
-    }
-
-    private findExactRegistrySymbols(input: {
-        symbols: SymbolRecord[];
-        symbolIdExact?: string;
-        symbolLabelExact?: string;
-        windowStart?: number;
-        windowEnd?: number;
-    }): SymbolRecord[] {
-        const visibleState = this.buildVisibleRegistrySymbolState(input);
-        const exactMatches = visibleState.visibleSymbols.filter((symbol) => {
-            if (input.symbolIdExact) {
-                const matchesExactSymbolId = symbol.symbolInstanceId === input.symbolIdExact;
-                if (!matchesExactSymbolId) {
-                    return false;
-                }
-            }
-            if (input.symbolLabelExact && symbol.label !== input.symbolLabelExact) {
-                return false;
-            }
-            return true;
-        });
-        return this.sortRegistrySymbols(exactMatches);
-    }
-
     private buildRegistrySymbolCallGraphHint(
         symbol: SymbolRecord,
         file: string,
@@ -5662,146 +2255,7 @@ export class ToolHandlers {
             relationshipUnavailableReason?: CallGraphUnavailableReason;
         }
     ): CallGraphHint {
-        if (symbol.kind === 'file') {
-            return { supported: false, reason: 'missing_symbol' };
-        }
-
-        if (!this.isCallGraphLanguageSupported(symbol.language, file)) {
-            return { supported: false, reason: 'unsupported_language' };
-        }
-
-        if (navigationState.relationshipReady) {
-            return this.buildRelationshipCallGraphHint({
-                file,
-                language: symbol.language,
-                symbolId: symbol.symbolInstanceId,
-                symbolLabel: symbol.label,
-                span: {
-                    startLine: symbol.span.startLine,
-                    endLine: symbol.span.endLine,
-                },
-                sidecarBuiltAt: navigationState.relationshipBuiltAt,
-            });
-        }
-
-        return {
-            supported: false,
-            reason: navigationState.relationshipUnavailableReason || 'missing_relationship_sidecar',
-        };
-    }
-
-    private buildRegistryFileOutlinePayload(input: {
-        codebaseRoot: string;
-        file: string;
-        symbols: SymbolRecord[];
-        limitSymbols: number;
-        resolveMode: 'outline' | 'exact';
-        symbolIdExact?: string;
-        symbolLabelExact?: string;
-        windowStart?: number;
-        windowEnd?: number;
-        callGraphNavigationState: {
-            relationshipReady: boolean;
-            relationshipBuiltAt?: string;
-        };
-        warnings?: string[];
-    }): FileOutlineResponseEnvelope {
-        const repairs = this.repairSourceBackedPythonSpans({
-            codebaseRoot: input.codebaseRoot,
-            symbols: input.symbols,
-        });
-        const repairedSymbols = repairs.map((repair) => repair.symbol);
-        const repairBySymbolId = new Map(repairs.map((repair) => [repair.symbol.symbolInstanceId, repair]));
-        const visibleState = this.buildVisibleRegistrySymbolState({
-            symbols: repairedSymbols,
-            windowStart: input.windowStart,
-            windowEnd: input.windowEnd,
-        });
-        const visibleSymbols = visibleState.visibleSymbols;
-
-        const mappedSymbols = this.sortFileOutlineSymbols(visibleSymbols.map((symbol) => ({
-            symbolId: symbol.symbolInstanceId,
-            symbolLabel: symbol.label,
-            span: {
-                startLine: symbol.span.startLine,
-                endLine: symbol.span.endLine,
-            },
-            callGraphHint: this.buildRegistrySymbolCallGraphHint(symbol, input.file, input.callGraphNavigationState),
-        } as FileOutlineSymbolResult)));
-
-        const collectWarnings = (symbols: FileOutlineSymbolResult[]): string[] => {
-            const warningSet = new Set(input.warnings || []);
-            for (const symbol of symbols) {
-                for (const warning of this.buildOutlineSpanWarningCodes(repairBySymbolId.get(symbol.symbolId))) {
-                    warningSet.add(warning);
-                }
-            }
-            if (symbols.some((symbol) => !symbol.callGraphHint.supported)) {
-                const firstUnsupported = symbols.find((symbol) => !symbol.callGraphHint.supported)?.callGraphHint;
-                if (firstUnsupported && !firstUnsupported.supported) {
-                    warningSet.add(`OUTLINE_CALL_GRAPH_UNAVAILABLE:${firstUnsupported.reason}`);
-                }
-            }
-            if (!visibleState.hasExtractedSymbols && symbols.length > 0) {
-                warningSet.add('OUTLINE_SYNTHESIZED_FILE_SYMBOL');
-            }
-            return [...warningSet].sort((a, b) => a.localeCompare(b));
-        };
-
-        if (input.resolveMode === 'exact') {
-            const exactMatchIds = new Set(this.findExactRegistrySymbols({
-                symbols: repairedSymbols,
-                symbolIdExact: input.symbolIdExact,
-                symbolLabelExact: input.symbolLabelExact,
-                windowStart: input.windowStart,
-                windowEnd: input.windowEnd,
-            }).map((symbol) => symbol.symbolInstanceId));
-            const exactMatches = this.sortFileOutlineSymbols(
-                mappedSymbols.filter((symbol) => exactMatchIds.has(symbol.symbolId))
-            );
-
-            if (exactMatches.length === 0) {
-                return {
-                    status: 'not_found',
-                    reason: 'missing_symbol',
-                    path: input.codebaseRoot,
-                    file: input.file,
-                    outline: null,
-                    hasMore: false,
-                    message: 'No exact symbol match found in file outline.',
-                    ...(collectWarnings(mappedSymbols).length > 0 ? { warnings: collectWarnings(mappedSymbols) } : {})
-                };
-            }
-
-            const hasMoreExact = exactMatches.length > input.limitSymbols;
-            const exactWarnings = collectWarnings(exactMatches);
-            return {
-                status: exactMatches.length > 1 ? 'ambiguous' : 'ok',
-                path: input.codebaseRoot,
-                file: input.file,
-                outline: {
-                    symbols: exactMatches.slice(0, input.limitSymbols)
-                },
-                hasMore: hasMoreExact,
-                ...(exactMatches.length > 1 ? {
-                    message: `Multiple exact symbol matches found (${exactMatches.length}). Narrow with symbolIdExact for deterministic selection.`
-                } : {}),
-                ...(exactWarnings.length > 0 ? { warnings: exactWarnings } : {})
-            };
-        }
-
-        const hasMore = mappedSymbols.length > input.limitSymbols;
-        const warnings = collectWarnings(mappedSymbols);
-        return {
-            status: 'ok',
-            path: input.codebaseRoot,
-            file: input.file,
-            outline: {
-                symbols: mappedSymbols.slice(0, input.limitSymbols)
-            },
-            hasMore,
-            ...(warnings.length > 0 ? { warnings } : {})
-        };
+        return buildSearchRegistrySymbolCallGraphHint(symbol, file, navigationState, this.getSearchNavigationHelpers());
     }
 
     private buildSearchGroupCallGraphHint(input: {
@@ -5819,543 +2273,11 @@ export class ToolHandlers {
             relationshipUnavailableReason?: CallGraphUnavailableReason;
         };
     }): CallGraphHint {
-        if (input.registrySymbol) {
-            return this.buildRegistrySymbolCallGraphHint(
-                input.registrySymbol,
-                input.registrySymbol.file,
-                input.navigationState
-            );
-        }
-
-        if (!input.ownerSymbolInstanceId) {
-            return { supported: false, reason: 'missing_symbol' };
-        }
-
-        if (input.registryUnavailableReason) {
-            return { supported: false, reason: input.registryUnavailableReason };
-        }
-
-        if (input.registryLoaded) {
-            return { supported: false, reason: 'stale_symbol_ref' };
-        }
-
-        if (input.navigationState.relationshipReady) {
-            return this.buildRelationshipCallGraphHint({
-                file: input.file,
-                language: input.language,
-                symbolId: input.ownerSymbolInstanceId,
-                symbolLabel: input.symbolLabel,
-                span: input.span,
-                sidecarBuiltAt: input.navigationState.relationshipBuiltAt,
-            });
-        }
-
-        return {
-            supported: false,
-            reason: input.navigationState.relationshipUnavailableReason || 'missing_relationship_sidecar',
-        };
-    }
-
-    private buildSearchPassWarning(passId: string): string {
-        return `SEARCH_PASS_FAILED:${passId} - ${passId} semantic search pass failed; results may be degraded.`;
-    }
-
-    private buildSearchWarningDetails(warnings: string[]): SearchWarningDetail[] {
-        const byCode = new Map<string, SearchWarningDetail>();
-        for (const warning of warnings) {
-            const detail = this.buildSearchWarningDetail(warning);
-            byCode.set(detail.code, detail);
-        }
-        return Array.from(byCode.values()).sort((a, b) => a.code.localeCompare(b.code));
-    }
-
-    private buildSearchWarningDetail(warning: string): SearchWarningDetail {
-        const [rawCode, rawMessage] = warning.split(/\s+-\s+/, 2);
-        const code = rawCode.trim();
-        const fallbackMessage = rawMessage?.trim();
-
-        if (code === 'SEARCH_SPAN_START_BEFORE_DEF') {
-            return {
-                code,
-                severity: 'caution',
-                blocksUse: false,
-                message: 'The stored Python symbol span started before the actual definition; Satori repaired the start from source.',
-                action: 'Use read_file(open_symbol) or file_outline exact output as the canonical span before relying on graph traversal.',
-            };
-        }
-        if (code === 'SEARCH_TRUNCATED_SYMBOL_SPAN') {
-            return {
-                code,
-                severity: 'caution',
-                blocksUse: false,
-                message: 'The stored Python symbol span ended before the full body; Satori extended it from source.',
-                action: 'Prefer the repaired span for reads and treat older sidecar graph edges as suspect until reindexed.',
-            };
-        }
-        if (code === 'SEARCH_SYMBOL_SPAN_UNVERIFIED') {
-            return {
-                code,
-                severity: 'degraded',
-                blocksUse: false,
-                message: 'Source validation could not confirm the stored Python symbol span, so open-symbol precision is degraded.',
-                action: 'Verify with direct read_file line windows or file_outline before trusting call_graph results for this symbol.',
-            };
-        }
-        if (code === WARNING_CODES.SEARCH_DIRTY_WORKTREE_NOT_SYNCED) {
-            return {
-                code,
-                severity: 'caution',
-                blocksUse: false,
-                message: 'Index freshness was checked, but currently dirty or untracked files may have changed after the last sync and may not be represented.',
-                action: 'Run manage_index sync only if those dirty or untracked files are relevant to the query, then retry the search.',
-            };
-        }
-        if (code === WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED) {
-            return {
-                code,
-                severity: 'info',
-                blocksUse: false,
-                message: 'Changed-file ranking boost was skipped because the dirty file set is too large for a precise boost.',
-                action: 'Narrow the query with path: or sync the repo if changed-file recency should affect ranking.',
-            };
-        }
-        if (code === WARNING_CODES.FILTER_MUST_UNSATISFIED) {
-            return {
-                code,
-                severity: 'degraded',
-                blocksUse: false,
-                message: 'The must: filter did not match any retained search result.',
-                action: 'Check the identifier spelling or remove must: to allow semantic discovery.',
-            };
-        }
-        if (code === WARNING_CODES.RERANKER_FAILED) {
-            return {
-                code,
-                severity: 'degraded',
-                blocksUse: false,
-                message: 'Reranking failed, so results use retrieval ranking only.',
-                action: 'Open the recommended result before trusting final ordering.',
-            };
-        }
-        if (code.startsWith('SEARCH_PASS_FAILED:')) {
-            return {
-                code,
-                severity: 'degraded',
-                blocksUse: false,
-                message: fallbackMessage || 'A semantic retrieval pass failed; returned results may be incomplete.',
-                action: 'Use the recommended action for the best result, or retry with a narrower path:/must: query.',
-            };
-        }
-        if (code.startsWith('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:')) {
-            return {
-                code,
-                severity: 'degraded',
-                blocksUse: false,
-                message: 'Relationship-backed call graph navigation is unavailable or incompatible for these search results.',
-                action: 'Open the symbol first; use lexical search or tests to verify inbound impact.',
-            };
-        }
-        if (code === SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING) {
-            return {
-                code,
-                severity: 'degraded',
-                blocksUse: false,
-                message: 'Partial search data may exist, but deterministic navigation sidecars were not published.',
-                action: 'Use read_file spans for inspection; reindex only if the response asks for requires_reindex.',
-            };
-        }
-        if (code.startsWith('SEARCH_PARTIAL_INDEX:')) {
-            return {
-                code,
-                severity: 'degraded',
-                blocksUse: false,
-                message: 'The index was built from a partial indexing run; search results may be incomplete.',
-                action: 'Treat results as hints and verify with direct reads or tests before editing.',
-            };
-        }
-
-        return {
-            code,
-            severity: 'caution',
-            blocksUse: false,
-            message: fallbackMessage || 'Search completed with a degraded condition.',
-            action: 'Inspect the result hints and verify with read_file before relying on this result.',
-        };
-    }
-
-    private buildSearchSpanWarningCodes(repair: PythonSourceBackedSpanRepair | undefined): string[] {
-        if (!repair) {
-            return [];
-        }
-        const warnings: string[] = [];
-        if (repair.startBeforeDefinition) {
-            warnings.push('SEARCH_SPAN_START_BEFORE_DEF');
-        }
-        if (repair.endTruncated) {
-            warnings.push('SEARCH_TRUNCATED_SYMBOL_SPAN');
-        }
-        if (repair.attempted && !repair.validated) {
-            warnings.push('SEARCH_SYMBOL_SPAN_UNVERIFIED');
-        }
-        return warnings;
+        return buildSearchGroupNavigationCallGraphHint(input, this.getSearchNavigationHelpers());
     }
 
     private buildOutlineSpanWarningCodes(repair: PythonSourceBackedSpanRepair | undefined): string[] {
-        if (!repair) {
-            return [];
-        }
-        const warnings: string[] = [];
-        if (repair.startBeforeDefinition) {
-            warnings.push('OUTLINE_SPAN_START_BEFORE_DEF');
-        }
-        if (repair.endTruncated) {
-            warnings.push('OUTLINE_TRUNCATED_SYMBOL_SPAN');
-        }
-        if (repair.attempted && !repair.validated) {
-            warnings.push('OUTLINE_SYMBOL_SPAN_UNVERIFIED');
-        }
-        return warnings;
-    }
-
-    private buildSearchDebugSummary(
-        debugHint: SearchDebugHint | undefined,
-        freshnessSummary: SearchFreshnessSummary
-    ): NonNullable<NonNullable<SearchResponseEnvelope['hints']>['debugSummary']> | undefined {
-        if (!debugHint) {
-            return undefined;
-        }
-        const passes = new Set(debugHint.passesUsed);
-        const retrieval = passes.has('exact_registry')
-            ? 'exact_registry'
-            : passes.has('live_path')
-                ? 'live_path'
-                : passes.has('lexical_files')
-                    ? 'tracked_lexical'
-                    : debugHint.rankingProvenance.semanticPassesUsed.join('+') || debugHint.retrieval.mode;
-        const rerank = debugHint.rerank?.applied
-            ? 'applied'
-            : debugHint.rerank?.skippedByIdentifierIntent
-                ? 'skipped_identifier_intent'
-                : debugHint.rerank?.skippedByScopeDocs
-                    ? 'skipped_docs_scope'
-                    : debugHint.rerank?.enabled === false
-                        ? 'skipped'
-                        : 'not_attempted';
-
-        return {
-            retrieval,
-            freshness: freshnessSummary.syncMode,
-            dirtyFiles: freshnessSummary.changedFileCount,
-            rerank,
-            ...(debugHint.changedCode?.truncated ? { changedCodeTruncated: true } : {}),
-        };
-    }
-
-    private buildSearchResultCapabilities(input: {
-        callGraphHint: CallGraphHint;
-        confidence?: "high" | "medium" | "low";
-        hasOpenSymbol: boolean;
-        hasReadFallback: boolean;
-        semanticMatch: SearchCapabilityConfidence;
-        spanValidation: SearchSpanValidation;
-    }): SearchResultCapabilities {
-        const openSymbol: SearchCapabilityConfidence = input.hasOpenSymbol
-            ? input.spanValidation === 'unverified'
-                ? 'low'
-                : (input.confidence === 'high' ? 'high' : 'medium')
-            : input.hasReadFallback
-                ? 'medium'
-                : 'low';
-        const graphUnavailableConfidence: SearchCapabilityConfidence = input.callGraphHint.supported
-            ? 'medium'
-            : input.callGraphHint.reason === 'unsupported_language'
-                ? 'unavailable'
-                : 'low';
-        return {
-            openSymbol,
-            callGraphCallers: input.callGraphHint.supported ? 'low' : graphUnavailableConfidence,
-            callGraphCallees: input.callGraphHint.supported ? 'medium' : graphUnavailableConfidence,
-            semanticMatch: input.semanticMatch,
-        };
-    }
-
-    private buildSearchGroupRecommendedAction(
-        result: SearchGroupResult,
-        resultIndex?: number
-    ): SearchRecommendedNextAction | undefined {
-        if (result.nextActions?.openSymbol) {
-            return {
-                ...(resultIndex !== undefined ? { resultIndex } : {}),
-                tool: 'read_file',
-                args: result.nextActions.openSymbol.args,
-                reason: result.confidence === 'high'
-                    ? 'Open the exact owner before call graph because symbol identity is high confidence.'
-                    : 'Open the selected owner before graph traversal so edits are grounded in source.',
-            };
-        }
-        if (result.navigationFallback?.readSpan) {
-            return {
-                ...(resultIndex !== undefined ? { resultIndex } : {}),
-                tool: 'read_file',
-                args: result.navigationFallback.readSpan.args,
-                reason: 'Call graph navigation is unavailable; read the result span directly.',
-            };
-        }
-        if (result.nextActions?.outlineWindow) {
-            return {
-                ...(resultIndex !== undefined ? { resultIndex } : {}),
-                tool: 'file_outline',
-                args: result.nextActions.outlineWindow.args,
-                reason: 'Open the nearby outline window to resolve the owner before reading code.',
-            };
-        }
-        return undefined;
-    }
-
-    private buildTopRecommendedSearchAction(results: SearchGroupResult[]): SearchRecommendedNextAction | undefined {
-        const firstActionableIndex = results.findIndex((result) => this.buildSearchGroupRecommendedAction(result) !== undefined);
-        if (firstActionableIndex < 0) {
-            return undefined;
-        }
-        return this.buildSearchGroupRecommendedAction(results[firstActionableIndex], firstActionableIndex);
-    }
-
-    private buildTopRecommendedRawSearchAction(
-        codebaseRoot: string,
-        results: SearchChunkResult[]
-    ): SearchRecommendedNextAction | undefined {
-        const first = results[0];
-        if (!first) {
-            return undefined;
-        }
-        return {
-            resultIndex: 0,
-            tool: 'read_file',
-            args: {
-                path: path.resolve(codebaseRoot, first.file),
-                start_line: Math.max(1, first.span.startLine),
-                end_line: Math.max(Math.max(1, first.span.startLine), first.span.endLine),
-            },
-            reason: 'Open the top raw chunk before inferring ownership from ungrouped search results.',
-        };
-    }
-
-    private buildSearchGroupFallbacks(input: {
-        codebaseRoot: string;
-        query: string;
-        scope: SearchScope;
-        groupBy: SearchGroupBy;
-        result: SearchGroupResult;
-    }): SearchGroupResult['fallbacks'] | undefined {
-        const fallbacks: NonNullable<SearchGroupResult['fallbacks']> = [];
-        if (input.result.callGraphHint.supported) {
-            fallbacks.push({
-                when: 'call_graph returns no edges or relationship confidence is lower than the edit needs',
-                tool: 'search_codebase',
-                args: {
-                    path: input.codebaseRoot,
-                    query: this.buildExactSymbolFallbackQuery(input.result, input.query),
-                    scope: input.scope,
-                    resultMode: 'grouped',
-                    groupBy: input.groupBy,
-                    limit: 5,
-                },
-                reason: 'Inbound graph coverage can be incomplete; exact lexical search verifies references before impact analysis.',
-            });
-        } else if (input.result.navigationFallback?.readSpan) {
-            fallbacks.push({
-                when: `call graph is unavailable: ${input.result.callGraphHint.supported ? 'unknown' : input.result.callGraphHint.reason}`,
-                tool: 'read_file',
-                args: input.result.navigationFallback.readSpan.args,
-                reason: 'Read the indexed span directly because deterministic graph navigation is unavailable.',
-            });
-        }
-
-        return fallbacks.length > 0 ? fallbacks : undefined;
-    }
-
-    private buildExactSymbolFallbackQuery(result: SearchGroupResult, originalQuery: string): string {
-        const identifier = this.extractIdentifierFromSymbolLabel(result.symbolLabel) || this.extractIdentifierFromSymbolLabel(result.groupId);
-        return identifier ? `must:${identifier} ${identifier}` : originalQuery;
-    }
-
-    private extractIdentifierFromSymbolLabel(label: string | null | undefined): string | undefined {
-        if (!label) {
-            return undefined;
-        }
-        const kindMatch = label.match(/\b(?:(?:export|default|public|private|protected|static|readonly)\s+)*(?:async\s+)?(?:function|method|def|class|const|let|var|interface|type|symbol)\s+([A-Za-z_$][\w$]*)/);
-        if (kindMatch) {
-            return kindMatch[1];
-        }
-        const keywordLike = new Set([
-            'export',
-            'default',
-            'public',
-            'private',
-            'protected',
-            'static',
-            'readonly',
-            'async',
-            'function',
-            'method',
-            'def',
-            'class',
-            'const',
-            'let',
-            'var',
-            'interface',
-            'type',
-            'symbol',
-        ]);
-        const identifiers = label.match(/\b[A-Za-z_$][\w$]*\b/g) || [];
-        return identifiers.find((identifier) => !keywordLike.has(identifier));
-    }
-
-    private buildDisplaySymbolLabel(input: {
-        symbolLabel?: string | null;
-        symbolKind?: string;
-        relativePath: string;
-        span: SearchSpan;
-        content?: string;
-    }): string {
-        const normalizedLabel = this.normalizeSearchSymbolLabel(input.symbolLabel);
-        if (normalizedLabel) {
-            return normalizedLabel;
-        }
-        const content = input.content || '';
-        const declaration = content.match(/\b(?:async\s+)?(?:function|def|class|const|let|var|interface|type)\s+([A-Za-z_$][\w$]*)/);
-        if (declaration) {
-            return `${input.symbolKind || 'symbol'} ${declaration[1]}`;
-        }
-        return `${input.symbolKind || 'symbol'} ${input.relativePath}:${Math.max(1, input.span.startLine)}`;
-    }
-
-    private normalizeSearchSymbolLabel(label: string | null | undefined): string | undefined {
-        if (typeof label !== 'string') {
-            return undefined;
-        }
-        let normalized = Array.from(label, (character) => {
-            const code = character.charCodeAt(0);
-            return code <= 31 || code === 127 ? ' ' : character;
-        }).join('')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .replace(/\s*\{\s*$/, '');
-        if (normalized.length === 0) {
-            return undefined;
-        }
-
-        const unmatchedParen = (normalized.match(/\(/g) || []).length > (normalized.match(/\)/g) || []).length;
-        if (unmatchedParen) {
-            const declaration = normalized.match(/\b((?:async\s+)?(?:function|method|def|class|const|let|var|interface|type))\s+([A-Za-z_$][\w$]*)/);
-            if (declaration) {
-                return `${declaration[1].replace(/\s+/g, ' ')} ${declaration[2]}`;
-            }
-            normalized = normalized.replace(/\s*\([^)]*$/, '').trim();
-        }
-
-        return normalized.length > 0 ? normalized : undefined;
-    }
-
-    private buildSearchGroupPreview(symbolLabel: string, content: string): string {
-        const normalizedLabel = this.normalizeSearchSymbolLabel(symbolLabel) || symbolLabel;
-        const labelIdentifier = this.extractIdentifierFromSymbolLabel(normalizedLabel);
-        const previewLines = [normalizedLabel];
-        const seen = new Set([this.normalizeSearchPreviewLine(normalizedLabel).toLowerCase()]);
-        let skippingSignatureContinuation = false;
-
-        for (const rawLine of content.split(/\r?\n/)) {
-            const line = this.normalizeSearchPreviewLine(rawLine);
-            if (!line || this.isSearchPreviewNoiseLine(line)) {
-                continue;
-            }
-            if (skippingSignatureContinuation) {
-                if (this.isSearchPreviewSignatureContinuationLine(line)) {
-                    if (this.isSearchPreviewSignatureContinuationEndLine(line)) {
-                        skippingSignatureContinuation = false;
-                    }
-                    continue;
-                }
-                skippingSignatureContinuation = false;
-            }
-            const key = line.toLowerCase();
-            if (seen.has(key)) {
-                continue;
-            }
-
-            const lineIdentifier = this.extractIdentifierFromSymbolLabel(line);
-            if (lineIdentifier && labelIdentifier && lineIdentifier !== labelIdentifier && this.isSearchPreviewNeighborDeclarationLine(line) && previewLines.length > 1) {
-                break;
-            }
-            if (lineIdentifier && labelIdentifier && lineIdentifier === labelIdentifier && this.isSearchPreviewPureDuplicateDeclarationLine(line)) {
-                if (this.isSearchPreviewOpenSignatureLine(line)) {
-                    skippingSignatureContinuation = true;
-                }
-                seen.add(key);
-                continue;
-            }
-
-            previewLines.push(line);
-            seen.add(key);
-            if (previewLines.length >= 5) {
-                break;
-            }
-        }
-
-        return truncateContent(previewLines.join('\n'), SEARCH_GROUP_PREVIEW_MAX_CHARS);
-    }
-
-    private normalizeSearchPreviewLine(line: string): string {
-        return line
-            .replace(/\s+/g, ' ')
-            .replace(/^\s+|\s+$/g, '')
-            .replace(/\s+([,;:)\]}])/g, '$1')
-            .replace(/([({\[])\s+/g, '$1');
-    }
-
-    private isSearchPreviewNoiseLine(line: string): boolean {
-        return line.length === 0
-            || /^[@#]\s*$/.test(line)
-            || /^@/.test(line)
-            || /^(?:\/\/|\/\*|\*\/|\*|#)\s*$/.test(line)
-            || /^[{}()[\],;]+$/.test(line);
-    }
-
-    private isSearchPreviewDeclarationLine(line: string): boolean {
-        return /^\s*(?:export\s+)?(?:async\s+)?(?:function|def|class|const|let|var|interface|type)\s+[A-Za-z_$][\w$]*/.test(line)
-            || /^\s*(?:(?:public|private|protected)\s+)?(?:async\s+)?[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{\s*$/.test(line);
-    }
-
-    private isSearchPreviewOpenSignatureLine(line: string): boolean {
-        const openParens = (line.match(/\(/g) || []).length;
-        const closeParens = (line.match(/\)/g) || []).length;
-        return openParens > closeParens || /\(\s*$/.test(line);
-    }
-
-    private isSearchPreviewSignatureContinuationLine(line: string): boolean {
-        return this.isSearchPreviewSignatureContinuationEndLine(line)
-            || /^(?:\.\.\.)?[A-Za-z_$][\w$]*\??(?:\s*:\s*[^,=]+)?(?:\s*=\s*[^,]+)?[,]?$/.test(line)
-            || /^\*{1,2}[A-Za-z_$][\w$]*(?:\s*=\s*[^,]+)?[,]?$/.test(line);
-    }
-
-    private isSearchPreviewSignatureContinuationEndLine(line: string): boolean {
-        return /^\)\s*(?:(?:->|=>)\s*[^:{]+)?\s*[:{,;]?$/.test(line);
-    }
-
-    private isSearchPreviewNeighborDeclarationLine(line: string): boolean {
-        return /^\s*(?:export\s+)?(?:async\s+)?(?:function|def|class|interface|type)\s+[A-Za-z_$][\w$]*/.test(line)
-            || /^\s*(?:(?:public|private|protected)\s+)?(?:async\s+)?[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{\s*$/.test(line);
-    }
-
-    private isSearchPreviewPureDuplicateDeclarationLine(line: string): boolean {
-        if (!this.isSearchPreviewDeclarationLine(line)) {
-            return false;
-        }
-        return !/\breturn\b/.test(line)
-            && !/=>/.test(line)
-            && !/=\s*[^=>]/.test(line)
-            && !/["'`]/.test(line)
-            && !/\b[A-Z][A-Z0-9_]{2,}\b/.test(line);
+        return buildSearchOutlineSpanWarningCodes(repair);
     }
 
     private isSearchPassFaultInjectionEnabled(): boolean {
@@ -6382,572 +2304,6 @@ export class ToolHandlers {
             return false;
         }
         return forced === 'both' || forced === passId;
-    }
-
-    private sortRelationshipBackedCallGraphNodes(nodes: CallGraphNode[]): CallGraphNode[] {
-        return [...nodes].sort((a, b) => {
-            const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
-            if (fileCmp !== 0) return fileCmp;
-            const startCmp = this.compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
-            if (startCmp !== 0) return startCmp;
-            const labelCmp = this.compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
-            if (labelCmp !== 0) return labelCmp;
-            return this.compareNullableStringsAsc(a.symbolId, b.symbolId);
-        });
-    }
-
-    private compareRelationshipBackedCallGraphEdges(a: CallGraphEdge, b: CallGraphEdge): number {
-        const srcCmp = this.compareNullableStringsAsc(a.srcSymbolId, b.srcSymbolId);
-        if (srcCmp !== 0) return srcCmp;
-        const dstCmp = this.compareNullableStringsAsc(a.dstSymbolId, b.dstSymbolId);
-        if (dstCmp !== 0) return dstCmp;
-        const kindCmp = this.compareNullableStringsAsc(a.kind, b.kind);
-        if (kindCmp !== 0) return kindCmp;
-        const fileCmp = this.compareNullableStringsAsc(a.site?.file, b.site?.file);
-        if (fileCmp !== 0) return fileCmp;
-        return this.compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
-    }
-
-    private sortRelationshipBackedCallGraphEdges(edges: CallGraphEdge[]): CallGraphEdge[] {
-        return [...edges].sort((a, b) => this.compareRelationshipBackedCallGraphEdges(a, b));
-    }
-
-    private sortRelationshipBackedCallGraphNotes(notes: CallGraphNote[]): CallGraphNote[] {
-        return [...notes].sort((a, b) => {
-            const fileCmp = this.compareNullableStringsAsc(a.file, b.file);
-            if (fileCmp !== 0) return fileCmp;
-            const startCmp = this.compareNullableNumbersAsc(a.startLine, b.startLine);
-            if (startCmp !== 0) return startCmp;
-            const typeCmp = this.compareNullableStringsAsc(a.type, b.type);
-            if (typeCmp !== 0) return typeCmp;
-            const symbolCmp = this.compareNullableStringsAsc(a.symbolId, b.symbolId);
-            if (symbolCmp !== 0) return symbolCmp;
-            return this.compareNullableStringsAsc(a.detail, b.detail);
-        });
-    }
-
-    private mapRelationshipConfidenceToCallGraphConfidence(confidence: 'high' | 'medium' | 'low'): number {
-        switch (confidence) {
-            case 'high':
-                return 0.95;
-            case 'medium':
-                return 0.65;
-            case 'low':
-            default:
-                return 0.35;
-        }
-    }
-
-    private createCallGraphNodeFromRegistrySymbol(symbol: SymbolRecord): CallGraphNode {
-        return {
-            symbolId: symbol.symbolInstanceId,
-            symbolLabel: symbol.label,
-            file: symbol.file,
-            language: symbol.language,
-            span: {
-                startLine: symbol.span.startLine,
-                endLine: symbol.span.endLine,
-            },
-        };
-    }
-
-    private countPythonIndent(line: string): number {
-        let indent = 0;
-        for (const char of line) {
-            if (char === ' ') {
-                indent += 1;
-            } else if (char === '\t') {
-                indent += 4;
-            } else {
-                break;
-            }
-        }
-        return indent;
-    }
-
-    private escapeRegExp(value: string): string {
-        return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-
-    private isPythonHeaderTerminated(trimmedLine: string): boolean {
-        return /:\s*(?:#.*)?$/.test(trimmedLine);
-    }
-
-    private findPythonDefinitionIndexByName(lines: string[], symbolName: string, startIndex: number, endExclusive: number): number | undefined {
-        const matcher = new RegExp(`^(?:async\\s+def|def)\\s+${this.escapeRegExp(symbolName)}\\b`);
-        for (let index = Math.max(0, startIndex); index < Math.min(lines.length, endExclusive); index += 1) {
-            if (matcher.test((lines[index] || '').trim())) {
-                return index;
-            }
-        }
-        return undefined;
-    }
-
-    private findPythonDefinitionIndexNearSpan(lines: string[], symbol: SymbolRecord): number | undefined {
-        const startIndex = Math.max(0, symbol.span.startLine - 1);
-        const spanEndExclusive = Math.min(lines.length, Math.max(startIndex + 1, symbol.span.endLine));
-        const inSpan = this.findPythonDefinitionIndexByName(lines, symbol.name, startIndex, spanEndExclusive);
-        if (inSpan !== undefined) {
-            return inSpan;
-        }
-        const windowStart = Math.max(0, startIndex - 8);
-        const windowEnd = Math.min(lines.length, Math.max(spanEndExclusive, startIndex + 48));
-        return this.findPythonDefinitionIndexByName(lines, symbol.name, windowStart, windowEnd);
-    }
-
-    private findPythonDecoratedDefinitionStart(lines: string[], definitionIndex: number): number {
-        const indent = this.countPythonIndent(lines[definitionIndex] || '');
-        let startIndex = definitionIndex;
-        for (let index = definitionIndex - 1; index >= 0; index -= 1) {
-            const line = lines[index] || '';
-            const trimmed = line.trim();
-            if (trimmed.length === 0) {
-                break;
-            }
-            if (!trimmed.startsWith('@') || this.countPythonIndent(line) !== indent) {
-                break;
-            }
-            startIndex = index;
-        }
-        return startIndex;
-    }
-
-    private findPythonSourceBackedBlockEnd(lines: string[], definitionIndex: number, indent: number): number | undefined {
-        let lastContentLine = definitionIndex + 1;
-        let headerComplete = this.isPythonHeaderTerminated((lines[definitionIndex] || '').trim());
-        for (let index = definitionIndex + 1; index < lines.length; index += 1) {
-            const line = lines[index] || '';
-            const trimmed = line.trim();
-            if (!headerComplete) {
-                lastContentLine = index + 1;
-                if (this.isPythonHeaderTerminated(trimmed)) {
-                    headerComplete = true;
-                }
-                continue;
-            }
-            if (trimmed.length === 0 || trimmed.startsWith('#')) {
-                continue;
-            }
-            if (this.countPythonIndent(line) <= indent) {
-                return lastContentLine;
-            }
-            lastContentLine = index + 1;
-        }
-        return headerComplete ? lastContentLine : undefined;
-    }
-
-    private repairSourceBackedPythonSpan(input: {
-        codebaseRoot: string;
-        symbol: SymbolRecord;
-        sourceLines?: string[];
-    }): PythonSourceBackedSpanRepair {
-        const symbol = input.symbol;
-        if (symbol.language !== 'python' || (symbol.kind !== 'function' && symbol.kind !== 'method')) {
-            return {
-                symbol,
-                attempted: false,
-                validated: false,
-                repaired: false,
-                startBeforeDefinition: false,
-                endTruncated: false,
-            };
-        }
-        const absoluteFile = path.resolve(input.codebaseRoot, symbol.file);
-        const relativeToRoot = path.relative(input.codebaseRoot, absoluteFile);
-        if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot) || !fs.existsSync(absoluteFile)) {
-            return {
-                symbol,
-                attempted: false,
-                validated: false,
-                repaired: false,
-                startBeforeDefinition: false,
-                endTruncated: false,
-            };
-        }
-        const lines = input.sourceLines || fs.readFileSync(absoluteFile, 'utf8').split(/\r?\n/);
-        const definitionIndex = this.findPythonDefinitionIndexNearSpan(lines, symbol);
-        if (definitionIndex === undefined) {
-            return {
-                symbol,
-                attempted: true,
-                validated: false,
-                repaired: false,
-                startBeforeDefinition: false,
-                endTruncated: false,
-            };
-        }
-        const definitionLine = lines[definitionIndex] || '';
-        const repairedStartIndex = this.findPythonDecoratedDefinitionStart(lines, definitionIndex);
-        const repairedEndLine = this.findPythonSourceBackedBlockEnd(
-            lines,
-            definitionIndex,
-            this.countPythonIndent(definitionLine)
-        );
-        if (!repairedEndLine) {
-            return {
-                symbol,
-                attempted: true,
-                validated: false,
-                repaired: false,
-                startBeforeDefinition: false,
-                endTruncated: false,
-            };
-        }
-        const repairedStartLine = repairedStartIndex + 1;
-        const startBeforeDefinition = symbol.span.startLine < repairedStartLine;
-        const endTruncated = symbol.span.endLine < repairedEndLine;
-        const repaired = repairedStartLine !== symbol.span.startLine || repairedEndLine !== symbol.span.endLine;
-        return {
-            symbol: repaired
-                ? {
-                    ...symbol,
-                    span: {
-                        ...symbol.span,
-                        startLine: repairedStartLine,
-                        endLine: repairedEndLine,
-                    },
-                }
-                : symbol,
-            attempted: true,
-            validated: true,
-            repaired,
-            startBeforeDefinition,
-            endTruncated,
-        };
-    }
-
-    private repairSourceBackedPythonSpans(input: {
-        codebaseRoot: string;
-        symbols: SymbolRecord[];
-    }): PythonSourceBackedSpanRepair[] {
-        const linesByFile = new Map<string, string[] | undefined>();
-        return input.symbols.map((symbol) => {
-            if (symbol.language !== 'python' || (symbol.kind !== 'function' && symbol.kind !== 'method')) {
-                return {
-                    symbol,
-                    attempted: false,
-                    validated: false,
-                    repaired: false,
-                    startBeforeDefinition: false,
-                    endTruncated: false,
-                };
-            }
-            if (!linesByFile.has(symbol.file)) {
-                const absoluteFile = path.resolve(input.codebaseRoot, symbol.file);
-                const relativeToRoot = path.relative(input.codebaseRoot, absoluteFile);
-                const safeFile = !relativeToRoot.startsWith('..') && !path.isAbsolute(relativeToRoot);
-                const lines = safeFile && fs.existsSync(absoluteFile)
-                    ? fs.readFileSync(absoluteFile, 'utf8').split(/\r?\n/)
-                    : undefined;
-                linesByFile.set(symbol.file, lines);
-            }
-            return this.repairSourceBackedPythonSpan({
-                codebaseRoot: input.codebaseRoot,
-                symbol,
-                sourceLines: linesByFile.get(symbol.file),
-            });
-        });
-    }
-
-    private extractDirectCallNamesFromLine(line: string, options: {
-        includeAttributeCalls?: boolean;
-        ignoredNames?: ReadonlySet<string>;
-    } = {}): string[] {
-        const names: string[] = [];
-        const seen = new Set<string>();
-        const includeAttributeCalls = options.includeAttributeCalls ?? true;
-        const directCallRegex = /\b([A-Za-z_][\w]*)\s*\(/g;
-        for (const match of line.matchAll(directCallRegex)) {
-            const name = match[1] || '';
-            const key = name.toLowerCase();
-            const prefix = line.slice(0, match.index).trimEnd();
-            if (
-                !name
-                || PYTHON_DIRECT_CALL_CONTROL_KEYWORDS.has(key)
-                || options.ignoredNames?.has(key)
-                || (!includeAttributeCalls && prefix.endsWith('.'))
-                || seen.has(key)
-            ) {
-                continue;
-            }
-            seen.add(key);
-            names.push(name);
-        }
-        return names;
-    }
-
-    private resolveUnambiguousDirectCallTarget(
-        source: SymbolRecord,
-        candidates: SymbolRecord[],
-        options: {
-            allowCrossFileCandidate?: boolean;
-        } = {}
-    ): SymbolRecord | undefined {
-        const nonSelfCandidates = candidates.filter((candidate) => candidate.symbolInstanceId !== source.symbolInstanceId);
-        const sameFileCandidates = nonSelfCandidates.filter((candidate) => candidate.file === source.file);
-        if (sameFileCandidates.length === 1) {
-            return sameFileCandidates[0];
-        }
-        if (sameFileCandidates.length > 1) {
-            return undefined;
-        }
-        if (options.allowCrossFileCandidate === false) {
-            return undefined;
-        }
-        return nonSelfCandidates.length === 1 ? nonSelfCandidates[0] : undefined;
-    }
-
-    private buildDirectCallTargetIndex(registry: SymbolRegistry): Map<string, SymbolRecord[]> {
-        const targetsByName = new Map<string, SymbolRecord[]>();
-        for (const symbol of registry.symbols.filter((candidate) => candidate.kind !== 'file')) {
-            const key = symbol.name.toLowerCase();
-            targetsByName.set(key, [...(targetsByName.get(key) || []), symbol]);
-        }
-        return targetsByName;
-    }
-
-    private readSafeCodebaseFileLines(codebaseRoot: string, relativeFilePath: string): string[] | undefined {
-        const absoluteFile = path.resolve(codebaseRoot, relativeFilePath);
-        const relativeToRoot = path.relative(codebaseRoot, absoluteFile);
-        if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot) || !fs.existsSync(absoluteFile)) {
-            return undefined;
-        }
-        return fs.readFileSync(absoluteFile, 'utf8').split(/\r?\n/);
-    }
-
-    private buildSourceBackedPythonCalleeFallback(input: {
-        codebaseRoot: string;
-        registry: SymbolRegistry;
-        source: SymbolRecord;
-    }): SourceBackedPythonCallFallback {
-        const source = input.source;
-        if (source.language !== 'python' || (source.kind !== 'function' && source.kind !== 'method')) {
-            return { edges: [], symbols: [], notes: [] };
-        }
-        const lines = this.readSafeCodebaseFileLines(input.codebaseRoot, source.file);
-        if (!lines) {
-            return { edges: [], symbols: [], notes: [] };
-        }
-        const targetsByName = this.buildDirectCallTargetIndex(input.registry);
-        const edgesByKey = new Map<string, CallGraphEdge>();
-        const targetSymbolsById = new Map<string, SymbolRecord>();
-        const maxLine = Math.min(source.span.endLine, lines.length);
-        for (let lineNo = source.span.startLine; lineNo <= maxLine; lineNo += 1) {
-            const line = (lines[lineNo - 1] || '').replace(/#.*$/, '');
-            if (line.trim().length === 0 || /^\s*(?:async\s+def|def|class)\s+/.test(line)) {
-                continue;
-            }
-            for (const callName of this.extractDirectCallNamesFromLine(line, {
-                includeAttributeCalls: false,
-                ignoredNames: PYTHON_BUILTIN_CALL_NAMES,
-            })) {
-                const target = this.resolveUnambiguousDirectCallTarget(
-                    source,
-                    targetsByName.get(callName.toLowerCase()) || [],
-                    { allowCrossFileCandidate: false }
-                );
-                if (!target) {
-                    continue;
-                }
-                const edge: CallGraphEdge = {
-                    srcSymbolId: source.symbolInstanceId,
-                    dstSymbolId: target.symbolInstanceId,
-                    kind: 'dynamic',
-                    site: {
-                        file: source.file,
-                        startLine: lineNo,
-                        endLine: lineNo,
-                    },
-                    confidence: 0.65,
-                };
-                edgesByKey.set(`${edge.srcSymbolId}\0${edge.dstSymbolId}\0${lineNo}`, edge);
-                targetSymbolsById.set(target.symbolInstanceId, target);
-            }
-        }
-
-        const edges = this.sortRelationshipBackedCallGraphEdges([...edgesByKey.values()]);
-        const notes = edges.length > 0
-            ? [{
-                type: 'dynamic_edge' as const,
-                file: source.file,
-                startLine: source.span.startLine,
-                symbolId: source.symbolInstanceId,
-                detail: 'Source-backed direct callee fallback synthesized edges because the relationship sidecar was built from a truncated Python span.',
-            }]
-            : [];
-        return {
-            edges,
-            symbols: [...targetSymbolsById.values()],
-            notes,
-        };
-    }
-
-    private buildSourceBackedPythonCallerFallback(input: {
-        codebaseRoot: string;
-        registry: SymbolRegistry;
-        resolvedTarget: SymbolRecord;
-        suppressedRecords: RelationshipRecord[];
-    }): SourceBackedPythonCallFallback {
-        const target = input.resolvedTarget;
-        if (target.language !== 'python' || (target.kind !== 'function' && target.kind !== 'method')) {
-            return { edges: [], symbols: [], notes: [] };
-        }
-
-        const targetsByName = this.buildDirectCallTargetIndex(input.registry);
-        const sourceRepairsById = new Map<string, PythonSourceBackedSpanRepair>();
-        const linesByFile = new Map<string, string[] | undefined>();
-        const edgesByKey = new Map<string, CallGraphEdge>();
-        const sourceSymbolsById = new Map<string, SymbolRecord>();
-
-        for (const record of input.suppressedRecords) {
-            if (record.targetInstanceId !== target.symbolInstanceId || !record.sourceInstanceId || !Number.isFinite(record.span?.startLine)) {
-                continue;
-            }
-
-            const source = input.registry.symbolsByInstanceId.get(record.sourceInstanceId);
-            if (!source || source.language !== 'python' || (source.kind !== 'function' && source.kind !== 'method')) {
-                continue;
-            }
-
-            let sourceRepair = sourceRepairsById.get(source.symbolInstanceId);
-            if (!sourceRepair) {
-                let sourceLines = linesByFile.get(source.file);
-                if (sourceLines === undefined) {
-                    sourceLines = this.readSafeCodebaseFileLines(input.codebaseRoot, source.file);
-                    linesByFile.set(source.file, sourceLines);
-                }
-                sourceRepair = this.repairSourceBackedPythonSpan({
-                    codebaseRoot: input.codebaseRoot,
-                    symbol: source,
-                    sourceLines,
-                });
-                sourceRepairsById.set(source.symbolInstanceId, sourceRepair);
-            }
-            if (!sourceRepair.validated) {
-                continue;
-            }
-
-            const repairedSource = sourceRepair.symbol;
-            const siteStartLine = Number(record.span?.startLine);
-            const siteEndLine = Number.isFinite(record.span?.endLine) ? Number(record.span?.endLine) : siteStartLine;
-            if (
-                record.file !== repairedSource.file
-                || siteStartLine < repairedSource.span.startLine
-                || siteEndLine > repairedSource.span.endLine
-            ) {
-                continue;
-            }
-
-            let sourceLines = linesByFile.get(repairedSource.file);
-            if (sourceLines === undefined) {
-                sourceLines = this.readSafeCodebaseFileLines(input.codebaseRoot, repairedSource.file);
-                linesByFile.set(repairedSource.file, sourceLines);
-            }
-            const siteLine = sourceLines?.[siteStartLine - 1];
-            if (typeof siteLine !== 'string') {
-                continue;
-            }
-
-            const verifiedTarget = this.extractDirectCallNamesFromLine(siteLine.replace(/#.*$/, ''), {
-                ignoredNames: PYTHON_BUILTIN_CALL_NAMES,
-            })
-                .map((callName) => this.resolveUnambiguousDirectCallTarget(
-                    repairedSource,
-                    targetsByName.get(callName.toLowerCase()) || []
-                ))
-                .find((candidate) => candidate?.symbolInstanceId === target.symbolInstanceId);
-            if (!verifiedTarget) {
-                continue;
-            }
-
-            const edge: CallGraphEdge = {
-                srcSymbolId: repairedSource.symbolInstanceId,
-                dstSymbolId: target.symbolInstanceId,
-                kind: 'dynamic',
-                site: {
-                    file: record.file,
-                    startLine: siteStartLine,
-                    ...(Number.isFinite(record.span?.endLine) ? { endLine: Number(record.span?.endLine) } : {}),
-                },
-                confidence: 0.65,
-            };
-            edgesByKey.set(`${edge.srcSymbolId}\0${edge.dstSymbolId}\0${edge.site.file}\0${edge.site.startLine}`, edge);
-            sourceSymbolsById.set(repairedSource.symbolInstanceId, repairedSource);
-        }
-
-        const edges = this.sortRelationshipBackedCallGraphEdges([...edgesByKey.values()]);
-        const notes = [...sourceSymbolsById.values()].map((source) => ({
-            type: 'dynamic_edge' as const,
-            file: source.file,
-            startLine: source.span.startLine,
-            symbolId: source.symbolInstanceId,
-            detail: 'Source-backed direct caller fallback synthesized edges because the relationship sidecar suppressed a usable Python caller edge.',
-        }));
-        return {
-            edges,
-            symbols: [...sourceSymbolsById.values()],
-            notes: this.sortRelationshipBackedCallGraphNotes(notes),
-        };
-    }
-
-    private buildSuppressedLowConfidenceCallGraphNotes(input: {
-        resolvedSymbol: SymbolRecord;
-        suppressedRecords: RelationshipRecord[];
-        registry: SymbolRegistry;
-    }): CallGraphNote[] {
-        const notes = input.suppressedRecords.flatMap((record) => {
-            if (!record.sourceInstanceId || !record.targetInstanceId) {
-                return [];
-            }
-
-            const source = record.sourceInstanceId === input.resolvedSymbol.symbolInstanceId
-                ? input.resolvedSymbol
-                : input.registry.symbolsByInstanceId.get(record.sourceInstanceId);
-            const target = record.targetInstanceId === input.resolvedSymbol.symbolInstanceId
-                ? input.resolvedSymbol
-                : input.registry.symbolsByInstanceId.get(record.targetInstanceId);
-            const siteStartLine = record.span?.startLine || source?.span.startLine || input.resolvedSymbol.span.startLine;
-            const siteLocation = `${record.file}:${siteStartLine}`;
-            const confidence = this.mapRelationshipConfidenceToCallGraphConfidence(record.confidence);
-
-            if (record.sourceInstanceId === input.resolvedSymbol.symbolInstanceId) {
-                const label = target?.label || target?.qualifiedName || target?.name || record.targetInstanceId;
-                return [{
-                    type: 'suppressed_edge' as const,
-                    file: record.file,
-                    startLine: siteStartLine,
-                    symbolId: record.targetInstanceId,
-                    ...(target?.label ? { symbolLabel: target.label } : {}),
-                    confidence,
-                    detail: `Suppressed low-confidence callee candidate ${label} at ${siteLocation}.`,
-                }];
-            }
-
-            if (record.targetInstanceId === input.resolvedSymbol.symbolInstanceId) {
-                const label = source?.label || source?.qualifiedName || source?.name || record.sourceInstanceId;
-                return [{
-                    type: 'suppressed_edge' as const,
-                    file: record.file,
-                    startLine: siteStartLine,
-                    symbolId: record.sourceInstanceId,
-                    ...(source?.label ? { symbolLabel: source.label } : {}),
-                    confidence,
-                    detail: `Suppressed low-confidence caller candidate ${label} at ${siteLocation}.`,
-                }];
-            }
-
-            const sourceLabel = source?.label || source?.qualifiedName || source?.name || record.sourceInstanceId;
-            const targetLabel = target?.label || target?.qualifiedName || target?.name || record.targetInstanceId;
-            return [{
-                type: 'suppressed_edge' as const,
-                file: record.file,
-                startLine: siteStartLine,
-                confidence,
-                detail: `Suppressed low-confidence relationship candidate ${sourceLabel} -> ${targetLabel} at ${siteLocation}.`,
-            }];
-        });
-
-        return this.sortRelationshipBackedCallGraphNotes(notes);
     }
 
     private async buildRelationshipBackedCallGraph(input: {
@@ -6978,998 +2334,35 @@ export class ToolHandlers {
             edgeCount: number;
         };
     } | null> {
-        const neighbors = await getGraphNeighbors({
-            normalizedRootPath: input.codebaseRoot,
-            expectedSymbolRegistryManifestHash: input.registryManifestHash,
-            navigationStore: this.navigationStore,
-            symbolInstanceId: input.resolvedSymbol.symbolInstanceId,
-            depth: input.depth,
-            direction: input.direction,
-            allowedTypes: ['CALLS'],
-            limit: input.limit,
-        });
-        if (neighbors.status !== 'ok') {
-            return null;
-        }
-        const suppressedLowConfidenceRecords = neighbors.suppressedLowConfidenceRecords || [];
-
-        const resolveNodeSymbol = (symbolInstanceId: string): SymbolRecord | undefined => (
-            symbolInstanceId === input.resolvedSymbol.symbolInstanceId
-                ? input.resolvedSymbol
-                : input.registry.symbolsByInstanceId.get(symbolInstanceId)
-        );
-        let droppedEdgesOutsideSourceSpan = 0;
-        const nodes = this.sortRelationshipBackedCallGraphNodes(
-            neighbors.visitedSymbolInstanceIds
-                .map((symbolInstanceId) => resolveNodeSymbol(symbolInstanceId))
-                .filter((symbol): symbol is SymbolRecord => Boolean(symbol))
-                .map((symbol) => this.createCallGraphNodeFromRegistrySymbol(symbol))
-        );
-        const edges = this.sortRelationshipBackedCallGraphEdges(
-            neighbors.records.flatMap((record) => {
-                if (!record.sourceInstanceId || !record.targetInstanceId) {
-                    return [];
-                }
-                const source = resolveNodeSymbol(record.sourceInstanceId);
-                const target = resolveNodeSymbol(record.targetInstanceId);
-                if (!source || !target) {
-                    return [];
-                }
-                const siteStartLine = record.span?.startLine || source.span.startLine;
-                const siteEndLine = record.span?.endLine || siteStartLine;
-                if (
-                    record.sourceInstanceId === input.resolvedSymbol.symbolInstanceId
-                    && input.sourceSpanRepair?.validated
-                    && (
-                        record.file !== input.resolvedSymbol.file
-                        || siteStartLine < input.resolvedSymbol.span.startLine
-                        || siteEndLine > input.resolvedSymbol.span.endLine
-                    )
-                ) {
-                    droppedEdgesOutsideSourceSpan += 1;
-                    return [];
-                }
-                return [{
-                    srcSymbolId: source.symbolInstanceId,
-                    dstSymbolId: target.symbolInstanceId,
-                    kind: 'call' as const,
-                    site: {
-                        file: record.file,
-                        startLine: siteStartLine,
-                        ...(record.span?.endLine ? { endLine: record.span.endLine } : {}),
-                    },
-                    confidence: this.mapRelationshipConfidenceToCallGraphConfidence(record.confidence),
-                }];
-            })
-        );
-        const suppressedLowConfidenceNotes = this.buildSuppressedLowConfidenceCallGraphNotes({
-            resolvedSymbol: input.resolvedSymbol,
-            suppressedRecords: suppressedLowConfidenceRecords,
-            registry: input.registry,
-        });
-        const hasSuppressedOutgoingLowConfidence = suppressedLowConfidenceRecords.some((record) => (
-            record.sourceInstanceId === input.resolvedSymbol.symbolInstanceId
-        ));
-        const hasSuppressedIncomingLowConfidence = suppressedLowConfidenceRecords.some((record) => (
-            record.targetInstanceId === input.resolvedSymbol.symbolInstanceId
-        ));
-        const shouldAttemptDynamicCalleeFallback = (input.direction === 'callees' || input.direction === 'both')
-            && (Boolean(input.sourceSpanRepair?.repaired) || hasSuppressedOutgoingLowConfidence);
-        const dynamicCalleeFallback = shouldAttemptDynamicCalleeFallback
-            ? this.buildSourceBackedPythonCalleeFallback({
-                codebaseRoot: input.codebaseRoot,
-                registry: input.registry,
-                source: input.resolvedSymbol,
-            })
-            : { edges: [], symbols: [], notes: [] };
-        const shouldAttemptDynamicCallerFallback = (input.direction === 'callers' || input.direction === 'both')
-            && hasSuppressedIncomingLowConfidence;
-        const dynamicCallerFallback = shouldAttemptDynamicCallerFallback
-            ? this.buildSourceBackedPythonCallerFallback({
-                codebaseRoot: input.codebaseRoot,
-                registry: input.registry,
-                resolvedTarget: input.resolvedSymbol,
-                suppressedRecords: suppressedLowConfidenceRecords,
-            })
-            : { edges: [], symbols: [], notes: [] };
-        const existingEdgeKeys = new Set(edges.map((edge) => [
-            edge.srcSymbolId,
-            edge.dstSymbolId,
-            edge.site.file,
-            edge.site.startLine,
-        ].join('\0')));
-        const addUniqueDynamicEdges = (fallbackEdges: CallGraphEdge[]): CallGraphEdge[] => fallbackEdges.filter((edge) => {
-            const key = [
-                edge.srcSymbolId,
-                edge.dstSymbolId,
-                edge.site.file,
-                edge.site.startLine,
-            ].join('\0');
-            if (existingEdgeKeys.has(key)) {
-                return false;
-            }
-            existingEdgeKeys.add(key);
-            return true;
-        });
-        const addedDynamicCalleeEdges = addUniqueDynamicEdges(dynamicCalleeFallback.edges);
-        const addedDynamicCallerEdges = addUniqueDynamicEdges(dynamicCallerFallback.edges);
-        const addedDynamicEdges = [...addedDynamicCalleeEdges, ...addedDynamicCallerEdges];
-        const combinedEdges = this.sortRelationshipBackedCallGraphEdges([...edges, ...addedDynamicEdges]);
-        const nodeById = new Map(nodes.map((node) => [node.symbolId, node]));
-        const referencedDynamicSymbolIds = new Set<string>(addedDynamicEdges.flatMap((edge) => [edge.srcSymbolId, edge.dstSymbolId]));
-        for (const symbol of [...dynamicCalleeFallback.symbols, ...dynamicCallerFallback.symbols]) {
-            if (!nodeById.has(symbol.symbolInstanceId) && referencedDynamicSymbolIds.has(symbol.symbolInstanceId)) {
-                nodeById.set(symbol.symbolInstanceId, this.createCallGraphNodeFromRegistrySymbol(symbol));
-            }
-        }
-        const referencedNodeIds = new Set<string>([
-            input.resolvedSymbol.symbolInstanceId,
-            ...combinedEdges.flatMap((edge) => [edge.srcSymbolId, edge.dstSymbolId]),
-        ]);
-        const combinedNodes = this.sortRelationshipBackedCallGraphNodes(
-            [...nodeById.values()].filter((node) => referencedNodeIds.has(node.symbolId))
-        );
-        const warnings = [...new Set([
-            ...input.registry.warnings,
-            ...neighbors.warnings,
-            ...(droppedEdgesOutsideSourceSpan > 0 ? [`CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:${droppedEdgesOutsideSourceSpan}`] : []),
-            ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),
-            ...(addedDynamicCallerEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLERS:${addedDynamicCallerEdges.length}`] : []),
-        ])].sort((a, b) => a.localeCompare(b));
-        const combinedNotes = this.sortRelationshipBackedCallGraphNotes([
-            ...suppressedLowConfidenceNotes,
-            ...(addedDynamicCalleeEdges.length > 0 ? dynamicCalleeFallback.notes : []),
-            ...(addedDynamicCallerEdges.length > 0 ? dynamicCallerFallback.notes : []),
-        ]);
-
-        return {
-            supported: true,
-            direction: input.direction,
-            depth: Math.max(1, Math.min(3, input.depth)),
-            limit: Math.max(1, input.limit),
-            nodes: combinedNodes,
-            edges: combinedEdges,
-            notes: combinedNotes,
-            ...(warnings.length > 0 ? { warnings } : {}),
-            notesTruncated: false,
-            totalNoteCount: combinedNotes.length,
-            returnedNoteCount: combinedNotes.length,
-            sidecar: {
-                builtAt: neighbors.manifest.builtAt,
-                nodeCount: combinedNodes.length,
-                edgeCount: combinedEdges.length,
-            },
-        };
-    }
-
-    private getContextIgnorePatterns(codebasePath: string): string[] {
-        return this.getContextActiveIgnorePatterns(codebasePath);
+        return this.relationshipBackedCallGraph.build(input);
     }
 
     private async rebuildCallGraphForIndex(codebasePath: string): Promise<void> {
-        try {
-            const sidecar = await this.callGraphManager.rebuildForCodebase(codebasePath, this.getContextIgnorePatterns(codebasePath));
-            this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
-            this.saveSnapshotIfSupported();
-            console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
-        } catch (error) {
-            console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after indexing '${codebasePath}': ${formatUnknownError(error)}`);
-        }
+        await this.relationshipBackedCallGraph.rebuildForIndex(codebasePath);
     }
 
     private async rebuildCallGraphForSyncDelta(codebasePath: string, changedFiles: string[]): Promise<boolean> {
-        try {
-            const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
-                codebasePath,
-                changedFiles,
-                this.getContextIgnorePatterns(codebasePath)
-            );
-            if (!sidecar) {
-                return false;
-            }
-            this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
-            this.saveSnapshotIfSupported();
-            console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync delta (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
-            return true;
-        } catch (error) {
-            console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after sync '${codebasePath}': ${formatUnknownError(error)}`);
-            return false;
-        }
-    }
-
-    private getVectorStore(): VectorDatabase {
-        return this.context.getVectorStore();
-    }
-
-    private isSatoriCodeCollection(collectionName: string): boolean {
-        return SATORI_COLLECTION_PREFIXES.some((prefix) => collectionName.startsWith(prefix));
-    }
-
-    private getVectorBackendInfo(): VectorStoreBackendInfoView | null {
-        const vectorDb = this.getVectorStore();
-        if (typeof vectorDb.getBackendInfo !== 'function') {
-            return null;
-        }
-
-        try {
-            const info = vectorDb.getBackendInfo();
-            if (!info || typeof info !== 'object') {
-                return null;
-            }
-
-            if (info.provider !== 'milvus' && info.provider !== 'zilliz') {
-                return null;
-            }
-
-            if (info.transport !== 'grpc' && info.transport !== 'rest') {
-                return null;
-            }
-
-            return {
-                provider: info.provider,
-                transport: info.transport,
-                address: typeof info.address === 'string' ? info.address : undefined,
-            };
-        } catch {
-            return null;
-        }
+        return this.relationshipBackedCallGraph.rebuildForSyncDelta(codebasePath, changedFiles);
     }
 
     private isZillizBackend(): boolean {
-        const backendInfo = this.getVectorBackendInfo();
-        return backendInfo?.provider === 'zilliz';
-    }
-
-    private async listCollectionDetailsWithFallback(vectorDb: VectorDatabase): Promise<CollectionDetailsView[]> {
-        if (typeof vectorDb.listCollectionDetails === 'function') {
-            const details = await vectorDb.listCollectionDetails();
-            if (Array.isArray(details)) {
-                return details
-                    .filter((detail): detail is CollectionDetailsView => Boolean(detail && typeof detail.name === 'string' && detail.name.length > 0))
-                    .map((detail) => ({
-                        name: detail.name,
-                        createdAt: detail.createdAt,
-                    }));
-            }
-        }
-
-        const names = await vectorDb.listCollections();
-        if (!Array.isArray(names)) {
-            return [];
-        }
-
-        return names
-            .filter((name): name is string => typeof name === 'string' && name.length > 0)
-            .map((name) => ({ name }));
-    }
-
-    private parseCodebaseFromMetadata(metadataValue: unknown): string | undefined {
-        if (typeof metadataValue !== 'string' || metadataValue.trim().length === 0) {
-            return undefined;
-        }
-
-        try {
-            const metadata: unknown = JSON.parse(metadataValue);
-            const codebasePath = isRecord(metadata) ? metadata.codebasePath : undefined;
-            return typeof codebasePath === 'string' && codebasePath.trim().length > 0
-                ? codebasePath
-                : undefined;
-        } catch {
-            return undefined;
-        }
-    }
-
-    private async resolveCollectionCodebasePath(
-        vectorDb: VectorDatabase,
-        collectionName: string,
-        byCollectionName: Map<string, string>
-    ): Promise<string | undefined> {
-        const knownPath = byCollectionName.get(collectionName);
-        if (knownPath) {
-            return knownPath;
-        }
-
-        try {
-            const results = await vectorDb.query(collectionName, '', ['metadata'], 1);
-            if (!Array.isArray(results) || results.length === 0) {
-                return undefined;
-            }
-
-            return this.parseCodebaseFromMetadata(results[0]?.metadata);
-        } catch {
-            return undefined;
-        }
-    }
-
-    private formatCollectionTimestamp(createdAt?: string): string {
-        if (!createdAt) {
-            return '[unknown]';
-        }
-
-        const timestamp = Date.parse(createdAt);
-        if (!Number.isFinite(timestamp)) {
-            return createdAt;
-        }
-
-        return new Date(timestamp).toISOString();
-    }
-
-    private parseTimestampMs(timestamp?: string): number | undefined {
-        if (!timestamp) {
-            return undefined;
-        }
-
-        const parsed = Date.parse(timestamp);
-        return Number.isFinite(parsed) ? parsed : undefined;
-    }
-
-    private resolveCollectionSortTimestampMs(
-        createdAt: string | undefined,
-        codebasePath: string | undefined,
-        snapshotLastUpdatedByPath: Map<string, number>
-    ): number | undefined {
-        const createdAtMs = this.parseTimestampMs(createdAt);
-        const snapshotMs = codebasePath ? snapshotLastUpdatedByPath.get(codebasePath) : undefined;
-
-        // Prefer collection metadata when it looks reliable.
-        if (createdAtMs !== undefined && createdAtMs >= MIN_RELIABLE_COLLECTION_CREATED_AT_MS) {
-            return createdAtMs;
-        }
-
-        // Fallback to snapshot timestamps when collection metadata is missing or suspicious.
-        if (snapshotMs !== undefined) {
-            return snapshotMs;
-        }
-
-        // Last resort for deterministic ordering when nothing else is available.
-        return createdAtMs;
-    }
-
-    private async buildZillizCollectionLimitGuidance(targetCodebasePath: string): Promise<string> {
-        const targetCollectionName = this.resolveCollectionName(targetCodebasePath);
-        const vectorDb = this.getVectorStore();
-        const collectionDetails = await this.listCollectionDetailsWithFallback(vectorDb);
-        const codeCollections = collectionDetails.filter((detail) => this.isSatoriCodeCollection(detail.name));
-
-        const trackedCodebases = this.getSnapshotAllCodebases().map((entry) => entry.path);
-        const byCollectionName = new Map<string, string>();
-        for (const codebasePath of trackedCodebases) {
-            byCollectionName.set(this.resolveCollectionName(codebasePath), codebasePath);
-        }
-        const snapshotLastUpdatedByPath = new Map<string, number>();
-        for (const entry of this.getSnapshotAllCodebases()) {
-            const lastUpdatedMs = this.parseTimestampMs(entry.info.lastUpdated);
-            if (lastUpdatedMs !== undefined) {
-                snapshotLastUpdatedByPath.set(entry.path, lastUpdatedMs);
-            }
-        }
-
-        const candidates: CandidateCollection[] = [];
-        for (const detail of codeCollections) {
-            const codebasePath = await this.resolveCollectionCodebasePath(vectorDb, detail.name, byCollectionName);
-            candidates.push({
-                name: detail.name,
-                createdAt: detail.createdAt,
-                codebasePath,
-                isTargetCollection: detail.name === targetCollectionName,
-                sortTimestampMs: this.resolveCollectionSortTimestampMs(
-                    detail.createdAt,
-                    codebasePath,
-                    snapshotLastUpdatedByPath
-                ),
-            });
-        }
-
-        candidates.sort((a, b) => {
-            const aValid = Number.isFinite(a.sortTimestampMs);
-            const bValid = Number.isFinite(b.sortTimestampMs);
-            if (aValid && bValid) {
-                return (a.sortTimestampMs as number) - (b.sortTimestampMs as number);
-            }
-            if (aValid) return -1;
-            if (bValid) return 1;
-            return a.name.localeCompare(b.name);
-        });
-
-        const oldestName = candidates.length > 0 ? candidates[0].name : undefined;
-        const newestName = candidates.length > 1 ? candidates[candidates.length - 1].name : oldestName;
-        const lines = candidates.map((candidate, index) => {
-            const codebaseInfo = candidate.codebasePath ? candidate.codebasePath : '[unknown]';
-            const labels: string[] = [];
-            if (candidate.name === oldestName) labels.push('oldest');
-            if (candidate.name === newestName) labels.push('newest');
-            if (candidate.isTargetCollection) labels.push('target');
-            const labelText = labels.length > 0 ? ` [${labels.join(', ')}]` : '';
-            return `${index + 1}. ${candidate.name}${labelText} | codebase: ${codebaseInfo} | created: ${this.formatCollectionTimestamp(candidate.createdAt)}`;
-        });
-
-        const suggestions = lines.length > 0
-            ? lines.join('\n')
-            : 'No Satori-managed collections were discovered.';
-
-        return `${COLLECTION_LIMIT_MESSAGE}
-
-Reason: Zilliz free-tier clusters are capped at ${ZILLIZ_FREE_TIER_COLLECTION_LIMIT} collections, and this cluster has no remaining collection slots.
-Target codebase: '${targetCodebasePath}'
-Target collection: '${targetCollectionName}'
-
-Current Satori-managed collections (oldest -> newest):
-${suggestions}
-
-To continue, choose one collection from the list and retry:
-manage_index {"action":"create","path":"${targetCodebasePath}","zillizDropCollection":"<collection_name>"}
-
-Agent instructions:
-1. Show this list to the user and ask which collection to delete.
-2. Do not auto-delete without explicit user confirmation.
-3. Retry create with zillizDropCollection set to the exact chosen collection name.`;
+        return this.vectorBackendMaintenance.isZillizBackend();
     }
 
     private async buildCollectionLimitMessage(targetCodebasePath: string): Promise<string> {
-        if (!this.isZillizBackend()) {
-            return COLLECTION_LIMIT_MESSAGE;
-        }
-
-        try {
-            return await this.buildZillizCollectionLimitGuidance(targetCodebasePath);
-        } catch (error) {
-            console.warn(`[INDEX-VALIDATION] Failed to build Zilliz collection guidance: ${formatUnknownError(error)}`);
-            return COLLECTION_LIMIT_MESSAGE;
-        }
+        return this.vectorBackendMaintenance.buildCollectionLimitMessage(targetCodebasePath);
     }
 
     private async dropZillizCollectionForCreate(collectionName: string): Promise<{ droppedCodebasePath?: string }> {
-        const trimmedName = collectionName.trim();
-        if (trimmedName.length === 0) {
-            throw new Error('zillizDropCollection must be a non-empty string.');
-        }
-
-        if (!this.isSatoriCodeCollection(trimmedName)) {
-            throw new Error(`zillizDropCollection '${trimmedName}' is not a Satori-managed collection (expected prefix ${SATORI_COLLECTION_PREFIXES.join(' or ')}).`);
-        }
-
-        const vectorDb = this.getVectorStore();
-        if (!await vectorDb.hasCollection(trimmedName)) {
-            throw new Error(`Collection '${trimmedName}' does not exist in the connected Zilliz cluster.`);
-        }
-
-        const droppedCodebasePath = await this.resolveCollectionCodebasePath(vectorDb, trimmedName, new Map());
-        await deleteCollectionWithVerification(vectorDb, trimmedName);
-
-        if (droppedCodebasePath) {
-            this.snapshotManager.removeCodebaseCompletely(droppedCodebasePath);
-            this.markCodebaseCleared(droppedCodebasePath, trimmedName);
-            this.saveSnapshotIfSupported();
-            try {
-                await this.unwatchCodebase(droppedCodebasePath);
-            } catch {
-                // Best-effort watcher cleanup; dropping cloud collection remains successful.
-            }
-        }
-
-        return { droppedCodebasePath };
+        return this.vectorBackendMaintenance.dropZillizCollectionForCreate(collectionName);
     }
 
     public async handleIndexCodebase(args: IndexCodebaseArgs) {
-        const { path: codebasePath, force, customExtensions, ignorePatterns, zillizDropCollection } = args;
-        const forceReindex = force || false;
-        const manageAction: ManageIndexAction = forceReindex ? 'reindex' : 'create';
-        const internalPreflight: ReindexPreflightResult | undefined = forceReindex
-            ? args.__reindexPreflight
-            : undefined;
-        const preflightOptions = internalPreflight
-            ? {
-                warnings: internalPreflight.warnings,
-                preflight: internalPreflight
-            }
-            : {};
-        const customFileExtensions = Array.isArray(customExtensions)
-            ? customExtensions.filter((extension): extension is string => typeof extension === 'string')
-            : [];
-        const customIgnorePatterns = Array.isArray(ignorePatterns)
-            ? ignorePatterns.filter((pattern): pattern is string => typeof pattern === 'string')
-            : [];
-        const requestedDropCollection = typeof zillizDropCollection === 'string' ? zillizDropCollection.trim() : undefined;
-        let dropSummaryLine = '';
-
-        try {
-            // Force absolute path resolution - warn if relative path provided
-            const absolutePath = ensureAbsolutePath(codebasePath);
-
-            // Validate path exists
-            if (!fs.existsSync(absolutePath)) {
-                return this.manageResponse(
-                    manageAction,
-                    absolutePath,
-                    "error",
-                    `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`,
-                    preflightOptions
-                );
-            }
-
-            // Check if it's a directory
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isDirectory()) {
-                return this.manageResponse(
-                    manageAction,
-                    absolutePath,
-                    "error",
-                    `Error: Path '${absolutePath}' is not a directory`,
-                    preflightOptions
-                );
-            }
-
-            const runtimeOwnerConflict = await this.buildRuntimeOwnerConflictResponseIfBlocked(manageAction, absolutePath);
-            if (runtimeOwnerConflict) {
-                return runtimeOwnerConflict;
-            }
-
-            await this.recoverStaleIndexingStateIfNeeded(absolutePath);
-
-            // Check if already indexing
-            if (this.getSnapshotIndexingCodebases().includes(absolutePath)) {
-                const blockedAction: 'create' | 'reindex' = forceReindex ? 'reindex' : 'create';
-                return this.manageResponse(
-                    manageAction,
-                    absolutePath,
-                    "not_ready",
-                    this.buildManageActionBlockedMessage(absolutePath, blockedAction),
-                    {
-                        ...preflightOptions,
-                        reason: "indexing",
-                        hints: {
-                            status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.getManageRetryAfterMs(),
-                            indexing: this.buildIndexingMetadata(absolutePath),
-                        }
-                    }
-                );
-            }
-
-            const existingInfo = this.getSnapshotCodebaseInfo(absolutePath);
-            if (!forceReindex && existingInfo?.status === 'requires_reindex') {
-                return this.manageResponse(
-                    manageAction,
-                    absolutePath,
-                    "requires_reindex",
-                    this.buildReindexInstruction(
-                        absolutePath,
-                        typeof existingInfo.message === 'string' ? existingInfo.message : undefined
-                    ),
-                    {
-                        ...preflightOptions,
-                        reason: "requires_reindex",
-                        hints: this.buildManageRequiresReindexHints(absolutePath)
-                    }
-                );
-            }
-
-            // Check if already indexed (unless force is true)
-            const isIndexedInSnapshot = this.getSnapshotIndexedCodebases().includes(absolutePath);
-            if (!forceReindex && !isIndexedInSnapshot) {
-                const proof = await this.validateCompletionProof(absolutePath);
-                if (this.recoverIndexedSnapshotFromCompletionProof(absolutePath, proof)) {
-                    if (proof.outcome === 'fingerprint_mismatch') {
-                        return this.manageResponse(
-                            manageAction,
-                            absolutePath,
-                            "requires_reindex",
-                            this.buildReindexInstruction(
-                                absolutePath,
-                                'Recovered local readiness from completion marker proof, but the current runtime fingerprint does not match the existing index.'
-                            ),
-                            {
-                                ...preflightOptions,
-                                reason: "requires_reindex",
-                                hints: this.buildManageRequiresReindexHints(absolutePath)
-                            }
-                        );
-                    }
-
-                    return this.manageResponse(
-                        manageAction,
-                        absolutePath,
-                        "blocked",
-                        `Codebase '${absolutePath}' is already indexed. Local readiness was recovered from completion marker proof.
-
-To update incrementally with recent changes: call manage_index with {"action":"sync","path":"${absolutePath}"}.
-To force rebuild from scratch: call manage_index with {"action":"create","path":"${absolutePath}","force":true}.`,
-                        preflightOptions
-                    );
-                }
-            }
-            if (!forceReindex && isIndexedInSnapshot) {
-                const proof = await this.validateCompletionProof(absolutePath);
-                if (proof.outcome === 'valid') {
-                    return this.manageResponse(
-                        manageAction,
-                        absolutePath,
-                        "blocked",
-                        `Codebase '${absolutePath}' is already indexed.
-
-To update incrementally with recent changes: call manage_index with {"action":"sync","path":"${absolutePath}"}.
-To force rebuild from scratch: call manage_index with {"action":"create","path":"${absolutePath}","force":true}.`
-                    );
-                }
-                console.warn(`[INDEX-VALIDATION] Snapshot reports indexed for '${absolutePath}', but completion proof is '${proof.reason || proof.outcome}'. Treating as not_indexed and continuing create flow.`);
-            }
-
-            if (requestedDropCollection) {
-                if (!this.isZillizBackend()) {
-                    return this.manageResponse(
-                        manageAction,
-                        absolutePath,
-                        "error",
-                        "Error: zillizDropCollection is only supported when connected to a Zilliz Cloud backend.",
-                        preflightOptions
-                    );
-                }
-
-                const targetCollectionName = this.resolveCollectionName(absolutePath);
-                if (requestedDropCollection === targetCollectionName) {
-                    return this.manageResponse(
-                        manageAction,
-                        absolutePath,
-                        "error",
-                        `Error: zillizDropCollection cannot target '${targetCollectionName}' for this same codebase create flow. Use {"action":"create","path":"${absolutePath}","force":true} for reindexing this codebase.`,
-                        preflightOptions
-                    );
-                }
-
-                let dropResult: { droppedCodebasePath?: string };
-                try {
-                    dropResult = await this.dropZillizCollectionForCreate(requestedDropCollection);
-                } catch (error) {
-                    if (error instanceof RemoteCollectionDeletePendingError) {
-                        return this.manageResponse(
-                            manageAction,
-                            absolutePath,
-                            "error",
-                            `Zilliz collection '${requestedDropCollection}' remote deletion is still pending. Local index state was not changed. Retry after the backend has converged. Details: ${formatUnknownError(error)}`,
-                            {
-                                ...preflightOptions,
-                                reason: "remote_delete_pending",
-                                hints: {
-                                    retry: {
-                                        tool: "manage_index",
-                                        args: { action: manageAction, path: absolutePath, zillizDropCollection: requestedDropCollection }
-                                    }
-                                }
-                            }
-                        );
-                    }
-                    throw error;
-                }
-                dropSummaryLine += dropResult.droppedCodebasePath
-                    ? `\nDropped Zilliz collection '${requestedDropCollection}' (mapped codebase: '${dropResult.droppedCodebasePath}').`
-                    : `\nDropped Zilliz collection '${requestedDropCollection}'.`;
-            }
-
-            const stagedCollectionName = this.resolveStagedCollectionName(absolutePath, `run_${crypto.randomUUID()}`);
-
-            // CRITICAL: Pre-index collection creation validation
-            try {
-                console.log(`[INDEX-VALIDATION] 🔍 Validating collection creation capability`);
-                const canCreateCollection = await this.context.getVectorStore().checkCollectionLimit();
-
-                if (!canCreateCollection) {
-                    console.error(`[INDEX-VALIDATION] ❌ Collection limit validation failed: ${absolutePath}`);
-                    const guidanceMessage = await this.buildCollectionLimitMessage(absolutePath);
-                    return this.manageResponse(manageAction, absolutePath, "error", guidanceMessage, preflightOptions);
-                }
-
-                console.log(`[INDEX-VALIDATION] ✅  Collection creation validation completed`);
-            } catch (validationError: unknown) {
-                // Handle other collection creation errors
-                console.error(`[INDEX-VALIDATION] ❌ Collection creation validation failed:`, validationError);
-                if (isCollectionLimitError(validationError)) {
-                    const guidanceMessage = await this.buildCollectionLimitMessage(absolutePath);
-                    return this.manageResponse(manageAction, absolutePath, "error", guidanceMessage, preflightOptions);
-                }
-
-                if (validationError instanceof RemoteCollectionDeletePendingError) {
-                    return this.manageResponse(
-                        manageAction,
-                        absolutePath,
-                        "error",
-                        `Zilliz/Milvus validation collection deletion is still pending. Local index state was not changed. Retry after the backend has converged. Details: ${formatUnknownError(validationError)}`,
-                        {
-                            ...preflightOptions,
-                            reason: "remote_delete_pending",
-                            hints: {
-                                retry: {
-                                    tool: "manage_index",
-                                    args: { action: manageAction, path: absolutePath }
-                                }
-                            }
-                        }
-                    );
-                }
-
-                const vectorBackendDiagnostic = classifyVectorBackendError(validationError);
-                if (vectorBackendDiagnostic) {
-                    return this.manageVectorBackendResponse(manageAction, absolutePath, vectorBackendDiagnostic);
-                }
-
-                const validationMessage = formatUnknownError(validationError);
-                const backendTimeout = isBackendTimeoutError(validationError);
-                const timeoutOptions = backendTimeout
-                    ? {
-                        ...preflightOptions,
-                        reason: "backend_timeout" as const,
-                        hints: {
-                            retry: {
-                                tool: "manage_index",
-                                args: { action: manageAction, path: absolutePath }
-                            }
-                        }
-                    }
-                    : preflightOptions;
-                const validationText = backendTimeout
-                    ? `Backend timeout while validating Zilliz/Milvus collection creation for '${absolutePath}'. The repo path is valid and local index state was not changed. This is retryable/operator-actionable: check backend availability or network latency, then retry manage_index action='${manageAction}'. Details: ${validationMessage}`
-                    : `Error validating collection creation: ${validationMessage}`;
-                return this.manageResponse(
-                    manageAction,
-                    absolutePath,
-                    "error",
-                    validationText,
-                    timeoutOptions
-                );
-            }
-
-            // Add custom extensions if provided
-            if (customFileExtensions.length > 0) {
-                console.log(`[CUSTOM-EXTENSIONS] Adding ${customFileExtensions.length} custom extensions: ${customFileExtensions.join(', ')}`);
-                this.context.addCustomExtensions(customFileExtensions);
-            }
-
-            // Add custom ignore patterns if provided (before loading file-based patterns)
-            if (customIgnorePatterns.length > 0) {
-                console.log(`[IGNORE-PATTERNS] Adding ${customIgnorePatterns.length} custom ignore patterns: ${customIgnorePatterns.join(', ')}`);
-                this.context.addCustomIgnorePatterns(customIgnorePatterns);
-            }
-
-            // Check current status and log if retrying after failure
-            const failedInfo = this.getSnapshotCodebaseInfo(absolutePath);
-            if (failedInfo?.status === 'indexfailed') {
-                console.log(`[BACKGROUND-INDEX] Retrying indexing for previously failed codebase. Previous error: ${failedInfo.errorMessage || 'Unknown error'}`);
-            }
-
-            // Set to indexing status and save snapshot immediately
-            this.snapshotManager.setCodebaseIndexing(absolutePath, 0);
-            this.saveSnapshotIfSupported();
-
-            // Track the codebase path for syncing
-            trackCodebasePath(absolutePath);
-            await this.touchWatchedCodebase(absolutePath);
-
-            // Start background indexing - now safe to proceed
-            this.startBackgroundIndexing(absolutePath, forceReindex, stagedCollectionName);
-
-            const pathInfo = codebasePath !== absolutePath
-                ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
-                : '';
-
-            const extensionInfo = customFileExtensions.length > 0
-                ? `\nUsing ${customFileExtensions.length} custom extensions: ${customFileExtensions.join(', ')}`
-                : '';
-
-            const ignoreInfo = customIgnorePatterns.length > 0
-                ? `\nUsing ${customIgnorePatterns.length} custom ignore patterns: ${customIgnorePatterns.join(', ')}`
-                : '';
-
-            return this.manageResponse(
-                manageAction,
-                absolutePath,
-                "ok",
-                `Started background indexing for codebase '${absolutePath}'.${pathInfo}${dropSummaryLine}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`,
-                preflightOptions
-            );
-
-        } catch (error: unknown) {
-            // Enhanced error handling to prevent MCP service crash
-            console.error('Error in handleIndexCodebase:', error);
-            const vectorBackendDiagnostic = classifyVectorBackendError(error);
-            if (vectorBackendDiagnostic) {
-                const errorMessage = formatUnknownError(error);
-                const preservesLocalState = errorMessage.includes('Force reindex cleanup failed before local state changes');
-                const humanText = preservesLocalState
-                    ? `${vectorBackendDiagnostic.message} ${errorMessage}`
-                    : vectorBackendDiagnostic.message;
-                return this.manageVectorBackendResponse(manageAction, ensureAbsolutePath(codebasePath), vectorBackendDiagnostic, humanText);
-            }
-            const errorMessage = formatUnknownError(error);
-
-            // Ensure we always return a proper MCP response, never throw
-            return this.manageResponse(
-                manageAction,
-                ensureAbsolutePath(codebasePath),
-                "error",
-                `Error starting indexing: ${errorMessage}`,
-                preflightOptions
-            );
-        }
-    }
-
-    private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean, writeCollectionName?: string) {
-        const absolutePath = codebasePath;
-        let lastSaveTime = 0; // Track last save timestamp
-
-        try {
-            console.log(`[BACKGROUND-INDEX] Starting background indexing for: ${absolutePath}`);
-
-            const targetCollectionName = typeof writeCollectionName === 'string' && writeCollectionName.trim().length > 0
-                ? writeCollectionName
-                : this.resolveCollectionName(absolutePath);
-            this.setWriteCollectionOverride(absolutePath, targetCollectionName);
-
-            if (forceReindex) {
-                console.log(`[BACKGROUND-INDEX] ℹ️  Force reindex mode - building a staged generation before retiring the previous proven collection.`);
-            }
-
-            const contextForThisTask = this.context;
-
-            const profileConfig = this.loadIndexProfileForCodebase(absolutePath);
-            console.log(`[BACKGROUND-INDEX] Using index profile '${profileConfig.profile}'${profileConfig.configPath ? ` from ${profileConfig.configPath}` : ' (default)'}`);
-
-            // Load supported root ignore files before synchronizer and index setup.
-            await this.context.loadResolvedIgnorePatterns(absolutePath);
-
-            // Initialize file synchronizer with proper ignore patterns (including project-specific patterns)
-            const { FileSynchronizer } = await import("@zokizuan/satori-core");
-            const ignorePatterns = this.getContextActiveIgnorePatterns(absolutePath);
-            const supportedExtensions = this.getContextIndexedExtensions(absolutePath);
-            console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(', ')}`);
-            const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns, supportedExtensions);
-            await synchronizer.initialize();
-
-            // Store synchronizer in the context (let context manage collection names)
-            await this.context.ensureCollectionPrepared(absolutePath);
-            const synchronizerKey = this.resolveCollectionName(absolutePath);
-            this.context.registerSynchronizer(synchronizerKey, synchronizer);
-
-            console.log(`[BACKGROUND-INDEX] Starting indexing for: ${absolutePath}`);
-
-            // Log embedding provider information before indexing
-            const encoderEngine = this.context.getEmbeddingEngine();
-            console.log(`[BACKGROUND-INDEX] 🧠 Using embedding provider: ${encoderEngine.getProvider()} with dimension: ${encoderEngine.getDimension()}`);
-
-            // Start indexing with the appropriate context and progress tracking
-            console.log(`[BACKGROUND-INDEX] 🚀 Beginning codebase indexing process...`);
-            const stats = await contextForThisTask.indexCodebase(absolutePath, (progress) => {
-                // Update progress in snapshot manager using new method
-                this.snapshotManager.setCodebaseIndexing(absolutePath, progress.percentage);
-
-                // Save snapshot periodically (every 2 seconds to avoid too frequent saves)
-                const currentTime = Date.now();
-                if (currentTime - lastSaveTime >= 2000) { // 2 seconds = 2000ms
-                    this.saveSnapshotIfSupported();
-                    lastSaveTime = currentTime;
-                    console.log(`[BACKGROUND-INDEX] 💾 Saved progress snapshot at ${progress.percentage.toFixed(1)}%`);
-                }
-
-                console.log(`[BACKGROUND-INDEX] Progress: ${progress.phase} - ${progress.percentage}% (${progress.current}/${progress.total})`);
-            });
-            console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
-
-            const runId = `run_${crypto.randomUUID()}`;
-            const canonicalMarkerPath = this.canonicalizeCodebasePath(absolutePath);
-            await this.writeIndexCompletionMarker(absolutePath, {
-                kind: 'satori_index_completion_v1',
-                codebasePath: canonicalMarkerPath,
-                fingerprint: this.runtimeFingerprint,
-                indexedFiles: stats.indexedFiles,
-                totalChunks: stats.totalChunks,
-                completedAt: new Date().toISOString(),
-                runId,
-            });
-
-            try {
-                const droppedCollections = await this.pruneIndexedCollectionFamily(absolutePath, targetCollectionName);
-                if (Array.isArray(droppedCollections) && droppedCollections.length > 0) {
-                    console.log(`[BACKGROUND-INDEX] 🧹 Retired ${droppedCollections.length} superseded collection(s): ${droppedCollections.join(', ')}`);
-                }
-            } catch (pruneError) {
-                console.warn(`[BACKGROUND-INDEX] Failed to retire superseded generations for '${absolutePath}': ${formatUnknownError(pruneError)}`);
-            }
-
-            // Set codebase to indexed status with complete statistics
-            this.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.runtimeFingerprint, 'verified');
-            const trackedPaths = this.getContextTrackedRelativePaths(absolutePath);
-            this.snapshotManager.setCodebaseIndexManifest(absolutePath, trackedPaths);
-            this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks };
-            await this.syncManager.recordCurrentIgnoreControlSignature(absolutePath);
-
-            // Save snapshot after updating codebase lists
-            this.saveSnapshotIfSupported();
-            await this.rebuildCallGraphForIndex(absolutePath);
-            await this.touchWatchedCodebase(absolutePath);
-
-            let message = `Background indexing completed for '${absolutePath}'.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`;
-            if (stats.status === 'limit_reached') {
-                message += `\n⚠️  Warning: Indexing stopped because the chunk limit (450,000) was reached. The index may be incomplete.`;
-            }
-
-            console.log(`[BACKGROUND-INDEX] ${message}`);
-
-        } catch (error: unknown) {
-            console.error(`[BACKGROUND-INDEX] Error during indexing for ${absolutePath}:`, error);
-
-            // Get the last attempted progress
-            const lastProgress = this.getSnapshotIndexingProgress(absolutePath);
-
-            // Set codebase to failed status with error information
-            let errorMessage = formatUnknownError(error);
-            if (isCollectionLimitError(error)) {
-                errorMessage = await this.buildCollectionLimitMessage(absolutePath);
-            }
-
-            try {
-                await this.clearIndexCompletionMarker(absolutePath);
-            } catch (clearError) {
-                console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
-            }
-
-            this.snapshotManager.setCodebaseIndexFailed(absolutePath, errorMessage, lastProgress);
-            this.saveSnapshotIfSupported();
-
-            // Log error but don't crash MCP service - indexing errors are handled gracefully
-            console.error(`[BACKGROUND-INDEX] Indexing failed for ${absolutePath}: ${errorMessage}`);
-        } finally {
-            this.setWriteCollectionOverride(absolutePath, null);
-        }
+        return this.manageIndexingHandlers.handleIndexCodebase(args);
     }
 
     public async handleReindexCodebase(args: ReindexCodebaseArgs) {
-        const {
-            path: codebasePath,
-            customExtensions,
-            ignorePatterns,
-            zillizDropCollection,
-            allowUnnecessaryReindex
-        } = args;
-        const absolutePath = ensureAbsolutePath(codebasePath);
-        const runtimeOwnerConflict = await this.buildRuntimeOwnerConflictResponseIfBlocked("reindex", absolutePath);
-        if (runtimeOwnerConflict) {
-            return runtimeOwnerConflict;
-        }
-        const preflight = this.evaluateReindexPreflight(absolutePath);
-
-        if (preflight.outcome === 'reindex_unnecessary_ignore_only' && allowUnnecessaryReindex !== true) {
-            return this.manageResponse(
-                "reindex",
-                absolutePath,
-                "blocked",
-                `Reindex preflight blocked for '${absolutePath}': only ignore/index-policy control changes were detected. Use manage_index with {"action":"sync","path":"${absolutePath}"} for immediate convergence.`,
-                {
-                    reason: "unnecessary_reindex_ignore_only",
-                    warnings: preflight.warnings,
-                    preflight,
-                    hints: {
-                        sync: {
-                            tool: "manage_index",
-                            args: { action: "sync", path: absolutePath }
-                        },
-                        overrideReindex: {
-                            tool: "manage_index",
-                            args: { action: "reindex", path: absolutePath, allowUnnecessaryReindex: true }
-                        }
-                    }
-                }
-            );
-        }
-
-        const forwardedPreflight = preflight.outcome === 'unknown' || preflight.outcome === 'probe_failed'
-            ? preflight
-            : undefined;
-        return this.handleIndexCodebase({
-            path: codebasePath,
-            force: true,
-            customExtensions,
-            ignorePatterns,
-            zillizDropCollection,
-            __reindexPreflight: forwardedPreflight,
-        });
+        return this.manageIndexingHandlers.handleReindexCodebase(args);
     }
 
     public async handleSearchCode(args: ToolArgs) {
@@ -8010,7 +2403,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             };
         }
 
-        const searchDiagnostics = {
+        const searchDiagnostics: SearchDiagnostics = {
             queryLength: input.query.length,
             limitRequested: input.limit,
             resultsBeforeFilter: 0,
@@ -8026,219 +2419,105 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             rerankerUsed: false,
         };
         const phaseTimings = this.createSearchPhaseTimings();
-        let proofDebugHint: CompletionProbeDebugHint | undefined;
 
         try {
-            const prepareReadStartedAtMs = this.searchPhaseNowMs();
-            const absolutePath = ensureAbsolutePath(input.path);
-            if (!fs.existsSync(absolutePath)) {
-                const payload = this.buildInvalidSearchRequestPayload({
-                    path: absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    resultMode: input.resultMode,
-                    limit: input.limit
-                }, `Path '${absolutePath}' does not exist. search_codebase requires an existing directory root or subdirectory.`, 'not_indexed', 'not_indexed');
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    isError: true
-                };
-            }
-
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isDirectory()) {
-                const payload = this.buildInvalidSearchRequestPayload({
-                    path: absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    resultMode: input.resultMode,
-                    limit: input.limit
-                }, `Path '${absolutePath}' is not a directory. search_codebase requires a directory root or subdirectory.`, 'not_indexed', 'not_indexed');
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    isError: true
-                };
-            }
-
-            trackCodebasePath(absolutePath);
-
-            const buildBlockedReadinessPayload = (trackedRootState: Awaited<ReturnType<ToolHandlers['prepareTrackedRootForRead']>>): SearchResponseEnvelope | null => {
-                if (trackedRootState.state === 'ready') {
-                    return null;
-                }
-
-                if (trackedRootState.state === 'requires_reindex') {
-                    return this.buildRequiresReindexPayload(trackedRootState.codebasePath, trackedRootState.message, {
-                        path: absolutePath,
-                        query: input.query,
-                        scope: input.scope,
-                        groupBy: input.groupBy,
-                        resultMode: input.resultMode,
-                        limit: input.limit
-                    }) as unknown as SearchResponseEnvelope;
-                }
-
-                if (trackedRootState.state === 'indexing') {
-                    return this.buildNotReadySearchPayload(trackedRootState.codebasePath, {
-                        path: absolutePath,
-                        query: input.query,
-                        scope: input.scope,
-                        groupBy: input.groupBy,
-                        resultMode: input.resultMode,
-                        limit: input.limit
-                    });
-                }
-
-                if (trackedRootState.state === 'index_failed') {
-                    return this.buildIndexFailedSearchPayload(trackedRootState.codebasePath, {
-                        path: absolutePath,
-                        query: input.query,
-                        scope: input.scope,
-                        groupBy: input.groupBy,
-                        resultMode: input.resultMode,
-                        limit: input.limit
-                    }, trackedRootState.info);
-                }
-
-                if (trackedRootState.state === 'not_indexed') {
-                    return {
-                        status: "not_indexed",
-                        reason: "not_indexed",
-                        path: absolutePath,
-                        query: input.query,
-                        scope: input.scope,
-                        groupBy: input.groupBy,
-                        limit: input.limit,
-                        resultMode: input.resultMode,
-                        freshnessDecision: null,
-                        message: `Codebase '${absolutePath}' (or any parent) is not indexed.`,
-                        recommendedNextAction: this.buildManageIndexRecommendedAction(
-                            "create",
-                            absolutePath,
-                            "Create an index for this codebase before retrying search."
-                        ),
-                        hints: {
-                            create: {
-                                tool: "manage_index",
-                                args: { action: "create", path: absolutePath }
-                            }
-                        },
-                        results: []
-                    };
-                }
-
-                if (trackedRootState.state === 'stale_local') {
-                    return {
-                        status: "not_indexed",
-                        reason: "not_indexed",
-                        path: absolutePath,
-                        query: input.query,
-                        scope: input.scope,
-                        groupBy: input.groupBy,
-                        limit: input.limit,
-                        resultMode: input.resultMode,
-                        freshnessDecision: null,
-                        message: this.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason),
-                        recommendedNextAction: this.buildManageIndexRecommendedAction(
-                            "create",
-                            trackedRootState.codebasePath,
-                            "Create a fresh index because local readiness metadata is stale."
-                        ),
-                        hints: {
-                            create: this.buildCreateHint(trackedRootState.codebasePath),
-                            staleLocal: this.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason)
-                        },
-                        results: []
-                    };
-                }
-
-                return this.withProofDebugHint(this.buildMissingLocalCollectionSearchPayload(
-                    trackedRootState.codebasePath,
-                    {
-                        path: absolutePath,
-                        query: input.query,
-                        scope: input.scope,
-                        groupBy: input.groupBy,
-                        resultMode: input.resultMode,
-                        limit: input.limit
-                    },
-                    trackedRootState.collectionName
-                ), trackedRootState.proofDebugHint);
-            };
-
-            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
-            this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
-            const blockedReadinessPayload = buildBlockedReadinessPayload(trackedRootState);
-            if (blockedReadinessPayload) {
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(blockedReadinessPayload) }],
-                    meta: { searchDiagnostics }
-                };
-            }
-            if (trackedRootState.state !== 'ready') {
-                throw new Error(`Unexpected non-ready tracked root state after readiness gating: ${trackedRootState.state}`);
-            }
-
-            let searchableRoot = trackedRootState.root;
-            let effectiveRoot = searchableRoot.path || absolutePath;
-            proofDebugHint = trackedRootState.proofDebugHint;
-            let partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot.info)
-                ? [
-                    SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,
-                    SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,
-                ]
-                : [];
-
-            if (searchableRoot.path !== absolutePath) {
-                console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${searchableRoot.path}'`);
-            }
-
-            const freshnessDecision = await this.measureSearchPhase(
-                phaseTimings,
-                'ensureFreshness',
-                () => this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000)
-            );
-            searchDiagnostics.freshnessMode = freshnessDecision.mode;
-            const freshnessBlockedPayload = this.buildFreshnessBlockedSearchPayload(effectiveRoot, freshnessDecision, {
-                path: absolutePath,
+            const frontDoor = await runSearchFrontDoor({
+                path: input.path,
                 query: input.query,
                 scope: input.scope,
                 groupBy: input.groupBy,
                 resultMode: input.resultMode,
-                limit: input.limit
-            });
-            if (freshnessBlockedPayload) {
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(freshnessBlockedPayload) }],
-                    meta: { searchDiagnostics }
-                };
-            }
-            const postFreshnessTrackedRootState = await this.measureSearchPhase(
-                phaseTimings,
-                'prepareRead',
-                () => this.prepareTrackedRootForRead(absolutePath)
-            );
-            const postFreshnessBlockedPayload = buildBlockedReadinessPayload(postFreshnessTrackedRootState);
-            if (postFreshnessBlockedPayload) {
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(postFreshnessBlockedPayload) }],
-                    meta: { searchDiagnostics }
-                };
-            }
-            if (postFreshnessTrackedRootState.state !== 'ready') {
-                throw new Error(`Unexpected non-ready tracked root state after freshness gating: ${postFreshnessTrackedRootState.state}`);
-            }
-            searchableRoot = postFreshnessTrackedRootState.root;
-            effectiveRoot = searchableRoot.path || absolutePath;
-            proofDebugHint = postFreshnessTrackedRootState.proofDebugHint;
-            partialIndexSearchWarnings = this.isPartialIndexNavigationUnavailable(searchableRoot.info)
-                ? [
+                limit: input.limit,
+            }, {
+                prepareInitialTrackedRootRead: async (absolutePath) => {
+                    const prepareReadStartedAtMs = this.searchPhaseNowMs();
+                    const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
+                    this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
+                    return trackedRootState;
+                },
+                preparePostFreshnessTrackedRootRead: (absolutePath) => this.measureSearchPhase(
+                    phaseTimings,
+                    'prepareRead',
+                    () => this.prepareTrackedRootForRead(absolutePath)
+                ),
+                ensureSearchFreshness: (effectiveRoot) => this.measureSearchPhase(
+                    phaseTimings,
+                    'ensureFreshness',
+                    () => this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000)
+                ),
+                noteFreshnessMode: (mode) => {
+                    searchDiagnostics.freshnessMode = mode;
+                },
+                buildInvalidSearchRequestPayload: (searchContext, message, status, reason) => this.buildInvalidSearchRequestPayload(
+                    searchContext,
+                    message,
+                    status,
+                    reason
+                ),
+                buildRequiresReindexPayload: (codebasePath, detail, searchContext) => this.buildRequiresReindexPayload(
+                    codebasePath,
+                    detail,
+                    searchContext
+                ) as unknown as SearchResponseEnvelope,
+                buildNotReadySearchPayload: (codebasePath, searchContext) => this.buildNotReadySearchPayload(
+                    codebasePath,
+                    searchContext
+                ),
+                buildIndexFailedSearchPayload: (codebasePath, searchContext, info) => this.buildIndexFailedSearchPayload(
+                    codebasePath,
+                    searchContext,
+                    info
+                ),
+                buildMissingLocalCollectionSearchPayload: (codebasePath, searchContext, collectionName) => this.buildMissingLocalCollectionSearchPayload(
+                    codebasePath,
+                    searchContext,
+                    collectionName
+                ),
+                buildFreshnessBlockedSearchPayload: (codebasePath, freshnessDecision, searchContext) => this.buildFreshnessBlockedSearchPayload(
+                    codebasePath,
+                    freshnessDecision,
+                    searchContext
+                ),
+                buildManageIndexRecommendedAction: (action, codebasePath, rationale) => this.buildManageIndexRecommendedAction(
+                    action,
+                    codebasePath,
+                    rationale
+                ),
+                buildCreateHint: (codebasePath) => this.buildCreateHint(codebasePath),
+                buildStaleLocalHint: (codebasePath, reason) => this.buildStaleLocalHint(codebasePath, reason),
+                buildStaleLocalMessage: (codebasePath, requestedPath, reason) => this.buildStaleLocalMessage(
+                    codebasePath,
+                    requestedPath,
+                    reason
+                ),
+                withProofDebugHint: (payload, proofDebugHint) => this.withProofDebugHint(payload, proofDebugHint),
+                isPartialIndexNavigationUnavailable: (info) => this.isPartialIndexNavigationUnavailable(info),
+                partialIndexWarnings: [
                     SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING,
                     SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING,
-                ]
-                : [];
+                ],
+            });
+
+            if (frontDoor.kind === 'blocked') {
+                return {
+                    content: [{ type: "text", text: this.stringifyToolJson(frontDoor.payload) }],
+                    ...(frontDoor.isError ? { isError: true } : {}),
+                    meta: { searchDiagnostics }
+                };
+            }
+
+            const {
+                absolutePath,
+                searchableRoot,
+                effectiveRoot,
+                proofDebugHint,
+                partialIndexSearchWarnings,
+                freshnessDecision,
+            } = frontDoor;
+
+            if (searchableRoot.path !== absolutePath) {
+                console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${searchableRoot.path}'`);
+            }
             const encoderEngine = this.context.getEmbeddingEngine();
             const rootTag = `[SEARCH][root=${effectiveRoot}]`;
             console.log(`${rootTag} Searching (requestedPath='${absolutePath}')`);
@@ -8246,15 +2525,12 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             console.log(`${rootTag} Indexing status: Completed`);
             console.log(`${rootTag} 🧠 Using embedding provider: ${encoderEngine.getProvider()} for search`);
 
-            const parsedOperators = this.parseSearchOperators(input.query);
+            const parsedOperators = this.searchQuerySupport.parseSearchOperators(input.query);
             const semanticQuery = parsedOperators.semanticQuery;
-            const queryPlan = this.buildSearchQueryPlan(semanticQuery);
-            const expandedQuery = `${semanticQuery}\nimplementation runtime source entrypoint`;
+            const queryPlan = this.searchQuerySupport.buildSearchQueryPlan(semanticQuery);
             const maxAttempts = parsedOperators.must.length > 0 ? 1 + SEARCH_MUST_RETRY_ROUNDS : 1;
             let candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
-            let trackedLexicalDebug: TrackedLexicalSearchDebug | undefined;
-            const operatorSummary = this.buildOperatorSummary(parsedOperators);
-            let filterSummary: SearchFilterSummary = {
+            const initialFilterSummary: SearchFilterSummary = {
                 removedByScope: 0,
                 removedByLanguage: 0,
                 removedByPathInclude: 0,
@@ -8262,41 +2538,30 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 removedByMust: 0,
                 removedByExclude: 0,
             };
-            const observedChangedFilesState = this.getChangedFilesForCodebase(effectiveRoot);
-            const changedFilesState = input.rankingMode === 'auto_changed_first'
-                ? observedChangedFilesState
-                : { available: observedChangedFilesState.available, files: new Set<string>() };
-            const debugChangedFilesState = input.debug ? observedChangedFilesState : undefined;
-            const changedFilesCount = changedFilesState.files.size;
-            const observedChangedFilesCount = observedChangedFilesState.files.size;
-            const changedFilesBoostWithinThreshold = changedFilesCount > 0 && changedFilesCount <= SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES;
-            const changedFilesBoostEnabled = input.rankingMode === 'auto_changed_first' && changedFilesState.available && changedFilesBoostWithinThreshold;
-            const changedFilesBoostSkippedForLargeChangeSet = input.rankingMode === 'auto_changed_first'
-                && changedFilesState.available
-                && changedFilesCount > SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES;
-            const freshnessSummary: SearchFreshnessSummary = {
+            const initialOperatorSummary = this.searchQuerySupport.buildOperatorSummary(parsedOperators);
+            const initialObservedChangedFilesState = this.getChangedFilesForCodebase(effectiveRoot);
+            const initialChangedFilesState = input.rankingMode === 'auto_changed_first'
+                ? initialObservedChangedFilesState
+                : { available: initialObservedChangedFilesState.available, files: new Set<string>() };
+            const initialDebugChangedFilesState = input.debug ? initialObservedChangedFilesState : undefined;
+            const initialChangedFilesCount = initialChangedFilesState.files.size;
+            const initialObservedChangedFilesCount = initialObservedChangedFilesState.files.size;
+            const initialChangedFilesBoostSkippedForLargeChangeSet = input.rankingMode === 'auto_changed_first'
+                && initialChangedFilesState.available
+                && initialChangedFilesCount > SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES;
+            const initialFreshnessSummary: SearchFreshnessSummary = {
                 syncMode: freshnessDecision.mode,
                 lastSyncAt: typeof freshnessDecision.lastSyncAt === 'string' ? freshnessDecision.lastSyncAt : null,
-                changedFileCount: observedChangedFilesCount,
-                gitDirtyFilesConsidered: observedChangedFilesState.available,
+                changedFileCount: initialObservedChangedFilesCount,
+                gitDirtyFilesConsidered: initialObservedChangedFilesState.available,
                 changedFilesBoostApplied: false,
-                changedFilesBoostSkippedForLargeChangeSet,
+                changedFilesBoostSkippedForLargeChangeSet: initialChangedFilesBoostSkippedForLargeChangeSet,
             };
-            const dirtyFilesNotFreshened = observedChangedFilesState.available
-                && observedChangedFilesCount > 0
+            const initialDirtyFilesNotFreshened = initialObservedChangedFilesState.available
+                && initialObservedChangedFilesCount > 0
                 && freshnessDecision.mode !== 'synced'
                 && freshnessDecision.mode !== 'reconciled_ignore_change';
-            const canSupplementLivePathEvidence = observedChangedFilesState.available
-                && observedChangedFilesCount > 0
-                && parsedOperators.path.length > 0;
-            let boostedCandidates = 0;
-            let attemptsUsed = 0;
-            const searchWarningsSet = new Set<string>();
-            const passesUsed = new Set<string>();
-            const backendScoreKinds = new Set<'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown'>();
-            let scored: SearchCandidate[] = [];
-            let exactMatchPinningApplied = false;
-            const rankingProvenance = {
+            const initialRankingProvenance = {
                 semanticPassesUsed: [] as string[],
                 lexicalPassesUsed: [] as string[],
                 livePathSupplementUsed: false,
@@ -8312,8 +2577,8 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
             let exactRegistryFallbackForTrackedLexical = false;
 
             const hasExactPathFilter = parsedOperators.path.some((pattern) => {
-                const normalized = this.normalizeRelativePathForIgnoreCheck(pattern);
-                return Boolean(normalized && this.isExactSearchPathFilter(normalized));
+                const normalized = this.searchQuerySupport.normalizeRelativePathForIgnoreCheck(pattern);
+                return Boolean(normalized && this.searchQuerySupport.isExactSearchPathFilter(normalized));
             });
             const exactRegistryEligible = input.resultMode === 'grouped'
                 && input.groupBy === 'symbol'
@@ -8344,7 +2609,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         operators: {
                             path: [...parsedOperators.path],
                         },
-                        filterSymbol: this.buildExactRegistrySymbolFilter({
+                        filterSymbol: this.searchQuerySupport.buildExactRegistrySymbolFilter({
                             scope: input.scope,
                             parsedOperators,
                         }),
@@ -8352,7 +2617,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     exactRegistryDebug = exactRegistryMatch.debug;
 
                     if (exactRegistryMatch.status === 'hit') {
-                        passesUsed.add('exact_registry');
+                        const exactRegistryRerankDecision = this.searchQuerySupport.resolveRerankDecision(input.scope, queryPlan);
                         const callGraphNavigationState = await this.measureSearchPhase(
                             phaseTimings,
                             'navigationValidation',
@@ -8361,69 +2626,24 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                 registryManifestHash: registryState.manifestHash,
                             })
                         );
-                        const searchWarnings = [
-                            ...partialIndexSearchWarnings,
-                        ];
-                        if (callGraphNavigationState.warning) {
-                            searchWarnings.push(`SEARCH_${callGraphNavigationState.warning}`);
-                        }
-                        if (dirtyFilesNotFreshened) {
-                            searchWarnings.push(WARNING_CODES.SEARCH_DIRTY_WORKTREE_NOT_SYNCED);
-                        }
-                        if (changedFilesBoostSkippedForLargeChangeSet) {
-                            searchWarnings.push(WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED);
-                        }
                         const exactGroupingStartedAtMs = this.searchPhaseNowMs();
-                        const exactRegistrySymbolRepair = this.repairSourceBackedPythonSpan({
+                        const envelope = buildExactRegistryHitEnvelope({
                             codebaseRoot: effectiveRoot,
-                            symbol: exactRegistryMatch.symbol,
-                        });
-                        const finalizedSearchWarnings = Array.from(new Set([
-                            ...searchWarnings,
-                            ...this.buildSearchSpanWarningCodes(exactRegistrySymbolRepair),
-                        ])).sort();
-                        const exactGroup = this.buildExactRegistryGroupResult({
-                            codebaseRoot: effectiveRoot,
-                            symbol: exactRegistrySymbolRepair.symbol,
-                            spanRepair: exactRegistrySymbolRepair,
-                            indexedAt: registryState.registry.manifest.builtAt || null,
-                            callGraphNavigationState,
-                            sidecarReadyForOutline: true,
-                            debug: Boolean(input.debug),
-                        });
-                        exactGroup.recommendedNextAction = this.buildSearchGroupRecommendedAction(exactGroup);
-                        const exactFallbacks = this.buildSearchGroupFallbacks({
-                            codebaseRoot: effectiveRoot,
+                            absolutePath,
                             query: input.query,
                             scope: input.scope,
                             groupBy: input.groupBy,
-                            result: exactGroup,
-                        });
-                        if (exactFallbacks) {
-                            exactGroup.fallbacks = exactFallbacks;
-                        }
-                        this.addSearchPhaseTiming(phaseTimings, 'grouping', exactGroupingStartedAtMs);
-                        const visibleGroupedResults = [exactGroup];
-                        const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file), input.scope);
-                        const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, visibleGroupedResults.map((result) => ({
-                            file: result.file,
-                            span: result.span,
-                        })));
-                        const responseHints: Record<string, unknown> = {
-                            version: 1 as const,
-                            navigation: { nextStep: SEARCH_NAVIGATION_NEXT_STEP },
-                        };
-                        if (noiseMitigationHint) {
-                            responseHints.noiseMitigation = noiseMitigationHint;
-                        }
-                        if (generatedArtifactsHint) {
-                            responseHints.verification = {
-                                generatedArtifacts: generatedArtifactsHint,
-                            };
-                        }
-                        if (input.debug) {
-                            const rerankDecision = this.resolveRerankDecision(input.scope, queryPlan);
-                            const debugSearch = {
+                            limit: input.limit,
+                            freshnessDecision,
+                            freshnessSummary: initialFreshnessSummary,
+                            proofDebugHint,
+                            symbol: exactRegistryMatch.symbol,
+                            indexedAt: registryState.registry.manifest.builtAt || null,
+                            navigationState: callGraphNavigationState,
+                            navigationWarning: callGraphNavigationState.warning,
+                            sidecarReadyForOutline: true,
+                            debug: Boolean(input.debug),
+                            debugInput: {
                                 queryIntent: {
                                     classification: queryPlan.intent,
                                     confidence: queryPlan.confidence,
@@ -8437,7 +2657,7 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                     backendScoreKinds: [],
                                 },
                                 rankingProvenance: {
-                                    ...rankingProvenance,
+                                    ...initialRankingProvenance,
                                     semanticPassesUsed: [],
                                     lexicalPassesUsed: [],
                                     livePathSupplementUsed: false,
@@ -8446,42 +2666,35 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                     exactMatchPinningApplied: false,
                                     registryRepairGroupCount: 0,
                                 },
-                                exactRegistry: exactRegistryDebug,
                                 phaseTimingsMs: phaseTimings,
-                                passesUsed: Array.from(passesUsed).sort(),
                                 candidateLimit,
-                                mustRetry: {
-                                    attempts: 0,
-                                    maxAttempts,
-                                    applied: parsedOperators.must.length > 0,
-                                    satisfied: true,
-                                    finalCount: 1,
-                                },
-                                operatorSummary,
-                                filterSummary,
+                                mustRetryApplied: parsedOperators.must.length > 0,
+                                maxAttempts,
+                                operatorSummary: initialOperatorSummary,
+                                filterSummary: initialFilterSummary,
                                 changedFilesBoost: {
                                     enabled: input.rankingMode === 'auto_changed_first',
                                     applied: false,
-                                    available: changedFilesState.available,
-                                    changedCount: changedFilesCount,
+                                    available: initialChangedFilesState.available,
+                                    changedCount: initialChangedFilesCount,
                                     maxChangedFilesForBoost: SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
-                                    skippedForLargeChangeSet: changedFilesBoostSkippedForLargeChangeSet,
+                                    skippedForLargeChangeSet: initialChangedFilesBoostSkippedForLargeChangeSet,
                                     multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
                                     boostedCandidates: 0,
                                 },
-                                ...(debugChangedFilesState ? {
-                                    changedCode: this.buildChangedCodeDebug(effectiveRoot, debugChangedFilesState),
+                                ...(initialDebugChangedFilesState ? {
+                                    changedCode: this.buildChangedCodeDebug(effectiveRoot, initialDebugChangedFilesState),
                                 } : {}),
                                 rerank: {
-                                    enabledByPolicy: rerankDecision.enabledByPolicy,
-                                    skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
-                                    skippedByIdentifierIntent: rerankDecision.skippedByIdentifierIntent,
-                                    capabilityPresent: rerankDecision.capabilityPresent,
-                                    rerankerPresent: rerankDecision.rerankerPresent,
+                                    enabledByPolicy: exactRegistryRerankDecision.enabledByPolicy,
+                                    skippedByScopeDocs: exactRegistryRerankDecision.skippedByScopeDocs,
+                                    skippedByIdentifierIntent: exactRegistryRerankDecision.skippedByIdentifierIntent,
+                                    capabilityPresent: exactRegistryRerankDecision.capabilityPresent,
+                                    rerankerPresent: exactRegistryRerankDecision.rerankerPresent,
                                     enabled: false,
                                     attempted: false,
                                     applied: false,
-                                    exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
+                                    exactMatchPinningEnabled: exactRegistryRerankDecision.exactMatchPinningEnabled,
                                     exactMatchPinningApplied: false,
                                     candidatesIn: 1,
                                     candidatesReranked: 0,
@@ -8491,29 +2704,18 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                                     docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
                                     docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
                                 },
-                            } satisfies SearchDebugHint;
-                            responseHints.debugSearch = debugSearch;
-                            responseHints.debugSummary = this.buildSearchDebugSummary(debugSearch, freshnessSummary);
-                        }
-                        if (proofDebugHint) {
-                            responseHints.debugProofCheck = proofDebugHint;
-                        }
-
-                        const envelope: SearchResponseEnvelope = {
-                            status: "ok",
-                            path: absolutePath,
-                            query: input.query,
-                            scope: input.scope,
-                            groupBy: input.groupBy,
-                            limit: input.limit,
-                            resultMode: "grouped",
-                            freshnessDecision,
-                            freshnessSummary,
-                            ...(finalizedSearchWarnings.length > 0 ? { warnings: this.buildSearchWarningDetails(finalizedSearchWarnings) } : {}),
-                            recommendedNextAction: this.buildTopRecommendedSearchAction(visibleGroupedResults),
-                            hints: responseHints,
-                            results: visibleGroupedResults.map(({ __exactLexicalMatch: _exactLexicalMatch, ...result }) => result)
-                        };
+                                exactRegistry: exactRegistryDebug,
+                            },
+                            now: this.now,
+                            previewMaxChars: SEARCH_GROUP_PREVIEW_MAX_CHARS,
+                            navigationHelpers: this.getSearchNavigationHelpers(),
+                            partialIndexSearchWarnings,
+                            dirtyFilesNotFreshened: initialDirtyFilesNotFreshened,
+                            changedFilesBoostSkippedForLargeChangeSet: initialChangedFilesBoostSkippedForLargeChangeSet,
+                            buildNoiseMitigationHint: (files) => this.searchQuerySupport.buildNoiseMitigationHint(effectiveRoot, files, input.scope),
+                            buildGeneratedArtifactsVerificationHint: (results) => this.buildGeneratedArtifactsVerificationHint(effectiveRoot, results),
+                        });
+                        this.addSearchPhaseTiming(phaseTimings, 'grouping', exactGroupingStartedAtMs);
 
                         await this.touchWatchedCodebase(effectiveRoot);
                         return {
@@ -8531,365 +2733,99 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                         };
                     }
                 } else {
-                    exactRegistryDebug = this.buildUnavailableExactRegistryDebug(registryState.reason);
+                    exactRegistryDebug = this.searchQuerySupport.buildUnavailableExactRegistryDebug(registryState.reason);
                 }
             }
 
-            for (let attempt = 0; attempt < maxAttempts; attempt++) {
-                attemptsUsed = attempt + 1;
-                const passDescriptors: Array<{ id: 'primary' | 'expanded'; query: string }> = [
-                    { id: 'primary', query: semanticQuery },
-                ];
-                if (!exactRegistryEligible) {
-                    passDescriptors.push({ id: 'expanded', query: expandedQuery });
-                }
-                searchDiagnostics.searchPassCount += passDescriptors.length;
+            const execution = await runSearchExecution({
+                effectiveRoot,
+                scope: input.scope,
+                rankingMode: input.rankingMode,
+                limit: input.limit,
+                debug: Boolean(input.debug),
+                semanticQuery,
+                parsedOperators,
+                queryPlan,
+                exactRegistryEligible,
+                exactRegistryFallbackForTrackedLexical,
+                freshnessMode: freshnessDecision.mode,
+            }, {
+                searchQuerySupport: this.searchQuerySupport,
+                semanticSearch: (request) => this.context.semanticSearch(request),
+                reranker: this.reranker,
+                shouldForceSearchPassFailure: (passId) => this.shouldForceSearchPassFailure(passId),
+                classifyVectorBackendError,
+                getChangedFilesForCodebase: (codebasePath) => this.getChangedFilesForCodebase(codebasePath),
+                measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
+            }, searchDiagnostics);
 
-                const passSettled = await this.measureSearchPhase(phaseTimings, 'semanticSearch', () => Promise.allSettled(passDescriptors.map(async (pass) => {
-                    const passId = pass.id as 'primary' | 'expanded';
-                    if (this.shouldForceSearchPassFailure(passId)) {
-                        throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${passId}`);
-                    }
-                    const scorePolicy = queryPlan.scorePolicyKind === 'topk_only'
-                        ? { kind: 'topk_only' as const }
-                        : { kind: 'dense_similarity_min' as const, min: 0.3 };
-                    return this.context.semanticSearch({
-                        codebasePath: effectiveRoot,
-                        query: pass.query,
-                        topK: candidateLimit,
-                        retrievalMode: queryPlan.retrievalMode,
-                        scorePolicy
-                    });
-                })));
-
-                const successfulPasses: Array<{ id: string; results: SearchResultLike[] }> = [];
-                let vectorBackendDiagnostic: VectorBackendDiagnostic | null = null;
-                for (let idx = 0; idx < passSettled.length; idx++) {
-                    const passResult = passSettled[idx];
-                    const passDescriptor = passDescriptors[idx];
-                    if (passResult.status === 'fulfilled' && Array.isArray(passResult.value)) {
-                        successfulPasses.push({
-                            id: passDescriptor.id,
-                            results: passResult.value
-                        });
-                        passesUsed.add(passDescriptor.id);
-                        continue;
-                    }
-
-                    if (passResult.status === 'rejected' && vectorBackendDiagnostic === null) {
-                        vectorBackendDiagnostic = classifyVectorBackendError(passResult.reason);
-                    }
-                    searchWarningsSet.add(this.buildSearchPassWarning(passDescriptor.id));
-                }
-
-                searchDiagnostics.searchPassSuccessCount += successfulPasses.length;
-                searchDiagnostics.searchPassFailureCount += passDescriptors.length - successfulPasses.length;
-
-                if (successfulPasses.length === 0) {
-                    if (vectorBackendDiagnostic) {
-                        const payload = this.buildVectorBackendSearchPayload(vectorBackendDiagnostic, {
-                            path: absolutePath,
-                            query: input.query,
-                            scope: input.scope,
-                            groupBy: input.groupBy,
-                            resultMode: input.resultMode,
-                            limit: input.limit
-                        });
-                        return {
-                            content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                            meta: {
-                                searchDiagnostics: {
-                                    ...searchDiagnostics,
-                                    error: vectorBackendDiagnostic.code
-                                }
-                            }
-                        };
-                    }
-                    return {
-                        content: [{
-                            type: "text",
-                            text: "Error searching code: all semantic search passes failed. Please retry and verify embedding/vector backends are reachable."
-                        }],
-                        isError: true,
-                        meta: { searchDiagnostics }
-                    };
-                }
-
-                const byChunkKey = new Map<string, SearchCandidate>();
-                const attemptFilterSummary: SearchFilterSummary = {
-                    removedByScope: 0,
-                    removedByLanguage: 0,
-                    removedByPathInclude: 0,
-                    removedByPathExclude: 0,
-                    removedByMust: 0,
-                    removedByExclude: 0,
-                };
-                const addPass = (results: SearchResultLike[], passId: string, passWeight = 1) => {
-                    for (let i = 0; i < results.length; i++) {
-                        const result = results[i];
-                        if (!result || typeof result.relativePath !== 'string') continue;
-                        const key = `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || 'unknown'}`;
-                        const rank = i + 1;
-                        const rrf = passWeight * (1 / (SEARCH_RRF_K + rank));
-                        const existing = byChunkKey.get(key);
-                        if (!existing) {
-                            const backendScoreKind = typeof result.backendScoreKind === 'string'
-                                ? result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion'
-                                : 'unknown';
-                            backendScoreKinds.add(backendScoreKind);
-                            byChunkKey.set(key, {
-                                result,
-                                baseScore: typeof result.backendScore === 'number'
-                                    ? result.backendScore
-                                    : (typeof result.score === 'number' ? result.score : 0),
-                                backendScore: typeof result.backendScore === 'number'
-                                    ? result.backendScore
-                                    : (typeof result.score === 'number' ? result.score : 0),
-                                backendScoreKind,
-                                backendScoreKindsSeen: [backendScoreKind],
-                                fusionScore: rrf,
-                                lexicalScore: 0,
-                                finalScore: 0,
-                                pathCategory: 'neutral',
-                                pathMultiplier: 1.0,
-                                changedFilesMultiplier: 1.0,
-                                agentFitMultiplier: SEARCH_AGENT_FIT_NEUTRAL,
-                                agentFitReason: 'neutral',
-                                passesMatchedMust: false,
-                                exactLexicalMatch: false,
-                                exactMatchPinned: false,
-                                rerankAdjusted: false,
-                                retrievalPasses: [passId],
-                            });
-                        } else {
-                            existing.fusionScore += rrf;
-                            const nextScore = typeof result.backendScore === 'number'
-                                ? result.backendScore
-                                : (typeof result.score === 'number' ? result.score : undefined);
-                            if (typeof nextScore === 'number') {
-                                existing.baseScore = Math.max(existing.baseScore, nextScore);
-                                existing.backendScore = Math.max(existing.backendScore, nextScore);
-                            }
-                            if (typeof result.backendScoreKind === 'string') {
-                                backendScoreKinds.add(result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion');
-                                if (!existing.backendScoreKindsSeen.includes(result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown')) {
-                                    existing.backendScoreKindsSeen.push(result.backendScoreKind as 'dense_similarity' | 'lexical_rank' | 'rrf_fusion' | 'unknown');
-                                }
-                            }
-                            if (!existing.retrievalPasses.includes(passId)) {
-                                existing.retrievalPasses.push(passId);
-                            }
-                        }
-                    }
-                };
-
-                for (const pass of successfulPasses) {
-                    addPass(pass.results, pass.id, 1);
-                }
-                const trackedLexical = await this.measureSearchPhase(phaseTimings, 'trackedLexical', async () => this.buildTrackedLexicalSearchResults({
-                    effectiveRoot,
-                    parsedOperators,
-                    queryPlan,
+            if (execution.kind === 'vector_backend_unavailable') {
+                const payload = this.buildVectorBackendSearchPayload(execution.diagnostic, {
+                    path: absolutePath,
+                    query: input.query,
                     scope: input.scope,
-                    limit: candidateLimit,
-                    exactRegistryFallback: exactRegistryFallbackForTrackedLexical,
-                }));
-                trackedLexicalDebug = trackedLexical.debug;
-                if (trackedLexical.results.length > 0) {
-                    addPass(trackedLexical.results, 'lexical_files', 1);
-                    passesUsed.add('lexical_files');
-                }
-                if (canSupplementLivePathEvidence) {
-                    const livePathResults = this.buildLivePathScopedSearchResults({
-                        effectiveRoot,
-                        parsedOperators,
-                        queryPlan,
-                        changedFiles: observedChangedFilesState.files,
-                    });
-                    if (livePathResults.length > 0) {
-                        addPass(livePathResults, 'live_path', 1);
-                        passesUsed.add('live_path');
-                    }
-                }
-
-                const beforeFilter = byChunkKey.size;
-                const scoredAttempt: SearchCandidate[] = [];
-                for (const candidate of byChunkKey.values()) {
-                    const category = this.classifyPathCategory(candidate.result.relativePath);
-                    if (!this.shouldIncludeCategoryInScope(input.scope, category)) {
-                        attemptFilterSummary.removedByScope += 1;
-                        continue;
-                    }
-
-                    const languageValue = typeof candidate.result.language === 'string'
-                        ? candidate.result.language.toLowerCase()
-                        : 'unknown';
-                    if (parsedOperators.lang.length > 0 && !parsedOperators.lang.includes(languageValue)) {
-                        attemptFilterSummary.removedByLanguage += 1;
-                        continue;
-                    }
-
-                    const relativePath = String(candidate.result.relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
-                    if (parsedOperators.path.length > 0 && !this.pathMatchesAnyPattern(relativePath, parsedOperators.path)) {
-                        attemptFilterSummary.removedByPathInclude += 1;
-                        continue;
-                    }
-
-                    if (parsedOperators.excludePath.length > 0 && this.pathMatchesAnyPattern(relativePath, parsedOperators.excludePath)) {
-                        attemptFilterSummary.removedByPathExclude += 1;
-                        continue;
-                    }
-
-                    const symbolLabel = typeof candidate.result.symbolLabel === 'string' ? candidate.result.symbolLabel : '';
-                    const content = typeof candidate.result.content === 'string' ? candidate.result.content : '';
-                    const fields = [symbolLabel, relativePath, content];
-                    const matchesMust = parsedOperators.must.every((token) => this.tokenMatchesAnyField(token, fields));
-                    if (!matchesMust) {
-                        attemptFilterSummary.removedByMust += 1;
-                        continue;
-                    }
-
-                    const matchesExclude = parsedOperators.exclude.some((token) => this.tokenMatchesAnyField(token, fields));
-                    if (matchesExclude) {
-                        attemptFilterSummary.removedByExclude += 1;
-                        continue;
-                    }
-
-                    const pathMultiplier = SCOPE_PATH_MULTIPLIERS[input.scope][category];
-                    const agentFit = this.resolveAgentFitMultiplier(queryPlan, candidate.result, category, input.scope);
-                    let changedFilesMultiplier = 1.0;
-                    if (changedFilesBoostEnabled
-                        && changedFilesState.files.has(relativePath)
-                        && this.shouldApplyChangedFilesBoost(category, queryPlan)) {
-                        changedFilesMultiplier = SEARCH_CHANGED_FIRST_MULTIPLIER;
-                        boostedCandidates += 1;
-                    }
-
-                    candidate.pathCategory = category;
-                    candidate.pathMultiplier = pathMultiplier;
-                    candidate.changedFilesMultiplier = changedFilesMultiplier;
-                    candidate.agentFitMultiplier = agentFit.multiplier;
-                    candidate.agentFitReason = agentFit.reason;
-                    candidate.passesMatchedMust = matchesMust;
-                    const lexicalEvidence = this.scoreCandidateLexicalEvidence(queryPlan, candidate.result);
-                    candidate.lexicalScore = lexicalEvidence.score;
-                    candidate.exactLexicalMatch = lexicalEvidence.exactLexicalMatch;
-                    candidate.finalScore = (candidate.fusionScore + candidate.lexicalScore)
-                        * pathMultiplier
-                        * changedFilesMultiplier
-                        * agentFit.multiplier;
-                    scoredAttempt.push(candidate);
-                }
-
-                searchDiagnostics.resultsBeforeFilter = beforeFilter;
-                searchDiagnostics.resultsAfterFilter = scoredAttempt.length;
-                filterSummary = attemptFilterSummary;
-                scored = scoredAttempt;
-
-                exactMatchPinningApplied = this.sortSearchCandidates(scored, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
-                rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
-
-                if (parsedOperators.must.length === 0 || scored.length >= input.limit || attempt === maxAttempts - 1 || candidateLimit >= SEARCH_MAX_CANDIDATES) {
-                    break;
-                }
-
-                candidateLimit = Math.min(
-                    SEARCH_MAX_CANDIDATES,
-                    Math.max(candidateLimit + 1, candidateLimit * SEARCH_MUST_RETRY_MULTIPLIER)
-                );
-            }
-
-            const searchWarnings = [
-                ...Array.from(searchWarningsSet),
-                ...partialIndexSearchWarnings,
-            ];
-            if (dirtyFilesNotFreshened) {
-                searchWarnings.push(WARNING_CODES.SEARCH_DIRTY_WORKTREE_NOT_SYNCED);
-            }
-            if (changedFilesBoostSkippedForLargeChangeSet) {
-                searchWarnings.push(WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED);
-            }
-            freshnessSummary.changedFilesBoostApplied = boostedCandidates > 0;
-            const rerankDecision = this.resolveRerankDecision(input.scope, queryPlan);
-            let rerankerApplied = false;
-            let rerankerAttempted = false;
-            let rerankerFailurePhase: 'api_call' | 'parse_results' | undefined;
-            let rerankerCandidatesIn = scored.length;
-            let rerankerCandidatesReranked = 0;
-
-            if (rerankDecision.enabled && scored.length > 0 && this.reranker) {
-                rerankerAttempted = true;
-                try {
-                    const rerankCount = Math.min(SEARCH_RERANK_TOP_K, scored.length);
-                    rerankerCandidatesReranked = rerankCount;
-                    const rerankSlice = scored.slice(0, rerankCount);
-                    const rerankDocuments = rerankSlice.map((candidate) => this.buildRerankDocument(candidate.result));
-                    let rerankResults: Array<{ index: number }> = [];
-                    try {
-                        rerankResults = await this.measureSearchPhase(phaseTimings, 'rerank', () => this.reranker!.rerank(semanticQuery, rerankDocuments, {
-                            topK: rerankCount,
-                            truncation: true,
-                            returnDocuments: false
-                        }));
-                    } catch {
-                        rerankerFailurePhase = 'api_call';
-                        throw new Error('reranker_api_call_failed');
-                    }
-
-                    const rerankRanks = new Map<number, number>();
-                    try {
-                        for (let idx = 0; idx < rerankResults.length; idx++) {
-                            const originalIndex = rerankResults[idx]?.index;
-                            if (Number.isInteger(originalIndex) && originalIndex >= 0 && originalIndex < rerankCount && !rerankRanks.has(originalIndex)) {
-                                rerankRanks.set(originalIndex, idx + 1);
-                            }
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                });
+                return {
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
+                    meta: {
+                        searchDiagnostics: {
+                            ...searchDiagnostics,
+                            error: execution.diagnostic.code
                         }
-                    } catch {
-                        rerankerFailurePhase = 'parse_results';
-                        throw new Error('reranker_parse_failed');
                     }
-
-                    let rerankerUpdatedCandidates = 0;
-                    for (let idx = 0; idx < rerankSlice.length; idx++) {
-                        const rank = rerankRanks.get(idx);
-                        if (!rank) {
-                            continue;
-                        }
-                        const rerankRrf = 1 / (SEARCH_RERANK_RRF_K + rank);
-                        rerankSlice[idx].fusionScore += SEARCH_RERANK_WEIGHT * rerankRrf;
-                        rerankSlice[idx].finalScore = (rerankSlice[idx].fusionScore + rerankSlice[idx].lexicalScore)
-                            * rerankSlice[idx].pathMultiplier
-                            * rerankSlice[idx].changedFilesMultiplier
-                            * rerankSlice[idx].agentFitMultiplier;
-                        rerankSlice[idx].rerankAdjusted = true;
-                        rerankerUpdatedCandidates++;
-                    }
-
-                    exactMatchPinningApplied = this.sortSearchCandidates(scored, rerankDecision.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
-                    rerankerApplied = rerankerUpdatedCandidates > 0;
-                } catch {
-                    if (!rerankerFailurePhase) {
-                        rerankerFailurePhase = 'parse_results';
-                    }
-                    searchWarnings.push('RERANKER_FAILED');
-                }
+                };
             }
 
-            searchDiagnostics.excludedByIgnore = Math.max(0, searchDiagnostics.resultsBeforeFilter - searchDiagnostics.resultsAfterFilter);
-            searchDiagnostics.rerankerAttempted = rerankerAttempted;
-            searchDiagnostics.rerankerUsed = rerankerApplied;
-            rankingProvenance.semanticPassesUsed = Array.from(passesUsed).filter((passId) => passId === 'primary' || passId === 'expanded').sort();
-            rankingProvenance.lexicalPassesUsed = Array.from(passesUsed).filter((passId) => passId === 'lexical_files' || passId === 'live_path').sort();
-            rankingProvenance.livePathSupplementUsed = passesUsed.has('live_path');
-            rankingProvenance.lexicalFileScanUsed = passesUsed.has('lexical_files');
-            rankingProvenance.rerankApplied = rerankerApplied;
-            rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
+            if (execution.kind === 'all_semantic_passes_failed') {
+                return {
+                    content: [{
+                        type: "text",
+                        text: "Error searching code: all semantic search passes failed. Please retry and verify embedding/vector backends are reachable."
+                    }],
+                    isError: true,
+                    meta: { searchDiagnostics }
+                };
+            }
+
+            let {
+                scored,
+                operatorSummary,
+                filterSummary,
+                freshnessSummary,
+                trackedLexicalDebug,
+                candidateLimit: executedCandidateLimit,
+                attemptsUsed,
+                searchWarnings,
+                passesUsed,
+                backendScoreKinds,
+                exactMatchPinningApplied,
+                boostedCandidates,
+                changedFilesState,
+                debugChangedFilesState,
+                changedFilesCount,
+                changedFilesBoostSkippedForLargeChangeSet,
+                rankingProvenance,
+                rerankerAttempted,
+                rerankerApplied,
+                rerankerFailurePhase,
+                rerankerCandidatesIn,
+                rerankerCandidatesReranked,
+            } = execution;
+            freshnessSummary = {
+                ...freshnessSummary,
+                lastSyncAt: typeof freshnessDecision.lastSyncAt === 'string' ? freshnessDecision.lastSyncAt : null,
+            };
+            candidateLimit = executedCandidateLimit;
+            const rerankDecision = this.searchQuerySupport.resolveRerankDecision(input.scope, queryPlan);
             const mustApplied = parsedOperators.must.length > 0;
             const mustSatisfied = !mustApplied || scored.length > 0;
-            if (mustApplied && !mustSatisfied) {
-                searchWarnings.push('FILTER_MUST_UNSATISFIED');
-            }
-            let finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
+            let finalizedSearchWarnings = Array.from(new Set([
+                ...searchWarnings,
+                ...partialIndexSearchWarnings,
+            ])).sort();
 
             const debugHintBase: SearchDebugHint | undefined = input.debug
                 ? {
@@ -8957,81 +2893,33 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 : undefined;
 
             if (input.resultMode === 'raw') {
-                const rawResults: SearchChunkResult[] = scored.slice(0, input.limit).map((candidate) => ({
-                    kind: "chunk",
-                    file: candidate.result.relativePath,
-                    span: {
-                        startLine: candidate.result.startLine || 0,
-                        endLine: candidate.result.endLine || 0,
-                    },
-                    language: candidate.result.language || "unknown",
-                    content: String(candidate.result.content || ""),
-                    score: candidate.finalScore,
-                    indexedAt: typeof candidate.result.indexedAt === 'string' ? candidate.result.indexedAt : undefined,
-                    stalenessBucket: this.getStalenessBucket(candidate.result.indexedAt),
-                    symbolId: typeof candidate.result.symbolId === 'string' ? candidate.result.symbolId : undefined,
-                    symbolLabel: typeof candidate.result.symbolLabel === 'string' ? candidate.result.symbolLabel : undefined,
-                    symbolKey: typeof candidate.result.ownerSymbolKey === 'string' ? candidate.result.ownerSymbolKey : undefined,
-                    symbolInstanceId: typeof candidate.result.ownerSymbolInstanceId === 'string' ? candidate.result.ownerSymbolInstanceId : undefined,
-                    symbolKind: typeof candidate.result.symbolKind === 'string' ? candidate.result.symbolKind : undefined,
-                    ...(input.debug ? {
-                        debug: {
-                            baseScore: candidate.baseScore,
-                            fusionScore: candidate.fusionScore,
-                            lexicalScore: candidate.lexicalScore,
-                            pathMultiplier: candidate.pathMultiplier,
-                            pathCategory: candidate.pathCategory,
-                            changedFilesMultiplier: candidate.changedFilesMultiplier,
-                            agentFitMultiplier: candidate.agentFitMultiplier,
-                            agentFitReason: candidate.agentFitReason,
-                            matchesMust: candidate.passesMatchedMust,
-                            exactLexicalMatch: candidate.exactLexicalMatch,
-                            backendScore: candidate.backendScore,
-                            backendScoreKind: candidate.backendScoreKind,
-                            provenance: this.buildSearchCandidateProvenance(candidate),
-                        }
-                    } : {})
-                }));
-                const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, rawResults.map((result) => result.file), input.scope);
+                const rawResults = buildRawSearchResultsHelper({
+                    scored,
+                    limit: input.limit,
+                    debug: Boolean(input.debug),
+                    now: this.now,
+                });
+                const noiseMitigationHint = this.searchQuerySupport.buildNoiseMitigationHint(effectiveRoot, rawResults.map((result) => result.file), input.scope);
                 const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, rawResults.map((result) => ({
                     file: result.file,
                     span: result.span,
                 })));
-                const responseHints: Record<string, unknown> = {
-                    version: 1 as const,
-                    navigation: { nextStep: SEARCH_NAVIGATION_NEXT_STEP },
-                };
-                if (noiseMitigationHint) {
-                    responseHints.noiseMitigation = noiseMitigationHint;
-                }
-                if (generatedArtifactsHint) {
-                    responseHints.verification = {
-                        generatedArtifacts: generatedArtifactsHint,
-                    };
-                }
-                if (debugHintBase) {
-                    responseHints.debugSearch = debugHintBase;
-                    responseHints.debugSummary = this.buildSearchDebugSummary(debugHintBase, freshnessSummary);
-                }
-                if (proofDebugHint) {
-                    responseHints.debugProofCheck = proofDebugHint;
-                }
-
-                const envelope: SearchResponseEnvelope = {
-                    status: "ok",
-                    path: absolutePath,
+                const envelope = buildRawSearchEnvelopeHelper({
+                    codebaseRoot: effectiveRoot,
+                    absolutePath,
                     query: input.query,
                     scope: input.scope,
                     groupBy: input.groupBy,
                     limit: input.limit,
-                    resultMode: "raw",
                     freshnessDecision,
                     freshnessSummary,
-                    ...(finalizedSearchWarnings.length > 0 ? { warnings: this.buildSearchWarningDetails(finalizedSearchWarnings) } : {}),
-                    recommendedNextAction: this.buildTopRecommendedRawSearchAction(effectiveRoot, rawResults),
-                    hints: responseHints,
-                    results: rawResults
-                };
+                    warnings: finalizedSearchWarnings,
+                    debugHint: debugHintBase,
+                    proofDebugHint,
+                    noiseMitigationHint,
+                    generatedArtifactsHint,
+                    results: rawResults,
+                });
 
                 await this.touchWatchedCodebase(effectiveRoot);
                 return {
@@ -9039,14 +2927,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                     meta: { searchDiagnostics }
                 };
             }
-
-            type GroupAccumulator = {
-                chunks: SearchCandidate[];
-                ownerSymbolKey?: string;
-                ownerSymbolInstanceId?: string;
-                ownerSymbolKind?: string;
-                ownerSource: SearchOwnerSource;
-            };
 
             const needsRegistryRepair = input.groupBy === 'symbol'
                 && scored.some((candidate) => !candidate.result.ownerSymbolKey || !candidate.result.ownerSymbolInstanceId);
@@ -9085,47 +2965,6 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 }
             }
 
-            const groupingStartedAtMs = this.searchPhaseNowMs();
-            const groups = new Map<string, GroupAccumulator>();
-            for (const candidate of scored) {
-                const result = candidate.result;
-                let groupKey = '';
-                const ownerResolution = input.groupBy === 'symbol'
-                    ? this.resolveSearchOwnerFromRegistry(result, searchSymbolRegistry, queryPlan)
-                    : {};
-                const ownerSymbolKey = ownerResolution.ownerSymbolKey;
-                const ownerSymbolInstanceId = ownerResolution.ownerSymbolInstanceId;
-                const ownerSymbolKind = ownerResolution.symbolKind;
-                let ownerSource: SearchOwnerSource = 'fallback';
-                if (input.groupBy === 'file') {
-                    groupKey = `file:${result.relativePath}`;
-                    ownerSource = 'fallback';
-                } else if (ownerSymbolKey) {
-                    groupKey = ownerSymbolInstanceId
-                        ? `owner:${ownerSymbolKey}:${ownerSymbolInstanceId}`
-                        : `owner:${ownerSymbolKey}`;
-                    ownerSource = ownerResolution.ownerSource || 'owner_metadata';
-                } else {
-                    const proximityBucket = Math.floor((Math.max(1, result.startLine || 1) - 1) / SEARCH_PROXIMITY_WINDOW);
-                    groupKey = `fallback:${result.relativePath}:${proximityBucket}`;
-                    ownerSource = 'fallback';
-                }
-
-                const existing = groups.get(groupKey);
-                if (!existing) {
-                    groups.set(groupKey, {
-                        chunks: [candidate],
-                        ownerSymbolKey,
-                        ownerSymbolInstanceId,
-                        ownerSymbolKind,
-                        ownerSource,
-                    });
-                } else {
-                    existing.chunks.push(candidate);
-                }
-            }
-            this.addSearchPhaseTiming(phaseTimings, 'grouping', groupingStartedAtMs);
-
             const callGraphNavigationState = await this.measureSearchPhase(
                 phaseTimings,
                 'navigationValidation',
@@ -9139,239 +2978,69 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
                 searchWarnings.push(`SEARCH_${callGraphNavigationState.warning}`);
                 finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
             }
-            const sidecarReadyForOutline = Boolean(searchSymbolRegistryManifestHash);
-            const groupingResultsStartedAtMs = this.searchPhaseNowMs();
-            const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
-            const spanWarningCodes = new Set<string>();
-            for (const group of groups.values()) {
-                exactMatchPinningApplied = this.sortSearchCandidates(group.chunks, queryPlan.exactMatchPinningEnabled, parsedOperators.must.length > 0) || exactMatchPinningApplied;
-                rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
-                const representative = group.chunks[0];
-                const chunkSpanStart = Math.min(...group.chunks.map((c) => c.result.startLine || 0));
-                const chunkSpanEnd = Math.max(...group.chunks.map((c) => c.result.endLine || 0));
-                const previewSpan: SearchSpan = { startLine: chunkSpanStart, endLine: chunkSpanEnd };
-
-                let indexedAtMax: string | undefined;
-                let indexedAtMaxMs = Number.NEGATIVE_INFINITY;
-                for (const chunk of group.chunks) {
-                    const indexedAt = typeof chunk.result.indexedAt === 'string' ? chunk.result.indexedAt : undefined;
-                    const indexedAtMs = this.parseIndexedAtMs(indexedAt);
-                    if (indexedAtMs !== undefined && indexedAtMs > indexedAtMaxMs) {
-                        indexedAtMaxMs = indexedAtMs;
-                        indexedAtMax = indexedAt;
-                    }
-                }
-
-                const ownerSymbolKey = group.ownerSymbolKey;
-                const ownerSymbolInstanceId = group.ownerSymbolInstanceId;
-                const symbolKind = group.ownerSymbolKind || (typeof representative.result.symbolKind === 'string' ? representative.result.symbolKind : undefined);
-                const supportBoost = Math.min(Math.log1p(group.chunks.length) * 0.01, 0.03);
-                const symbolScore = representative.finalScore + supportBoost;
-                const confidence = group.ownerSource === 'owner_metadata' || group.ownerSource === 'registry_repair'
-                    ? (symbolKind === 'file' ? 'low' : 'medium')
-                    : 'low';
-                if (group.ownerSource === 'registry_repair') {
-                    rankingProvenance.registryRepairGroupCount += 1;
-                }
-                const groupId = ownerSymbolInstanceId
-                    || ownerSymbolKey
-                    || this.buildFallbackGroupId(representative.result.relativePath, previewSpan);
-                const rawRegistrySymbol = ownerSymbolInstanceId
-                    ? searchSymbolRegistry?.symbolsByInstanceId.get(ownerSymbolInstanceId)
-                    : undefined;
-                const registrySymbolRepair = rawRegistrySymbol
-                    ? this.repairSourceBackedPythonSpan({
-                        codebaseRoot: effectiveRoot,
-                        symbol: rawRegistrySymbol,
-                    })
-                    : undefined;
-                for (const warning of this.buildSearchSpanWarningCodes(registrySymbolRepair)) {
-                    spanWarningCodes.add(warning);
-                }
-                const registrySymbol = registrySymbolRepair?.symbol;
-                const symbolSpan: SearchSpan | undefined = registrySymbol
-                    ? {
-                        startLine: registrySymbol.span.startLine,
-                        endLine: registrySymbol.span.endLine,
-                    }
-                    : undefined;
-                const span: SearchSpan = symbolSpan
-                    ? {
-                        startLine: symbolSpan.startLine,
-                        endLine: symbolSpan.endLine,
-                    }
-                    : {
-                        startLine: previewSpan.startLine,
-                        endLine: previewSpan.endLine,
-                    };
-                const repSymbolLabel = this.buildDisplaySymbolLabel({
-                    symbolLabel: typeof representative.result.symbolLabel === 'string' ? representative.result.symbolLabel : undefined,
-                    symbolKind,
-                    relativePath: representative.result.relativePath,
-                    span,
-                    content: String(representative.result.content || ''),
-                });
-                const callGraphHint = this.buildSearchGroupCallGraphHint({
-                    file: representative.result.relativePath,
-                    language: representative.result.language || 'unknown',
-                    span,
-                    symbolLabel: repSymbolLabel,
-                    ownerSymbolInstanceId,
-                    registrySymbol,
-                    registryLoaded: Boolean(searchSymbolRegistry),
-                    registryUnavailableReason: searchSymbolRegistryUnavailableReason,
-                    navigationState: callGraphNavigationState,
-                });
-                const nextActions = this.buildSearchNextActions(
-                    effectiveRoot,
-                    representative.result.relativePath,
-                    span,
-                    callGraphHint,
-                    sidecarReadyForOutline,
-                    registrySymbol
-                );
-                const navigationFallback = this.buildNavigationFallback(
-                    effectiveRoot,
-                    representative.result.relativePath,
-                    previewSpan,
-                    callGraphHint,
-                    sidecarReadyForOutline,
-                    this.shouldAllowPreviewReadFallback(callGraphHint, Boolean(nextActions?.openSymbol))
-                );
-                const semanticMatch: SearchCapabilityConfidence = representative.backendScoreKindsSeen.includes('dense_similarity')
-                    ? (queryPlan.intent === 'semantic' || queryPlan.intent === 'mixed' ? 'high' : 'medium')
-                    : representative.exactLexicalMatch
-                        ? 'low'
-                        : 'medium';
-                const groupResult: SearchGroupResult & { __exactLexicalMatch: boolean } = {
-                    kind: "group",
-                    groupId,
-                    file: representative.result.relativePath,
-                    span,
-                    previewSpan,
-                    ...(symbolSpan ? { symbolSpan } : {}),
-                    language: representative.result.language || 'unknown',
-                    ...(ownerSymbolInstanceId ? { symbolId: ownerSymbolInstanceId } : {}),
-                    symbolLabel: repSymbolLabel,
-                    ...(ownerSymbolKey ? { symbolKey: ownerSymbolKey } : {}),
-                    ...(ownerSymbolInstanceId ? { symbolInstanceId: ownerSymbolInstanceId } : {}),
-                    ...(symbolKind ? { symbolKind } : {}),
-                    confidence,
-                    score: symbolScore,
-                    indexedAt: indexedAtMax || null,
-                    stalenessBucket: this.getStalenessBucket(indexedAtMax),
-                    collapsedChunkCount: group.chunks.length,
-                    callGraphHint,
-                    ...(navigationFallback ? { navigationFallback } : {}),
-                    ...(nextActions ? { nextActions } : {}),
-                    capabilities: this.buildSearchResultCapabilities({
-                        callGraphHint,
-                        confidence,
-                        hasOpenSymbol: Boolean(nextActions?.openSymbol),
-                        hasReadFallback: Boolean(navigationFallback?.readSpan),
-                        semanticMatch,
-                        spanValidation: registrySymbolRepair
-                            ? (registrySymbolRepair.validated ? 'verified' : registrySymbolRepair.attempted ? 'unverified' : 'not_applicable')
-                            : 'not_applicable',
-                    }),
-                    preview: this.buildSearchGroupPreview(repSymbolLabel, String(representative.result.content || '')),
-                    __exactLexicalMatch: representative.exactLexicalMatch,
-                    ...(input.debug ? {
-                        debug: {
-                            representativeChunkCount: group.chunks.length,
-                            pathCategory: representative.pathCategory,
-                            pathMultiplier: representative.pathMultiplier,
-                            topChunkScore: representative.finalScore,
-                            lexicalScore: representative.lexicalScore,
-                            changedFilesMultiplier: representative.changedFilesMultiplier,
-                            agentFitMultiplier: representative.agentFitMultiplier,
-                            agentFitReason: representative.agentFitReason,
-                            matchesMust: representative.passesMatchedMust,
-                            exactLexicalMatch: representative.exactLexicalMatch,
-                            symbolAggregation: {
-                                ownerSource: group.ownerSource,
-                                evidenceChunkCount: group.chunks.length,
-                                supportBoost,
-                            },
-                            provenance: this.buildSearchCandidateProvenance(representative, group.ownerSource),
-                        }
-                    } : {})
-                };
-                groupResult.recommendedNextAction = this.buildSearchGroupRecommendedAction(groupResult);
-                const fallbacks = this.buildSearchGroupFallbacks({
-                    codebaseRoot: effectiveRoot,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    result: groupResult,
-                });
-                if (fallbacks) {
-                    groupResult.fallbacks = fallbacks;
-                }
-                groupedResults.push(groupResult);
-            }
-            this.addSearchPhaseTiming(phaseTimings, 'grouping', groupingResultsStartedAtMs);
-            if (spanWarningCodes.size > 0) {
-                finalizedSearchWarnings = Array.from(new Set([
-                    ...finalizedSearchWarnings,
-                    ...spanWarningCodes,
-                ])).sort();
-            }
-
-            const rankedGroupedResults = (queryPlan.referenceSeeking || queryPlan.intent === 'identifier')
-                ? this.collapseDuplicateDeclarationGroups(groupedResults)
-                : groupedResults;
-
-            if (this.sortGroupedSearchResults(rankedGroupedResults, queryPlan.exactMatchPinningEnabled)) {
-                exactMatchPinningApplied = true;
-                rankingProvenance.exactMatchPinningApplied = true;
-            }
-
-            const diversityApplied = this.applyGroupDiversity(rankedGroupedResults, input.limit, input.groupBy);
-            const visibleGroupedResults = diversityApplied.selected;
-            const noiseMitigationHint = this.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file), input.scope);
-            const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, visibleGroupedResults.map((result) => ({
-                file: result.file,
-                span: result.span,
-            })));
-            const responseHints: Record<string, unknown> = {
-                version: 1 as const,
-                navigation: { nextStep: SEARCH_NAVIGATION_NEXT_STEP },
-            };
-            if (noiseMitigationHint) {
-                responseHints.noiseMitigation = noiseMitigationHint;
-            }
-            if (generatedArtifactsHint) {
-                responseHints.verification = {
-                    generatedArtifacts: generatedArtifactsHint,
-                };
-            }
-            if (debugHintBase) {
-                responseHints.debugSearch = {
-                    ...debugHintBase,
-                    diversitySummary: diversityApplied.summary
-                };
-                responseHints.debugSummary = this.buildSearchDebugSummary(responseHints.debugSearch as SearchDebugHint, freshnessSummary);
-            }
-            if (proofDebugHint) {
-                responseHints.debugProofCheck = proofDebugHint;
-            }
-
-            const envelope: SearchResponseEnvelope = {
-                status: "ok",
-                path: absolutePath,
+            const groupingStartedAtMs = this.searchPhaseNowMs();
+            const groupedSearchResults = buildVisibleGroupedSearchResultsHelper({
+                scored,
+                codebaseRoot: effectiveRoot,
                 query: input.query,
                 scope: input.scope,
                 groupBy: input.groupBy,
                 limit: input.limit,
-                resultMode: "grouped",
+                queryPlan,
+                mustMatchesFirst: parsedOperators.must.length > 0,
+                registry: searchSymbolRegistry,
+                registryUnavailableReason: searchSymbolRegistryUnavailableReason,
+                navigationState: callGraphNavigationState,
+                sidecarReadyForOutline: Boolean(searchSymbolRegistryManifestHash),
+                debug: Boolean(input.debug),
+                now: this.now,
+                previewMaxChars: SEARCH_GROUP_PREVIEW_MAX_CHARS,
+                navigationHelpers: this.getSearchNavigationHelpers(),
+                parseIndexedAtMs: (indexedAt?: string) => this.parseIndexedAtMs(indexedAt),
+                resolveOwner: (result) => this.resolveSearchOwnerFromRegistry(result as SearchResultLike, searchSymbolRegistry, queryPlan),
+            });
+            this.addSearchPhaseTiming(phaseTimings, 'grouping', groupingStartedAtMs);
+            if (groupedSearchResults.warnings.length > 0) {
+                finalizedSearchWarnings = Array.from(new Set([
+                    ...finalizedSearchWarnings,
+                    ...groupedSearchResults.warnings,
+                ])).sort();
+            }
+            if (groupedSearchResults.exactMatchPinningApplied) {
+                exactMatchPinningApplied = true;
+                rankingProvenance.exactMatchPinningApplied = true;
+            }
+            rankingProvenance.registryRepairGroupCount += groupedSearchResults.registryRepairGroupCount;
+
+            const visibleGroupedResults = groupedSearchResults.visibleResults;
+            const noiseMitigationHint = this.searchQuerySupport.buildNoiseMitigationHint(effectiveRoot, visibleGroupedResults.map((result) => result.file), input.scope);
+            const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(effectiveRoot, visibleGroupedResults.map((result) => ({
+                file: result.file,
+                span: result.span,
+            })));
+            const groupedDebugHint = debugHintBase
+                ? {
+                    ...debugHintBase,
+                    diversitySummary: groupedSearchResults.diversitySummary,
+                } satisfies SearchDebugHint
+                : undefined;
+
+            const envelope = buildGroupedSearchEnvelopeHelper({
+                codebaseRoot: effectiveRoot,
+                absolutePath,
+                query: input.query,
+                scope: input.scope,
+                groupBy: input.groupBy,
+                limit: input.limit,
                 freshnessDecision,
                 freshnessSummary,
-                ...(finalizedSearchWarnings.length > 0 ? { warnings: this.buildSearchWarningDetails(finalizedSearchWarnings) } : {}),
-                recommendedNextAction: this.buildTopRecommendedSearchAction(visibleGroupedResults),
-                hints: responseHints,
-                results: visibleGroupedResults.map(({ __exactLexicalMatch: _exactLexicalMatch, ...result }) => result)
-            };
+                warnings: finalizedSearchWarnings,
+                debugHint: groupedDebugHint,
+                proofDebugHint,
+                noiseMitigationHint,
+                generatedArtifactsHint,
+                results: visibleGroupedResults,
+            });
 
             await this.touchWatchedCodebase(effectiveRoot);
             return {
@@ -9423,1308 +3092,26 @@ To force rebuild from scratch: call manage_index with {"action":"create","path":
     }
 
     public async handleFileOutline(args: FileOutlineInput) {
-        const limitSymbols = Number.isFinite(args?.limitSymbols)
-            ? Math.max(1, Number(args.limitSymbols))
-            : 500;
-        const requestedStartLine = Number.isFinite(args?.start_line) ? Math.max(1, Number(args.start_line)) : undefined;
-        const requestedEndLine = Number.isFinite(args?.end_line) ? Math.max(1, Number(args.end_line)) : undefined;
-        const resolveMode = args?.resolveMode === 'exact' ? 'exact' : 'outline';
-        const symbolIdExact = typeof args?.symbolIdExact === 'string' ? args.symbolIdExact.trim() : undefined;
-        const symbolLabelExact = typeof args?.symbolLabelExact === 'string' ? args.symbolLabelExact.trim() : undefined;
-
-        try {
-            const absoluteRoot = ensureAbsolutePath(args.path);
-            const normalizedFile = this.normalizeRelativeFilePath(args.file);
-
-            if (!fs.existsSync(absoluteRoot)) {
-                const payload = this.buildInvalidFileOutlineRequestPayload(
-                    absoluteRoot,
-                    normalizedFile,
-                    `Path '${absoluteRoot}' does not exist. file_outline requires an indexed codebase directory root.`,
-                    'not_indexed',
-                    'not_indexed'
-                );
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    isError: true
-                };
-            }
-
-            const rootStat = fs.statSync(absoluteRoot);
-            if (!rootStat.isDirectory()) {
-                const payload = this.buildInvalidFileOutlineRequestPayload(
-                    absoluteRoot,
-                    normalizedFile,
-                    `Path '${absoluteRoot}' is not a directory. file_outline requires an indexed codebase directory root.`,
-                    'not_indexed',
-                    'not_indexed'
-                );
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    isError: true
-                };
-            }
-
-            trackCodebasePath(absoluteRoot);
-
-            const trackedRootState = await this.prepareTrackedRootForRead(absoluteRoot, 'navigation');
-            if (trackedRootState.state === 'requires_reindex') {
-                const payload = this.buildRequiresReindexFileOutlinePayload(trackedRootState.codebasePath, {
-                    ...args,
-                    file: normalizedFile
-                }, trackedRootState.message);
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            if (trackedRootState.state === 'index_failed') {
-                const payload = this.buildIndexFailedFileOutlinePayload(
-                    trackedRootState.codebasePath,
-                    absoluteRoot,
-                    normalizedFile,
-                    trackedRootState.info
-                );
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            if (trackedRootState.state === 'not_indexed') {
-                const payload = this.buildNotIndexedFileOutlinePayload(normalizedFile, absoluteRoot);
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            if (trackedRootState.state === 'indexing') {
-                const payload = this.buildNotReadyFileOutlinePayload(trackedRootState.codebasePath, normalizedFile, absoluteRoot);
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            if (trackedRootState.state === 'stale_local') {
-                const payload = this.buildNotIndexedFileOutlinePayload(normalizedFile, absoluteRoot, {
-                    codebaseRoot: trackedRootState.codebasePath,
-                    reason: trackedRootState.reason
-                });
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            if (trackedRootState.state === 'missing_collection') {
-                const payload = this.withProofDebugHint(this.buildMissingLocalCollectionFileOutlinePayload(
-                    trackedRootState.codebasePath,
-                    absoluteRoot,
-                    normalizedFile,
-                    trackedRootState.collectionName
-                ), trackedRootState.proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            const matchedRoot = trackedRootState.root;
-            const effectiveRoot = matchedRoot.path;
-            const absoluteFile = path.resolve(effectiveRoot, normalizedFile);
-            const relativeToRoot = path.relative(effectiveRoot, absoluteFile);
-            if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
-                const payload = this.buildInvalidFileOutlineRequestPayload(
-                    effectiveRoot,
-                    normalizedFile,
-                    `File '${normalizedFile}' must be inside codebase root '${effectiveRoot}'.`,
-                    'not_found'
-                );
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    isError: true
-                };
-            }
-            const proofDebugHint = trackedRootState.proofDebugHint;
-
-            if (this.isPartialIndexNavigationUnavailable(matchedRoot.info)) {
-                const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(
-                    effectiveRoot,
-                    {
-                        ...args,
-                        file: normalizedFile
-                    },
-                    PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL,
-                    'partial_index_navigation_unavailable'
-                ), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            if (!fs.existsSync(absoluteFile)) {
-                const payload: FileOutlineResponseEnvelope = {
-                    status: 'not_found',
-                    path: effectiveRoot,
-                    file: normalizedFile,
-                    outline: null,
-                    hasMore: false,
-                    message: `File '${normalizedFile}' does not exist under codebase root '${effectiveRoot}'.`
-                };
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
-                };
-            }
-
-            const fileStat = fs.statSync(absoluteFile);
-            if (!fileStat.isFile()) {
-                const payload: FileOutlineResponseEnvelope = {
-                    status: 'not_found',
-                    path: effectiveRoot,
-                    file: normalizedFile,
-                    outline: null,
-                    hasMore: false,
-                    message: `'${normalizedFile}' is not a file.`
-                };
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
-                };
-            }
-
-            const windowStart = requestedStartLine;
-            const windowEnd = requestedEndLine && requestedStartLine
-                ? Math.max(requestedEndLine, requestedStartLine)
-                : requestedEndLine;
-
-            const registryState = await this.navigationStore.getSymbolsByFile({
-                normalizedRootPath: effectiveRoot,
-                file: normalizedFile,
-            });
-            if (registryState.status === 'ok') {
-                const registrySymbols = registryState.symbols;
-                if (registrySymbols.length > 0) {
-                    const fileFreshness = this.getRegistryFileFreshness({
-                        symbols: registrySymbols,
-                        absoluteFile,
-                    });
-                    if (fileFreshness.status === 'inconsistent') {
-                        const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
-                            ...args,
-                            file: normalizedFile
-                        }, `Symbol registry contains inconsistent file hashes for '${normalizedFile}'.`, 'incompatible_symbol_registry'), proofDebugHint);
-                        return {
-                            content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                        };
-                    }
-                    if (fileFreshness.status === 'stale') {
-                        const payload = this.withProofDebugHint(this.buildStaleSymbolRefFileOutlinePayload(effectiveRoot, {
-                            ...args,
-                            file: normalizedFile
-                        }, `File '${normalizedFile}' has changed since the symbol registry snapshot was published.`), proofDebugHint);
-                        return {
-                            content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                        };
-                    }
-
-                    const relationshipGraph = await this.loadRegistryValidatedCallGraphSidecar({
-                        codebaseRoot: effectiveRoot,
-                        registryManifestHash: registryState.manifestHash,
-                    });
-                    const outlineWarnings = registryState.warnings.length > 0
-                        ? [`OUTLINE_SYMBOL_REGISTRY_WARNINGS:${registryState.warnings.length}`]
-                        : [];
-                    if (relationshipGraph.warning) {
-                        outlineWarnings.push(`OUTLINE_${relationshipGraph.warning}`);
-                    }
-                    const payload = this.buildRegistryFileOutlinePayload({
-                        codebaseRoot: effectiveRoot,
-                        file: normalizedFile,
-                        symbols: registrySymbols,
-                        limitSymbols,
-                        resolveMode,
-                        symbolIdExact,
-                        symbolLabelExact,
-                        windowStart,
-                        windowEnd,
-                        callGraphNavigationState: relationshipGraph,
-                        warnings: outlineWarnings.length > 0 ? outlineWarnings : undefined,
-                    });
-                    await this.touchWatchedCodebase(effectiveRoot);
-                    return {
-                        content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
-                    };
-                }
-                const languageStatus = this.getOutlineStatusForLanguage(normalizedFile);
-                if (languageStatus !== 'ok') {
-                    const payload: FileOutlineResponseEnvelope = {
-                        status: 'unsupported',
-                        reason: 'unsupported_language',
-                        path: effectiveRoot,
-                        file: normalizedFile,
-                        outline: null,
-                        hasMore: false,
-                        message: `File '${normalizedFile}' is not supported for sidecar outline. Supported extensions: ${OUTLINE_SUPPORTED_EXTENSIONS.join(', ')}.`
-                    };
-                    return {
-                        content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
-                    };
-                }
-
-                const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
-                    ...args,
-                    file: normalizedFile
-                }, `File '${normalizedFile}' is missing from the symbol registry for this snapshot.`, 'missing_symbol_registry'), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            if (registryState.status === 'incompatible') {
-                const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
-                    ...args,
-                    file: normalizedFile
-                }, `Symbol registry is incompatible: ${registryState.reason}`, 'incompatible_symbol_registry'), proofDebugHint);
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-                };
-            }
-
-            if (this.getOutlineStatusForLanguage(normalizedFile) !== 'ok') {
-                const payload: FileOutlineResponseEnvelope = {
-                    status: 'unsupported',
-                    reason: 'unsupported_language',
-                    path: effectiveRoot,
-                    file: normalizedFile,
-                    outline: null,
-                    hasMore: false,
-                    message: `File '${normalizedFile}' is not supported for sidecar outline. Supported extensions: ${OUTLINE_SUPPORTED_EXTENSIONS.join(', ')}.`
-                };
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(this.withProofDebugHint(payload, proofDebugHint)) }]
-                };
-            }
-
-            const payload = this.withProofDebugHint(this.buildRequiresReindexFileOutlinePayload(effectiveRoot, {
-                ...args,
-                file: normalizedFile
-            }, registryState.reason, 'missing_symbol_registry'), proofDebugHint);
-            return {
-                content: [{ type: "text", text: this.stringifyToolJson(payload) }]
-            };
-        } catch (error: unknown) {
-            const payload = this.buildInvalidFileOutlineRequestPayload(
-                typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
-                typeof args?.file === 'string' ? this.normalizeRelativeFilePath(args.file) : '',
-                `Unexpected file_outline failure: ${formatUnknownError(error)}`,
-                'not_ready'
-            );
-            return {
-                content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                isError: true
-            };
-        }
+        return this.navigationHandlers.handleFileOutline(args);
     }
 
     public async handleCallGraph(args: ToolArgs) {
-        const rawDirection = args?.direction;
-        const direction: CallGraphDirection = rawDirection === 'callers' || rawDirection === 'callees' || rawDirection === 'both'
-            ? rawDirection
-            : 'both';
-        const depth = Number.isFinite(args?.depth) ? Math.max(1, Math.min(3, Number(args.depth))) : 1;
-        const limit = Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 20;
-        const symbolRef = args?.symbolRef as CallGraphSymbolRef | undefined;
-        const normalizedSymbolRef: CallGraphSymbolRef = {
-            file: typeof symbolRef?.file === 'string' ? this.normalizeRelativeFilePath(symbolRef.file) : '',
-            symbolId: typeof symbolRef?.symbolId === 'string' ? symbolRef.symbolId : '',
-            ...(typeof symbolRef?.symbolLabel === 'string' ? { symbolLabel: symbolRef.symbolLabel } : {}),
-            ...(symbolRef?.span ? { span: symbolRef.span } : {}),
-        };
-        const invalidSymbolRefContext = {
-            path: typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
-            symbolRef: normalizedSymbolRef,
-            direction,
-            depth,
-            limit,
-        };
-
-        if (!symbolRef || typeof symbolRef.file !== 'string' || typeof symbolRef.symbolId !== 'string') {
-            const payload = this.buildInvalidCallGraphRequestPayload(
-                invalidSymbolRefContext,
-                'symbolRef with { file, symbolId } is required.',
-                'not_found',
-                'invalid_symbol_ref'
-            );
-            return {
-                content: [{
-                    type: "text",
-                    text: this.stringifyToolJson(payload)
-                }],
-                isError: true
-            };
-        }
-
-        try {
-            const absolutePath = ensureAbsolutePath(typeof args.path === 'string' ? args.path : '');
-            if (!fs.existsSync(absolutePath)) {
-                const payload = this.buildInvalidCallGraphRequestPayload(
-                    {
-                        path: absolutePath,
-                        symbolRef: normalizedSymbolRef,
-                        direction,
-                        depth,
-                        limit,
-                    },
-                    `Path '${absolutePath}' does not exist. call_graph requires an indexed codebase directory root.`,
-                    'not_indexed',
-                    'not_indexed'
-                );
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    isError: true
-                };
-            }
-
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isDirectory()) {
-                const payload = this.buildInvalidCallGraphRequestPayload(
-                    {
-                        path: absolutePath,
-                        symbolRef: normalizedSymbolRef,
-                        direction,
-                        depth,
-                        limit,
-                    },
-                    `Path '${absolutePath}' is not a directory. call_graph requires an indexed codebase directory root.`,
-                    'not_indexed',
-                    'not_indexed'
-                );
-                return {
-                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
-                    isError: true
-                };
-            }
-
-            trackCodebasePath(absolutePath);
-
-            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath, 'navigation');
-            if (trackedRootState.state === 'requires_reindex') {
-                const payload = this.buildRequiresReindexCallGraphPayload(
-                    trackedRootState.codebasePath,
-                    trackedRootState.message,
-                    {
-                        path: absolutePath,
-                        symbolRef,
-                        direction,
-                        depth,
-                        limit
-                    }
-                );
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            if (trackedRootState.state === 'indexing') {
-                const payload = this.buildNotReadyCallGraphPayload(trackedRootState.codebasePath, {
-                    path: absolutePath,
-                    symbolRef,
-                    direction,
-                    depth,
-                    limit
-                });
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            if (trackedRootState.state === 'index_failed') {
-                const payload = this.buildIndexFailedCallGraphPayload(trackedRootState.codebasePath, {
-                    path: absolutePath,
-                    symbolRef,
-                    direction,
-                    depth,
-                    limit
-                }, trackedRootState.info);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            if (trackedRootState.state === 'not_indexed') {
-                const payload = this.buildNotIndexedCallGraphPayload({
-                    path: absolutePath,
-                    symbolRef,
-                    direction,
-                    depth,
-                    limit
-                });
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            if (trackedRootState.state === 'stale_local') {
-                const payload = this.buildNotIndexedCallGraphPayload(
-                    {
-                        path: absolutePath,
-                        symbolRef,
-                        direction,
-                        depth,
-                        limit
-                    },
-                    {
-                        codebaseRoot: trackedRootState.codebasePath,
-                        reason: trackedRootState.reason
-                    }
-                );
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            if (trackedRootState.state === 'missing_collection') {
-                const payload = this.withProofDebugHint(this.buildMissingLocalCollectionCallGraphPayload(
-                    trackedRootState.codebasePath,
-                    {
-                        path: absolutePath,
-                        symbolRef,
-                        direction,
-                        depth,
-                        limit,
-                    },
-                    trackedRootState.collectionName
-                ), trackedRootState.proofDebugHint);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            const searchableRoot = trackedRootState.root;
-            const effectiveRoot = searchableRoot.path;
-            const proofDebugHint = trackedRootState.proofDebugHint;
-
-            if (this.isPartialIndexNavigationUnavailable(searchableRoot.info)) {
-                const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
-                    effectiveRoot,
-                    PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL,
-                    {
-                        path: absolutePath,
-                        symbolRef,
-                        direction,
-                        depth,
-                        limit
-                    },
-                    'partial_index_navigation_unavailable'
-                ), proofDebugHint);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            const normalizedSymbolFile = this.normalizeRelativeFilePath(symbolRef.file);
-            const registryState = await this.navigationStore.getSymbolsByFile({
-                normalizedRootPath: effectiveRoot,
-                file: normalizedSymbolFile,
-            });
-            if (registryState.status !== 'ok') {
-                const reason = registryState.status === 'missing'
-                    ? 'missing_symbol_registry'
-                    : 'incompatible_symbol_registry';
-                const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
-                    effectiveRoot,
-                    `Symbol registry is ${registryState.status}: ${registryState.reason}`,
-                    {
-                        path: absolutePath,
-                        symbolRef,
-                        direction,
-                        depth,
-                        limit
-                    },
-                    reason
-                ), proofDebugHint);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            const exactRegistrySymbols = this.findExactRegistrySymbols({
-                symbols: registryState.symbols,
-                symbolIdExact: symbolRef.symbolId,
-                symbolLabelExact: symbolRef.symbolLabel,
-            });
-            if (exactRegistrySymbols.length === 0) {
-                const payload = this.withProofDebugHint({
-                    status: 'not_found' as const,
-                    path: effectiveRoot,
-                    symbolRef,
-                    supported: false,
-                    reason: 'missing_symbol',
-                    message: 'No exact symbol match found in relationship-backed navigation state.',
-                    nodes: [],
-                    edges: [],
-                    notes: [],
-                    notesTruncated: false,
-                    totalNoteCount: 0,
-                    returnedNoteCount: 0,
-                } satisfies CallGraphResponseEnvelope, proofDebugHint);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            if (exactRegistrySymbols.length > 1) {
-                const payload = this.withProofDebugHint({
-                    status: 'not_found' as const,
-                    path: effectiveRoot,
-                    symbolRef,
-                    supported: false,
-                    reason: 'missing_symbol',
-                    message: 'Ambiguous exact symbol reference. Use symbolInstanceId for deterministic traversal.',
-                    nodes: [],
-                    edges: [],
-                    notes: [],
-                    notesTruncated: false,
-                    totalNoteCount: 0,
-                    returnedNoteCount: 0,
-                } satisfies CallGraphResponseEnvelope, proofDebugHint);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            const resolvedSymbolRepair = this.repairSourceBackedPythonSpan({
-                codebaseRoot: effectiveRoot,
-                symbol: exactRegistrySymbols[0],
-            });
-            const resolvedSymbol = resolvedSymbolRepair.symbol;
-            const absoluteSymbolFile = path.resolve(effectiveRoot, normalizedSymbolFile);
-            const relativeSymbolFile = path.relative(effectiveRoot, absoluteSymbolFile);
-            const symbolFileInsideRoot = !relativeSymbolFile.startsWith('..') && !path.isAbsolute(relativeSymbolFile);
-            if (!symbolFileInsideRoot || !fs.existsSync(absoluteSymbolFile) || !fs.statSync(absoluteSymbolFile).isFile()) {
-                if (exactRegistrySymbols.some((symbol) => this.isSha256HexHash(symbol.fileHash))) {
-                    const payload = this.withProofDebugHint(this.buildStaleSymbolRefCallGraphPayload({
-                        codebaseRoot: effectiveRoot,
-                        context: {
-                            path: absolutePath,
-                            symbolRef,
-                            direction,
-                            depth,
-                            limit,
-                        },
-                        message: `Symbol reference points at '${normalizedSymbolFile}', but the current file is unavailable. Refresh the index before using exact call graph navigation.`,
-                    }), proofDebugHint);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: this.stringifyToolJson(payload)
-                        }]
-                    };
-                }
-            } else {
-                const fileFreshness = this.getRegistryFileFreshness({
-                    symbols: exactRegistrySymbols,
-                    absoluteFile: absoluteSymbolFile,
-                });
-                if (fileFreshness.status === 'inconsistent') {
-                    const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
-                        effectiveRoot,
-                        `Symbol registry contains inconsistent file hashes for '${normalizedSymbolFile}'.`,
-                        {
-                            path: absolutePath,
-                            symbolRef,
-                            direction,
-                            depth,
-                            limit
-                        },
-                        'incompatible_symbol_registry'
-                    ), proofDebugHint);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: this.stringifyToolJson(payload)
-                        }]
-                    };
-                }
-                if (fileFreshness.status === 'stale') {
-                    const payload = this.withProofDebugHint(this.buildStaleSymbolRefCallGraphPayload({
-                        codebaseRoot: effectiveRoot,
-                        context: {
-                            path: absolutePath,
-                            symbolRef,
-                            direction,
-                            depth,
-                            limit,
-                        },
-                        message: `Symbol reference for '${normalizedSymbolFile}' is stale relative to the current file contents. Refresh the index before using exact call graph navigation.`,
-                    }), proofDebugHint);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: this.stringifyToolJson(payload)
-                        }]
-                    };
-                }
-            }
-
-            if (!this.isCallGraphLanguageSupported(resolvedSymbol.language, resolvedSymbol.file)) {
-                const payload = this.withProofDebugHint({
-                    status: 'unsupported' as const,
-                    path: effectiveRoot,
-                    symbolRef,
-                    supported: false,
-                    reason: 'unsupported_language',
-                    message: `Language '${resolvedSymbol.language}' does not support relationship-backed call graph traversal.`,
-                    nodes: [],
-                    edges: [],
-                    notes: [],
-                    notesTruncated: false,
-                    totalNoteCount: 0,
-                    returnedNoteCount: 0,
-                } satisfies CallGraphResponseEnvelope, proofDebugHint);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            const compatibility = await this.navigationStore.getCompatibilityState({
-                normalizedRootPath: effectiveRoot,
-                expectedSymbolRegistryManifestHash: registryState.manifestHash,
-            });
-            if (compatibility.relationships.status !== 'ok') {
-                const reason = compatibility.relationships.status === 'missing'
-                    ? 'missing_relationship_sidecar'
-                    : 'incompatible_relationship_sidecar';
-                const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
-                    effectiveRoot,
-                    `Relationship sidecar is ${compatibility.relationships.status}: ${compatibility.relationships.reason}`,
-                    {
-                        path: absolutePath,
-                        symbolRef,
-                        direction,
-                        depth,
-                        limit
-                    },
-                    reason
-                ), proofDebugHint);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            const relationshipBackedGraph = await this.buildRelationshipBackedCallGraph({
-                codebaseRoot: effectiveRoot,
-                registry: registryState.registry,
-                registryManifestHash: registryState.manifestHash,
-                resolvedSymbol,
-                sourceSpanRepair: resolvedSymbolRepair,
-                direction,
-                depth,
-                limit,
-            });
-            if (!relationshipBackedGraph) {
-                const payload = this.withProofDebugHint(this.buildRequiresReindexCallGraphPayload(
-                    effectiveRoot,
-                    'Relationship-backed call graph traversal could not load a compatible navigation snapshot.',
-                    {
-                        path: absolutePath,
-                        symbolRef,
-                        direction,
-                        depth,
-                        limit
-                    }
-                ), proofDebugHint);
-                return {
-                    content: [{
-                        type: "text",
-                        text: this.stringifyToolJson(payload)
-                    }]
-                };
-            }
-
-            await this.touchWatchedCodebase(effectiveRoot);
-            const payload = this.withProofDebugHint({
-                status: 'ok' as const,
-                path: effectiveRoot,
-                symbolRef,
-                ...relationshipBackedGraph,
-            } satisfies CallGraphResponseEnvelope, proofDebugHint);
-
-            return {
-                content: [{
-                    type: "text",
-                    text: this.stringifyToolJson(payload)
-                }]
-            };
-        } catch (error: unknown) {
-            const payload = this.buildInvalidCallGraphRequestPayload(
-                {
-                    path: typeof args?.path === 'string' ? ensureAbsolutePath(args.path) : '',
-                    symbolRef: normalizedSymbolRef,
-                    direction,
-                    depth,
-                    limit,
-                },
-                `Unexpected call_graph failure: ${formatUnknownError(error)}`,
-                'not_ready'
-            );
-            return {
-                content: [{
-                    type: "text",
-                    text: this.stringifyToolJson(payload)
-                }],
-                isError: true
-            };
-        }
+        return this.navigationHandlers.handleCallGraph(args);
     }
 
     public async handleClearIndex(args: ToolArgs) {
-        const codebasePath = typeof args.path === 'string' ? args.path : '';
-        const requestedPath = ensureAbsolutePath(codebasePath);
-
-        if (this.getSnapshotAllCodebases().length === 0) {
-            return this.manageResponse(
-                "clear",
-                requestedPath,
-                "not_indexed",
-                "No codebases are currently tracked.",
-                { reason: "not_indexed" }
-            );
-        }
-
-        try {
-            // Force absolute path resolution - warn if relative path provided
-            const absolutePath = requestedPath;
-            const pathExists = fs.existsSync(absolutePath);
-
-            if (pathExists) {
-                // Check if it's a directory
-                const stat = fs.statSync(absolutePath);
-                if (!stat.isDirectory()) {
-                    return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
-                }
-            }
-
-            const runtimeOwnerConflict = await this.buildRuntimeOwnerConflictResponseIfBlocked("clear", absolutePath);
-            if (runtimeOwnerConflict) {
-                return runtimeOwnerConflict;
-            }
-
-            if (pathExists) {
-                await this.recoverStaleIndexingStateIfNeeded(absolutePath);
-            }
-
-            // Check if this codebase is indexed or being indexed
-            const isIndexed = this.getSnapshotIndexedCodebases().includes(absolutePath);
-            const isIndexing = this.getSnapshotIndexingCodebases().includes(absolutePath);
-            const status = this.getSnapshotCodebaseStatus(absolutePath);
-            const isRequiresReindex = status === 'requires_reindex';
-
-            if (!isIndexed && !isIndexing && !isRequiresReindex) {
-                if (!pathExists) {
-                    return this.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
-                }
-                return this.manageResponse(
-                    "clear",
-                    absolutePath,
-                    "not_indexed",
-                    `Error: Codebase '${absolutePath}' is not indexed or being indexed.`,
-                    {
-                        reason: "not_indexed",
-                        hints: {
-                            create: this.buildCreateHint(absolutePath)
-                        }
-                    }
-                );
-            }
-
-            if (isIndexing) {
-                return this.manageResponse(
-                    "clear",
-                    absolutePath,
-                    "not_ready",
-                    this.buildManageActionBlockedMessage(absolutePath, 'clear'),
-                    {
-                        reason: "indexing",
-                        hints: {
-                            status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.getManageRetryAfterMs(),
-                            indexing: this.buildIndexingMetadata(absolutePath),
-                        }
-                    }
-                );
-            }
-
-            console.log(`[CLEAR] Clearing codebase: ${absolutePath}`);
-
-            try {
-                await this.context.clearIndex(absolutePath);
-                console.log(`[CLEAR] Successfully cleared index for: ${absolutePath}`);
-            } catch (error: unknown) {
-                if (error instanceof RemoteCollectionDeletePendingError) {
-                    const errorMsg = `Remote deletion is still pending for ${absolutePath}. Local index state was not changed. Details: ${formatUnknownError(error)}`;
-                    console.error(`[CLEAR] ${errorMsg}`);
-                    return this.manageResponse("clear", absolutePath, "error", errorMsg, {
-                        reason: "remote_delete_pending",
-                        hints: {
-                            retry: this.buildStatusHint(absolutePath),
-                            clear: { tool: "manage_index", args: { action: "clear", path: absolutePath } }
-                        }
-                    });
-                }
-                const errorMsg = `Failed to clear ${absolutePath}: ${formatUnknownError(error)}`;
-                console.error(`[CLEAR] ${errorMsg}`);
-                return this.manageResponse("clear", absolutePath, "error", errorMsg);
-            }
-
-            // Completely remove the cleared codebase from snapshot
-            this.snapshotManager.removeCodebaseCompletely(absolutePath);
-            this.markCodebaseCleared(absolutePath, this.resolveCollectionName(absolutePath));
-
-            // Reset indexing stats if this was the active codebase
-            this.indexingStats = null;
-
-            // Save snapshot after clearing index
-            this.saveSnapshotIfSupported();
-            await this.unwatchCodebase(absolutePath);
-
-            let resultText = `Successfully cleared codebase '${absolutePath}'`;
-
-            const remainingIndexed = this.getSnapshotIndexedCodebases().length;
-            const remainingIndexing = this.getSnapshotIndexingCodebases().length;
-
-            if (remainingIndexed > 0 || remainingIndexing > 0) {
-                resultText += `\n${remainingIndexed} other indexed codebase(s) and ${remainingIndexing} indexing codebase(s) remain`;
-            }
-
-            return this.manageResponse("clear", absolutePath, "ok", resultText);
-        } catch (error) {
-            // Check if this is the collection limit error
-            // Handle both direct string throws and Error objects containing the message
-            const errorMessage = typeof error === 'string' ? error : (error instanceof Error ? error.message : String(error));
-
-            if (errorMessage === COLLECTION_LIMIT_MESSAGE || errorMessage.includes(COLLECTION_LIMIT_MESSAGE)) {
-                // Return the collection limit message as a successful response
-                // This ensures LLM treats it as final answer, not as retryable error
-                return this.manageResponse("clear", requestedPath, "error", COLLECTION_LIMIT_MESSAGE);
-            }
-
-            return this.manageResponse("clear", requestedPath, "error", `Error clearing index: ${errorMessage}`);
-        }
+        return this.manageMaintenanceHandlers.handleClearIndex(args);
     }
 
     public async handleGetIndexingStatus(args: ToolArgs) {
-        const codebasePath = typeof args.path === 'string' ? args.path : '';
-        const requestedPath = ensureAbsolutePath(codebasePath);
-
-        try {
-            // Force absolute path resolution
-            const absolutePath = requestedPath;
-
-            // Validate path exists
-            if (!fs.existsSync(absolutePath)) {
-                return this.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
-            }
-
-            // Check if it's a directory
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isDirectory()) {
-                return this.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
-            }
-
-            this.refreshSnapshotStateFromDisk();
-            await this.recoverStaleIndexingStateIfNeeded(absolutePath);
-
-            const trackedRootState = await this.prepareTrackedRootForRead(absolutePath);
-            if (trackedRootState.state === 'requires_reindex') {
-                const statusMessage = this.buildReindexInstruction(trackedRootState.codebasePath, trackedRootState.message);
-                const compatibilityStatus = this.buildCompatibilityStatusLines(trackedRootState.codebasePath);
-                const pathInfo = codebasePath !== trackedRootState.codebasePath
-                    ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${trackedRootState.codebasePath}'`
-                    : '';
-                return this.manageResponse(
-                    "status",
-                    trackedRootState.codebasePath,
-                    "requires_reindex",
-                    statusMessage + compatibilityStatus + pathInfo,
-                    {
-                        reason: "requires_reindex",
-                        hints: this.buildManageRequiresReindexHints(trackedRootState.codebasePath)
-                    }
-                );
-            }
-
-            let statusMessage = '';
-            let envelopePath = absolutePath;
-            let envelopeStatus: ManageIndexStatus = "ok";
-            let envelopeReason: ManageIndexReason | undefined = undefined;
-            let envelopeHints: Record<string, unknown> | undefined = undefined;
-            let proofDebugHint: CompletionProbeDebugHint | undefined;
-
-            if (trackedRootState.state === 'not_indexed') {
-                envelopeStatus = "not_indexed";
-                envelopeReason = "not_indexed";
-                envelopeHints = {
-                    create: this.buildCreateHint(absolutePath),
-                };
-                statusMessage = `❌ Codebase '${absolutePath}' is not indexed. Call manage_index with {"action":"create","path":"${absolutePath}"} to index it first.`;
-            } else if (trackedRootState.state === 'stale_local') {
-                envelopePath = trackedRootState.codebasePath;
-                envelopeStatus = "not_indexed";
-                envelopeReason = "not_indexed";
-                envelopeHints = {
-                    create: this.buildCreateHint(trackedRootState.codebasePath),
-                    staleLocal: this.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason),
-                };
-                statusMessage = `❌ ${this.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason)} Run manage_index with {"action":"create","path":"${trackedRootState.codebasePath}"} to repair it.`;
-            } else if (trackedRootState.state === 'missing_collection') {
-                envelopePath = trackedRootState.codebasePath;
-                envelopeStatus = "not_indexed";
-                envelopeReason = "not_indexed";
-                envelopeHints = {
-                    create: this.buildCreateHint(trackedRootState.codebasePath),
-                };
-                statusMessage = `❌ ${this.buildMissingLocalCollectionMessage(
-                    trackedRootState.codebasePath,
-                    absolutePath,
-                    trackedRootState.collectionName
-                )}`;
-                proofDebugHint = trackedRootState.proofDebugHint;
-            } else if (trackedRootState.state === 'indexing') {
-                envelopePath = trackedRootState.codebasePath;
-                envelopeStatus = "not_ready";
-                envelopeReason = "indexing";
-                envelopeHints = {
-                    status: this.buildStatusHint(trackedRootState.codebasePath),
-                    retryAfterMs: this.getManageRetryAfterMs(),
-                    indexing: this.buildIndexingMetadata(trackedRootState.codebasePath),
-                };
-                const info = this.getSnapshotCodebaseInfo(trackedRootState.codebasePath);
-                if (info?.status === 'indexing') {
-                    const progressPercentage = typeof info.indexingPercentage === 'number' && Number.isFinite(info.indexingPercentage)
-                        ? info.indexingPercentage
-                        : 0;
-                    statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is currently being indexed. Progress: ${progressPercentage.toFixed(1)}%`;
-                    if (progressPercentage < 10) {
-                        statusMessage += ' (Preparing and scanning files...)';
-                    } else if (progressPercentage < 100) {
-                        statusMessage += ' (Processing files and generating embeddings...)';
-                    }
-                    if (typeof info.lastUpdated === 'string') {
-                        statusMessage += `\n🕐 Last updated: ${new Date(info.lastUpdated).toLocaleString()}`;
-                    }
-                } else {
-                    statusMessage = `🔄 Codebase '${trackedRootState.codebasePath}' is currently being indexed.`;
-                }
-            } else if (trackedRootState.state === 'index_failed') {
-                envelopePath = trackedRootState.codebasePath;
-                envelopeStatus = "error";
-                const failedInfo = trackedRootState.info;
-                if (typeof failedInfo.errorMessage === 'string') {
-                    statusMessage = `❌ Codebase '${trackedRootState.codebasePath}' indexing failed.`;
-                    statusMessage += `\n🚨 Error: ${failedInfo.errorMessage}`;
-                    if (typeof failedInfo.lastAttemptedPercentage === 'number' && Number.isFinite(failedInfo.lastAttemptedPercentage)) {
-                        statusMessage += `\n📊 Failed at: ${failedInfo.lastAttemptedPercentage.toFixed(1)}% progress`;
-                    }
-                    if (typeof failedInfo.lastUpdated === 'string') {
-                        statusMessage += `\n🕐 Failed at: ${new Date(failedInfo.lastUpdated).toLocaleString()}`;
-                    }
-                    statusMessage += `\n💡 Retry with manage_index action='create'.`;
-                } else {
-                    statusMessage = `❌ Codebase '${trackedRootState.codebasePath}' indexing failed. You can retry indexing.`;
-                }
-            } else {
-                envelopePath = trackedRootState.root.path;
-                proofDebugHint = trackedRootState.proofDebugHint;
-                const status = this.getSnapshotCodebaseStatus(trackedRootState.root.path);
-                const info = trackedRootState.root.info || this.getSnapshotCodebaseInfo(trackedRootState.root.path);
-                switch (status) {
-                    case 'indexed':
-                        if (info.status === 'indexed') {
-                            statusMessage = `✅ Codebase '${trackedRootState.root.path}' is fully indexed and ready for search.`;
-                            statusMessage += `\n📊 Statistics: ${info.indexedFiles} files, ${info.totalChunks} chunks`;
-                            statusMessage += `\n📅 Status: ${info.indexStatus}`;
-                            if (typeof info.lastUpdated === 'string') {
-                                statusMessage += `\n🕐 Last updated: ${new Date(info.lastUpdated).toLocaleString()}`;
-                            }
-                        } else {
-                            statusMessage = `✅ Codebase '${trackedRootState.root.path}' is fully indexed and ready for search.`;
-                        }
-                        break;
-
-                    case 'sync_completed':
-                        if (info.status === 'sync_completed') {
-                            statusMessage = `🔄 Codebase '${trackedRootState.root.path}' sync completed.`;
-                            statusMessage += `\n📊 Changes: +${info.added} added, -${info.removed} removed, ~${info.modified} modified`;
-                            if (typeof info.lastUpdated === 'string') {
-                                statusMessage += `\n🕐 Last synced: ${new Date(info.lastUpdated).toLocaleString()}`;
-                            }
-                        } else {
-                            statusMessage = `🔄 Codebase '${trackedRootState.root.path}' sync completed.`;
-                        }
-                        break;
-
-                    case 'not_found':
-                    default:
-                        envelopeStatus = "not_indexed";
-                        envelopeReason = "not_indexed";
-                        envelopeHints = {
-                            create: this.buildCreateHint(trackedRootState.root.path)
-                        };
-                        statusMessage = `❌ Codebase '${trackedRootState.root.path}' is not indexed. Call manage_index with {\"action\":\"create\",\"path\":\"${trackedRootState.root.path}\"} to index it first.`;
-                        break;
-                }
-            }
-
-            const warnings: WarningCode[] = [];
-            if (proofDebugHint) {
-                statusMessage += `\n⚠️ Completion proof check is temporarily unavailable (probe_failed); keeping local status.`;
-                warnings.push(WARNING_CODES.IGNORE_POLICY_PROBE_FAILED);
-            }
-
-            const pathInfo = codebasePath !== envelopePath
-                ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${envelopePath}'`
-                : '';
-            const compatibilityStatus = this.buildCompatibilityStatusLines(envelopePath);
-
-            return this.manageResponse(
-                "status",
-                envelopePath,
-                envelopeStatus,
-                statusMessage + compatibilityStatus + pathInfo,
-                {
-                    reason: envelopeReason,
-                    hints: envelopeHints,
-                    warnings
-                }
-            );
-
-        } catch (error: unknown) {
-            return this.manageResponse("status", requestedPath, "error", `Error getting indexing status: ${formatUnknownError(error)}`);
-        }
+        return this.manageMaintenanceHandlers.handleGetIndexingStatus(args);
     }
 
     /**
      * Handle sync request - manually trigger incremental sync for a codebase
      */
     public async handleSyncCodebase(args: ToolArgs) {
-        const codebasePath = typeof args.path === 'string' ? args.path : '';
-        const requestedPath = ensureAbsolutePath(codebasePath);
-
-        try {
-            // Force absolute path resolution
-            const absolutePath = requestedPath;
-
-            // Validate path exists
-            if (!fs.existsSync(absolutePath)) {
-                return this.manageResponse("sync", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
-            }
-
-            // Check if it's a directory
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isDirectory()) {
-                return this.manageResponse("sync", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
-            }
-
-            const runtimeOwnerConflict = await this.buildRuntimeOwnerConflictResponseIfBlocked("sync", absolutePath);
-            if (runtimeOwnerConflict) {
-                return runtimeOwnerConflict;
-            }
-
-            await this.recoverStaleIndexingStateIfNeeded(absolutePath);
-
-            // Check if this codebase is indexed
-            const syncGate = this.enforceFingerprintGate(absolutePath);
-            if (syncGate.blockedResponse) {
-                return this.manageResponse(
-                    "sync",
-                    absolutePath,
-                    "requires_reindex",
-                    this.buildReindexInstruction(absolutePath, syncGate.message),
-                    {
-                        reason: "requires_reindex",
-                        hints: {
-                            reindex: this.buildReindexHint(absolutePath),
-                            status: this.buildStatusHint(absolutePath),
-                        }
-                    }
-                );
-            }
-
-            if (this.getSnapshotIndexingCodebases().includes(absolutePath)) {
-                return this.manageResponse(
-                    "sync",
-                    absolutePath,
-                    "not_ready",
-                    this.buildManageActionBlockedMessage(absolutePath, 'sync'),
-                    {
-                        reason: "indexing",
-                        hints: {
-                            status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.getManageRetryAfterMs(),
-                            indexing: this.buildIndexingMetadata(absolutePath),
-                        }
-                    }
-                );
-            }
-
-            const isIndexed = this.getSnapshotIndexedCodebases().includes(absolutePath);
-            if (!isIndexed) {
-                return this.manageResponse(
-                    "sync",
-                    absolutePath,
-                    "not_indexed",
-                    `Error: Codebase '${absolutePath}' is not indexed. Call manage_index with {\"action\":\"create\",\"path\":\"${absolutePath}\"} first.`,
-                    {
-                        reason: "not_indexed",
-                        hints: {
-                            create: this.buildCreateHint(absolutePath)
-                        }
-                    }
-                );
-            }
-
-            console.log(`[SYNC] Manually triggering incremental sync for: ${absolutePath}`);
-            // Route manual sync through freshness gate so ignore-rule reconciliation is honored.
-            const decision = await this.syncManager.ensureFreshness(absolutePath, 0);
-
-            if (decision.mode === 'ignore_reload_failed') {
-                const fallbackLine = decision.fallbackSyncExecuted
-                    ? '\nFallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
-                    : '';
-                return this.manageResponse(
-                    "sync",
-                    absolutePath,
-                    "error",
-                    `Error syncing codebase: ignore-rule reconciliation failed (${decision.errorMessage || 'unknown_ignore_reload_error'}).${fallbackLine}`
-                );
-            }
-
-            if (decision.mode === 'skipped_indexing') {
-                return this.manageResponse(
-                    "sync",
-                    absolutePath,
-                    "not_ready",
-                    this.buildManageActionBlockedMessage(absolutePath, 'sync'),
-                    {
-                        reason: "indexing",
-                        hints: {
-                            status: this.buildStatusHint(absolutePath),
-                            retryAfterMs: this.getManageRetryAfterMs(),
-                            indexing: this.buildIndexingMetadata(absolutePath),
-                        }
-                    }
-                );
-            }
-
-            if (decision.mode === 'skipped_requires_reindex') {
-                return this.manageResponse(
-                    "sync",
-                    absolutePath,
-                    "requires_reindex",
-                    this.buildReindexInstruction(absolutePath, 'Sync blocked because this codebase requires reindex.'),
-                    {
-                        reason: "requires_reindex",
-                        hints: {
-                            reindex: this.buildReindexHint(absolutePath),
-                            status: this.buildStatusHint(absolutePath),
-                        }
-                    }
-                );
-            }
-
-            if (decision.mode === 'skipped_missing_path') {
-                return this.manageResponse("sync", absolutePath, "error", `Error: Codebase path '${absolutePath}' no longer exists.`);
-            }
-
-            const added = decision.stats?.added ?? 0;
-            const removed = decision.stats?.removed ?? 0;
-            const modified = decision.stats?.modified ?? 0;
-            const ignoredDeletes = decision.deletedFiles ?? 0;
-            const totalChanges = added + removed + modified;
-
-            if (decision.mode === 'coalesced') {
-                if (typeof decision.errorMessage === 'string' && decision.errorMessage.trim().length > 0) {
-                    const fallbackLine = decision.fallbackSyncExecuted
-                        ? '\nFallback incremental sync was executed, but ignore-rule reconciliation did not complete deterministically.'
-                        : '';
-                    return this.manageResponse(
-                        "sync",
-                        absolutePath,
-                        "error",
-                        `Error syncing codebase: coalesced in-flight reconcile failed (${decision.errorMessage}).${fallbackLine}`
-                    );
-                }
-                await this.touchWatchedCodebase(absolutePath);
-                return this.manageResponse("sync", absolutePath, "ok", `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`);
-            }
-
-            if (decision.mode === 'reconciled_ignore_change') {
-                if (totalChanges === 0 && ignoredDeletes === 0) {
-                    await this.touchWatchedCodebase(absolutePath);
-                    return this.manageResponse("sync", absolutePath, "ok", `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`);
-                }
-
-                const resultMessage =
-                    `🔄 Incremental sync + ignore-rule reconciliation completed for '${absolutePath}'.\n\n` +
-                    `📊 Sync changes:\n+ ${added} file(s) added\n- ${removed} file(s) removed\n~ ${modified} file(s) modified\n` +
-                    `🧹 Ignored paths removed from index: ${ignoredDeletes}\n` +
-                    `\nTotal changes: ${totalChanges + ignoredDeletes}`;
-                console.log(`[SYNC] ✅ Sync+ignore reconcile completed: +${added}, -${removed}, ~${modified}, ignoredDeleted=${ignoredDeletes}`);
-                await this.touchWatchedCodebase(absolutePath);
-                return this.manageResponse("sync", absolutePath, "ok", resultMessage);
-            }
-
-            if (totalChanges === 0) {
-                await this.touchWatchedCodebase(absolutePath);
-                return this.manageResponse("sync", absolutePath, "ok", `✅ No changes detected for codebase '${absolutePath}'. Index is up to date.`);
-            }
-
-            const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${added} file(s) added\n- ${removed} file(s) removed\n~ ${modified} file(s) modified\n\nTotal changes: ${totalChanges}`;
-            console.log(`[SYNC] ✅ Sync completed: +${added}, -${removed}, ~${modified}`);
-            await this.touchWatchedCodebase(absolutePath);
-            return this.manageResponse("sync", absolutePath, "ok", resultMessage);
-
-        } catch (error: unknown) {
-            console.error(`[SYNC] Error during sync:`, error);
-            const vectorBackendDiagnostic = classifyVectorBackendError(error);
-            if (vectorBackendDiagnostic) {
-                return this.manageVectorBackendResponse("sync", requestedPath, vectorBackendDiagnostic);
-            }
-            return this.manageResponse("sync", requestedPath, "error", `Error syncing codebase: ${formatUnknownError(error)}`);
-        }
+        return this.manageMaintenanceHandlers.handleSyncCodebase(args);
     }
     public async handleReadCode(args: ToolArgs) {
         const filePath = typeof args.path === 'string' ? args.path : '';

@@ -8,7 +8,7 @@ import type { SnapshotManager } from "./snapshot.js";
 import type { SyncManager } from "./sync.js";
 import type {
     CompletionProbeDebugHint,
-    TrackedRootReadinessState,
+    TrackedRootReadiness,
 } from "./tracked-root-readiness.js";
 import { WARNING_CODES, type WarningCode } from "./warnings.js";
 import {
@@ -44,6 +44,10 @@ type ManageMaintenanceHandlersHost = {
     context: Pick<Context, "clearIndex">;
     snapshotManager: Pick<SnapshotManager, "removeCodebaseCompletely">;
     syncManager: Pick<SyncManager, "ensureFreshness">;
+    trackedRootReadiness: Pick<
+        TrackedRootReadiness,
+        "prepareTrackedRootForRead" | "buildMissingLocalCollectionMessage"
+    >;
     getSnapshotAllCodebases(): string[];
     getSnapshotIndexedCodebases(): string[];
     getSnapshotIndexingCodebases(): string[];
@@ -69,13 +73,11 @@ type ManageMaintenanceHandlersHost = {
     saveSnapshotIfSupported(): void;
     unwatchCodebase(codebasePath: string): Promise<void>;
     refreshSnapshotStateFromDisk(): void;
-    prepareTrackedRootForRead(codebasePath: string): Promise<TrackedRootReadinessState>;
     buildReindexInstruction(codebasePath: string, detail?: string): string;
     buildCompatibilityStatusLines(codebasePath: string): string;
     buildManageRequiresReindexHints(codebasePath: string): Record<string, unknown>;
     buildStaleLocalHint(codebasePath: string, reason: string): Record<string, unknown>;
     buildStaleLocalMessage(codebasePath: string, requestedPath: string, reason: string): string;
-    buildMissingLocalCollectionMessage(codebasePath: string, requestedPath: string, collectionName?: string): string;
     enforceFingerprintGate(codebasePath: string): { blockedResponse?: ToolTextResponse; message?: string };
     buildReindexHint(codebasePath: string): Record<string, unknown>;
     touchWatchedCodebase(codebasePath: string): Promise<void>;
@@ -304,7 +306,7 @@ export class ManageMaintenanceHandlers {
             this.host.refreshSnapshotStateFromDisk();
             await this.host.recoverStaleIndexingStateIfNeeded(absolutePath);
 
-            const trackedRootState = await this.host.prepareTrackedRootForRead(absolutePath);
+            const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absolutePath);
             if (trackedRootState.state === "requires_reindex") {
                 const statusMessage = this.host.buildReindexInstruction(trackedRootState.codebasePath, trackedRootState.message);
                 const compatibilityStatus = this.host.buildCompatibilityStatusLines(trackedRootState.codebasePath);
@@ -349,7 +351,7 @@ export class ManageMaintenanceHandlers {
                 envelopeStatus = "not_indexed";
                 envelopeReason = "not_indexed";
                 envelopeHints = { create: this.host.buildCreateHint(trackedRootState.codebasePath) };
-                statusMessage = `❌ ${this.host.buildMissingLocalCollectionMessage(
+                statusMessage = `❌ ${this.host.trackedRootReadiness.buildMissingLocalCollectionMessage(
                     trackedRootState.codebasePath,
                     absolutePath,
                     trackedRootState.collectionName,

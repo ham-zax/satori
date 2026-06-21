@@ -15,7 +15,7 @@ import {
 } from "./registry-file-outline.js";
 import type {
     CompletionProbeDebugHint,
-    TrackedRootReadinessState,
+    TrackedRootReadiness,
 } from "./tracked-root-readiness.js";
 import type {
     CallGraphDirection,
@@ -48,15 +48,20 @@ const PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL = "Partial index/search data m
 
 type NavigationHandlersHost = {
     navigationStore: Pick<NavigationStore, "getSymbolsByFile" | "getCompatibilityState">;
+    trackedRootReadiness: Pick<
+        TrackedRootReadiness,
+        | "prepareTrackedRootForRead"
+        | "buildIndexFailedFileOutlinePayload"
+        | "buildMissingLocalCollectionFileOutlinePayload"
+        | "buildIndexFailedCallGraphPayload"
+        | "buildMissingLocalCollectionCallGraphPayload"
+    >;
     stringifyToolJson(value: unknown): string;
     normalizeRelativeFilePath(relativeFilePath: string): string;
-    prepareTrackedRootForRead(absolutePath: string, accessMode?: "semantic" | "navigation"): Promise<TrackedRootReadinessState>;
     buildInvalidFileOutlineRequestPayload(root: string, file: string, message: string, status?: string, reason?: string): unknown;
     buildRequiresReindexFileOutlinePayload(codebasePath: string, args: Record<string, unknown>, detail?: string, reason?: string): object;
-    buildIndexFailedFileOutlinePayload(codebasePath: string, requestedPath: string, file: string, info: Record<string, unknown>): FileOutlineResponseEnvelope;
     buildNotIndexedFileOutlinePayload(file: string, requestedPath: string, staleLocal?: { codebaseRoot: string; reason: string }): FileOutlineResponseEnvelope;
     buildNotReadyFileOutlinePayload(codebasePath: string, file: string, requestedPath: string): FileOutlineResponseEnvelope & Record<string, unknown>;
-    buildMissingLocalCollectionFileOutlinePayload(codebasePath: string, requestedPath: string, file: string, collectionName?: string): FileOutlineResponseEnvelope;
     withProofDebugHint<T extends object>(payload: T, proofDebugHint?: CompletionProbeDebugHint): T;
     isPartialIndexNavigationUnavailable(info: unknown): boolean;
     getRegistryFileFreshness(input: {
@@ -103,13 +108,6 @@ type NavigationHandlersHost = {
         depth: number;
         limit: number;
     }): CallGraphResponseEnvelope;
-    buildIndexFailedCallGraphPayload(codebasePath: string, context: {
-        path: string;
-        symbolRef: CallGraphSymbolRef;
-        direction: CallGraphDirection;
-        depth: number;
-        limit: number;
-    }, info: Record<string, unknown>): CallGraphResponseEnvelope;
     buildNotIndexedCallGraphPayload(context: {
         path: string;
         symbolRef: CallGraphSymbolRef;
@@ -117,13 +115,6 @@ type NavigationHandlersHost = {
         depth: number;
         limit: number;
     }, staleLocal?: { codebaseRoot: string; reason: string }): CallGraphResponseEnvelope;
-    buildMissingLocalCollectionCallGraphPayload(codebasePath: string, context: {
-        path: string;
-        symbolRef: CallGraphSymbolRef;
-        direction: CallGraphDirection;
-        depth: number;
-        limit: number;
-    }, collectionName?: string): CallGraphResponseEnvelope;
     isCallGraphLanguageSupported(language: string, file?: string): boolean;
     isSha256HexHash(input: string | undefined): boolean;
     buildStaleSymbolRefCallGraphPayload(input: {
@@ -284,7 +275,7 @@ export class NavigationHandlers {
 
             trackCodebasePath(absoluteRoot);
 
-            const trackedRootState = await this.host.prepareTrackedRootForRead(absoluteRoot, "navigation");
+            const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absoluteRoot, "navigation");
             if (trackedRootState.state === "requires_reindex") {
                 const payload = this.host.buildRequiresReindexFileOutlinePayload(trackedRootState.codebasePath, {
                     ...args,
@@ -296,7 +287,7 @@ export class NavigationHandlers {
             }
 
             if (trackedRootState.state === "index_failed") {
-                const payload = this.host.buildIndexFailedFileOutlinePayload(
+                const payload = this.host.trackedRootReadiness.buildIndexFailedFileOutlinePayload(
                     trackedRootState.codebasePath,
                     absoluteRoot,
                     normalizedFile,
@@ -332,7 +323,7 @@ export class NavigationHandlers {
             }
 
             if (trackedRootState.state === "missing_collection") {
-                const payload = this.host.withProofDebugHint(this.host.buildMissingLocalCollectionFileOutlinePayload(
+                const payload = this.host.withProofDebugHint(this.host.trackedRootReadiness.buildMissingLocalCollectionFileOutlinePayload(
                     trackedRootState.codebasePath,
                     absoluteRoot,
                     normalizedFile,
@@ -620,7 +611,7 @@ export class NavigationHandlers {
 
             trackCodebasePath(absolutePath);
 
-            const trackedRootState = await this.host.prepareTrackedRootForRead(absolutePath, "navigation");
+            const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absolutePath, "navigation");
             if (trackedRootState.state === "requires_reindex") {
                 const payload = this.host.buildRequiresReindexCallGraphPayload(
                     trackedRootState.codebasePath,
@@ -652,7 +643,7 @@ export class NavigationHandlers {
             }
 
             if (trackedRootState.state === "index_failed") {
-                const payload = this.host.buildIndexFailedCallGraphPayload(trackedRootState.codebasePath, {
+                const payload = this.host.trackedRootReadiness.buildIndexFailedCallGraphPayload(trackedRootState.codebasePath, {
                     path: absolutePath,
                     symbolRef,
                     direction,
@@ -697,7 +688,7 @@ export class NavigationHandlers {
             }
 
             if (trackedRootState.state === "missing_collection") {
-                const payload = this.host.withProofDebugHint(this.host.buildMissingLocalCollectionCallGraphPayload(
+                const payload = this.host.withProofDebugHint(this.host.trackedRootReadiness.buildMissingLocalCollectionCallGraphPayload(
                     trackedRootState.codebasePath,
                     {
                         path: absolutePath,

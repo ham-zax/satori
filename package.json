@@ -1,7 +1,7 @@
 {
     "name": "satori",
     "version": "0.5.6",
-    "description": "Satori: sudden-insight semantic code indexing + MCP integration",
+    "description": "A codebase map for AI coding agents before they edit.",
     "private": true,
     "scripts": {
         "build": "pnpm -r build",

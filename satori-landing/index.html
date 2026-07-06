@@ -4,6 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="logo.svg" />
   <title>Satori | Codebase Map for AI Coding Agents</title>
   <meta name="description"
     content="Satori gives AI coding agents a structured map of your repo before they edit: plain-English search, symbols, exact reads, related code paths, and freshness warnings." />
@@ -274,7 +275,15 @@
     .nav-brand {
       display: flex;
       align-items: center;
-      gap: 0.85rem;
+      gap: 0.65rem;
+    }
+
+    .nav-brand-logo {
+      width: 35px;
+      height: 36px;
+      display: block;
+      flex-shrink: 0;
+      transform: translateY(-1px);
     }
 
     .status-dot {
@@ -361,6 +370,17 @@
       -webkit-background-clip: text;
       background-clip: text;
       -webkit-text-fill-color: transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.32em;
+    }
+
+    .hero-logo {
+      height: 0.9em;
+      width: auto;
+      flex-shrink: 0;
+      transform: translateY(-0.02em);
+      -webkit-text-fill-color: initial;
     }
 
     .hero h2 {
@@ -1060,6 +1080,12 @@
       color: var(--accent);
       margin-bottom: 0.85rem;
     }
+    .footer-brand-logo {
+      width: 39px;
+      height: 40px;
+      display: block;
+      margin-bottom: 0.85rem;
+    }
     .footer-col a {
       display: block;
       padding: 0.3rem 0;
@@ -1313,7 +1339,7 @@
     <a class="skip-link" href="#main">Skip to content</a>
     <nav aria-label="Primary">
       <div class="nav-brand">
-        <div class="status-dot" aria-hidden="true"></div>
+        <img class="nav-brand-logo" src="logo-mark.svg" alt="Satori logo" width="35" height="36" />
         <span>Satori</span>
       </div>
       <div class="nav-links">
@@ -1326,13 +1352,13 @@
 
     <main id="main">
     <section class="hero" id="top">
-      <h1>Satori</h1>
-      <h2>Give coding agents the codebase map before they edit.</h2>
+      <h1><img class="hero-logo" src="logo-mark.svg" alt="" aria-hidden="true" />Satori</h1>
+      <h2>Give coding agents the route from intent to evidence.</h2>
       <p>
         Most agents can search files. That is not enough. Satori gives
-        MCP-compatible coding agents a structured route through your repo:
-        plain-English intent search, symbol-aware navigation, exact reads, related
-        code paths, and freshness warnings before edits happen.
+        MCP-compatible coding agents a structured way to understand real repos
+        before editing: plain-English intent search, symbol-aware navigation,
+        exact reads, related code paths, and freshness warnings.
       </p>
       <div class="hero-terminal" role="group" aria-labelledby="hero-install-label">
         <div class="terminal-label">
@@ -1709,6 +1735,7 @@ npx -y @zokizuan/satori-cli@0.4.5 doctor</code></pre>
 
     <footer class="footer">
       <div class="footer-col">
+        <img class="footer-brand-logo" src="logo-mark.svg" alt="Satori logo" width="39" height="40" />
         <h5>Satori</h5>
         <p>A structured codebase map for AI coding agents before they edit.</p>
       </div>

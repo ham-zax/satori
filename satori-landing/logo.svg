@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 156">
+<!-- SVG created with Arrow, by QuiverAI (https://quiver.ai) -->
+  <style type="text/css">.cls-0 {fill:#1A1919;}
+.cls-1 {fill:none;stroke:#FFFFFF;stroke-width:5.8;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4.8772;}
+.cls-2 {fill:#1B1C1E;}
+.cls-3 {fill:#B7C63F;}
+.cls-4 {fill:#FFFFFF;}</style>
+  <rect class="cls-0" width="150.2" height="156"/>
+  <path class="cls-1" d="m33.4 8.8h-15.6c-5.4 0-10.1 4.6-10.1 10.2v116c0 5-0.1 13.5 10.1 15h17.6m17.1-113.6 28.5 0.1c8 0 16 5.5 16.3 15.3v7.2"/>
+  <path class="cls-1" d="m116.4 127.9h-52.9c-4.9 0-11.5-3.9-11.9-11.9s5.4-14.8 13.1-15l17-0.1c7.4 0.1 15.3-6.6 15.4-15.4v-5.5m10.6-10.6h4.3c9.7 0 17.3 7.2 17.6 17.4l0.1 29.3"/>
+  <path class="cls-4" d="m44.9 56.8v-8.8c4.8-0.8 8.9-4.8 9.8-9.6 0.8-7.5-4.7-14.4-11.6-14.4-7.1-0.5-13.1 4.9-13.9 11s2.7 11.7 9.7 13v8.4c-5 1.2-9.9 5.9-9.8 12.2 0 7.1 4.9 13.1 12.8 13.2 7.6 0 13.2-5.3 13.1-12.8 0-5.7-3.7-11-10.1-12.2zm-10.1-20.3c0-3.5 3.1-6.5 7.2-6.8 3.7-0.1 7.1 2.7 7.2 6.7 0.2 3.6-2.6 6.8-7.2 7.1-3.9-0.2-7-2.8-7.2-7zm7.2 39.9c-3.9 0-7-2.9-7-7.3-0.1-3.5 3.1-6.7 7-6.7 4.1 0 7.1 3 7.3 6.7 0.1 3.9-2.8 7.3-7.3 7.3z"/>
+  <path class="cls-1" d="m96.9 59.2c-4.4 0.1-9.4 3.7-9.6 8.8-0.3 6 3.8 11.1 9.7 11.2 4.4 0.4 10-3.1 10.1-9.2 0.4-5.5-3.7-10.7-10.2-10.8z"/>
+ <!-- Final Destination Square Node -->
+  <rect class="cls-1" x="117.5" y="116" width="24" height="24" rx="4" />
+  <rect class="cls-3" x="125.5" y="124" width="8" height="8" rx="1" />
+
+</svg>

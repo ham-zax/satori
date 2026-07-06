@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="../logo.svg" />
     <title>Satori Docs | Repo Context for AI Coding Agents</title>
     <meta
       name="description"
@@ -229,7 +230,15 @@
       .nav-brand {
         display: flex;
         align-items: center;
-        gap: 0.85rem;
+        gap: 0.65rem;
+      }
+
+      .nav-brand-logo {
+        width: 35px;
+        height: 36px;
+        display: block;
+        flex-shrink: 0;
+        transform: translateY(-1px);
       }
 
       .nav-links {
@@ -561,6 +570,12 @@
         color: var(--accent);
         margin-bottom: 0.85rem;
       }
+      .footer-brand-logo {
+        width: 39px;
+        height: 40px;
+        display: block;
+        margin-bottom: 0.85rem;
+      }
       .footer-col a {
         display: block;
         padding: 0.3rem 0;
@@ -625,7 +640,7 @@
       <a class="skip-link" href="#main">Skip to content</a>
       <nav aria-label="Primary">
         <div class="nav-brand">
-          <div class="status-dot" aria-hidden="true"></div>
+          <img class="nav-brand-logo" src="../logo-mark.svg" alt="Satori logo" width="35" height="36" />
           <span>Satori</span>
         </div>
         <div class="nav-links">
@@ -1395,6 +1410,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
 
       <footer class="footer">
         <div class="footer-col">
+          <img class="footer-brand-logo" src="../logo-mark.svg" alt="Satori logo" width="39" height="40" />
           <h5>Satori</h5>
           <p>Repo context for AI coding agents. Investigate real codebases before editing.</p>
         </div>

@@ -496,7 +496,7 @@ export class ToolHandlers {
             getSnapshotCodebaseStatus: this.getSnapshotCodebaseStatus.bind(this),
             enforceFingerprintGate: this.enforceFingerprintGate.bind(this),
             validateCompletionProof: (codebasePath: string) => this.validateCompletionProof(codebasePath),
-            probeLocalSearchCollectionState: this.probeLocalSearchCollectionState.bind(this),
+            probeLocalSearchCollectionState: (codebasePath: string) => this.probeLocalSearchCollectionState(codebasePath),
             markCodebaseSearchStateMissing: this.markCodebaseSearchStateMissing.bind(this),
             buildCreateHint: this.buildCreateHint.bind(this),
             buildStatusHint: this.buildStatusHint.bind(this),

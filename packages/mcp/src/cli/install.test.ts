@@ -98,6 +98,9 @@ function installRuntimePackageStub(relativeEntry: string) {
         assert.notEqual(prefixIndex, -1);
         const runtimeRoot = args[prefixIndex + 1];
         assert.equal(typeof runtimeRoot, "string");
+        const packageIndex = args.indexOf(EXPECTED_PACKAGE_SPECIFIER);
+        assert.notEqual(packageIndex, -1);
+        assert.equal(args[packageIndex - 1], "--");
         const packageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
         const entryPath = path.join(packageRoot, relativeEntry);
         fs.mkdirSync(path.dirname(entryPath), { recursive: true });

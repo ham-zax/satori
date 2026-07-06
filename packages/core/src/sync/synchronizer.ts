@@ -525,7 +525,13 @@ export class FileSynchronizer {
             fullHashCounter: this.fullHashCounter
         };
 
-        await fsp.writeFile(this.snapshotPath, JSON.stringify(payload), 'utf-8');
+        const tempSnapshotPath = `${this.snapshotPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        try {
+            await fsp.writeFile(tempSnapshotPath, JSON.stringify(payload), 'utf-8');
+            await fsp.rename(tempSnapshotPath, this.snapshotPath);
+        } finally {
+            await fsp.unlink(tempSnapshotPath).catch(() => undefined);
+        }
         console.log(`Saved snapshot to ${this.snapshotPath}`);
     }
 

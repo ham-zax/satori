@@ -24,6 +24,7 @@ import {
 } from './types';
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
+import { buildMilvusIdInFilter } from './filters';
 
 type MilvusResultRow = {
     id?: unknown;
@@ -710,7 +711,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
         await this.client.delete({
             collection_name: collectionName,
-            filter: `id in [${ids.map(id => `"${id}"`).join(', ')}]`,
+            filter: buildMilvusIdInFilter(ids),
         });
     }
 

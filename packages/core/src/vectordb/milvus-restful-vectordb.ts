@@ -25,6 +25,7 @@ import {
 } from './types';
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
+import { buildMilvusIdInFilter } from './filters';
 
 type MilvusRestResponse<T = unknown> = {
     code?: number;
@@ -688,7 +689,7 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
             const restfulConfig = this.config as MilvusRestfulConfig;
             // Build filter expression for deleting by IDs
             // Format: id in ["id1", "id2", "id3"]
-            const filter = `id in [${ids.map(id => `"${id}"`).join(', ')}]`;
+            const filter = buildMilvusIdInFilter(ids);
 
             const deleteRequest = {
                 collectionName,

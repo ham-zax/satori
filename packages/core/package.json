@@ -1,7 +1,7 @@
 {
     "name": "@zokizuan/satori-core",
     "version": "1.6.3",
-    "description": "Core semantic indexing engine for Satori's insight-first retrieval",
+    "description": "Core indexing and retrieval engine for Satori's codebase map.",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "scripts": {

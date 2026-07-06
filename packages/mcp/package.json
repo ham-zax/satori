@@ -1,7 +1,7 @@
 {
     "name": "@zokizuan/satori-mcp",
     "version": "4.11.7",
-    "description": "MCP server for Satori with agent-safe semantic search and indexing",
+    "description": "Repo-aware MCP tools for AI coding agents: intent search, symbol navigation, exact reads, related paths, and freshness warnings.",
     "type": "module",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",

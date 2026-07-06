@@ -4,7 +4,7 @@ import {
     RemoteCollectionDeletePendingError,
     type Context,
 } from "@zokizuan/satori-core";
-import type { SnapshotManager } from "./snapshot.js";
+import type { SnapshotCorruptionWarning, SnapshotManager } from "./snapshot.js";
 import type { SyncManager } from "./sync.js";
 import type {
     CompletionProbeDebugHint,
@@ -53,6 +53,7 @@ type ManageMaintenanceHandlersHost = {
     getSnapshotIndexingCodebases(): string[];
     getSnapshotCodebaseStatus(codebasePath: string): string;
     getSnapshotCodebaseInfo(codebasePath: string): Record<string, unknown> | undefined;
+    getSnapshotCorruptionWarning(): SnapshotCorruptionWarning | undefined;
     buildRuntimeOwnerConflictResponseIfBlocked(action: "clear" | "sync", codebasePath: string): Promise<ToolTextResponse | null>;
     recoverStaleIndexingStateIfNeeded(codebasePath: string): Promise<void>;
     manageResponse(
@@ -304,6 +305,7 @@ export class ManageMaintenanceHandlers {
             }
 
             this.host.refreshSnapshotStateFromDisk();
+            const snapshotCorruptionWarning = this.host.getSnapshotCorruptionWarning();
             await this.host.recoverStaleIndexingStateIfNeeded(absolutePath);
 
             const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absolutePath);
@@ -451,12 +453,24 @@ export class ManageMaintenanceHandlers {
                 ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${envelopePath}'`
                 : "";
             const compatibilityStatus = this.host.buildCompatibilityStatusLines(envelopePath);
+            const snapshotWarningText = snapshotCorruptionWarning
+                ? `\nWARNING: Snapshot state was recovered after a corrupt snapshot was quarantined. Tracked codebases may be incomplete.`
+                + `\nSnapshot path: ${snapshotCorruptionWarning.snapshotPath}`
+                + (typeof snapshotCorruptionWarning.quarantinedPath === "string" ? `\nQuarantined snapshot: ${snapshotCorruptionWarning.quarantinedPath}` : "")
+                + `\nReason: ${snapshotCorruptionWarning.message}`
+                : "";
+            if (snapshotCorruptionWarning) {
+                envelopeHints = {
+                    ...(envelopeHints || {}),
+                    snapshotCorruption: snapshotCorruptionWarning,
+                };
+            }
 
             return this.host.manageResponse(
                 "status",
                 envelopePath,
                 envelopeStatus,
-                statusMessage + compatibilityStatus + pathInfo,
+                statusMessage + compatibilityStatus + pathInfo + snapshotWarningText,
                 {
                     reason: envelopeReason,
                     hints: envelopeHints,

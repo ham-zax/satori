@@ -741,24 +741,27 @@ export class SyncManager {
             return;
         }
 
-        this.watcherIgnoreMatchers.set(
-            codebasePath,
-            await this.buildIgnoreMatcherForCodebase(codebasePath)
-        );
-
         let watcher: FSWatcher;
         try {
+            this.watcherIgnoreMatchers.set(
+                codebasePath,
+                await this.buildIgnoreMatcherForCodebase(codebasePath)
+            );
             watcher = chokidar.watch(codebasePath, {
                 persistent: true,
                 ignoreInitial: true,
                 ignored: (watchPath) => this.shouldIgnoreWatchPath(codebasePath, watchPath),
             });
         } catch (error) {
+            this.watcherIgnoreMatchers.delete(codebasePath);
             await this.handleWatcherError(codebasePath, error);
             return;
         }
 
         const onPathChange = (watchPath: string) => {
+            if (this.watchers.get(codebasePath) !== watcher) {
+                return;
+            }
             const relativePath = this.normalizeRelativePath(codebasePath, watchPath);
             const reason: WatchSyncReason = this.isIgnoreRuleControlFile(relativePath)
                 ? 'ignore_rules_changed'
@@ -766,6 +769,7 @@ export class SyncManager {
             this.scheduleWatcherSync(codebasePath, reason);
         };
 
+        this.watchers.set(codebasePath, watcher);
         watcher
             .on('add', onPathChange)
             .on('change', onPathChange)
@@ -776,7 +780,6 @@ export class SyncManager {
                 void this.handleWatcherError(codebasePath, error);
             });
 
-        this.watchers.set(codebasePath, watcher);
         console.log(`[SYNC-WATCH] Watching '${codebasePath}' (debounce=${this.watchDebounceMs}ms)`);
     }
 

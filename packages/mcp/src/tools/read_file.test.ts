@@ -282,6 +282,10 @@ test('read_file preserves missing-file and non-file errors', async () => {
         assert.equal(missing.isError, true);
         assert.match(missing.content[0].text, /not found/);
 
+        const annotatedMissing = await runReadFile({ path: missingPath, mode: 'annotated' }, 1000);
+        assert.equal(annotatedMissing.isError, true);
+        assert.equal(JSON.parse(annotatedMissing.content[0].text).status, 'not_found');
+
         const nonFile = await runReadFile({ path: dir }, 1000);
         assert.equal(nonFile.isError, true);
         assert.match(nonFile.content[0].text, /is not a file/);
@@ -838,6 +842,98 @@ test('read_file open_symbol returns not_found for a stale symbolInstanceId witho
         const payload = JSON.parse(response.content[0].text);
         assert.equal(payload.status, 'not_found');
         assert.match(payload.message, /Exact symbol not found/);
+    });
+});
+
+test('read_file open_symbol returns json envelope for unsupported outline file', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'notes.txt');
+        fs.writeFileSync(filePath, 'plain text\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_notes'
+            }
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'unsupported');
+        assert.equal(payload.reason, 'unsupported_language');
+        assert.match(payload.message, /not outline-capable/);
+    });
+});
+
+test('read_file open_symbol returns json envelope when resolved symbol span is invalid', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as unknown as SnapshotManagerLike,
+            toolHandlers: {
+                handleFileOutline: async () => ({
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'ok',
+                            path: repoPath,
+                            file: 'src/runtime.ts',
+                            outline: { symbols: [{ symbolId: 'sym_runtime_instance' }] },
+                            hasMore: false
+                        })
+                    }]
+                })
+            } as unknown as ToolHandlersLike
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'not_found');
+        assert.equal(payload.reason, 'missing_symbol');
+        assert.match(payload.message, /missing a valid span/);
+    });
+});
+
+test('read_file open_symbol catch-all returns json envelope', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance'
+            }
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
+            } as unknown as SnapshotManagerLike,
+            toolHandlers: {
+                handleFileOutline: async () => ({
+                    content: [{ type: 'text', text: 'not-json' }]
+                })
+            } as unknown as ToolHandlersLike
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'not_ready');
+        assert.match(payload.message, /Error reading file/);
     });
 });
 

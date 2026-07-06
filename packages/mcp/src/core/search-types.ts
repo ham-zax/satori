@@ -464,6 +464,7 @@ export type NonOkReason =
     | "not_indexed"
     | NavigationUnavailableReason
     | "missing_provider_config"
+    | "search_backend_failed"
     | "vector_backend_unavailable";
 
 export interface IndexingFailureMetadata {

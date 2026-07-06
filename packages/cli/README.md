@@ -5,8 +5,8 @@ Installer and shell client for Satori MCP. Use this package to configure support
 ## Quick Start
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.6 install --client all
-npx -y @zokizuan/satori-cli@0.4.6 doctor
+npx -y @zokizuan/satori-cli@latest install --client all
+npx -y @zokizuan/satori-cli@latest doctor
 ```
 
 Supported clients are `codex`, `claude`, `opencode`, and `all`.
@@ -24,13 +24,13 @@ After a repo is indexed, Satori keeps the public MCP surface fixed while buildin
 ## Commands
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.6 install --client codex
-npx -y @zokizuan/satori-cli@0.4.6 install --client all --profile minimal
-npx -y @zokizuan/satori-cli@0.4.6 install --client codex --install-guidance-hook
-npx -y @zokizuan/satori-cli@0.4.6 install --client claude
-npx -y @zokizuan/satori-cli@0.4.6 install --client opencode
-npx -y @zokizuan/satori-cli@0.4.6 install --client all --dry-run
-npx -y @zokizuan/satori-cli@0.4.6 uninstall --client codex
+npx -y @zokizuan/satori-cli@latest install --client codex
+npx -y @zokizuan/satori-cli@latest install --client all --profile minimal
+npx -y @zokizuan/satori-cli@latest install --client codex --install-guidance-hook
+npx -y @zokizuan/satori-cli@latest install --client claude
+npx -y @zokizuan/satori-cli@latest install --client opencode
+npx -y @zokizuan/satori-cli@latest install --client all --dry-run
+npx -y @zokizuan/satori-cli@latest uninstall --client codex
 ```
 
 `doctor` checks Node, package visibility, provider env, and Milvus env without starting an MCP client.
@@ -52,8 +52,8 @@ Codex installs write two companion artifacts by default: the first-party `satori
 Typical first run:
 
 ```bash
-npx -y @zokizuan/satori-cli@0.4.6 install --client all
-npx -y @zokizuan/satori-cli@0.4.6 doctor
+npx -y @zokizuan/satori-cli@latest install --client all
+npx -y @zokizuan/satori-cli@latest doctor
 # restart your MCP client
 ```
 

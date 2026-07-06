@@ -9,7 +9,7 @@
     "command": "npx",
     "args": [
       "-y",
-      "@zokizuan/satori-cli@0.4.6",
+      "@zokizuan/satori-cli@latest",
       "install",
       "--client",
       "all"

@@ -7,7 +7,6 @@ import {
 import type { SnapshotManager } from "./snapshot.js";
 
 const SATORI_COLLECTION_PREFIXES = ["code_chunks_", "hybrid_code_chunks_"];
-const ZILLIZ_FREE_TIER_COLLECTION_LIMIT = 5;
 const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
 
 type CandidateCollection = {
@@ -258,7 +257,7 @@ export class VectorBackendMaintenance {
 
         return `${COLLECTION_LIMIT_MESSAGE}
 
-Reason: Zilliz free-tier clusters are capped at ${ZILLIZ_FREE_TIER_COLLECTION_LIMIT} collections, and this cluster has no remaining collection slots.
+Reason: The connected Zilliz cluster has no remaining collection slots.
 Target codebase: '${targetCodebasePath}'
 Target collection: '${targetCollectionName}'
 

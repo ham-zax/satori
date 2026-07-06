@@ -9,6 +9,7 @@ on:
 jobs:
   core_sync_gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
@@ -38,6 +39,7 @@ jobs:
 
   lint_and_build:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
 
     strategy:
       matrix:

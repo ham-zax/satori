@@ -116,9 +116,9 @@ For indie devs and engineering teams using Claude Code, Codex, OpenCode, or Curs
 |---|---|---|
 | License | MIT | `LICENSE` |
 | NPM Packages | 3 | `package.json` |
-| Latest Core | v1.6.3 | `packages/core/package.json:3` |
-| Latest MCP | v4.11.7 | `packages/mcp/package.json:3` |
-| Latest CLI | v0.4.5 | `packages/cli/package.json:3` |
+| Latest Core | v1.6.4 | `packages/core/package.json:3` |
+| Latest MCP | v4.11.8 | `packages/mcp/package.json:3` |
+| Latest CLI | v0.4.6 | `packages/cli/package.json:3` |
 | MCP Tools | 6 fixed | `AGENTS.md:36-46` |
 | Client Integrations | 3 (Codex, Claude, OpenCode) | `README.md:41` |
 | Embedding Providers | 4 (VoyageAI, OpenAI, Gemini, Ollama) | `packages/core/src/embedding/` |
@@ -129,14 +129,14 @@ For indie devs and engineering teams using Claude Code, Codex, OpenCode, or Curs
 
 | Package | Purpose |
 |---|---|
-| `@zokizuan/satori-core` v1.6.3 | Indexing, AST chunking, embeddings, Milvus/Zilliz storage, incremental Merkle sync |
-| `@zokizuan/satori-mcp` v4.11.7 | MCP server with 6 tools, Zod schemas, snapshot v3 state machine, fingerprint gates, search telemetry |
-| `@zokizuan/satori-cli` v0.4.5 | Installer for Codex/Claude/OpenCode. `bin: satori-cli`. Managed config ownership. `doctor` command. Schema-backed wrapper flags |
+| `@zokizuan/satori-core` v1.6.4 | Indexing, AST chunking, embeddings, Milvus/Zilliz storage, incremental Merkle sync |
+| `@zokizuan/satori-mcp` v4.11.8 | MCP server with 6 tools, Zod schemas, snapshot v3 state machine, fingerprint gates, search telemetry |
+| `@zokizuan/satori-cli` v0.4.6 | Installer for Codex/Claude/OpenCode. `bin: satori-cli`. Managed config ownership. `doctor` command. Schema-backed wrapper flags |
 
 ### Installer-First Setup
 ```bash
-npx -y @zokizuan/satori-cli@0.4.5 install --client all
-npx -y @zokizuan/satori-cli@0.4.5 doctor
+npx -y @zokizuan/satori-cli@0.4.6 install --client all
+npx -y @zokizuan/satori-cli@0.4.6 doctor
 ```
 - Writes managed client config (TOML for Codex, JSON for Claude, JSONC for OpenCode)
 - Copies first-party `satori` workflow skill (plus `satori-search`, `satori-navigation`, `satori-indexing` companions)
@@ -357,7 +357,7 @@ Satori ships a deterministic comparison harness (`pnpm run vs:code-intelligence`
 |---|---|
 | **GitHub** | [github.com/ham-zax/satori](https://github.com/ham-zax/satori) |
 | **Landing Page** | [hamza.my.id/satori](https://hamza.my.id/satori) |
-| **Install** | `npx -y @zokizuan/satori-cli@0.4.5 install --client all` |
+| **Install** | `npx -y @zokizuan/satori-cli@0.4.6 install --client all` |
 | **Eval harness** | `pnpm run vs:code-intelligence` |
 | **Package** | [npm: @zokizuan/satori-cli](https://www.npmjs.com/package/@zokizuan/satori-cli) |
 
@@ -381,7 +381,7 @@ This pitch deck was fact-checked against the codebase by three independent subag
 | Navigation path | `AGENTS.md:51` |
 | Search operators | `AGENTS.md:57`; `packages/mcp/src/core/search-query-planning.ts:10` |
 | State machine (5 states) | `packages/mcp/src/config.ts:84-125` |
-| Package versions | `packages/*/package.json` (core 1.6.3, mcp 4.11.7, cli 0.4.5) |
+| Package versions | `packages/*/package.json` (core 1.6.4, mcp 4.11.8, cli 0.4.6) |
 | Fingerprint fields | `packages/mcp/src/config.ts:9-15`; `snapshot.ts:78-87` |
 | Language capability tiers | `packages/core/src/languages/capabilities.ts:18-118,265-364` |
 | AST language count (9) | `packages/core/src/splitter/ast-splitter.ts:12-20,124-134` |
@@ -411,7 +411,7 @@ This pitch deck was fact-checked against the codebase by three independent subag
 | **No published benchmark numbers** | Harness exists; no leaderboard, no win-rate, no per-task scores in repo. |
 | **No CI gating of behavioral regressions** | `pnpm test`, `pnpm lint`, and the comparison harness are **not** in CI. Lint is commented out in `.github/workflows/ci.yml:79-80`. |
 | **No `.c` dedicated AST** | C is routed to the C++ parser. |
-| **No release tags since v4.2.0** | Latest tag is 9 minor versions behind `mcp@4.11.7`. Release process may publish without tagging. |
+| **No release tags since v4.2.0** | Latest tag is 9 minor versions behind `mcp@4.11.8`. Release process may publish without tagging. |
 | **No production-tested claim at CI level** | "Tested" means installer support + integration + smoke. Unit tests and eval suite do not run on PR. |
 | **No `~/.satori/.satoriignore` global ignore** | Runtime reads only repo-root control files, despite one ARCHITECTURE.md mention. |
 | **No audit trail feature** | Satori surfaces evidence in tool responses, but does not log agent reasoning or edit paths. |

@@ -646,7 +646,7 @@
         <div class="nav-links">
           <a href="../index.html">Landing</a>
           <a href="../architecture.html">Architecture</a>
-          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">Repository</a>
+          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer">Repository</a>
           <a href="../index.html#contact" class="cta-contact">Contact</a>
         </div>
       </nav>
@@ -683,16 +683,16 @@
         <div class="callout">
           <p>
             Recommended public setup:
-            <code>npx -y @zokizuan/satori-cli@0.4.5 install --client all</code>,
+            <code>npx -y @zokizuan/satori-cli@0.4.6 install --client all</code>,
             then
-            <code>npx -y @zokizuan/satori-cli@0.4.5 doctor</code>.
+            <code>npx -y @zokizuan/satori-cli@0.4.6 doctor</code>.
             Restart the MCP client after install.
           </p>
         </div>
         <div class="grid">
           <div class="panel">
             <h3>Codex</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.5 install --client codex</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.6 install --client codex</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
               and installs the Satori skill in <code>~/.codex/skills</code>.
@@ -700,7 +700,7 @@
           </div>
           <div class="panel">
             <h3>Claude</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.5 install --client claude</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.6 install --client claude</code></pre>
             <p>
               Writes the Satori MCP entry to
               <code>~/.claude.json</code> and installs the Satori skill
@@ -709,7 +709,7 @@
           </div>
           <div class="panel">
             <h3>OpenCode</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.5 install --client opencode</code></pre>
+            <pre><code>npx -y @zokizuan/satori-cli@0.4.6 install --client opencode</code></pre>
             <p>
               Writes the Satori MCP entry to
               <code>~/.config/opencode/opencode.json</code> and installs the
@@ -723,7 +723,7 @@
             Use <code>--client all</code> to install every supported client, and
             <code>uninstall</code> with the same selector to remove only
             Satori-managed config and skills. Run
-            <code>npx -y @zokizuan/satori-cli@0.4.5 doctor</code> to check
+            <code>npx -y @zokizuan/satori-cli@0.4.6 doctor</code> to check
             provider and Milvus setup without starting an MCP client.
           </p>
         </div>
@@ -1315,7 +1315,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               If indexing or search returns
               <code>MISSING_PROVIDER_CONFIG</code>, run
-              <code>npx -y @zokizuan/satori-cli@0.4.5 doctor</code>, set the
+              <code>npx -y @zokizuan/satori-cli@0.4.6 doctor</code>, set the
               missing provider or Milvus values, then retry the same tool call.
               It is an active setup failure only when it appears as the tool
               response <code>code</code> or <code>reason</code>; inside
@@ -1418,7 +1418,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
           <h5>Resources</h5>
           <a href="../index.html">Landing</a>
           <a href="../architecture.html">Architecture</a>
-          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">GitHub Repository</a>
+          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
         </div>
         <div class="footer-col">
           <h5>Contact</h5>

@@ -135,8 +135,8 @@ For indie devs and engineering teams using Claude Code, Codex, OpenCode, or Curs
 
 ### Installer-First Setup
 ```bash
-npx -y @zokizuan/satori-cli@0.4.6 install --client all
-npx -y @zokizuan/satori-cli@0.4.6 doctor
+npx -y @zokizuan/satori-cli@latest install --client all
+npx -y @zokizuan/satori-cli@latest doctor
 ```
 - Writes managed client config (TOML for Codex, JSON for Claude, JSONC for OpenCode)
 - Copies first-party `satori` workflow skill (plus `satori-search`, `satori-navigation`, `satori-indexing` companions)
@@ -357,7 +357,7 @@ Satori ships a deterministic comparison harness (`pnpm run vs:code-intelligence`
 |---|---|
 | **GitHub** | [github.com/ham-zax/satori](https://github.com/ham-zax/satori) |
 | **Landing Page** | [hamza.my.id/satori](https://hamza.my.id/satori) |
-| **Install** | `npx -y @zokizuan/satori-cli@0.4.6 install --client all` |
+| **Install** | `npx -y @zokizuan/satori-cli@latest install --client all` |
 | **Eval harness** | `pnpm run vs:code-intelligence` |
 | **Package** | [npm: @zokizuan/satori-cli](https://www.npmjs.com/package/@zokizuan/satori-cli) |
 

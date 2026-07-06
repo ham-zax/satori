@@ -15,6 +15,7 @@ import {
     resolveNavigationSidecarRoot,
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
+    COLLECTION_LIMIT_MESSAGE,
 } from '@zokizuan/satori-core';
 import type { SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
 
@@ -603,7 +604,7 @@ test('handleSearchCode grouped symbol mode emits relationship-backed callGraphHi
     }));
 });
 
-test('handleSearchCode does not emit supported callGraphHint from stale ownerSymbolInstanceId metadata when the current registry has no matching symbol', async () => {
+test('handleSearchCode does not surface read_file action from stale-symbol chunk', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const fileContent = [
             'function currentSession(token: string) {',
@@ -651,14 +652,10 @@ test('handleSearchCode does not emit supported callGraphHint from stale ownerSym
         assert.equal(result.callGraphHint.supported, false);
         assert.equal(result.callGraphHint.reason, 'stale_symbol_ref');
         assert.equal(result.nextActions, undefined);
-        assert.deepEqual(result.navigationFallback.readSpan, {
-            tool: 'read_file',
-            args: {
-                path: path.resolve(repoPath, 'src/stale.ts'),
-                start_line: 1,
-                end_line: 3
-            }
-        });
+        assert.equal(result.navigationFallback?.readSpan, undefined);
+        assert.notEqual(result.recommendedNextAction?.tool, 'read_file');
+        assert.equal(result.fallbacks?.some((fallback: { tool?: string }) => fallback.tool === 'read_file'), undefined);
+        assert.notEqual(payload.recommendedNextAction?.tool, 'read_file');
     }));
 });
 
@@ -6982,7 +6979,12 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
         });
 
         assert.equal(response.isError, true);
-        assert.match(response.content[0]?.text || '', /all semantic search passes failed/i);
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'search_backend_failed');
+        assert.equal(payload.resultMode, 'grouped');
+        assert.deepEqual(payload.results, []);
+        assert.match(payload.message, /all semantic search passes failed/i);
     });
 });
 
@@ -7029,6 +7031,51 @@ test('handleSearchCode returns structured backend diagnostics when all semantic 
         assert.equal(payload.freshnessDecision, null);
         assert.deepEqual(payload.results, []);
         assert.match(payload.hints.backend.nextSteps.join(' '), /Resume the Zilliz Cloud cluster/);
+    });
+});
+
+test('handleSearchCode returns json envelope for collection limit errors', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => {
+                throw new Error(COLLECTION_LIMIT_MESSAGE);
+            },
+            semanticSearch: async () => []
+        } as unknown as HandlerContext;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as unknown as HandlerSnapshotManager;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000
+            })
+        } as unknown as HandlerSyncManager;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'vector_backend_unavailable');
+        assert.equal(payload.message, COLLECTION_LIMIT_MESSAGE);
+        assert.deepEqual(payload.results, []);
+        assert.equal(payload.hints?.backend?.provider, 'zilliz');
     });
 });
 
@@ -7227,7 +7274,12 @@ test('handleSearchCode returns deterministic all-pass error when test fault inje
             });
 
             assert.equal(response.isError, true);
-            assert.match(response.content[0]?.text || '', /all semantic search passes failed/i);
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'not_ready');
+            assert.equal(payload.reason, 'search_backend_failed');
+            assert.equal(payload.resultMode, 'grouped');
+            assert.deepEqual(payload.results, []);
+            assert.match(payload.message, /all semantic search passes failed/i);
         });
     });
 });

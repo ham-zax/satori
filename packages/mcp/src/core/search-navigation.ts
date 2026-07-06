@@ -179,7 +179,7 @@ export function shouldAllowPreviewReadFallback(
         return false;
     }
 
-    return callGraphHint.reason === "missing_symbol" || callGraphHint.reason === "stale_symbol_ref";
+    return callGraphHint.reason === "missing_symbol";
 }
 
 export function buildNavigationFallback(

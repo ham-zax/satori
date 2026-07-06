@@ -573,6 +573,9 @@ export class ToolHandlers {
             getSnapshotIndexingCodebases: this.getSnapshotIndexingCodebases.bind(this),
             getSnapshotCodebaseStatus: this.getSnapshotCodebaseStatus.bind(this),
             getSnapshotCodebaseInfo: this.getSnapshotCodebaseInfo.bind(this),
+            getSnapshotCorruptionWarning: typeof this.snapshotManager.getSnapshotCorruptionWarning === "function"
+                ? this.snapshotManager.getSnapshotCorruptionWarning.bind(this.snapshotManager)
+                : () => undefined,
             buildRuntimeOwnerConflictResponseIfBlocked: this.buildRuntimeOwnerConflictResponseIfBlocked.bind(this),
             recoverStaleIndexingStateIfNeeded: this.recoverStaleIndexingStateIfNeeded.bind(this),
             manageResponse: this.toolResponseBuilders.manageResponse.bind(this.toolResponseBuilders),
@@ -2340,11 +2343,16 @@ export class ToolHandlers {
             }
 
             if (execution.kind === 'all_semantic_passes_failed') {
+                const payload = this.buildInvalidSearchRequestPayload({
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                }, "Search backend failed: all semantic search passes failed. Retry and verify embedding/vector backends are reachable.", "not_ready", "search_backend_failed");
                 return {
-                    content: [{
-                        type: "text",
-                        text: "Error searching code: all semantic search passes failed. Please retry and verify embedding/vector backends are reachable."
-                    }],
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true,
                     meta: { searchDiagnostics }
                 };
@@ -2418,8 +2426,29 @@ export class ToolHandlers {
             const errorMessage = typeof error === 'string' ? error : (error instanceof Error ? error.message : String(error));
 
             if (errorMessage === COLLECTION_LIMIT_MESSAGE || errorMessage.includes(COLLECTION_LIMIT_MESSAGE)) {
+                const payload = this.buildInvalidSearchRequestPayload({
+                    path: typeof input.path === 'string' ? ensureAbsolutePath(input.path) : '',
+                    query: typeof input.query === 'string' ? input.query : '',
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit
+                }, COLLECTION_LIMIT_MESSAGE, 'not_ready', 'vector_backend_unavailable');
+                payload.hints = {
+                    ...(payload.hints || {}),
+                    backend: {
+                        provider: 'zilliz',
+                        retryable: false,
+                        nextSteps: [
+                            'List current Satori-managed collections with manage_index status or retry create to get full collection-limit guidance.',
+                            'Ask the user which collection to delete.',
+                            'Retry manage_index create with zillizDropCollection set to the exact chosen collection name.',
+                        ],
+                    },
+                };
                 return {
-                    content: [{ type: "text", text: COLLECTION_LIMIT_MESSAGE }]
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
+                    isError: true
                 };
             }
 

@@ -16,6 +16,8 @@ export class OllamaEmbedding extends Embedding {
     private config: OllamaEmbeddingConfig;
     private dimension: number = 768; // Default dimension for many embedding models
     private dimensionDetected: boolean = false; // Track if dimension has been detected
+    private dimensionDetectionPromise: Promise<number> | null = null;
+    private dimensionCacheVersion = 0;
     protected maxTokens: number = 2048; // Default context window for Ollama
 
     constructor(config: OllamaEmbeddingConfig) {
@@ -68,16 +70,62 @@ export class OllamaEmbedding extends Embedding {
         return request;
     }
 
+    private invalidateDimensionCache(): void {
+        this.dimensionCacheVersion += 1;
+        this.dimensionDetectionPromise = null;
+        if (this.config.dimension) {
+            this.dimension = this.config.dimension;
+            this.dimensionDetected = true;
+            return;
+        }
+        this.dimensionDetected = false;
+    }
+
+    private async ensureDimensionDetected(): Promise<void> {
+        if (this.config.dimension) {
+            this.dimension = this.config.dimension;
+            this.dimensionDetected = true;
+            return;
+        }
+        if (this.dimensionDetected) {
+            return;
+        }
+
+        const cacheVersion = this.dimensionCacheVersion;
+        if (!this.dimensionDetectionPromise) {
+            this.dimensionDetectionPromise = this.detectDimension().then(
+                (dimension) => {
+                    if (cacheVersion === this.dimensionCacheVersion) {
+                        this.dimension = dimension;
+                        this.dimensionDetected = true;
+                        console.log(`[OllamaEmbedding] 📏 Detected Ollama embedding dimension: ${this.dimension} for model: ${this.config.model}`);
+                    }
+                    return dimension;
+                },
+                (error) => {
+                    if (cacheVersion === this.dimensionCacheVersion) {
+                        throw error;
+                    }
+                    return this.dimension;
+                }
+            ).finally(() => {
+                if (cacheVersion === this.dimensionCacheVersion) {
+                    this.dimensionDetectionPromise = null;
+                }
+            });
+        }
+
+        await this.dimensionDetectionPromise;
+        if (!this.dimensionDetected) {
+            await this.ensureDimensionDetected();
+        }
+    }
+
     async embed(text: string): Promise<EmbeddingVector> {
         // Preprocess the text
         const processedText = this.preprocessText(text);
 
-        // Detect dimension on first use if not configured
-        if (!this.dimensionDetected && !this.config.dimension) {
-            this.dimension = await this.detectDimension();
-            this.dimensionDetected = true;
-            console.log(`[OllamaEmbedding] 📏 Detected Ollama embedding dimension: ${this.dimension} for model: ${this.config.model}`);
-        }
+        await this.ensureDimensionDetected();
 
         const response = await this.client.embed(this.buildEmbedRequest(processedText));
 
@@ -95,12 +143,7 @@ export class OllamaEmbedding extends Embedding {
         // Preprocess all texts
         const processedTexts = this.preprocessTexts(texts);
 
-        // Detect dimension on first use if not configured
-        if (!this.dimensionDetected && !this.config.dimension) {
-            this.dimension = await this.detectDimension();
-            this.dimensionDetected = true;
-            console.log(`[OllamaEmbedding] 📏 Detected Ollama embedding dimension: ${this.dimension} for model: ${this.config.model}`);
-        }
+        await this.ensureDimensionDetected();
 
         // Use Ollama's native batch embedding API
         const response = await this.client.embed(this.buildEmbedRequest(processedTexts));
@@ -131,13 +174,11 @@ export class OllamaEmbedding extends Embedding {
     async setModel(model: string): Promise<void> {
         this.config.model = model;
         // Reset dimension detection when model changes
-        this.dimensionDetected = false;
+        this.invalidateDimensionCache();
         // Update max tokens for new model
         this.setDefaultMaxTokensForModel(model);
         if (!this.config.dimension) {
-            this.dimension = await this.detectDimension();
-            this.dimensionDetected = true;
-            console.log(`[OllamaEmbedding] 📏 Detected Ollama embedding dimension: ${this.dimension} for model: ${this.config.model}`);
+            await this.ensureDimensionDetected();
         } else {
             console.log('[OllamaEmbedding] Dimension already detected for model ' + this.config.model);
         }
@@ -153,6 +194,7 @@ export class OllamaEmbedding extends Embedding {
             host: host,
             fetch: this.config.fetch,
         });
+        this.invalidateDimensionCache();
     }
 
     /**

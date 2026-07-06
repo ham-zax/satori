@@ -1018,6 +1018,41 @@ test('corrupt snapshot is quarantined for diagnostics', () => {
         const quarantined = files.some((name) => name.startsWith('mcp-codebase-snapshot.json.corrupt-'));
         assert.equal(quarantined, true);
         assert.equal(manager.getAllCodebases().length, 0);
+        assert.equal(typeof manager.getSnapshotCorruptionWarning()?.quarantinedPath, 'string');
+
+        const restarted = new SnapshotManager(FINGERPRINT_A);
+        restarted.loadCodebaseSnapshot();
+        assert.equal(typeof restarted.getSnapshotCorruptionWarning()?.quarantinedPath, 'string');
+    });
+});
+
+test('corrupt snapshot reload preserves loaded runtime state and can save it back', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-preserved');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { file } = snapshotPathsFor(homeDir);
+
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexed(codebase, {
+            indexedFiles: 2,
+            totalChunks: 5,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified');
+        manager.saveCodebaseSnapshot();
+
+        fs.writeFileSync(file, '{ this is invalid json');
+        manager.loadCodebaseSnapshot();
+
+        assert.equal(manager.getAllCodebases().length, 1);
+        assert.equal(manager.getCodebaseInfo(codebase)?.status, 'indexed');
+        assert.equal(typeof manager.getSnapshotCorruptionWarning()?.quarantinedPath, 'string');
+
+        manager.saveCodebaseSnapshot();
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+
+        assert.equal(reader.getCodebaseInfo(codebase)?.status, 'indexed');
+        assert.equal(reader.getSnapshotCorruptionWarning(), undefined);
     });
 });
 

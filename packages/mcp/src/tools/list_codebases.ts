@@ -6,6 +6,21 @@ import { getCompletionMarkerReader, validateCompletionProof } from "../core/comp
 const listCodebasesInputSchema = z.object({}).strict();
 const comparePathAsc = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
+function formatSnapshotCorruptionWarning(warning: ReturnType<ToolContext["snapshotManager"]["getSnapshotCorruptionWarning"]>): string[] {
+    if (!warning) {
+        return [];
+    }
+    const lines = [
+        "WARNING: Snapshot state was recovered after a corrupt snapshot was quarantined. Tracked codebases may be incomplete.",
+        `Snapshot path: ${warning.snapshotPath}`,
+    ];
+    if (warning.quarantinedPath) {
+        lines.push(`Quarantined snapshot: ${warning.quarantinedPath}`);
+    }
+    lines.push(`Reason: ${warning.message}`);
+    return lines;
+}
+
 export const listCodebasesTool: McpTool = {
     name: "list_codebases",
     description: () => "List tracked codebases and their indexing state.",
@@ -24,17 +39,31 @@ export const listCodebasesTool: McpTool = {
         }
 
         const all = ctx.snapshotManager.getAllCodebases();
+        const rawSnapshotWarning = typeof ctx.snapshotManager.getSnapshotCorruptionWarning === "function"
+            ? ctx.snapshotManager.getSnapshotCorruptionWarning()
+            : undefined;
+        const snapshotWarning = formatSnapshotCorruptionWarning(rawSnapshotWarning);
 
         if (all.length === 0) {
             return {
                 content: [{
                     type: "text",
-                    text: "No codebases are currently tracked.\n\nUse manage_index with action='create' to index one."
+                    text: [
+                        ...snapshotWarning,
+                        ...(snapshotWarning.length > 0 ? [""] : []),
+                        "No codebases are currently tracked.",
+                        "",
+                        "Use manage_index with action='create' to index one.",
+                    ].join("\n")
                 }]
             };
         }
 
         const lines: string[] = [];
+        if (snapshotWarning.length > 0) {
+            lines.push(...snapshotWarning);
+            lines.push('');
+        }
         lines.push('## Codebases');
         lines.push('');
 

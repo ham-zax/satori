@@ -12,6 +12,7 @@ type SyncManagerTestAccess = {
     watcherModeStarted: boolean;
     watchers: Map<string, { close: () => Promise<void> | void }>;
     debounceTimers: Map<string, NodeJS.Timeout>;
+    watcherIgnoreMatchers: Map<string, unknown>;
     shouldIgnoreWatchPath(codebasePath: string, filePath: string): boolean;
     isIgnoreRuleControlFile(relativePath: string): boolean;
     touchWatchedCodebase(codebasePath: string): Promise<void>;
@@ -1027,6 +1028,33 @@ test('registering watcher does not increment ignore rules version', async () => 
     assert.equal(snapshot.getCodebaseIgnoreRulesVersion(codebasePath), undefined);
 
     await manager.unregisterCodebaseWatcher(codebasePath);
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('registering watcher contains ignore matcher failures', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const context = createContext();
+    const snapshot = createSnapshot(statusByPath);
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
+        watchEnabled: true,
+        watchDebounceMs: 20,
+    });
+    const access = manager as unknown as SyncManagerTestAccess & {
+        buildIgnoreMatcherForCodebase(codebasePath: string): Promise<unknown>;
+    };
+
+    access.watcherModeStarted = true;
+    access.buildIgnoreMatcherForCodebase = async () => {
+        throw new Error('invalid ignore matcher');
+    };
+
+    await manager.registerCodebaseWatcher(codebasePath);
+
+    assert.equal(access.watchers.has(codebasePath), false);
+    assert.equal(access.watcherIgnoreMatchers.has(codebasePath), false);
+
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });

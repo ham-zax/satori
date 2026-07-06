@@ -18,6 +18,11 @@ import {
 } from "../config.js";
 
 export type AccessGateReason = 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';
+export interface SnapshotCorruptionWarning {
+    snapshotPath: string;
+    quarantinedPath?: string;
+    message: string;
+}
 type MergeClass = 'searchable' | 'terminal_bad' | 'active';
 
 function isSearchableStatus(status: CodebaseInfo['status']): boolean {
@@ -110,6 +115,7 @@ export class SnapshotManager {
     private pendingTombstoneRemovals: Set<string> = new Set();
     private isDirty = false;
     private lastLoadedSnapshotStateToken: string | null = null;
+    private snapshotCorruptionWarning: SnapshotCorruptionWarning | undefined;
     private runtimeFingerprint: IndexFingerprint;
 
     constructor(runtimeFingerprint: IndexFingerprint) {
@@ -695,10 +701,25 @@ export class SnapshotManager {
         this.refreshDerivedState();
     }
 
-    private quarantineCorruptSnapshot(error: unknown): void {
+    private findLatestQuarantinedSnapshotPath(): string | undefined {
+        const snapshotDir = path.dirname(this.snapshotFilePath);
+        if (!fs.existsSync(snapshotDir)) {
+            return undefined;
+        }
+        const prefix = `${path.basename(this.snapshotFilePath)}.corrupt-`;
+        const candidates = fs.readdirSync(snapshotDir)
+            .filter((name) => name.startsWith(prefix))
+            .sort();
+        const latest = candidates[candidates.length - 1];
+        return latest ? path.join(snapshotDir, latest) : undefined;
+    }
+
+    private quarantineCorruptSnapshot(error: unknown): SnapshotCorruptionWarning {
         console.error('[SNAPSHOT] Error loading snapshot:', error);
+        const message = errorMessage(error);
+        let quarantinedPath = this.findLatestQuarantinedSnapshotPath();
         if (!fs.existsSync(this.snapshotFilePath)) {
-            return;
+            return { snapshotPath: this.snapshotFilePath, quarantinedPath, message };
         }
 
         let lockHandle: { fd: number; path: string } | null = null;
@@ -708,13 +729,15 @@ export class SnapshotManager {
             if (!lockHandle) {
                 try {
                     fs.copyFileSync(this.snapshotFilePath, quarantinePath);
+                    quarantinedPath = quarantinePath;
                     console.warn(`[SNAPSHOT] Lock unavailable; copied corrupt snapshot to ${quarantinePath}`);
                 } catch (copyError) {
                     console.error(`[SNAPSHOT] Failed to preserve corrupt snapshot copy: ${errorMessage(copyError)}`);
                 }
-                return;
+                return { snapshotPath: this.snapshotFilePath, quarantinedPath, message };
             }
             fs.renameSync(this.snapshotFilePath, quarantinePath);
+            quarantinedPath = quarantinePath;
             console.warn(`[SNAPSHOT] Quarantined corrupt snapshot to ${quarantinePath}`);
         } catch (quarantineError) {
             console.error(`[SNAPSHOT] Failed to quarantine corrupt snapshot: ${errorMessage(quarantineError)}`);
@@ -723,10 +746,12 @@ export class SnapshotManager {
                 this.releaseSnapshotLock(lockHandle);
             }
         }
+        return { snapshotPath: this.snapshotFilePath, quarantinedPath, message };
     }
 
     public loadCodebaseSnapshot(): void {
         console.log('[SNAPSHOT] Loading codebase snapshot from:', this.snapshotFilePath);
+        const hadRuntimeState = this.codebaseInfoMap.size > 0 || this.clearTombstones.size > 0;
 
         try {
             this.pendingRemovals.clear();
@@ -734,6 +759,14 @@ export class SnapshotManager {
             this.isDirty = false;
             if (!fs.existsSync(this.snapshotFilePath)) {
                 console.log('[SNAPSHOT] Snapshot file does not exist. Starting with empty codebase list.');
+                const quarantinedPath = this.findLatestQuarantinedSnapshotPath();
+                this.snapshotCorruptionWarning = quarantinedPath
+                    ? {
+                        snapshotPath: this.snapshotFilePath,
+                        quarantinedPath,
+                        message: "Snapshot file is missing after a previous corrupt snapshot quarantine.",
+                    }
+                    : undefined;
                 this.codebaseInfoMap.clear();
                 this.clearTombstones.clear();
                 this.refreshDerivedState();
@@ -746,22 +779,27 @@ export class SnapshotManager {
             let shouldPersist = false;
 
             if (this.isV3Format(snapshot)) {
+                this.snapshotCorruptionWarning = undefined;
                 this.loadV3Format(snapshot);
                 const loadedRecord = this.mapToCodebaseRecord(this.codebaseInfoMap);
                 const persistedRecord = this.canonicalizeUnknownRecord(snapshot.codebases);
                 shouldPersist = !this.codebaseRecordEqualsUnknown(persistedRecord, loadedRecord);
             } else if (this.isV2Format(snapshot)) {
+                this.snapshotCorruptionWarning = undefined;
                 this.loadV2Format(snapshot);
                 shouldPersist = true;
             } else if (this.isV1Format(snapshot)) {
+                this.snapshotCorruptionWarning = undefined;
                 this.loadV1Format(snapshot);
                 shouldPersist = true;
             } else {
-                this.quarantineCorruptSnapshot(new Error('Snapshot format is malformed'));
-                this.codebaseInfoMap.clear();
-                this.clearTombstones.clear();
+                this.snapshotCorruptionWarning = this.quarantineCorruptSnapshot(new Error('Snapshot format is malformed'));
+                if (!hadRuntimeState) {
+                    this.codebaseInfoMap.clear();
+                    this.clearTombstones.clear();
+                }
                 this.refreshDerivedState();
-                this.isDirty = false;
+                this.isDirty = hadRuntimeState;
                 return;
             }
 
@@ -772,13 +810,15 @@ export class SnapshotManager {
                 this.rememberCurrentSnapshotStateToken();
             }
         } catch (error) {
-            this.quarantineCorruptSnapshot(error);
-            this.codebaseInfoMap.clear();
-            this.clearTombstones.clear();
+            this.snapshotCorruptionWarning = this.quarantineCorruptSnapshot(error);
+            if (!hadRuntimeState) {
+                this.codebaseInfoMap.clear();
+                this.clearTombstones.clear();
+            }
             this.pendingRemovals.clear();
             this.pendingTombstoneRemovals.clear();
             this.refreshDerivedState();
-            this.isDirty = false;
+            this.isDirty = hadRuntimeState;
             this.lastLoadedSnapshotStateToken = this.readSnapshotStateToken();
         }
     }
@@ -883,6 +923,12 @@ export class SnapshotManager {
 
     public getAllCodebases(): Array<{ path: string; info: CodebaseInfo }> {
         return Array.from(this.codebaseInfoMap.entries()).map(([p, info]) => ({ path: p, info }));
+    }
+
+    public getSnapshotCorruptionWarning(): SnapshotCorruptionWarning | undefined {
+        return this.snapshotCorruptionWarning
+            ? { ...this.snapshotCorruptionWarning }
+            : undefined;
     }
 
     public markCodebaseCleared(codebasePath: string, collectionName?: string): void {

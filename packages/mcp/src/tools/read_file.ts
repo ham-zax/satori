@@ -75,6 +75,16 @@ function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
+function readFileErrorResponse(payload: ReadFileOpenSymbolResponseEnvelope) {
+    return {
+        content: [{
+            type: "text" as const,
+            text: JSON.stringify(payload, null, 2)
+        }],
+        isError: true
+    };
+}
+
 function toReadFileSearchableStatus(status: unknown): ReadFileSearchableStatus | undefined {
     if (status === 'indexed' || status === 'sync_completed' || status === 'indexing') {
         return status;
@@ -240,8 +250,15 @@ export const readFileTool: McpTool = {
 
         try {
             const absolutePath = ensureAbsolutePath(input.path);
+            const wantsStructuredError = mode === "annotated" || Boolean(input.open_symbol);
 
             if (!fs.existsSync(absolutePath)) {
+                if (wantsStructuredError) {
+                    return readFileErrorResponse({
+                        status: "not_found",
+                        message: `Error: File '${absolutePath}' not found.`,
+                    });
+                }
                 return {
                     content: [{ type: "text", text: `Error: File '${absolutePath}' not found.` }],
                     isError: true
@@ -250,6 +267,12 @@ export const readFileTool: McpTool = {
 
             const stat = fs.statSync(absolutePath);
             if (!stat.isFile()) {
+                if (wantsStructuredError) {
+                    return readFileErrorResponse({
+                        status: "not_found",
+                        message: `Error: '${absolutePath}' is not a file.`,
+                    });
+                }
                 return {
                     content: [{ type: "text", text: `Error: '${absolutePath}' is not a file.` }],
                     isError: true
@@ -328,10 +351,11 @@ export const readFileTool: McpTool = {
                 const spanEnd = Number.isFinite(openSymbol.end_line) ? Number(openSymbol.end_line) : undefined;
                 if (hasExactIdentity) {
                     if (!isOutlineSupportedFile(absolutePath)) {
-                        return {
-                            content: [{ type: "text", text: `Error opening symbol: file '${absolutePath}' is not outline-capable.` }],
-                            isError: true
-                        };
+                        return readFileErrorResponse({
+                            status: "unsupported",
+                            reason: "unsupported_language",
+                            message: `Error opening symbol: file '${absolutePath}' is not outline-capable.`,
+                        });
                     }
 
                     const resolvedRoot = resolveCodebaseRootForFile(absolutePath, ctx);
@@ -397,10 +421,11 @@ export const readFileTool: McpTool = {
 
                     const resolvedSymbol = parsedOutline?.outline?.symbols?.[0];
                     if (!resolvedSymbol?.span || !Number.isFinite(resolvedSymbol.span.startLine) || !Number.isFinite(resolvedSymbol.span.endLine)) {
-                        return {
-                            content: [{ type: "text", text: "Error opening symbol: resolved symbol is missing a valid span." }],
-                            isError: true
-                        };
+                        return readFileErrorResponse({
+                            status: "not_found",
+                            reason: "missing_symbol",
+                            message: "Error opening symbol: resolved symbol is missing a valid span.",
+                        });
                     }
                     startLine = clamp(Number(resolvedSymbol.span.startLine), 1, totalLines);
                     endLine = clamp(Number(resolvedSymbol.span.endLine), startLine, totalLines);
@@ -508,6 +533,12 @@ export const readFileTool: McpTool = {
                 }]
             };
         } catch (error) {
+            if (mode === "annotated" || input.open_symbol) {
+                return readFileErrorResponse({
+                    status: "not_ready",
+                    message: `Error reading file: ${errorMessage(error)}`,
+                });
+            }
             return {
                 content: [{ type: "text", text: `Error reading file: ${errorMessage(error)}` }],
                 isError: true

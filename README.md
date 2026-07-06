@@ -4,19 +4,22 @@
 [![CI](https://github.com/ham-zax/satori/actions/workflows/ci.yml/badge.svg)](https://github.com/ham-zax/satori/actions/workflows/ci.yml)
 [![npm CLI](https://img.shields.io/npm/v/@zokizuan/satori-cli?label=satori-cli)](https://www.npmjs.com/package/@zokizuan/satori-cli)
 
-Agent-safe code retrieval for developers who use MCP coding agents on real repos.
+A codebase map for AI coding agents working on real repos.
 
-Satori indexes a repository, keeps the index fresh, and gives agents a fixed six-tool MCP surface for finding code, opening exact spans, checking callers/callees, and reading bounded evidence before an edit. It is read-only from MCP: source edits stay in your editor or agent host.
+Grep finds strings. Satori gives coding agents a route through the codebase before they edit.
+
+Satori indexes a repo and gives MCP-compatible agents a fixed investigation path from plain-English intent to structured code evidence: symbol-owned results, file outlines, exact symbol or line-range reads, caller/callee context when supported, freshness checks, and recovery guidance when context is stale. Satori does not edit your source code; edits stay in your editor or agent host.
 
 ## What You Get
 
-- Find behavior by intent, not just filenames or exact tokens.
+- Find behavior by plain-English intent, not just filenames or exact tokens.
+- Give agents a structured route instead of making them assemble context through grep chains.
 - Keep search focused on runtime code before pulling in docs or tests.
 - Group search around owner symbols; chunks are supporting evidence, not the final unit of navigation.
 - Open exact files, line ranges, and symbols instead of dumping broad context.
-- Trace nearby callers/callees from relationship-backed navigation when compatible sidecars are ready.
+- Check nearby callers/callees when graph support is available.
 - Build derived symbol registry and relationship sidecars during completed full indexes.
-- Get explicit `requires_reindex`, partial-index, stale-state, and precise sidecar guidance instead of silent bad context.
+- Get clear recovery steps when context is stale, partial, or not ready.
 - Compare Satori against another code-intelligence MCP on the same deterministic task suite.
 - Install the MCP server and first-party workflow skill with one command.
 - Avoid resident MCP startup through `npx`; clients launch an installer-owned Node launcher.
@@ -230,6 +233,18 @@ Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish ac
 
 Satori gives the agent better evidence. It does not remove engineering judgment.
 
+## Roadmap
+
+Satori is focused on making repo investigation easier for coding agents without requiring heavyweight setup.
+
+Planned work includes:
+
+- **Local-first setup:** keep improving the Ollama-backed local embedding path and evaluate Zvec as an embedded vector-store backend, reducing the need for cloud keys or a separate Milvus/Zilliz setup.
+- **Retrieval quality:** improve symbol-owned retrieval, ranking, exact evidence selection, and noisy-result handling.
+- **Language support:** expand caller/callee and relationship-backed navigation beyond the currently supported languages.
+- **Team workflows:** explore shared indexes, hosted indexing, multi-user freshness state, and managed repo context for engineering teams.
+- **Evaluation:** improve deterministic retrieval tests and comparison harnesses for real repositories.
+
 ## Repository Layout
 
 ```text
@@ -332,7 +347,7 @@ npm view @zokizuan/satori-cli@<version> dist.integrity dist.shasum
 
 ## Open Source
 
-Satori is open source under the MIT License. The public MCP surface is intentionally read-only and fixed to six tools, so users can inspect behavior, self-host the index runtime, and contribute without expanding the agent write surface.
+Satori is open source under the MIT License. The public MCP surface is fixed to six tools and does not expose source-code write tools, so users can inspect behavior, self-host the index runtime, and contribute without expanding the agent edit surface.
 
 ## License
 

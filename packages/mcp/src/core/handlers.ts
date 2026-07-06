@@ -2309,13 +2309,13 @@ export class ToolHandlers {
                 exactRegistryEligible: exactRegistryFallbackForTrackedLexical,
                 exactRegistryFallbackForTrackedLexical,
                 freshnessMode: freshnessDecision.mode,
+                observedChangedFilesState: initialObservedChangedFilesState,
             }, {
                 searchQuerySupport: this.searchQuerySupport,
                 semanticSearch: (request) => this.context.semanticSearch(request),
                 reranker: this.reranker,
                 shouldForceSearchPassFailure: (passId) => this.shouldForceSearchPassFailure(passId),
                 classifyVectorBackendError,
-                getChangedFilesForCodebase: (codebasePath) => this.getChangedFilesForCodebase(codebasePath),
                 measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
             }, searchDiagnostics);
 

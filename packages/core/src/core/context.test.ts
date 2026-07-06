@@ -200,6 +200,23 @@ test('Context.resolveStagedCollectionName normalizes staged generation ids to ba
     );
 });
 
+test('Context fails clearly without OPENAI_API_KEY when no embedding is provided', () => {
+    const previousOpenAiApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+        assert.throws(
+            () => new Context({ vectorDatabase: new InMemoryVectorDatabase() }),
+            /OPENAI_API_KEY is required/
+        );
+    } finally {
+        if (previousOpenAiApiKey === undefined) {
+            delete process.env.OPENAI_API_KEY;
+        } else {
+            process.env.OPENAI_API_KEY = previousOpenAiApiKey;
+        }
+    }
+});
+
 test('Context.getIgnorePatternsFromFile preserves gitignore-significant spaces', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ignore-parser-'));
     const ignorePath = path.join(tempDir, '.gitignore');

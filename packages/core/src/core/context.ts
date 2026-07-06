@@ -98,11 +98,19 @@ export class Context {
 
     constructor(config: ContextConfig = {}) {
         // Initialize services
-        this.embedding = config.embedding || new OpenAIEmbedding({
-            apiKey: envManager.get('OPENAI_API_KEY') || 'your-openai-api-key',
-            model: 'text-embedding-3-small',
-            ...(envManager.get('OPENAI_BASE_URL') && { baseURL: envManager.get('OPENAI_BASE_URL') })
-        });
+        if (config.embedding) {
+            this.embedding = config.embedding;
+        } else {
+            const openAiApiKey = envManager.get('OPENAI_API_KEY');
+            if (!openAiApiKey) {
+                throw new Error('OPENAI_API_KEY is required when no embedding implementation is provided.');
+            }
+            this.embedding = new OpenAIEmbedding({
+                apiKey: openAiApiKey,
+                model: 'text-embedding-3-small',
+                ...(envManager.get('OPENAI_BASE_URL') && { baseURL: envManager.get('OPENAI_BASE_URL') })
+            });
+        }
 
         if (!config.vectorDatabase) {
             throw new Error('VectorDatabase is required. Please provide a vectorDatabase instance in the config.');

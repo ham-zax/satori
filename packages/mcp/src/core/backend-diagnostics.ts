@@ -59,7 +59,7 @@ function createVectorBackendDiagnostic(code: VectorBackendDiagnosticCode): Vecto
         case "ZILLIZ_CLUSTER_STOPPED":
             return {
                 code,
-                message: "Vector backend is unavailable because the Zilliz Cloud cluster is stopped.",
+                message: "Zilliz Cloud cluster is stopped. Resume it in Zilliz Cloud, then retry the tool call.",
                 hints: {
                     backend: {
                         code,
@@ -124,13 +124,16 @@ function createVectorBackendDiagnostic(code: VectorBackendDiagnosticCode): Vecto
         case "VECTOR_BACKEND_CONNECTION_CLOSED":
             return {
                 code,
-                message: "Vector backend connection closed before the tool call completed.",
+                message: "Vector backend connection closed before the tool call completed. Check backend health, provider environment, network connectivity, or an MCP process restart in the previous log lines.",
                 hints: {
                     backend: {
                         code,
                         provider: "unknown",
                         retryable: true,
                         nextSteps: [
+                            "If the previous response mentions ZILLIZ_CLUSTER_STOPPED, resume the Zilliz cluster at https://cloud.zilliz.com.",
+                            "If the previous response mentions MISSING_PROVIDER_CONFIG, set the missing env values in the MCP client environment and restart the client.",
+                            "For non-Zilliz Milvus-compatible backends, confirm the service is running and reachable at MILVUS_ADDRESS.",
                             "Retry the MCP tool call after confirming the backend is healthy.",
                             "Restart the MCP client/session if the MCP process exited after the transport failure.",
                         ],

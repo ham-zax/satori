@@ -130,6 +130,7 @@ export function formatSearchVectorBackendError(
                 limit: input.limit,
                 freshnessDecision: null,
                 message: diagnostic.message,
+                humanText: diagnostic.message,
                 hints: diagnostic.hints,
                 results: [],
             })

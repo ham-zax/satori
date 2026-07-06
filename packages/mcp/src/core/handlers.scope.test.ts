@@ -1577,6 +1577,132 @@ test('handleSearchCode exact registry miss still allows bounded tracked lexical 
     });
 });
 
+test('handleSearchCode tracked lexical recovery reads active ignore patterns once per request', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            const registryPath = 'src/unrelated.ts';
+            const trackedPaths = ['src/alpha.ts', 'src/beta.ts', 'src/gamma.ts'];
+            fs.writeFileSync(path.join(repoPath, registryPath), 'export function unrelatedSymbol() { return true; }', 'utf8');
+            fs.writeFileSync(path.join(repoPath, trackedPaths[0]), 'export const alpha = true;', 'utf8');
+            fs.writeFileSync(path.join(repoPath, trackedPaths[1]), 'export const missingExactIdentifier = true;', 'utf8');
+            fs.writeFileSync(path.join(repoPath, trackedPaths[2]), 'export const gamma = true;', 'utf8');
+            await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath: registryPath,
+                content: fs.readFileSync(path.join(repoPath, registryPath), 'utf8'),
+                chunks: [{
+                    content: 'export function unrelatedSymbol() { return true; }',
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function unrelatedSymbol()',
+                }],
+            });
+
+            let getActiveIgnorePatternsCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => [];
+            (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => trackedPaths;
+            (handlers as unknown as ToolHandlersTestOverrides).context.getActiveIgnorePatterns = () => {
+                getActiveIgnorePatternsCalls += 1;
+                return ['node_modules/**'];
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'missingExactIdentifier',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debug: true,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].file, trackedPaths[1]);
+            assert.equal(getActiveIgnorePatternsCalls, 1);
+        });
+    });
+});
+
+test('handleSearchCode tracked lexical recovery short-circuits exact-ish line scoring', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const registryPath = 'src/unrelated.ts';
+            const lexicalPath = 'src/large.ts';
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, registryPath), 'export function unrelatedSymbol() { return true; }', 'utf8');
+            const lexicalLines = [
+                'export const filler_0 = true;',
+                'export const missingExactIdentifier = true;',
+                ...Array.from({ length: 250 }, (_, index) => `export const filler_${index + 1} = ${index};`),
+            ];
+            const lexicalContent = lexicalLines.join('\n');
+            fs.writeFileSync(path.join(repoPath, lexicalPath), lexicalContent, 'utf8');
+            await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath: registryPath,
+                content: fs.readFileSync(path.join(repoPath, registryPath), 'utf8'),
+                chunks: [{
+                    content: 'export function unrelatedSymbol() { return true; }',
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function unrelatedSymbol()',
+                }],
+            });
+
+            const handlers = createHandlers(repoPath, []);
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => [];
+            (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => [lexicalPath];
+
+            const searchQuerySupport = (handlers as unknown as {
+                searchQuerySupport: {
+                    scoreCandidateLexicalEvidence: (plan: unknown, result: unknown) => unknown;
+                };
+            }).searchQuerySupport;
+            const originalScoreCandidateLexicalEvidence = searchQuerySupport.scoreCandidateLexicalEvidence.bind(searchQuerySupport);
+            let scoreCandidateCalls = 0;
+            searchQuerySupport.scoreCandidateLexicalEvidence = (plan, result) => {
+                scoreCandidateCalls += 1;
+                return originalScoreCandidateLexicalEvidence(plan, result);
+            };
+            const originalSplit = String.prototype.split;
+            let trackedNewlineSplitCalls = 0;
+            String.prototype.split = function(this: string, separator: string | RegExp, limit?: number): string[] {
+                const isTrackedLexicalContent = String(this) === lexicalContent;
+                const isLineSplit = separator instanceof RegExp && separator.source === '\\r?\\n';
+                if (isTrackedLexicalContent && isLineSplit) {
+                    trackedNewlineSplitCalls += 1;
+                }
+                return originalSplit.call(this, separator as string & RegExp, limit);
+            };
+
+            let response;
+            try {
+                response = await handlers.handleSearchCode({
+                    path: repoPath,
+                    query: 'missingExactIdentifier',
+                    scope: 'runtime',
+                    resultMode: 'grouped',
+                    groupBy: 'symbol',
+                    limit: 5,
+                    debug: true,
+                });
+            } finally {
+                String.prototype.split = originalSplit;
+            }
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].file, lexicalPath);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
+            assert.equal(scoreCandidateCalls <= 3, true);
+            assert.equal(trackedNewlineSplitCalls, 0);
+        });
+    });
+});
+
 test('handleSearchCode exact symbolInstanceId fast path only uses current registry ids', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {

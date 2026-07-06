@@ -193,27 +193,28 @@ export class SearchQuerySupport {
     public isExactSearchPathFilter(pattern: string): boolean {
         return !/[!*?[\]{}]/.test(pattern) && !pattern.endsWith('/');
     }
-    private activeIgnorePatternsExcludePath(codebaseRoot: string, relativePath: string): boolean {
+    private buildActiveIgnoreMatcher(codebaseRoot: string): ((relativePath: string) => boolean) | undefined {
         const patterns = this.getContextActiveIgnorePatterns(codebaseRoot);
         if (!Array.isArray(patterns) || patterns.length === 0) {
-            return false;
-        }
-
-        const normalized = this.normalizeRelativePathForIgnoreCheck(relativePath);
-        if (!normalized) {
-            return true;
+            return undefined;
         }
 
         try {
             const matcher = ignore();
             matcher.add(patterns.filter((pattern: unknown) => typeof pattern === 'string'));
-            if (matcher.ignores(normalized)) {
-                return true;
-            }
-            const withSlash = normalized.endsWith('/') ? normalized : `${normalized}/`;
-            return matcher.ignores(withSlash);
+            return (relativePath: string) => {
+                const normalized = this.normalizeRelativePathForIgnoreCheck(relativePath);
+                if (!normalized) {
+                    return true;
+                }
+                if (matcher.ignores(normalized)) {
+                    return true;
+                }
+                const withSlash = normalized.endsWith('/') ? normalized : `${normalized}/`;
+                return matcher.ignores(withSlash);
+            };
         } catch {
-            return true;
+            return () => true;
         }
     }
     public buildLivePathScopedSearchResults(input: {
@@ -226,6 +227,7 @@ export class SearchQuerySupport {
             return [];
         }
 
+        const activeIgnoreMatcher = this.buildActiveIgnoreMatcher(input.effectiveRoot);
         const results: SearchResultLike[] = [];
         const seenPaths = new Set<string>();
         const lexicalTerms = input.queryPlan.lexicalTerms
@@ -249,7 +251,7 @@ export class SearchQuerySupport {
             if (!isLanguageCapabilitySupportedForFilename(normalized, 'search')) {
                 continue;
             }
-            if (this.activeIgnorePatternsExcludePath(input.effectiveRoot, normalized)) {
+            if (activeIgnoreMatcher?.(normalized)) {
                 continue;
             }
 
@@ -330,6 +332,115 @@ export class SearchQuerySupport {
         }
         return /\b[A-Z][A-Z0-9_]*(?:WARNING|ERROR|CODE|STATUS|REASON)[A-Z0-9_]*\b/.test(semanticQuery);
     }
+    private shouldUseExactTrackedLexicalLineFastPath(queryPlan: SearchQueryPlan): boolean {
+        return queryPlan.quotedLiteralPhrases.length > 0
+            || queryPlan.intent === 'identifier'
+            || queryPlan.exactMatchPinningEnabled;
+    }
+    private isStrongTrackedLexicalWholeTerm(term: string): boolean {
+        return /[0-9_./\\:-]/.test(term);
+    }
+    private findExactTrackedLexicalWindowMatch(
+        relativePath: string,
+        content: string,
+        queryPlan: SearchQueryPlan,
+    ): {
+        startLine: number;
+        endLine: number;
+        windowContent: string;
+        lineEvidence: SearchLexicalEvidence;
+    } | null {
+        if (!this.shouldUseExactTrackedLexicalLineFastPath(queryPlan)) {
+            return null;
+        }
+
+        const quotedPhrases = queryPlan.quotedLiteralPhrases
+            .map((phrase) => phrase.toLowerCase())
+            .filter((phrase) => phrase.length > 0);
+        const wholeTerms = queryPlan.lexicalTerms
+            .filter((term) => term.kind === 'whole')
+            .map((term) => term.value.toLowerCase())
+            .filter((term) => queryPlan.intent === 'identifier' || this.isStrongTrackedLexicalWholeTerm(term))
+            .filter((term) => term.length > 0);
+        if (quotedPhrases.length === 0 && wholeTerms.length === 0) {
+            return null;
+        }
+
+        const recentLineStarts: number[] = [];
+        let lineStart = 0;
+        let lineIndex = 0;
+        while (lineStart <= content.length) {
+            recentLineStarts.push(lineStart);
+            const newlineIndex = content.indexOf('\n', lineStart);
+            const lineEndExclusive = newlineIndex === -1
+                ? content.length
+                : (
+                    newlineIndex > lineStart && content.charCodeAt(newlineIndex - 1) === 13
+                        ? newlineIndex - 1
+                        : newlineIndex
+                );
+            const nextLineStart = newlineIndex === -1 ? content.length + 1 : newlineIndex + 1;
+            const line = content.slice(lineStart, lineEndExclusive);
+            const lowerLine = line.toLowerCase();
+            const hasQuotedPhraseMatch = quotedPhrases.some((phrase) => lowerLine.includes(phrase));
+            const hasWholeTermMatch = wholeTerms.some((term) => this.hasTokenBoundaryMatch(lowerLine, term));
+            if (!hasQuotedPhraseMatch && !hasWholeTermMatch) {
+                if (newlineIndex === -1) {
+                    break;
+                }
+                lineStart = nextLineStart;
+                lineIndex += 1;
+                continue;
+            }
+
+            const evidence = this.scoreCandidateLexicalEvidence(queryPlan, {
+                relativePath,
+                content: line,
+                symbolLabel: '',
+            });
+            if (evidence.score > 0) {
+                const startLineIndex = Math.max(0, lineIndex - SEARCH_TRACKED_LEXICAL_CONTEXT_LINES);
+                const windowStartOffset = recentLineStarts[startLineIndex] ?? 0;
+                let endLineIndex = lineIndex;
+                let windowEndExclusive = lineEndExclusive;
+                let forwardLineStart = nextLineStart;
+                while (
+                    endLineIndex - lineIndex < SEARCH_TRACKED_LEXICAL_CONTEXT_LINES
+                    && forwardLineStart <= content.length
+                    && forwardLineStart < content.length
+                ) {
+                    const forwardNewlineIndex = content.indexOf('\n', forwardLineStart);
+                    const forwardLineEndExclusive = forwardNewlineIndex === -1
+                        ? content.length
+                        : (
+                            forwardNewlineIndex > forwardLineStart && content.charCodeAt(forwardNewlineIndex - 1) === 13
+                                ? forwardNewlineIndex - 1
+                                : forwardNewlineIndex
+                        );
+                    windowEndExclusive = forwardLineEndExclusive;
+                    endLineIndex += 1;
+                    if (forwardNewlineIndex === -1) {
+                        break;
+                    }
+                    forwardLineStart = forwardNewlineIndex + 1;
+                }
+                return {
+                    startLine: startLineIndex + 1,
+                    endLine: endLineIndex + 1,
+                    windowContent: content.slice(windowStartOffset, windowEndExclusive),
+                    lineEvidence: evidence,
+                };
+            }
+
+            if (newlineIndex === -1) {
+                break;
+            }
+            lineStart = nextLineStart;
+            lineIndex += 1;
+        }
+
+        return null;
+    }
     public buildTrackedLexicalSearchResults(input: {
         effectiveRoot: string;
         parsedOperators: ParsedSearchOperators;
@@ -356,6 +467,7 @@ export class SearchQuerySupport {
         if (!Array.isArray(trackedRelativePaths) || trackedRelativePaths.length === 0) {
             return { results: [], debug: disabledDebug() };
         }
+        const activeIgnoreMatcher = this.buildActiveIgnoreMatcher(input.effectiveRoot);
         const debug: TrackedLexicalSearchDebug = {
             enabled: true,
             trackedPathCount: trackedRelativePaths.length,
@@ -433,7 +545,7 @@ export class SearchQuerySupport {
             if (input.parsedOperators.excludePath.length > 0 && this.pathMatchesAnyPattern(relativePath, input.parsedOperators.excludePath)) {
                 continue;
             }
-            if (this.activeIgnorePatternsExcludePath(input.effectiveRoot, relativePath)) {
+            if (activeIgnoreMatcher?.(relativePath)) {
                 continue;
             }
 
@@ -471,6 +583,26 @@ export class SearchQuerySupport {
             const quickMatch = lexicalTerms.length === 0
                 || lexicalTerms.some((term) => lowerContent.includes(term) || relativePath.toLowerCase().includes(term));
             if (!quickMatch) {
+                continue;
+            }
+
+            const exactWindowMatch = this.findExactTrackedLexicalWindowMatch(relativePath, content, input.queryPlan);
+            if (exactWindowMatch) {
+                const windowEvidence = this.scoreCandidateLexicalEvidence(input.queryPlan, {
+                    relativePath,
+                    content: exactWindowMatch.windowContent,
+                    symbolLabel: '',
+                });
+
+                candidates.push({
+                    relativePath,
+                    score: windowEvidence.score > 0 ? windowEvidence.score : exactWindowMatch.lineEvidence.score,
+                    exactLexicalMatch: windowEvidence.exactLexicalMatch || exactWindowMatch.lineEvidence.exactLexicalMatch,
+                    startLine: exactWindowMatch.startLine,
+                    endLine: exactWindowMatch.endLine,
+                    content: exactWindowMatch.windowContent,
+                    language: getLanguageIdFromFilename(relativePath, 'text'),
+                });
                 continue;
             }
 

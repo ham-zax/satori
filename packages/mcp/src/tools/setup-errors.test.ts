@@ -8,6 +8,7 @@ test("classifyVectorBackendError identifies stopped Zilliz clusters before gener
     );
 
     assert.equal(diagnostic?.code, "ZILLIZ_CLUSTER_STOPPED");
+    assert.match(diagnostic?.message || "", /Zilliz Cloud cluster is stopped/);
     assert.equal(diagnostic?.hints.backend.provider, "zilliz");
     assert.equal(diagnostic?.hints.backend.retryable, true);
     assert.match(diagnostic?.hints.backend.nextSteps.join(" "), /Resume the Zilliz Cloud cluster/);
@@ -46,8 +47,13 @@ test("formatSearchVectorBackendError returns a deterministic not_ready search en
     assert.equal(payload.code, "VECTOR_BACKEND_CONNECTION_CLOSED");
     assert.equal(payload.freshnessDecision, null);
     assert.deepEqual(payload.results, []);
+    assert.equal(payload.humanText, payload.message);
     assert.equal(payload.hints.backend.code, "VECTOR_BACKEND_CONNECTION_CLOSED");
     assert.doesNotMatch(payload.message, /Connection closed/);
+    assert.doesNotMatch(payload.message, /Zilliz/);
+    assert.match(payload.message, /backend health, provider environment, network connectivity/);
+    assert.match(payload.hints.backend.nextSteps.join(" "), /MISSING_PROVIDER_CONFIG/);
+    assert.match(payload.hints.backend.nextSteps.join(" "), /non-Zilliz Milvus-compatible backends/);
 });
 
 test("formatManageVectorBackendError returns a deterministic manage_index envelope", () => {
@@ -67,6 +73,7 @@ test("formatManageVectorBackendError returns a deterministic manage_index envelo
     assert.equal(payload.action, "sync");
     assert.equal(payload.path, "/repo");
     assert.equal(payload.code, "ZILLIZ_CLUSTER_STOPPED");
+    assert.match(payload.humanText, /Zilliz Cloud cluster is stopped/);
     assert.equal(payload.hints.backend.code, "ZILLIZ_CLUSTER_STOPPED");
     assert.doesNotMatch(payload.message, /UNAUTHENTICATED/);
 });

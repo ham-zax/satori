@@ -36,6 +36,9 @@ function buildNavigationProviderFailureResponse(
         message: input.messagePrefix
             ? `${input.messagePrefix} ${failure.message}`
             : failure.message,
+        humanText: input.messagePrefix
+            ? `${input.messagePrefix} ${failure.message}`
+            : failure.message,
         ...(failure.hints ? { hints: failure.hints } : {}),
     };
 

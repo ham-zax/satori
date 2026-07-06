@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Satori Docs | MCP Repo Retrieval Setup</title>
+    <title>Satori Docs | Repo Context for AI Coding Agents</title>
     <meta
       name="description"
       content="Satori documentation for installer-first MCP setup, provider configuration, repo indexing, semantic code search, symbol navigation, call graph context, warnings, and troubleshooting."
@@ -11,14 +11,14 @@
     <meta name="keywords" content="Satori docs, MCP install, AI coding agent documentation, semantic code search docs, repo indexing, call graph, code navigation" />
     <meta name="robots" content="index,follow" />
     <link rel="canonical" href="https://hamza.my.id/satori/docs/" />
-    <meta property="og:title" content="Satori Docs | MCP Install and Repo Search Workflow" />
+    <meta property="og:title" content="Satori Docs | Repo Context for AI Coding Agents" />
     <meta property="og:description" content="Install Satori, configure providers, index a repo, search code, open exact symbols, follow call graph context, and troubleshoot lifecycle states." />
     <meta property="og:type" content="article" />
     <meta property="og:url" content="https://hamza.my.id/satori/docs/" />
     <meta property="og:site_name" content="Satori" />
     <meta property="og:image" content="https://hamza.my.id/satori/og-image.svg" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Satori Docs | MCP Install and Repo Search Workflow" />
+    <meta name="twitter:title" content="Satori Docs | Repo Context for AI Coding Agents" />
     <meta name="twitter:description" content="Installer-first setup, provider config, repo indexing, exact symbol navigation, call graph context, and troubleshooting for Satori." />
     <meta name="twitter:image" content="https://hamza.my.id/satori/og-image.svg" />
     <script type="application/ld+json">
@@ -34,27 +34,32 @@
           "url": "https://hamza.my.id"
         },
         "about": {
-          "@type": "SoftwareSourceCode",
+          "@type": "SoftwareApplication",
           "name": "Satori",
-          "codeRepository": "https://github.com/ham-zax/satori"
+          "codeRepository": "https://github.com/ham-zax/satori",
+          "contactPoint": {
+            "@type": "ContactPoint",
+            "email": "ahmed@hamza.my.id",
+            "contactType": "customer support"
+          }
         }
       }
     </script>
     <link
       rel="preconnect"
       href="https://fonts.googleapis.com"
-      media="(min-width: 921px)"
+      media="(min-width: 861px)"
     />
     <link
       rel="preconnect"
       href="https://fonts.gstatic.com"
       crossorigin
-      media="(min-width: 921px)"
+      media="(min-width: 861px)"
     />
     <link
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@100;400;700&display=swap"
       rel="stylesheet"
-      media="(min-width: 921px)"
+      media="(min-width: 861px)"
     />
     <style>
       :root {
@@ -64,10 +69,7 @@
         --muted: rgba(255, 255, 255, 0.62);
         --line: rgba(255, 255, 255, 0.14);
         --accent: #dfff00;
-        --cyan: #00e5ff;
-        --pink: #ff4d7a;
-        --amber: #ffb020;
-        --green: #00ff99;
+        --accent-dim: rgba(223, 255, 0, 0.12);
         --sans: "Inter", sans-serif;
         --serif: "Cormorant Garamond", serif;
         --mono: "JetBrains Mono", monospace;
@@ -100,15 +102,39 @@
         color: #060607;
       }
 
+      /* Ambient energy background */
+      .ambient-energy {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: -1;
+        pointer-events: none;
+        overflow: hidden;
+        opacity: 0.22;
+        background:
+          radial-gradient(circle at 20% 30%, rgba(180, 142, 255, 0.06) 0%, transparent 45%),
+          radial-gradient(circle at 80% 70%, rgba(92, 200, 255, 0.04) 0%, transparent 45%),
+          radial-gradient(circle at 50% 50%, rgba(223, 255, 0, 0.03) 0%, transparent 50%);
+        filter: blur(60px);
+        animation: ambient-pulse 12s ease-in-out infinite alternate;
+      }
+      @keyframes ambient-pulse {
+        0% { transform: scale(1); opacity: 0.22; }
+        50% { transform: scale(1.08); opacity: 0.32; }
+        100% { transform: scale(1); opacity: 0.22; }
+      }
+
       .bg-grid {
         position: fixed;
         inset: 0;
         pointer-events: none;
         z-index: -2;
-        opacity: 0.64;
+        opacity: 0.5;
         background-image:
-          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+          linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
         background-size: 4rem 4rem;
         mask-image: linear-gradient(to bottom, #000 0%, transparent 86%);
       }
@@ -119,6 +145,67 @@
         padding: 1rem 1rem 4rem;
       }
 
+      /* Skip link */
+      .skip-link {
+        position: absolute;
+        top: -100px;
+        left: 1rem;
+        z-index: 200;
+        padding: 0.75rem 1.25rem;
+        background: var(--accent);
+        color: #050510;
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        transition: top 0.2s ease;
+      }
+      .skip-link:focus { top: 1rem; }
+
+      /* Scroll progress */
+      .scroll-progress {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 2px;
+        width: 0%;
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+        z-index: 200;
+        transition: width 0.1s ease-out;
+      }
+
+      /* Back-to-top */
+      .back-to-top {
+        position: fixed;
+        bottom: 1.5rem;
+        right: 1.5rem;
+        z-index: 150;
+        width: 44px;
+        height: 44px;
+        border: 1px solid var(--accent-dim);
+        background: rgba(5,5,16,0.85);
+        color: var(--accent);
+        font-family: var(--mono);
+        font-size: 1.2rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s, transform 0.3s, border-color 0.2s;
+        backdrop-filter: blur(8px);
+      }
+      .back-to-top.visible { opacity: 1; pointer-events: auto; }
+      .back-to-top:hover {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #050510;
+        transform: translateY(-2px);
+        box-shadow: 0 0 20px var(--accent-dim);
+      }
+
       nav {
         display: flex;
         align-items: center;
@@ -126,29 +213,54 @@
         flex-wrap: wrap;
         gap: 1rem;
         border: 1px solid rgba(255, 255, 255, 0.1);
-        padding: 1.2rem 1.5rem;
+        padding: 0.5rem 1rem;
         text-transform: uppercase;
-        letter-spacing: 0.15em;
-        font-size: 0.75rem;
+        letter-spacing: 0.12em;
+        font-size: 0.72rem;
         font-family: var(--mono);
         background: rgba(10, 10, 10, 0.7);
         backdrop-filter: blur(16px);
         position: sticky;
-        top: 1rem;
+        top: 0.75rem;
         z-index: 100;
         box-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.5);
       }
 
-      .nav-brand,
-      .nav-links {
+      .nav-brand {
         display: flex;
         align-items: center;
-        flex-wrap: wrap;
-        gap: 1rem;
+        gap: 0.85rem;
       }
 
       .nav-links {
-        gap: 1.5rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+
+      .nav-links a {
+        color: var(--fg);
+        text-decoration: none;
+        padding: 0.6rem 0.85rem;
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid transparent;
+        transition: color 0.2s, border-color 0.2s, background 0.2s;
+      }
+      .nav-links a:hover {
+        color: var(--accent);
+        border-color: rgba(255,255,255,0.1);
+      }
+      .nav-links a.cta-contact {
+        color: #050510;
+        background: var(--accent);
+        border-color: var(--accent);
+        font-weight: 700;
+      }
+      .nav-links a.cta-contact:hover {
+        box-shadow: 0 0 16px var(--accent-dim);
       }
 
       .status-dot {
@@ -161,26 +273,15 @@
       }
 
       @keyframes pulse {
-        0%,
-        100% {
-          opacity: 1;
-          transform: scale(1);
-        }
-        50% {
-          opacity: 0.6;
-          transform: scale(0.9);
-        }
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.6; transform: scale(0.9); }
       }
 
       a {
         color: var(--fg);
         text-decoration: none;
-        transition: color 0.2s, border-color 0.2s;
       }
-
-      a:hover {
-        color: var(--accent);
-      }
+      a:hover { color: var(--accent); }
 
       a:focus-visible,
       summary:focus-visible {
@@ -191,18 +292,17 @@
       .hero {
         margin-top: 2rem;
         padding: 5rem 2rem 3rem;
-        border: 1px solid var(--line);
-        border-left: 2px solid var(--accent);
-        background:
-          linear-gradient(135deg, rgba(223, 255, 0, 0.08), transparent 32%),
-          rgba(10, 10, 10, 0.58);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        background: linear-gradient(160deg, rgba(20, 20, 24, 0.5) 0%, rgba(5, 5, 8, 0.7) 100%);
+        backdrop-filter: blur(12px);
       }
 
       .eyebrow {
         color: var(--accent);
         font-family: var(--mono);
         font-size: 0.78rem;
-        letter-spacing: 0.18em;
+        letter-spacing: 0.16em;
         margin-bottom: 1.2rem;
         text-transform: uppercase;
       }
@@ -210,43 +310,49 @@
       h1 {
         max-width: 980px;
         font-family: var(--serif);
-        font-size: clamp(3.5rem, 12vw, 9rem);
+        font-size: clamp(3rem, 10vw, 7.5rem);
         font-weight: 300;
         line-height: 0.86;
-        letter-spacing: 0;
+        letter-spacing: -0.03em;
         margin-bottom: 1.5rem;
+        background: linear-gradient(180deg, #ffffff 0%, rgba(255,255,255,0.7) 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
       }
 
       h2 {
         font-family: var(--serif);
-        font-size: clamp(2.2rem, 5vw, 5rem);
-        font-weight: 300;
-        line-height: 0.96;
-        letter-spacing: 0;
-        margin-bottom: 1.5rem;
+        font-size: clamp(1.9rem, 4.5vw, 3.2rem);
+        font-weight: 400;
+        line-height: 1;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.75rem;
       }
 
       h3 {
         font-family: var(--mono);
-        font-size: 0.86rem;
-        letter-spacing: 0.14em;
+        font-size: 0.78rem;
+        letter-spacing: 0.12em;
         text-transform: uppercase;
         color: var(--accent);
-        margin-bottom: 0.8rem;
+        margin-bottom: 0.85rem;
+        font-weight: 400;
       }
 
       p {
         max-width: 860px;
         color: var(--muted);
         font-size: 1rem;
+        line-height: 1.65;
       }
 
       code {
         color: var(--fg);
         font-family: var(--mono);
         font-size: 0.9em;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
         padding: 0.08rem 0.28rem;
       }
 
@@ -254,9 +360,9 @@
         overflow-x: auto;
         color: rgba(255, 255, 255, 0.88);
         font-family: var(--mono);
-        font-size: 0.84rem;
+        font-size: 0.82rem;
         line-height: 1.55;
-        border: 1px solid var(--line);
+        border: 1px solid rgba(255, 255, 255, 0.06);
         background: rgba(0, 0, 0, 0.42);
         padding: 1rem;
         margin-top: 1rem;
@@ -269,54 +375,64 @@
       }
 
       .hero-copy {
-        font-size: 1.18rem;
-        color: rgba(255, 255, 255, 0.75);
+        font-size: 1.12rem;
+        color: rgba(255, 255, 255, 0.72);
+        line-height: 1.6;
       }
 
       .quick-links {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.8rem;
+        gap: 0.5rem;
         margin-top: 2rem;
       }
 
       .quick-links a {
         display: inline-flex;
         align-items: center;
-        min-height: 2.6rem;
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        padding: 0.72rem 0.9rem;
+        min-height: 44px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 0.5rem 0.85rem;
         font-family: var(--mono);
-        font-size: 0.76rem;
+        font-size: 0.72rem;
         letter-spacing: 0.1em;
         text-transform: uppercase;
-        background: rgba(255, 255, 255, 0.04);
+        background: rgba(255, 255, 255, 0.025);
+        color: rgba(255, 255, 255, 0.65);
+        transition: all 0.2s;
+      }
+      .quick-links a:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--accent-dim);
       }
 
       .section {
+        margin-top: 1rem;
         padding: 4rem 2rem;
-        border-bottom: 1px solid var(--line);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-left: 2px solid rgba(255, 255, 255, 0.06);
+        background: linear-gradient(180deg, rgba(255,255,255,0.015) 0%, rgba(0,0,0,0.2) 100%);
+        backdrop-filter: blur(8px);
+        transition: border-left-color 0.3s ease, border-color 0.3s ease;
       }
 
-      .section:nth-of-type(2) {
-        --accent: var(--cyan);
+      .section:hover {
+        border-color: rgba(255, 255, 255, 0.1);
+        border-left-color: var(--accent);
       }
 
-      .section:nth-of-type(3) {
-        --accent: var(--pink);
-      }
-
-      .section:nth-of-type(4) {
-        --accent: var(--amber);
-      }
-
-      .section:nth-of-type(5) {
-        --accent: var(--green);
-      }
+      /* 3-accent system */
+      .section:nth-of-type(2) { --accent: #5cc8ff; --accent-dim: rgba(92, 200, 255, 0.12); }
+      .section:nth-of-type(3) { --accent: #dfff00; --accent-dim: rgba(223, 255, 0, 0.12); }
+      .section:nth-of-type(4) { --accent: #5cc8ff; --accent-dim: rgba(92, 200, 255, 0.12); }
+      .section:nth-of-type(5) { --accent: #b48eff; --accent-dim: rgba(180, 142, 255, 0.12); }
 
       .lede {
         margin-bottom: 2rem;
         color: rgba(255, 255, 255, 0.72);
+        font-size: 1.08rem;
+        line-height: 1.6;
       }
 
       .grid {
@@ -333,14 +449,41 @@
       }
 
       .panel {
-        border: 1px solid var(--line);
-        background: var(--panel);
-        padding: 1.35rem;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.15) 100%);
+        padding: 1.75rem;
+        position: relative;
+        overflow: hidden;
+        transition: border-color 0.25s, background 0.25s;
+      }
+
+      .panel::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 1px;
+        background: var(--accent);
+        transform: scaleX(0);
+        transform-origin: left;
+        transition: transform 0.3s ease;
+      }
+
+      .panel:hover {
+        border-color: rgba(255, 255, 255, 0.12);
+        background: linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(0,0,0,0.2) 100%);
+      }
+
+      .panel:hover::before {
+        transform: scaleX(1);
       }
 
       .panel p,
       .panel li {
         font-size: 0.94rem;
+        color: rgba(255, 255, 255, 0.62);
+        line-height: 1.65;
       }
 
       .panel ul {
@@ -362,24 +505,28 @@
         display: grid;
         grid-template-columns: 8.5rem 1fr;
         gap: 1rem;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.035);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.15) 100%);
         padding: 1rem;
+        transition: border-color 0.25s;
       }
 
+      .step:hover { border-color: rgba(255, 255, 255, 0.12); }
+
       .step strong {
-        color: var(--fg);
+        color: var(--accent);
         font-family: var(--mono);
-        font-size: 0.78rem;
+        font-size: 0.76rem;
         letter-spacing: 0.12em;
         text-transform: uppercase;
+        font-weight: 400;
       }
 
       .callout {
         margin-top: 1.5rem;
         border-left: 2px solid var(--accent);
         padding: 1rem 1.2rem;
-        background: rgba(255, 255, 255, 0.04);
+        background: rgba(255, 255, 255, 0.025);
       }
 
       .code-list {
@@ -394,65 +541,109 @@
       }
 
       .footer {
+        margin-top: 1rem;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: var(--bg);
+        padding: 2.5rem 2rem;
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 2rem;
+        font-family: var(--sans);
+        font-size: 0.85rem;
+        color: var(--muted);
+        font-weight: 300;
+      }
+      .footer-col h5 {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+        margin-bottom: 0.85rem;
+      }
+      .footer-col a {
+        display: block;
+        padding: 0.3rem 0;
+        color: rgba(255,255,255,0.65);
+        transition: color 0.2s;
+      }
+      .footer-col a:hover { color: var(--accent); }
+      .footer-col p { line-height: 1.55; }
+      .footer-bottom {
+        grid-column: 1 / -1;
+        border-top: 1px solid rgba(255,255,255,0.06);
+        padding-top: 1.25rem;
+        margin-top: 0.5rem;
         display: flex;
         justify-content: space-between;
-        gap: 1rem;
         flex-wrap: wrap;
-        padding: 2rem 0 0;
-        color: var(--muted);
-        font-family: var(--mono);
-        font-size: 0.75rem;
+        gap: 0.5rem;
+        font-size: 0.78rem;
+        color: rgba(255,255,255,0.35);
       }
 
-      @media (max-width: 900px) {
-        .grid,
-        .tool-grid {
-          grid-template-columns: 1fr;
+      @media (max-width: 860px) {
+        :root {
+          --serif: ui-serif, Georgia, serif;
+          --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+          --mono: ui-monospace, SFMono-Regular, Menos, Consolas, monospace;
         }
 
-        .step {
-          grid-template-columns: 1fr;
+        nav {
+          backdrop-filter: none;
+          background: rgba(8, 8, 12, 0.96);
+          padding: 0.5rem 0.75rem;
+          flex-direction: column;
+          align-items: stretch;
+          gap: 0.5rem;
         }
+        .nav-brand { justify-content: center; }
+        .nav-links { justify-content: center; flex-wrap: wrap; gap: 0.25rem; }
+        .nav-links a { padding: 0.5rem 0.6rem; font-size: 0.68rem; }
+
+        .grid, .tool-grid { grid-template-columns: 1fr; }
+        .step { grid-template-columns: 1fr; }
+        .footer { grid-template-columns: 1fr; }
+        .back-to-top { display: none; }
+        .scroll-progress { display: none; }
       }
 
-      @media (max-width: 640px) {
-        nav,
-        .hero,
-        .section {
-          padding-left: 1rem;
-          padding-right: 1rem;
-        }
-
-        h1 {
-          font-size: 4rem;
-        }
+      @media (prefers-reduced-motion: reduce) {
+        .status-dot, .ambient-energy { animation: none !important; }
+        html { scroll-behavior: auto; }
+        *, *::before, *::after { transition-duration: 0.01ms !important; }
       }
     </style>
   </head>
   <body>
+    <div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
+    <button class="back-to-top" id="backToTop" aria-label="Back to top" title="Back to top">&uarr;</button>
     <div class="bg-grid"></div>
+    <div class="ambient-energy"></div>
 
     <div class="container">
-      <nav>
+      <a class="skip-link" href="#main">Skip to content</a>
+      <nav aria-label="Primary">
         <div class="nav-brand">
           <div class="status-dot" aria-hidden="true"></div>
-          <span>Satori // Docs</span>
+          <span>Satori</span>
         </div>
         <div class="nav-links">
-          <a href="../index.html">[ Landing ]</a>
-          <a href="../architecture.html">[ Architecture ]</a>
-          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">[ Repository ]</a>
-          <a href="https://hamza.my.id" target="_blank" rel="noopener">[ Hamza ]</a>
+          <a href="../index.html">Landing</a>
+          <a href="../architecture.html">Architecture</a>
+          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">Repository</a>
+          <a href="../index.html#contact" class="cta-contact">Contact</a>
         </div>
       </nav>
 
+      <main id="main">
       <section class="hero">
         <div class="eyebrow">Operational documentation</div>
         <h1>Satori Docs</h1>
         <p class="hero-copy">
-          Satori gives coding agents repo-aware retrieval through a fixed
-          six-tool MCP surface: index lifecycle, semantic search, symbol
-          outlines, exact reads, and bounded call-graph context.
+          Satori helps coding agents investigate real repos before editing:
+          intent search, file outlines, exact reads, caller/callee context when
+          supported, freshness checks, and recovery steps when context is stale.
         </p>
         <nav class="quick-links" aria-label="Docs sections">
           <a href="#install">Install</a>
@@ -463,7 +654,7 @@
           <a href="#lifecycle">Lifecycle</a>
           <a href="#warnings">Warnings</a>
           <a href="#troubleshooting">Troubleshooting</a>
-          <a href="#launch">Launch</a>
+          <a href="#boundaries">Boundaries</a>
         </nav>
       </section>
 
@@ -694,6 +885,11 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               <code>MILVUS_TOKEN</code> is optional auth only and is not a
               substitute for <code>MILVUS_ADDRESS</code>.
             </p>
+            <p>
+              Today this local embedding path still needs a Milvus-compatible
+              vector store. Embedded local vector storage, such as a Zvec-backed
+              backend, is planned work rather than current setup.
+            </p>
           </div>
         </div>
       </section>
@@ -746,9 +942,9 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
         <h2>Search Workflow</h2>
         <p class="lede">
           The default agent path starts with plain-English discovery, then
-          narrows to proof. Search groups evidence by owner symbols, outline
-          locks deterministic spans, call graph adds nearby context when
-          supported, and exact reads provide edit context.
+          narrows to exact code evidence. Search points to the next useful step:
+          inspect an outline, open a symbol, read a line range, or check
+          caller/callee context when supported.
         </p>
         <div class="workflow">
           <div class="step">
@@ -764,8 +960,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <strong>2 Outline</strong>
             <p>
               Use <code>file_outline</code> to lock symbol spans before reading
-              or editing. Exact mode resolves <code>symbolInstanceId</code>
-              deterministically and reports ambiguity instead of guessing.
+              or editing. Exact mode resolves <code>symbolInstanceId</code> and
+              reports ambiguity instead of guessing.
             </p>
           </div>
           <div class="step">
@@ -774,7 +970,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               Use <code>call_graph</code> with the returned
               <code>callGraphHint.symbolRef</code>. On symbol-owned flows,
               <code>symbolRef.symbolId</code> carries the exact
-              <code>symbolInstanceId</code>. Treat the output as graph context,
+              <code>symbolInstanceId</code>. Treat the output as nearby context,
               not a complete impact guarantee.
             </p>
           </div>
@@ -783,8 +979,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               Use <code>read_file</code> with <code>open_symbol</code> or the
               returned navigation fallback. Use result fallbacks when graph
-              confidence is weak or unsupported. Reads are bounded and return
-              continuation hints when truncated.
+              context is unsupported. Reads are bounded and return continuation
+              hints when truncated.
             </p>
           </div>
         </div>
@@ -869,8 +1065,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
       <section class="section" id="tools">
         <h2>Six Tools</h2>
         <p class="lede">
-          Satori keeps the public MCP surface fixed. Diagnostics are added
-          through existing tools, not through new product surface area.
+          Satori keeps the public MCP surface small. The tools move an agent
+          from repo discovery to exact evidence without adding edit commands.
         </p>
         <div class="tool-grid">
           <div class="panel">
@@ -893,8 +1089,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               Semantic search with runtime/docs/mixed scopes, path operators,
               must/exclude filters, grouped output, and debug metadata.
               Search is the freshness-aware read path and returns structured
-              warnings, recommended actions, capability confidence, and
-              executable navigation fallbacks.
+              warnings, recommended actions, and navigation fallbacks.
             </p>
           </div>
           <div class="panel">
@@ -907,9 +1102,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
           <div class="panel">
             <h3>call_graph</h3>
             <p>
-              Traverses sidecar caller/callee relationships with deterministic
-              depth, limits, and transparency metadata when graph support is
-              ready for the returned symbol reference.
+              Traverses caller/callee relationships with depth limits when graph
+              support is ready for the returned symbol reference.
             </p>
           </div>
           <div class="panel">
@@ -1121,55 +1315,140 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               additional scoped searches to enumerate usages.
             </p>
           </div>
-        </div>
-      </section>
-
-      <section class="section" id="launch">
-        <h2>Public Launch Notes</h2>
-        <p class="lede">
-          For Product Hunt or another public launch, keep the message narrow:
-          Satori is read-only repo retrieval for MCP coding agents. It helps
-          agents inspect evidence before edits; it does not replace tests or
-          code review.
-        </p>
-        <div class="grid">
           <div class="panel">
-            <h3>Tagline</h3>
-            <p>Repo retrieval for MCP coding agents.</p>
-          </div>
-          <div class="panel">
-            <h3>Primary CTA</h3>
-            <pre><code>npx -y @zokizuan/satori-cli@0.4.5 install --client all
-npx -y @zokizuan/satori-cli@0.4.5 doctor</code></pre>
-          </div>
-          <div class="panel">
-            <h3>Launch Checklist</h3>
+            <h3>Generated output in context</h3>
             <p>
-              Product Hunt copy, preflight commands, website checks, and
-              launch-day monitoring live in
-              <a href="https://github.com/ham-zax/satori/blob/master/docs/LAUNCH_CHECKLIST.md" target="_blank" rel="noopener">docs/LAUNCH_CHECKLIST.md</a>.
+              If generated files such as <code>dist</code>, <code>build</code>,
+              or <code>.output</code> appear in search context, verify the
+              generated artifact directly. Source matches do not prove generated
+              output is current.
             </p>
           </div>
           <div class="panel">
-            <h3>Honest Claims</h3>
-            <ul>
-              <li>No source-code write tools.</li>
-              <li>No fake static-test coverage claims.</li>
-              <li>No promise that provider free tiers are permanent.</li>
-              <li>No manual resident <code>npx</code> setup for supported clients.</li>
-            </ul>
+            <h3>Partial index</h3>
+            <p>
+              If a full index hits a limit, search may still return partial
+              chunks, but navigation may be unavailable or incomplete. Treat the
+              warning as evidence to narrow scope, sync, or reindex before
+              relying on related-code navigation.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Backend timeout</h3>
+            <p>
+              If Milvus or Zilliz times out during validation or deletion,
+              Satori returns retryable backend guidance and preserves local state
+              unless remote absence is verified.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Collection limit reached</h3>
+            <p>
+              Some Zilliz tiers limit collections. Follow the returned
+              <code>manage_index</code> guidance for the named collection, then
+              retry the original lifecycle action.
+            </p>
           </div>
         </div>
       </section>
 
+      <section class="section" id="boundaries">
+        <h2>Operational Boundaries</h2>
+        <p class="lede">
+          Satori provides context, navigation, reads, warnings, and recovery
+          guidance. It does not replace the developer's normal editing,
+          testing, or review workflow.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>Not a source-code write server</h3>
+            <p>
+              Satori does not expose source-code write tools through MCP. Edits
+              stay in the user's editor or agent host.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Not an agent framework</h3>
+            <p>
+              Satori works alongside coding agents and MCP clients. It is
+              focused on repository context, not orchestration.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Not a test replacement</h3>
+            <p>
+              Static evidence helps agents investigate, but runtime behavior
+              still needs tests, typechecks, review, and developer validation.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Not hosted SaaS yet</h3>
+            <p>
+              Satori is currently local-first and open source. Hosted indexing
+              experiments and team workflows are roadmap items.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      </main>
+
       <footer class="footer">
-        <span>
-          Landing: <a href="../index.html">index.html</a> · Architecture:
-          <a href="../architecture.html">architecture.html</a> · Source:
-          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">GitHub</a>
-        </span>
-        <span>Fixed six-tool surface. Diagnostics through existing tools.</span>
+        <div class="footer-col">
+          <h5>Satori</h5>
+          <p>Repo context for AI coding agents. Investigate real codebases before editing.</p>
+        </div>
+        <div class="footer-col">
+          <h5>Resources</h5>
+          <a href="../index.html">Landing</a>
+          <a href="../architecture.html">Architecture</a>
+          <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener">GitHub Repository</a>
+        </div>
+        <div class="footer-col">
+          <h5>Contact</h5>
+          <a href="mailto:ahmed@hamza.my.id">ahmed@hamza.my.id</a>
+          <a href="../index.html#contact">Contact form</a>
+          <p style="margin-top:0.5rem;">MIT open source. Built by Hamza.</p>
+        </div>
+        <div class="footer-bottom">
+          <span>&copy; 2026 Satori. MIT License.</span>
+          <span>Fixed six-tool surface. Diagnostics through existing tools.</span>
+        </div>
       </footer>
     </div>
+
+    <script>
+      const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const scrollProgress = document.getElementById("scrollProgress");
+      const backToTop = document.getElementById("backToTop");
+      let scrollTicking = false;
+
+      function updateScrollUI() {
+        const scrollTop = window.scrollY;
+        const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+        const pct = docHeight > 0 ? (scrollTop / docHeight) * 100 : 0;
+        if (scrollProgress) scrollProgress.style.width = pct + "%";
+        if (backToTop) {
+          if (scrollTop > 600) backToTop.classList.add("visible");
+          else backToTop.classList.remove("visible");
+        }
+        scrollTicking = false;
+      }
+
+      window.addEventListener("scroll", () => {
+        if (!scrollTicking) {
+          requestAnimationFrame(updateScrollUI);
+          scrollTicking = true;
+        }
+      }, { passive: true });
+
+      if (backToTop) {
+        backToTop.addEventListener("click", () => {
+          window.scrollTo({ top: 0, behavior: prefersReducedMotion ? "auto" : "smooth" });
+        });
+      }
+
+      updateScrollUI();
+    </script>
   </body>
 </html>

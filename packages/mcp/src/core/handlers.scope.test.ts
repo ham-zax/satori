@@ -3438,6 +3438,58 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
     });
 });
 
+test('handleSearchCode probes changed files once per grouped search request', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'export const unchanged = true;',
+                relativePath: 'src/unchanged.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_unchanged',
+                symbolLabel: 'const unchanged'
+            },
+            {
+                content: 'export const changed = true;',
+                relativePath: 'src/changed.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_changed',
+                symbolLabel: 'const changed'
+            }
+        ]);
+
+        let getChangedFilesCalls = 0;
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => {
+            getChangedFilesCalls += 1;
+            return {
+                available: true,
+                files: new Set(['src/changed.ts'])
+            };
+        };
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'changed symbol',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            debug: true,
+            limit: 2
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(getChangedFilesCalls, 1);
+    });
+});
+
 test('handleSearchCode freshness summary only marks changed-files boost applied when a candidate was boosted', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [

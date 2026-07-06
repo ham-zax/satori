@@ -157,7 +157,6 @@ export type SearchExecutionHost = {
     reranker: VoyageAIReranker | null;
     shouldForceSearchPassFailure: (passId: SearchPassId) => boolean;
     classifyVectorBackendError: (error: unknown) => VectorBackendDiagnostic | null;
-    getChangedFilesForCodebase: (codebasePath: string) => ChangedFilesState;
     measureSearchPhase: <T>(
         phase: "semanticSearch" | "trackedLexical" | "rerank",
         run: () => Promise<T>,
@@ -176,6 +175,7 @@ export type SearchExecutionInput = {
     exactRegistryEligible: boolean;
     exactRegistryFallbackForTrackedLexical: boolean;
     freshnessMode: FreshnessDecision["mode"];
+    observedChangedFilesState: ChangedFilesState;
 };
 
 function buildEmptyFilterSummary(): SearchFilterSummary {
@@ -200,7 +200,7 @@ export async function runSearchExecution(
     let trackedLexicalDebug: TrackedLexicalSearchDebug | undefined;
     const operatorSummary = host.searchQuerySupport.buildOperatorSummary(input.parsedOperators);
     let filterSummary = buildEmptyFilterSummary();
-    const observedChangedFilesState = host.getChangedFilesForCodebase(input.effectiveRoot);
+    const observedChangedFilesState = input.observedChangedFilesState;
     const changedFilesState = input.rankingMode === "auto_changed_first"
         ? observedChangedFilesState
         : { available: observedChangedFilesState.available, files: new Set<string>() };

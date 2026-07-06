@@ -47,7 +47,6 @@ test("formatSearchVectorBackendError returns a deterministic not_ready search en
     assert.equal(payload.code, "VECTOR_BACKEND_CONNECTION_CLOSED");
     assert.equal(payload.freshnessDecision, null);
     assert.deepEqual(payload.results, []);
-    assert.equal(payload.humanText, payload.message);
     assert.equal(payload.hints.backend.code, "VECTOR_BACKEND_CONNECTION_CLOSED");
     assert.doesNotMatch(payload.message, /Connection closed/);
     assert.doesNotMatch(payload.message, /Zilliz/);

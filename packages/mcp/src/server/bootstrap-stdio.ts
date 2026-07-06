@@ -13,7 +13,7 @@ interface BootstrapStdioSafetyOptions {
 export function installBootstrapStdioSafety(options: BootstrapStdioSafetyOptions): () => void {
     const restoreConsole = installConsoleToStderrPatch({
         writeToStderr: options.writeToStderr,
-        methods: options.runMode === "mcp" ? ["warn", "error"] : undefined,
+        methods: options.runMode === "mcp" ? ["log", "info", "warn", "error", "debug"] : undefined,
     });
     let restoreStdout = () => { };
 

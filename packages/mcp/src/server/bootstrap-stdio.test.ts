@@ -24,6 +24,7 @@ test("installBootstrapStdioSafety guards mcp stdout without blocking captured pr
     });
 
     fakeStdout.write("third-party warning\n");
+    console.log("startup chatter");
     console.warn("actionable warning");
     protocolWrite("{\"jsonrpc\":\"2.0\"}\n");
 
@@ -31,5 +32,6 @@ test("installBootstrapStdioSafety guards mcp stdout without blocking captured pr
 
     assert.deepEqual(stdoutWrites, ["{\"jsonrpc\":\"2.0\"}\n"]);
     assert.equal(stderrWrites.some((line) => line.includes("[STDOUT_BLOCKED]")), false);
+    assert.equal(stderrWrites.some((line) => line.includes("startup chatter")), true);
     assert.equal(stderrWrites.some((line) => line.includes("actionable warning")), true);
 });

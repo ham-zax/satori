@@ -1,63 +1,63 @@
 {
-    "name": "@zokizuan/satori-mcp",
-    "version": "4.11.8",
-    "description": "Repo-aware MCP tools for AI coding agents: intent search, symbol navigation, exact reads, related paths, and freshness warnings.",
-    "type": "module",
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts",
-    "bin": {
-        "satori": "dist/index.js"
-    },
-    "scripts": {
-        "build": "pnpm clean && tsc --build --force && pnpm fix:bin-perms && pnpm docs:generate && pnpm manifest:generate",
-        "build:runtime": "pnpm clean && tsc --build --force && pnpm fix:bin-perms",
-        "dev": "tsx --watch src/index.ts",
-        "clean": "rimraf dist",
-        "lint": "eslint src --ext .ts",
-        "lint:fix": "eslint src --ext .ts --fix",
-        "typecheck": "tsc --noEmit",
-        "start": "tsx src/index.ts",
-        "start:with-env": "OPENAI_API_KEY=${OPENAI_API_KEY:-your-api-key-here} MILVUS_ADDRESS=${MILVUS_ADDRESS:-localhost:19530} tsx src/index.ts",
-        "docs:generate": "tsx scripts/generate-docs.ts",
-        "docs:check": "tsx scripts/generate-docs.ts --check",
-        "manifest:generate": "tsx scripts/generate-server-manifest.ts",
-        "manifest:check": "tsx scripts/generate-server-manifest.ts --check",
-        "release:smoke": "tsx scripts/release-smoke.ts",
-        "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
-        "prepublishOnly": "pnpm build && pnpm docs:check && pnpm manifest:check && pnpm release:smoke",
-        "test": "pnpm --filter @zokizuan/satori-core build && node --import tsx --test --test-concurrency=1 src/core/**/*.test.ts src/server/**/*.test.ts src/tools/**/*.test.ts src/cli/**/*.test.ts"
-    },
-    "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.29.0",
-        "@zokizuan/satori-core": "workspace:*",
-        "chokidar": "^5.0.0",
-        "ignore": "^7.0.5",
-        "jsonc-parser": "^3.3.1",
-        "zod": "^3.25.55",
-        "zod-to-json-schema": "^3.25.1"
-    },
-    "devDependencies": {
-        "@types/node": "^20.0.0",
-        "tsx": "^4.22.4",
-        "typescript": "^5.0.0"
-    },
-    "files": [
-        "dist/**/*.js",
-        "dist/**/*.d.ts",
-        "README.md"
-    ],
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/ham-zax/satori.git",
-        "directory": "packages/mcp"
-    },
-    "homepage": "https://github.com/ham-zax/satori",
-    "bugs": {
-        "url": "https://github.com/ham-zax/satori/issues"
-    },
-    "author": "Hamza (@ham-zax)",
-    "license": "MIT",
-    "publishConfig": {
-        "access": "public"
-    }
+  "name": "@zokizuan/satori-mcp",
+  "version": "4.11.9",
+  "description": "Repo-aware MCP tools for AI coding agents: intent search, symbol navigation, exact reads, related paths, and freshness warnings.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "satori": "dist/index.js"
+  },
+  "scripts": {
+    "build": "pnpm clean && tsc --build --force && pnpm fix:bin-perms && pnpm docs:generate && pnpm manifest:generate",
+    "build:runtime": "pnpm clean && tsc --build --force && pnpm fix:bin-perms",
+    "dev": "tsx --watch src/index.ts",
+    "clean": "rimraf dist",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/index.ts",
+    "start:with-env": "OPENAI_API_KEY=${OPENAI_API_KEY:-your-api-key-here} MILVUS_ADDRESS=${MILVUS_ADDRESS:-localhost:19530} tsx src/index.ts",
+    "docs:generate": "tsx scripts/generate-docs.ts",
+    "docs:check": "tsx scripts/generate-docs.ts --check",
+    "manifest:generate": "tsx scripts/generate-server-manifest.ts",
+    "manifest:check": "tsx scripts/generate-server-manifest.ts --check",
+    "release:smoke": "tsx scripts/release-smoke.ts",
+    "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
+    "prepublishOnly": "pnpm build && pnpm docs:check && pnpm manifest:check && pnpm release:smoke",
+    "test": "pnpm --filter @zokizuan/satori-core build && node --import tsx --test --test-concurrency=1 src/core/**/*.test.ts src/server/**/*.test.ts src/tools/**/*.test.ts src/cli/**/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@zokizuan/satori-core": "workspace:*",
+    "chokidar": "^5.0.0",
+    "ignore": "^7.0.5",
+    "jsonc-parser": "^3.3.1",
+    "zod": "^3.25.55",
+    "zod-to-json-schema": "^3.25.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ham-zax/satori.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/ham-zax/satori",
+  "bugs": {
+    "url": "https://github.com/ham-zax/satori/issues"
+  },
+  "author": "Hamza (@ham-zax)",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

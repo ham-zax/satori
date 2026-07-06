@@ -180,7 +180,7 @@ test('handleIndexCodebase returns Zilliz eviction guidance with free-tier reason
         assert.equal(envelope.status, 'error');
         const text = envelope.humanText;
 
-        assert.match(text, /Reason: Zilliz free-tier clusters are capped at 5 collections/i);
+        assert.match(text, /Reason: The connected Zilliz cluster has no remaining collection slots/i);
         assert.match(text, /Current Satori-managed collections \(oldest -> newest\):/i);
         assert.match(text, /\[oldest\]/i);
         assert.match(text, /\[newest\]/i);

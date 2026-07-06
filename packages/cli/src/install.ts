@@ -505,6 +505,7 @@ function installManagedRuntimeCommand(
             "--ignore-scripts",
             "--no-audit",
             "--no-fund",
+            "--",
             packageSpecifier,
         ], {
             encoding: "utf8",

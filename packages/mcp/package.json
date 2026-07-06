@@ -1,6 +1,6 @@
 {
     "name": "@zokizuan/satori-mcp",
-    "version": "4.11.7",
+    "version": "4.11.8",
     "description": "Repo-aware MCP tools for AI coding agents: intent search, symbol navigation, exact reads, related paths, and freshness warnings.",
     "type": "module",
     "main": "dist/index.js",
@@ -17,7 +17,7 @@
         "lint:fix": "eslint src --ext .ts --fix",
         "typecheck": "tsc --noEmit",
         "start": "tsx src/index.ts",
-        "start:with-env": "OPENAI_API_KEY=${OPENAI_API_KEY:your-api-key-here} MILVUS_ADDRESS=${MILVUS_ADDRESS:localhost:19530} tsx src/index.ts",
+        "start:with-env": "OPENAI_API_KEY=${OPENAI_API_KEY:-your-api-key-here} MILVUS_ADDRESS=${MILVUS_ADDRESS:-localhost:19530} tsx src/index.ts",
         "docs:generate": "tsx scripts/generate-docs.ts",
         "docs:check": "tsx scripts/generate-docs.ts --check",
         "manifest:generate": "tsx scripts/generate-server-manifest.ts",

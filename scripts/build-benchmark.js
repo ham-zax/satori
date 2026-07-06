@@ -81,6 +81,10 @@ function main() {
     console.log(`   Node version: ${process.version}`);
     
     saveBenchmark(results);
+
+    if (successCount !== results.length) {
+        process.exitCode = 1;
+    }
 }
 
 if (require.main === module) {

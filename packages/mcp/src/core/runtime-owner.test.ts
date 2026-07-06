@@ -19,7 +19,7 @@ const FINGERPRINT: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3',
 };
-const CURRENT_SATORI_VERSION = '4.11.7';
+const CURRENT_SATORI_VERSION = '4.11.8';
 
 function withTempState<T>(fn: (stateDir: string) => Promise<T> | T): Promise<T> {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-runtime-owner-'));

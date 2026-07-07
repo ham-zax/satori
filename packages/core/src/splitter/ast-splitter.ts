@@ -166,6 +166,10 @@ export class AstCodeSplitter implements Splitter {
                         metadata: {
                             startLine,
                             endLine,
+                            startByte: currentNode.startIndex,
+                            endByte: currentNode.endIndex,
+                            startColumn: currentNode.startPosition.column,
+                            endColumn: currentNode.endPosition.column,
                             language,
                             filePath,
                             breadcrumbs,

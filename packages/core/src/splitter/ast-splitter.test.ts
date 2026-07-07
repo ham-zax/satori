@@ -46,6 +46,21 @@ test('AstCodeSplitter text-symbol fallback identifies class property arrow funct
     assert.ok(chunks.some((chunk) => chunk.metadata.symbolLabel === 'async function runTask(...)'));
 });
 
+test('AstCodeSplitter preserves byte spans for same-line anonymous callbacks', async () => {
+    const code = 'entries.filter((candidate) => candidate.isFile()).sort((a, b) => compare(a.name, b.name));\n';
+    const splitter = new AstCodeSplitter();
+    const chunks = await splitter.split(code, 'typescript', 'src/sidecar.ts');
+    const callbacks = chunks
+        .filter((chunk) => chunk.metadata.symbolLabel?.startsWith('function <anonymous>'))
+        .sort((a, b) => (a.metadata.startByte ?? 0) - (b.metadata.startByte ?? 0));
+
+    assert.equal(callbacks.length, 2);
+    assert.deepEqual(callbacks.map((chunk) => chunk.metadata.startLine), [1, 1]);
+    assert.ok(callbacks[0].metadata.startByte !== callbacks[1].metadata.startByte);
+    assert.ok(typeof callbacks[0].metadata.endByte === 'number');
+    assert.ok(typeof callbacks[1].metadata.endByte === 'number');
+});
+
 test('AstCodeSplitter preserves symbol metadata for large Python files', async () => {
     const fillerMethods = Array.from({ length: 2500 }, (_, index) => [
         `    def filler_${index}(self):`,

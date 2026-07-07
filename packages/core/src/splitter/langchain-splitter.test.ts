@@ -2,6 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LangChainCodeSplitter } from './langchain-splitter';
 
+function hasUnpairedSurrogate(text: string): boolean {
+    for (let index = 0; index < text.length; index++) {
+        const code = text.charCodeAt(index);
+        if (code >= 0xd800 && code <= 0xdbff) {
+            const next = text.charCodeAt(index + 1);
+            if (!(next >= 0xdc00 && next <= 0xdfff)) {
+                return true;
+            }
+            index++;
+        } else if (code >= 0xdc00 && code <= 0xdfff) {
+            return true;
+        }
+    }
+    return false;
+}
+
 test('LangChainCodeSplitter returns deterministic chunks with source metadata', async () => {
     const splitter = new LangChainCodeSplitter(48, 8);
     const code = [
@@ -36,6 +52,14 @@ test('LangChainCodeSplitter overlaps long single-line chunks without exceeding c
         'vwxyz',
     ]);
     assert.ok(chunks.every((chunk) => chunk.metadata.startLine === 1));
+});
+
+test('LangChainCodeSplitter does not split emoji surrogate pairs', async () => {
+    const splitter = new LangChainCodeSplitter(4, 1);
+    const chunks = await splitter.split('abc📊def📅ghi', 'text');
+
+    assert.ok(chunks.length > 1);
+    assert.ok(chunks.every((chunk) => !hasUnpairedSurrogate(chunk.content)));
 });
 
 test('LangChainCodeSplitter clamps invalid sizing inputs and handles empty content', async () => {

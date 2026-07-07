@@ -2,6 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AstCodeSplitter } from './ast-splitter';
 
+function hasUnpairedSurrogate(text: string): boolean {
+    for (let index = 0; index < text.length; index++) {
+        const code = text.charCodeAt(index);
+        if (code >= 0xd800 && code <= 0xdbff) {
+            const next = text.charCodeAt(index + 1);
+            if (!(next >= 0xdc00 && next <= 0xdfff)) {
+                return true;
+            }
+            index++;
+        } else if (code >= 0xdc00 && code <= 0xdfff) {
+            return true;
+        }
+    }
+    return false;
+}
+
 test('AstCodeSplitter preserves symbol metadata for large TypeScript files', async () => {
     const fillerMethods = Array.from({ length: 1200 }, (_, index) => [
         `    public filler${index}(): number {`,
@@ -59,6 +75,22 @@ test('AstCodeSplitter preserves byte spans for same-line anonymous callbacks', a
     assert.ok(callbacks[0].metadata.startByte !== callbacks[1].metadata.startByte);
     assert.ok(typeof callbacks[0].metadata.endByte === 'number');
     assert.ok(typeof callbacks[1].metadata.endByte === 'number');
+});
+
+test('AstCodeSplitter overlap does not split emoji surrogate pairs', async () => {
+    const code = [
+        'export function statusText(): string {',
+        '    const marker = `',
+        '📊',
+        '`;',
+        '    return marker.repeat(20);',
+        '}',
+    ].join('\n');
+    const splitter = new AstCodeSplitter(32, 1);
+    const chunks = await splitter.split(code, 'typescript', 'src/status.ts');
+
+    assert.ok(chunks.length > 1);
+    assert.ok(chunks.every((chunk) => !hasUnpairedSurrogate(chunk.content)));
 });
 
 test('AstCodeSplitter preserves symbol metadata for large Python files', async () => {

@@ -5,10 +5,21 @@ All notable changes to this repository are documented in this file.
 ## Unreleased
 
 ### Release Versions
-- Repository version: `0.5.8`
-- `@zokizuan/satori-core`: `1.6.6`
-- `@zokizuan/satori-mcp`: `4.11.10`
-- `@zokizuan/satori-cli`: `0.4.8`
+- Repository version: `0.5.9`
+- `@zokizuan/satori-core`: `1.6.7`
+- `@zokizuan/satori-mcp`: `4.11.11`
+- `@zokizuan/satori-cli`: `0.4.9`
+
+### Added
+- `manage_index` `repair` action: rebuilds local readiness (completion marker + navigation sidecars) without re-embedding vectors when the existing vector payload and trusted runtime fingerprint match.
+- `Context.repairIndex` verifies chunk coverage, rebuilds symbol registry and relationship sidecars, and writes a fresh completion marker.
+- `Context.pruneUnprovenStagedCollectionFamily` drops failed staged generations (marker-only or empty collections) before collection limit validation.
+- AST splitter now emits `startByte`, `endByte`, `startColumn`, `endColumn` on chunk metadata for anonymous callbacks.
+- Symbol registry merges byte-level spans when deduplicating symbols from overlapping chunks.
+
+### Changed
+- Stale-local readiness (`missing_marker_doc`) now recommends `repair` over `create` in `search_codebase`, `file_outline`, and `call_graph` responses.
+- `file_outline` and `call_graph` missing sidecar hints now suggest `repair` when the issue is a missing (not incompatible) sidecar.
 
 ### Fixed
 - Removed stale `humanText` duplication from `search_codebase` and `file_outline`/`call_graph` error envelopes; `humanText` remains a `manage_index`-only contract field.

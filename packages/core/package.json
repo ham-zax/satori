@@ -1,6 +1,6 @@
 {
   "name": "@zokizuan/satori-core",
-  "version": "1.6.6",
+  "version": "1.6.7",
   "description": "Core indexing and retrieval engine for Satori's codebase map.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

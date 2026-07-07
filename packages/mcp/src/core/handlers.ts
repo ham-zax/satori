@@ -208,6 +208,7 @@ type IndexCompletionMarkerContext = {
     writeIndexCompletionMarker?: (codebasePath: string, marker: IndexCompletionMarkerDocument) => Promise<void>;
     clearIndexCompletionMarker?: (codebasePath: string) => Promise<void>;
     pruneIndexedCollectionFamily?: (codebasePath: string, keepCollectionName: string) => Promise<string[]>;
+    pruneUnprovenStagedCollectionFamily?: (codebasePath: string) => Promise<string[]>;
 };
 
 type ToolTextResponse = {
@@ -448,6 +449,7 @@ export class ToolHandlers {
             buildManageIndexRecommendedAction: this.buildManageIndexRecommendedAction.bind(this),
             buildCreateHint: this.buildCreateHint.bind(this),
             buildReindexHint: this.buildReindexHint.bind(this),
+            buildRepairHint: this.buildRepairHint.bind(this),
             buildStatusHint: this.buildStatusHint.bind(this),
             buildStaleLocalHint: this.buildStaleLocalHint.bind(this),
             buildStaleLocalMessage: this.buildStaleLocalMessage.bind(this),
@@ -636,6 +638,7 @@ export class ToolHandlers {
             getSnapshotCodebaseInfo: this.getSnapshotCodebaseInfo.bind(this),
             getSnapshotIndexedCodebases: this.getSnapshotIndexedCodebases.bind(this),
             buildManageActionBlockedMessage: this.buildManageActionBlockedMessage.bind(this),
+            buildCreateHint: this.buildCreateHint.bind(this),
             buildStatusHint: this.buildStatusHint.bind(this),
             getManageRetryAfterMs: this.getManageRetryAfterMs.bind(this),
             buildIndexingMetadata: this.buildIndexingMetadata.bind(this),
@@ -658,6 +661,7 @@ export class ToolHandlers {
             canonicalizeCodebasePath: this.canonicalizeCodebasePath.bind(this),
             writeIndexCompletionMarker: this.writeIndexCompletionMarker.bind(this),
             pruneIndexedCollectionFamily: this.pruneIndexedCollectionFamily.bind(this),
+            pruneUnprovenStagedCollectionFamily: this.pruneUnprovenStagedCollectionFamily.bind(this),
             getContextTrackedRelativePaths: this.getContextTrackedRelativePaths.bind(this),
             setIndexingStats: this.setIndexingStats.bind(this),
             rebuildCallGraphForIndex: this.rebuildCallGraphForIndex.bind(this),
@@ -746,8 +750,18 @@ export class ToolHandlers {
         };
     }
 
+    private buildRepairHint(codebasePath: string): { tool: string; args: { action: string; path: string } } {
+        return {
+            tool: "manage_index",
+            args: {
+                action: "repair",
+                path: codebasePath
+            }
+        };
+    }
+
     private buildManageIndexRecommendedAction(
-        action: Extract<ManageIndexAction, "create" | "reindex" | "status" | "sync">,
+        action: Extract<ManageIndexAction, "create" | "reindex" | "status" | "sync" | "repair">,
         codebasePath: string,
         reason: string
     ): SearchRecommendedNextAction {
@@ -969,6 +983,11 @@ export class ToolHandlers {
         return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 
+    private async pruneUnprovenStagedCollectionFamily(codebasePath: string): Promise<string[]> {
+        const dropped = await this.contextLifecycle().pruneUnprovenStagedCollectionFamily?.(codebasePath);
+        return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
+    }
+
     private markCodebaseCleared(codebasePath: string, collectionName?: string): void {
         this.snapshotCapabilities().markCodebaseCleared?.(codebasePath, collectionName);
     }
@@ -1078,7 +1097,7 @@ export class ToolHandlers {
         console.log(`[INDEX-RECOVERY] Marked stale indexing state as failed for '${codebasePath}' (${decision.reason}).`);
     }
 
-    private buildManageActionBlockedMessage(codebasePath: string, action: 'create' | 'reindex' | 'sync' | 'clear'): string {
+    private buildManageActionBlockedMessage(codebasePath: string, action: 'create' | 'reindex' | 'sync' | 'clear' | 'repair'): string {
         const indexing = this.buildIndexingMetadata(codebasePath);
         const retryAfterMs = this.getManageRetryAfterMs();
 
@@ -1107,9 +1126,13 @@ export class ToolHandlers {
     }
 
     private buildStaleLocalHint(codebasePath: string, reason: CompletionProofReason): Record<string, unknown> {
+        const preferRepair = reason === "missing_marker_doc";
         return {
             completionProof: reason,
-            recommendedAction: this.buildCreateHint(codebasePath)
+            recommendedAction: preferRepair
+                ? this.buildRepairHint(codebasePath)
+                : this.buildCreateHint(codebasePath),
+            ...(preferRepair ? { create: this.buildCreateHint(codebasePath) } : {})
         };
     }
 
@@ -1845,6 +1868,7 @@ export class ToolHandlers {
         reason: NonOkReason = 'requires_reindex'
     ): FileOutlineResponseEnvelope {
         const detailLine = detail ? `${detail}\n\n` : '';
+        const preferRepair = reason === 'missing_symbol_registry' || reason === 'missing_relationship_sidecar';
         return {
             status: 'requires_reindex',
             reason,
@@ -1852,8 +1876,11 @@ export class ToolHandlers {
             file: input.file,
             outline: null,
             hasMore: false,
-            message: `${detailLine}Relationship-backed navigation sidecars are missing or incompatible. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
+            message: preferRepair
+                ? `${detailLine}Relationship-backed navigation sidecars are missing. Please run manage_index with {"action":"repair","path":"${codebasePath}"}.`
+                : `${detailLine}Relationship-backed navigation sidecars are missing or incompatible. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
             hints: {
+                ...(preferRepair ? { repair: this.buildRepairHint(codebasePath) } : {}),
                 reindex: this.buildReindexHint(codebasePath)
             }
         };
@@ -2043,6 +2070,10 @@ export class ToolHandlers {
         return this.manageIndexingHandlers.handleReindexCodebase(args);
     }
 
+    public async handleRepairIndex(args: ToolArgs) {
+        return this.manageIndexingHandlers.handleRepairIndex(args);
+    }
+
     public async handleSearchCode(args: ToolArgs) {
         const scope = (typeof args.scope === 'string' ? args.scope : 'runtime') as SearchScope;
         const resultMode = (typeof args.resultMode === 'string' ? args.resultMode : 'grouped') as SearchResultMode;
@@ -2153,6 +2184,7 @@ export class ToolHandlers {
                     rationale
                 ),
                 buildCreateHint: (codebasePath) => this.buildCreateHint(codebasePath),
+                buildRepairHint: (codebasePath) => this.buildRepairHint(codebasePath),
                 buildStaleLocalHint: (codebasePath, reason) => this.buildStaleLocalHint(codebasePath, reason),
                 buildStaleLocalMessage: (codebasePath, requestedPath, reason) => this.buildStaleLocalMessage(
                     codebasePath,

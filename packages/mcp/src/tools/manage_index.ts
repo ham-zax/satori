@@ -7,7 +7,7 @@ import {
     isMissingProviderConfigIssue
 } from "./setup-errors.js";
 
-const actionEnum = z.enum(["create", "reindex", "sync", "status", "clear"]);
+const actionEnum = z.enum(["create", "reindex", "sync", "status", "clear", "repair"]);
 
 const manageIndexInputSchema = z.object({
     action: actionEnum.describe("Required operation to run."),
@@ -22,7 +22,7 @@ const manageIndexInputSchema = z.object({
 export const manageIndexTool: McpTool = {
     name: "manage_index",
     description: () =>
-        "Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action=\"sync\" for immediate convergence and action=\"reindex\" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). create/reindex return the kickoff response immediately and do not poll to terminal state; use action=\"status\" to observe progress.",
+        "Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for a codebase path. repair rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match; otherwise it refuses and asks for create/reindex. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action=\"sync\" for immediate convergence and action=\"reindex\" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). create/reindex return the kickoff response immediately and do not poll to terminal state; use action=\"status\" to observe progress.",
     inputSchemaZod: () => manageIndexInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = manageIndexInputSchema.safeParse(args || {});
@@ -39,7 +39,7 @@ export const manageIndexTool: McpTool = {
         const input = parsed.data;
         const providerOperation = input.action === "clear" || input.action === "status"
             ? "vector_only"
-            : (input.action === "create" || input.action === "reindex" || input.action === "sync")
+            : (input.action === "create" || input.action === "reindex" || input.action === "sync" || input.action === "repair")
                 ? "embedding_vector"
                 : null;
         let executionContext: ToolContext | MissingProviderConfigIssue;
@@ -83,6 +83,9 @@ export const manageIndexTool: McpTool = {
                     break;
                 case 'clear':
                     response = await executionContext.toolHandlers.handleClearIndex(input);
+                    break;
+                case 'repair':
+                    response = await executionContext.toolHandlers.handleRepairIndex(input);
                     break;
                 default:
                     return {

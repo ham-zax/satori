@@ -240,7 +240,7 @@ test('handleSearchCode returns stale-local not_indexed when completion marker is
         assert.equal(payload.hints?.staleLocal?.completionProof, 'missing_marker_doc');
         assert.equal(payload.hints?.create?.args?.path, repoPath);
         assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
-        assert.equal(payload.recommendedNextAction?.args?.action, 'create');
+        assert.equal(payload.recommendedNextAction?.args?.action, 'repair');
         assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
     });
 });

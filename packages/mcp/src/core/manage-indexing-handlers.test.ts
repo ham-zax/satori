@@ -91,6 +91,7 @@ function createFailedIndexingHarness(existingCollections: Set<string>) {
         canonicalizeCodebasePath: (codebasePath: string) => path.resolve(codebasePath),
         writeIndexCompletionMarker: async () => undefined,
         pruneIndexedCollectionFamily: async () => [],
+        pruneUnprovenStagedCollectionFamily: async () => [],
         getContextTrackedRelativePaths: () => [],
         setIndexingStats: () => undefined,
         rebuildCallGraphForIndex: async () => undefined,
@@ -134,5 +135,88 @@ test("startBackgroundIndexing keeps stable collection after non-staged failure",
         assert.deepEqual(droppedCollections, []);
         assert.equal(existingCollections.has(stableCollection), true);
         assert.equal(failedSnapshots.length, 1);
+    });
+});
+
+test("handleRepairIndex saves the manifest paths verified by repair", async () => {
+    await withTempRepo(async (repoPath) => {
+        let manifestPaths: string[] | null = null;
+        let repairOptions: Record<string, unknown> | undefined;
+        const handler = new ManageIndexingHandlers({
+            context: {
+                repairIndex: async (_codebasePath: string, options?: Record<string, unknown>) => {
+                    repairOptions = options;
+                    return {
+                        status: "ok",
+                        message: "repaired",
+                        indexedFiles: 1,
+                        totalChunks: 2,
+                        warnings: [],
+                        trackedRelativePaths: ["src/repaired.ts"],
+                    };
+                },
+            },
+            snapshotManager: {
+                setCodebaseIndexed: () => undefined,
+                setCodebaseIndexManifest: (_codebasePath: string, paths: string[]) => {
+                    manifestPaths = paths;
+                },
+            },
+            syncManager: {},
+            runtimeFingerprint: RUNTIME_FINGERPRINT,
+            manageResponse: (action: string, responsePath: string, status: string, message: string, options?: Record<string, unknown>) => ({
+                content: [{ type: "text", text: JSON.stringify({ action, path: responsePath, status, message, ...options }) }],
+            }),
+            buildRuntimeOwnerConflictResponseIfBlocked: async () => null,
+            recoverStaleIndexingStateIfNeeded: async () => undefined,
+            getSnapshotIndexingCodebases: () => [],
+            getSnapshotCodebaseInfo: () => ({
+                status: "indexed",
+                lastUpdated: new Date(0).toISOString(),
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+            }),
+            getSnapshotIndexedCodebases: () => [],
+            buildManageActionBlockedMessage: () => "blocked",
+            buildCreateHint: (codebasePath: string) => ({ tool: "manage_index", args: { action: "create", path: codebasePath } }),
+            buildStatusHint: (codebasePath: string) => ({ tool: "manage_index", args: { action: "status", path: codebasePath } }),
+            getManageRetryAfterMs: () => 2000,
+            buildIndexingMetadata: () => undefined,
+            buildReindexInstruction: () => "reindex",
+            buildManageRequiresReindexHints: () => ({}),
+            validateCompletionProof: async () => ({ outcome: "missing_collection" }),
+            recoverIndexedSnapshotFromCompletionProof: () => false,
+            isZillizBackend: () => false,
+            resolveCollectionName,
+            dropZillizCollectionForCreate: async () => ({}),
+            resolveStagedCollectionName: (codebasePath: string, generationId: string) => `${resolveCollectionName(codebasePath)}__gen_${generationId}`,
+            buildCollectionLimitMessage: async () => "collection limit",
+            manageVectorBackendResponse: (action: string, responsePath: string) => ({
+                content: [{ type: "text", text: JSON.stringify({ action, path: responsePath, status: "error" }) }],
+            }),
+            saveSnapshotIfSupported: () => undefined,
+            touchWatchedCodebase: async () => undefined,
+            setWriteCollectionOverride: () => undefined,
+            loadIndexProfileForCodebase: () => ({ profile: "default" }),
+            getContextActiveIgnorePatterns: () => [],
+            getContextIndexedExtensions: () => [".ts"],
+            canonicalizeCodebasePath: (codebasePath: string) => path.resolve(codebasePath),
+            writeIndexCompletionMarker: async () => undefined,
+            pruneIndexedCollectionFamily: async () => [],
+            pruneUnprovenStagedCollectionFamily: async () => [],
+            getContextTrackedRelativePaths: () => ["stale/from-context.ts"],
+            setIndexingStats: () => undefined,
+            rebuildCallGraphForIndex: async () => undefined,
+            getSnapshotIndexingProgress: () => undefined,
+            clearIndexCompletionMarker: async () => undefined,
+            evaluateReindexPreflight: () => ({ allowed: true }),
+        } as unknown as ConstructorParameters<typeof ManageIndexingHandlers>[0]);
+
+        const response = await handler.handleRepairIndex({ path: repoPath });
+        const payload = JSON.parse(response.content[0].text);
+
+        assert.equal(payload.status, "ok");
+        assert.deepEqual(manifestPaths, ["src/repaired.ts"]);
+        assert.deepEqual(repairOptions, { trustedFingerprint: RUNTIME_FINGERPRINT });
     });
 });

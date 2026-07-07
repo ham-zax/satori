@@ -108,3 +108,37 @@ test("manage_index returns structured backend diagnostics when handler backend c
     assert.equal(payload.reason, "vector_backend_unavailable");
     assert.equal(payload.code, "VECTOR_BACKEND_TIMEOUT");
 });
+
+test("manage_index repair uses provider embedding/vector context when available", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    let requestedOperation: string | null = null;
+    const providerContext = {
+        toolHandlers: {
+            handleRepairIndex: async () => ({
+                content: [{ type: "text", text: "provider-backed repair" }]
+            })
+        }
+    } as unknown as ToolContext;
+    const ctx = {
+        capabilities,
+        providerRuntime: {
+            requireToolContext: async (operation: string) => {
+                requestedOperation = operation;
+                return providerContext;
+            }
+        },
+        toolHandlers: {
+            handleRepairIndex: async () => {
+                throw new Error("startup context should not handle repair when provider context is available");
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({
+        action: "repair",
+        path: "/repo",
+    }, ctx);
+
+    assert.equal(requestedOperation, "embedding_vector");
+    assert.equal(response.content[0].text, "provider-backed repair");
+});

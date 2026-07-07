@@ -40,6 +40,7 @@ type ToolHandlersTestOverrides = {
 
 interface ValidationHarnessOptions {
     checkCollectionLimitImpl: () => Promise<boolean>;
+    pruneUnprovenStagedCollectionFamilyImpl?: (codebasePath: string) => Promise<string[]>;
     backendProvider?: BackendProvider;
     collectionDetails?: Array<{ name: string; createdAt?: string }>;
     metadataByCollection?: Record<string, { codebasePath?: string }>;
@@ -113,6 +114,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         },
         getVectorStore: () => vectorStore,
         resolveCollectionName,
+        pruneUnprovenStagedCollectionFamily: options.pruneUnprovenStagedCollectionFamilyImpl || (async () => []),
         ...(!options.omitStagedCollectionResolver ? {
             resolveStagedCollectionName: (codebasePath: string, generationId: string) =>
                 `${resolveCollectionName(codebasePath)}__gen_${generationId}`,
@@ -279,6 +281,53 @@ test('handleIndexCodebase supports explicit zillizDropCollection for user-select
         assert.match(text, /Dropped Zilliz collection 'hybrid_code_chunks_deadbeef'/i);
         assert.equal(droppedCollections.length, 1);
         assert.equal(droppedCollections[0], 'hybrid_code_chunks_deadbeef');
+    });
+});
+
+test('handleIndexCodebase prunes unproven staged generations before collection limit validation', async () => {
+    await withTempRepo(async (repoPath) => {
+        const events: string[] = [];
+        const failedStagedCollection = `${resolveCollectionName(repoPath)}__gen_failed`;
+        const { handlers } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            pruneUnprovenStagedCollectionFamilyImpl: async (codebasePath) => {
+                events.push(`prune:${codebasePath}`);
+                return [failedStagedCollection];
+            },
+            checkCollectionLimitImpl: async () => {
+                events.push('limit');
+                return true;
+            },
+        });
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'ok');
+        assert.deepEqual(events, [`prune:${repoPath}`, 'limit']);
+    });
+});
+
+test('handleIndexCodebase uses staged pruning before reporting remaining collection limit block', async () => {
+    await withTempRepo(async (repoPath) => {
+        const events: string[] = [];
+        const { handlers } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            pruneUnprovenStagedCollectionFamilyImpl: async () => {
+                events.push('prune');
+                return [];
+            },
+            checkCollectionLimitImpl: async () => {
+                events.push('limit');
+                return false;
+            },
+        });
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'error');
+        assert.deepEqual(events, ['prune', 'limit']);
     });
 });
 

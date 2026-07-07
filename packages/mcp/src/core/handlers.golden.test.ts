@@ -678,8 +678,12 @@ test('golden MCP file_outline missing registry requires_reindex shape', async ()
             file: 'src/runtime.ts',
             outline: null,
             hasMore: false,
-            message: "symbol registry manifest is missing\n\nRelationship-backed navigation sidecars are missing or incompatible. Please run manage_index with {\"action\":\"reindex\",\"path\":\"<repo>\"}.",
+            message: "symbol registry manifest is missing\n\nRelationship-backed navigation sidecars are missing. Please run manage_index with {\"action\":\"repair\",\"path\":\"<repo>\"}.",
             hints: {
+                repair: {
+                    tool: 'manage_index',
+                    args: { action: 'repair', path: '<repo>' },
+                },
                 reindex: {
                     tool: 'manage_index',
                     args: { action: 'reindex', path: '<repo>' },
@@ -1104,8 +1108,12 @@ test('golden MCP call_graph missing relationship sidecar shape', async () => {
             edges: [],
             notes: [],
             freshnessDecision: { mode: 'skipped_requires_reindex' },
-            message: "Relationship sidecar is missing: relationship manifest is missing\n\nThe index at '<repo>' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {\"action\":\"reindex\",\"path\":\"<repo>\"}.",
+            message: "Relationship sidecar is missing: relationship manifest is missing\n\nThe index at '<repo>' is missing navigation sidecars. Please run manage_index with {\"action\":\"repair\",\"path\":\"<repo>\"}.",
             hints: {
+                repair: {
+                    tool: 'manage_index',
+                    args: { action: 'repair', path: '<repo>' },
+                },
                 reindex: {
                     tool: 'manage_index',
                     args: { action: 'reindex', path: '<repo>' },

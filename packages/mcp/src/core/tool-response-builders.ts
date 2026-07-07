@@ -42,12 +42,13 @@ type CallGraphContext = {
 
 export type ToolResponseBuildersHost = {
     buildManageIndexRecommendedAction(
-        action: "create" | "reindex" | "sync" | "status",
+        action: "create" | "reindex" | "sync" | "status" | "repair",
         codebasePath: string,
         rationale: string,
     ): SearchRecommendedNextAction;
     buildCreateHint(codebasePath: string): { tool: string; args: { action: string; path: string } };
     buildReindexHint(codebasePath: string): { tool: string; args: { action: string; path: string } };
+    buildRepairHint(codebasePath: string): { tool: string; args: { action: string; path: string } };
     buildStatusHint(codebasePath: string): { tool: string; args: { action: string; path: string } };
     buildStaleLocalHint(codebasePath: string, reason: CompletionProofReason): Record<string, unknown>;
     buildStaleLocalMessage(codebasePath: string, requestedPath: string, reason: CompletionProofReason): string;
@@ -239,6 +240,7 @@ export class ToolResponseBuilders {
         > = "requires_reindex",
     ): CallGraphResponseEnvelope {
         const detailLine = detail ? `${detail}\n\n` : "";
+        const preferRepair = reason === "missing_symbol_registry" || reason === "missing_relationship_sidecar";
         return {
             status: "requires_reindex",
             supported: false,
@@ -255,8 +257,11 @@ export class ToolResponseBuilders {
             freshnessDecision: {
                 mode: "skipped_requires_reindex",
             },
-            message: `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
+            message: preferRepair
+                ? `${detailLine}The index at '${codebasePath}' is missing navigation sidecars. Please run manage_index with {"action":"repair","path":"${codebasePath}"}.`
+                : `${detailLine}The index at '${codebasePath}' is incompatible with the current runtime and must be rebuilt. Please run manage_index with {"action":"reindex","path":"${codebasePath}"}.`,
             hints: {
+                ...(preferRepair ? { repair: this.host.buildRepairHint(codebasePath) } : {}),
                 reindex: this.host.buildReindexHint(codebasePath),
             },
             compatibility: this.host.buildCompatibilityDiagnostics(codebasePath),

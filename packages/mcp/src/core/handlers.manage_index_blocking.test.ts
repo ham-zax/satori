@@ -647,3 +647,103 @@ test('handleSyncCodebase surfaces coalesced in-flight reconcile failure from ens
         assert.match(text, /Fallback incremental sync was executed/i);
     });
 });
+
+test('handleRepairIndex parses, executes, and rebuilds call graph on success', async () => {
+    await withTempRepo(async (repoPath) => {
+        let rebuildCallGraphCalled = false;
+
+        const context = {
+            repairIndex: async (codebasePath: string) => {
+                assert.equal(codebasePath, repoPath);
+                return {
+                    status: 'ok',
+                    message: 'readiness repaired',
+                    indexedFiles: 5,
+                    totalChunks: 10,
+                    warnings: [],
+                };
+            }
+        } as unknown as HandlerContext;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => ({
+                status: 'indexed',
+                indexedFiles: 5,
+                totalChunks: 10,
+                indexStatus: 'completed',
+                lastUpdated: new Date().toISOString()
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined,
+            setCodebaseIndexed: () => undefined,
+            setCodebaseIndexManifest: () => undefined,
+        } as unknown as HandlerSnapshotManager;
+
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+        } as unknown as HandlerSyncManager;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        // Mock rebuildCallGraphForIndex
+        ((handlers as any).manageIndexingHandlers as any).host.rebuildCallGraphForIndex = async (codebasePath: string) => {
+            assert.equal(codebasePath, repoPath);
+            rebuildCallGraphCalled = true;
+        };
+
+        const response = await handlers.handleRepairIndex({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'ok');
+        assert.equal(envelope.action, 'repair');
+        assert.match(envelope.message, /readiness repaired/i);
+        assert.ok(rebuildCallGraphCalled);
+    });
+});
+
+test('handleRepairIndex returns blocked/needs_create when repairIndex reports blocked coverage', async () => {
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            repairIndex: async () => ({
+                status: 'blocked',
+                reason: 'needs_create',
+                message: 'Coverage verification failed',
+                missingCount: 3,
+            })
+        } as unknown as HandlerContext;
+
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'stale_local' } }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => 'stale_local',
+            getCodebaseInfo: () => ({
+                status: 'stale_local',
+                lastUpdated: new Date().toISOString()
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined
+        } as unknown as HandlerSnapshotManager;
+
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+        } as unknown as HandlerSyncManager;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const response = await handlers.handleRepairIndex({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'blocked');
+        assert.equal(envelope.action, 'repair');
+        assert.equal(envelope.reason, 'needs_create');
+        assert.equal(envelope.hints?.missingCount, 3);
+        assert.deepEqual(envelope.hints?.create, {
+            tool: 'manage_index',
+            args: { action: 'create', path: repoPath }
+        });
+    });
+});

@@ -1,6 +1,6 @@
 import { WarningCode } from "./warnings.js";
 
-export type ManageIndexAction = "create" | "reindex" | "sync" | "status" | "clear";
+export type ManageIndexAction = "create" | "reindex" | "sync" | "status" | "clear" | "repair";
 
 export type ManageIndexStatus =
     | "ok"
@@ -20,7 +20,8 @@ export type ManageIndexReason =
     | "remote_delete_pending"
     | "missing_provider_config"
     | "vector_backend_unavailable"
-    | "runtime_owner_conflict";
+    | "runtime_owner_conflict"
+    | "needs_create";
 
 export type VectorBackendResponseCode =
     | "ZILLIZ_CLUSTER_STOPPED"

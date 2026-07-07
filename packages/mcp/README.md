@@ -131,11 +131,11 @@ The full generated tool reference below is kept in the npm README for MCP client
 
 ### `manage_index`
 
-Manage index lifecycle operations (create/reindex/sync/status/clear) for a codebase path. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action="sync" for immediate convergence and action="reindex" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). create/reindex return the kickoff response immediately and do not poll to terminal state; use action="status" to observe progress.
+Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for a codebase path. repair rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match; otherwise it refuses and asks for create/reindex. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action="sync" for immediate convergence and action="reindex" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). create/reindex return the kickoff response immediately and do not poll to terminal state; use action="status" to observe progress.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `action` | enum("create", "reindex", "sync", "status", "clear") | yes |  | Required operation to run. |
+| `action` | enum("create", "reindex", "sync", "status", "clear", "repair") | yes |  | Required operation to run. |
 | `path` | string | yes |  | ABSOLUTE path to the target codebase. |
 | `force` | boolean | no |  | Only for action='create'. Force rebuild from scratch. |
 | `allowUnnecessaryReindex` | boolean | no |  | Only for action='reindex'. Override preflight block when reindex is detected as unnecessary ignore-only churn. |

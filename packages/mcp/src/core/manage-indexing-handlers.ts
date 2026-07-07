@@ -46,6 +46,23 @@ type IndexProfileView = {
     configPath?: string;
 };
 
+function isMatchingVerifiedFingerprint(info: Record<string, unknown> | undefined, runtimeFingerprint: IndexFingerprint): IndexFingerprint | undefined {
+    if (info?.fingerprintSource !== "verified") {
+        return undefined;
+    }
+    const fingerprint = info.indexFingerprint;
+    if (!fingerprint || typeof fingerprint !== "object") {
+        return undefined;
+    }
+    const record = fingerprint as Record<string, unknown>;
+    const matches = record.embeddingProvider === runtimeFingerprint.embeddingProvider
+        && record.embeddingModel === runtimeFingerprint.embeddingModel
+        && Number(record.embeddingDimension) === Number(runtimeFingerprint.embeddingDimension)
+        && record.vectorStoreProvider === runtimeFingerprint.vectorStoreProvider
+        && record.schemaVersion === runtimeFingerprint.schemaVersion;
+    return matches ? fingerprint as IndexFingerprint : undefined;
+}
+
 type ManageIndexingHandlersHost = {
     context: Context;
     snapshotManager: SnapshotManager;
@@ -71,7 +88,8 @@ type ManageIndexingHandlersHost = {
     getSnapshotIndexingCodebases(): string[];
     getSnapshotCodebaseInfo(codebasePath: string): Record<string, unknown> | undefined;
     getSnapshotIndexedCodebases(): string[];
-    buildManageActionBlockedMessage(codebasePath: string, action: "create" | "reindex"): string;
+    buildManageActionBlockedMessage(codebasePath: string, action: "create" | "reindex" | "repair"): string;
+    buildCreateHint(codebasePath: string): Record<string, unknown>;
     buildStatusHint(codebasePath: string): Record<string, unknown>;
     getManageRetryAfterMs(): number;
     buildIndexingMetadata(codebasePath: string): Record<string, unknown> | undefined;
@@ -102,6 +120,7 @@ type ManageIndexingHandlersHost = {
     canonicalizeCodebasePath(codebasePath: string): string;
     writeIndexCompletionMarker(codebasePath: string, marker: IndexCompletionMarkerDocument): Promise<void>;
     pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string): Promise<string[]>;
+    pruneUnprovenStagedCollectionFamily(codebasePath: string): Promise<string[]>;
     getContextTrackedRelativePaths(codebasePath: string): string[];
     setIndexingStats(stats: { indexedFiles: number; totalChunks: number } | null): void;
     rebuildCallGraphForIndex(codebasePath: string): Promise<void>;
@@ -410,6 +429,11 @@ export class ManageIndexingHandlers {
             const stagedCollectionName = this.host.resolveStagedCollectionName(absolutePath, `run_${crypto.randomUUID()}`);
 
             try {
+                const prunedStagedCollections = await this.host.pruneUnprovenStagedCollectionFamily(absolutePath);
+                if (prunedStagedCollections.length > 0) {
+                    console.log(`[INDEX-VALIDATION] 🧹 Removed ${prunedStagedCollections.length} unproven staged collection(s): ${prunedStagedCollections.join(", ")}`);
+                }
+
                 console.log("[INDEX-VALIDATION] 🔍 Validating collection creation capability");
                 const canCreateCollection = await this.host.context.getVectorStore().checkCollectionLimit();
 
@@ -585,6 +609,140 @@ export class ManageIndexingHandlers {
             zillizDropCollection,
             __reindexPreflight: forwardedPreflight,
         });
+    }
+
+    public async handleRepairIndex(args: Record<string, unknown>): Promise<ToolTextResponse> {
+        const codebasePath = args.path;
+        if (typeof codebasePath !== "string" || codebasePath.trim().length === 0) {
+            return this.host.manageResponse(
+                "repair",
+                "",
+                "error",
+                "Error: Path is required."
+            );
+        }
+
+        let absolutePath = codebasePath;
+        try {
+            absolutePath = ensureAbsolutePath(codebasePath);
+
+            if (!fs.existsSync(absolutePath)) {
+                return this.host.manageResponse(
+                    "repair",
+                    absolutePath,
+                    "error",
+                    `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`
+                );
+            }
+
+            const stat = fs.statSync(absolutePath);
+            if (!stat.isDirectory()) {
+                return this.host.manageResponse(
+                    "repair",
+                    absolutePath,
+                    "error",
+                    `Error: Path '${absolutePath}' is not a directory`
+                );
+            }
+
+            const runtimeOwnerConflict = await this.host.buildRuntimeOwnerConflictResponseIfBlocked("repair", absolutePath);
+            if (runtimeOwnerConflict) {
+                return runtimeOwnerConflict;
+            }
+
+            if (this.host.getSnapshotIndexingCodebases().includes(absolutePath)) {
+                return this.host.manageResponse(
+                    "repair",
+                    absolutePath,
+                    "not_ready",
+                    this.host.buildManageActionBlockedMessage(absolutePath, "repair"),
+                    {
+                        reason: "indexing",
+                        hints: {
+                            status: this.host.buildStatusHint(absolutePath),
+                            retryAfterMs: this.host.getManageRetryAfterMs(),
+                            indexing: this.host.buildIndexingMetadata(absolutePath),
+                        },
+                    },
+                );
+            }
+
+            const trustedFingerprint = isMatchingVerifiedFingerprint(
+                this.host.getSnapshotCodebaseInfo(absolutePath),
+                this.host.runtimeFingerprint,
+            );
+            const result = await this.host.context.repairIndex(absolutePath, { trustedFingerprint });
+
+            if (result.status === "ok") {
+                await this.host.rebuildCallGraphForIndex(absolutePath);
+                await this.host.touchWatchedCodebase(absolutePath);
+
+                const stats = {
+                    indexedFiles: result.indexedFiles || 0,
+                    totalChunks: result.totalChunks || 0,
+                    status: "completed" as const
+                };
+                this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified");
+                const trackedRelativePaths = (result as { trackedRelativePaths?: unknown }).trackedRelativePaths;
+                this.host.snapshotManager.setCodebaseIndexManifest(
+                    absolutePath,
+                    Array.isArray(trackedRelativePaths)
+                        ? trackedRelativePaths.filter((entry): entry is string => typeof entry === "string")
+                        : this.host.getContextTrackedRelativePaths(absolutePath)
+                );
+                this.host.setIndexingStats(stats);
+                this.host.saveSnapshotIfSupported();
+
+                const warningsArray = Array.isArray(result.warnings) ? result.warnings : [];
+                return this.host.manageResponse(
+                    "repair",
+                    absolutePath,
+                    "ok",
+                    result.message,
+                    {
+                        warnings: warningsArray,
+                    }
+                );
+            } else if (result.status === "requires_reindex") {
+                return this.host.manageResponse(
+                    "repair",
+                    absolutePath,
+                    "requires_reindex",
+                    result.message,
+                    {
+                        reason: "requires_reindex",
+                        hints: this.host.buildManageRequiresReindexHints(absolutePath),
+                    }
+                );
+            } else {
+                return this.host.manageResponse(
+                    "repair",
+                    absolutePath,
+                    "blocked",
+                    result.message,
+                    {
+                        reason: result.reason || "needs_create",
+                        hints: {
+                            create: this.host.buildCreateHint(absolutePath),
+                            missingCount: result.missingCount,
+                        }
+                    }
+                );
+            }
+
+        } catch (error: unknown) {
+            console.error("Error in handleRepairIndex:", error);
+            const vectorBackendDiagnostic = classifyVectorBackendError(error);
+            if (vectorBackendDiagnostic) {
+                return this.host.manageVectorBackendResponse("repair", absolutePath, vectorBackendDiagnostic);
+            }
+            return this.host.manageResponse(
+                "repair",
+                absolutePath,
+                "error",
+                `Error performing repair: ${formatUnknownError(error)}`
+            );
+        }
     }
 
     private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean, writeCollectionName?: string): Promise<void> {

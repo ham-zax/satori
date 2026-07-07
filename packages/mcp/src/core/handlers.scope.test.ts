@@ -7606,7 +7606,7 @@ test('handleSearchCode fails closed when readiness degrades to stale_local after
         assert.equal(payload.hints?.create?.tool, 'manage_index');
         assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
         assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
-        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'create', path: repoPath });
+        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'repair', path: repoPath });
     });
 });
 

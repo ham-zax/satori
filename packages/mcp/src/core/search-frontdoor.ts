@@ -69,11 +69,12 @@ export type SearchFrontDoorHost = {
         searchContext: SearchFrontDoorSearchContext,
     ) => SearchResponseEnvelope | null;
     buildManageIndexRecommendedAction: (
-        action: "create" | "reindex" | "sync" | "status",
+        action: "create" | "reindex" | "sync" | "status" | "repair",
         codebasePath: string,
         rationale: string,
     ) => SearchRecommendedNextAction;
     buildCreateHint: (codebasePath: string) => { tool: string; args: { action: string; path: string } };
+    buildRepairHint: (codebasePath: string) => { tool: string; args: { action: string; path: string } };
     buildStaleLocalHint: (codebasePath: string, reason: CompletionProofReason) => Record<string, unknown>;
     buildStaleLocalMessage: (codebasePath: string, requestedPath: string, reason: CompletionProofReason) => string;
     withProofDebugHint: <T extends object>(payload: T, proofDebugHint?: CompletionProbeDebugHint) => T;
@@ -144,6 +145,7 @@ function buildBlockedReadinessPayload(
     }
 
     if (state.state === "stale_local") {
+        const preferRepair = state.reason === "missing_marker_doc";
         return {
             status: "not_indexed",
             reason: "not_indexed",
@@ -156,11 +158,14 @@ function buildBlockedReadinessPayload(
             freshnessDecision: null,
             message: host.buildStaleLocalMessage(state.codebasePath, searchContext.path, state.reason),
             recommendedNextAction: host.buildManageIndexRecommendedAction(
-                "create",
+                preferRepair ? "repair" : "create",
                 state.codebasePath,
-                "Create a fresh index because local readiness metadata is stale.",
+                preferRepair
+                    ? "Repair local readiness because completion marker proof is missing but vector rows may still be reusable."
+                    : "Create a fresh index because local readiness metadata is stale.",
             ),
             hints: {
+                ...(preferRepair ? { repair: host.buildRepairHint(state.codebasePath) } : {}),
                 create: host.buildCreateHint(state.codebasePath),
                 staleLocal: host.buildStaleLocalHint(state.codebasePath, state.reason),
             },

@@ -38,7 +38,8 @@ type ManageIndexReason =
     | "requires_reindex"
     | "unnecessary_reindex_ignore_only"
     | "remote_delete_pending"
-    | "backend_timeout";
+    | "backend_timeout"
+    | "needs_create";
 
 type ManageMaintenanceHandlersHost = {
     context: Pick<Context, "clearIndex">;
@@ -347,7 +348,8 @@ export class ManageMaintenanceHandlers {
                     create: this.host.buildCreateHint(trackedRootState.codebasePath),
                     staleLocal: this.host.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason),
                 };
-                statusMessage = `❌ ${this.host.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason)} Run manage_index with {"action":"create","path":"${trackedRootState.codebasePath}"} to repair it.`;
+                const repairAction = trackedRootState.reason === "missing_marker_doc" ? "repair" : "create";
+                statusMessage = `❌ ${this.host.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason)} Run manage_index with {"action":"${repairAction}","path":"${trackedRootState.codebasePath}"} to repair it.`;
             } else if (trackedRootState.state === "missing_collection") {
                 envelopePath = trackedRootState.codebasePath;
                 envelopeStatus = "not_indexed";

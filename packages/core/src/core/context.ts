@@ -46,6 +46,7 @@ import {
     buildSymbolRecordsForFile,
     buildSymbolRegistry,
     clearSymbolRegistrySidecar,
+    readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
     writeRelationshipSidecar,
@@ -90,6 +91,20 @@ type ReindexByChangeOptions = {
     targetCollectionName?: string;
     maintainCompletionMarker?: boolean;
 };
+
+type ExpectedIndexedChunk = {
+    id: string;
+    relativePath: string;
+    startLine: number;
+    endLine: number;
+    content: string;
+    language: string;
+    chunkIndex: number;
+};
+
+type CollectionPayloadVerification =
+    | { ok: true; indexedFiles: number; totalChunks: number }
+    | { ok: false; message: string };
 
 export class Context {
     private embedding: Embedding;
@@ -758,6 +773,7 @@ export class Context {
         }
 
         const currentSynchronizer = this.synchronizers.get(synchronizerKey)!;
+        const maintainCompletionMarker = options.maintainCompletionMarker === true;
         let collectionName = typeof options.targetCollectionName === 'string' && options.targetCollectionName.trim().length > 0
             ? options.targetCollectionName.trim()
             : null;
@@ -778,7 +794,7 @@ export class Context {
         const collectionExists = collectionName !== null;
 
         if (!collectionExists) {
-            if (options.maintainCompletionMarker === true) {
+            if (maintainCompletionMarker) {
                 throw new Error(`Cannot incremental sync '${codebasePath}': no existing collection could be resolved for completion marker maintenance.`);
             }
             console.warn(`[Context] ⚠️  No proven collection exists for '${codebasePath}'. Rebuilding full index before incremental sync resumes.`);
@@ -801,14 +817,19 @@ export class Context {
             throw new Error(`Expected an indexed collection for '${codebasePath}' after sync preflight.`);
         }
         const targetCollectionName = collectionName;
+        const markerWasMissing = maintainCompletionMarker
+            ? (await this.queryCompletionMarkerRows(targetCollectionName)).length === 0
+            : false;
 
         progressCallback?.({ phase: 'Checking for file changes...', current: 0, total: 100, percentage: 0 });
         const { added, removed, modified } = await currentSynchronizer.checkForChanges();
         const totalChanges = added.length + removed.length + modified.length;
 
         if (totalChanges === 0) {
-            if (options.maintainCompletionMarker === true) {
-                await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName);
+            if (maintainCompletionMarker && markerWasMissing) {
+                await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
+                    requirePayloadProof: true,
+                });
             }
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
             console.log('[Context] ✅ No file changes detected.');
@@ -830,9 +851,13 @@ export class Context {
         };
 
         let navigationRecovery: 'rebuilt' | 'failed' | undefined;
-        let deltaIndexCompleted = true;
+        let readinessArtifactsComplete = false;
 
         try {
+            if (maintainCompletionMarker) {
+                await this.clearIndexCompletionMarkerFromCollection(targetCollectionName);
+            }
+
             // Handle removed files
             for (const file of removed) {
                 await this.deleteFileChunks(targetCollectionName, file);
@@ -872,7 +897,6 @@ export class Context {
                     targetCollectionName
                 );
             }
-            deltaIndexCompleted = indexedDelta.status === 'completed';
 
             const canPublishNavigationDelta = canRebuildNavigationArtifacts && indexedDelta.status === 'completed';
             if (canPublishNavigationDelta) {
@@ -889,6 +913,7 @@ export class Context {
                     indexedDelta.symbolRecords,
                     indexedDelta.symbolManifestFiles,
                 );
+                readinessArtifactsComplete = true;
             } else if (!canRebuildNavigationArtifacts && indexedDelta.status === 'completed') {
                 progressCallback?.({
                     phase: 'Recovering navigation metadata...',
@@ -899,10 +924,11 @@ export class Context {
                 try {
                     await this.rebuildNavigationArtifacts(codebasePath);
                     navigationRecovery = 'rebuilt';
+                    readinessArtifactsComplete = true;
                     console.log('[Context] 🧭 Rebuilt navigation sidecars after incremental sync found no compatible pre-sync registry.');
                 } catch (error) {
                     await this.clearSymbolRegistryForCodebase(codebasePath);
-                    await this.clearIndexCompletionMarker(codebasePath);
+                    await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker);
                     navigationRecovery = 'failed';
                     console.warn(
                         `[Context] ⚠️  Failed to recover navigation sidecars after incremental sync; reindex is required: ${error instanceof Error ? error.message : String(error)}`
@@ -910,7 +936,8 @@ export class Context {
                 }
             } else {
                 await this.clearSymbolRegistryForCodebase(codebasePath);
-                await this.clearIndexCompletionMarker(codebasePath);
+                await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker);
+                navigationRecovery = 'failed';
                 if (!canRebuildNavigationArtifacts) {
                     console.log('[Context] ⏭️ Skipping navigation rebuild because no compatible symbol registry existed before incremental sync.');
                 } else {
@@ -919,12 +946,14 @@ export class Context {
             }
         } catch (error) {
             await this.clearSymbolRegistryForCodebase(codebasePath);
-            await this.clearIndexCompletionMarker(codebasePath);
+            await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker);
             throw error;
         }
 
-        if (options.maintainCompletionMarker === true && deltaIndexCompleted && navigationRecovery !== 'failed') {
-            await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName);
+        if (maintainCompletionMarker && readinessArtifactsComplete) {
+            await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
+                requirePayloadProof: markerWasMissing,
+            });
         }
 
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
@@ -1722,27 +1751,11 @@ export class Context {
         filePaths: string[],
         codebasePath: string
     ): Promise<{
-        expectedChunks: Array<{
-            id: string;
-            relativePath: string;
-            startLine: number;
-            endLine: number;
-            content: string;
-            language: string;
-            chunkIndex: number;
-        }>;
+        expectedChunks: ExpectedIndexedChunk[];
         symbolRecords: SymbolRecord[];
         symbolManifestFiles: SymbolRegistryManifestFile[];
     }> {
-        const expectedChunks: Array<{
-            id: string;
-            relativePath: string;
-            startLine: number;
-            endLine: number;
-            content: string;
-            language: string;
-            chunkIndex: number;
-        }> = [];
+        const expectedChunks: ExpectedIndexedChunk[] = [];
         const symbolRecords: SymbolRecord[] = [];
         const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
 
@@ -1802,11 +1815,134 @@ export class Context {
         };
     }
 
-    private async refreshCompletionMarkerFromCurrentSource(codebasePath: string, collectionName: string): Promise<void> {
+    private async refreshCompletionMarkerFromCurrentSource(
+        codebasePath: string,
+        collectionName: string,
+        options: { requirePayloadProof?: boolean } = {}
+    ): Promise<void> {
         await this.loadIgnorePatterns(codebasePath);
         const codeFiles = await this.getCodeFiles(codebasePath);
         const { expectedChunks } = await this.getExpectedChunksAndSymbols(codeFiles, codebasePath);
+        if (options.requirePayloadProof === true) {
+            await this.ensureNavigationArtifactsReadyForMarkerRefresh(codebasePath);
+            const verification = await this.verifyCollectionPayloadMatchesCurrentSource(collectionName, codeFiles, expectedChunks);
+            if (!verification.ok) {
+                await this.clearIndexCompletionMarkerFromCollection(collectionName);
+                throw new Error(`Cannot refresh completion marker for '${codebasePath}': ${verification.message}`);
+            }
+        }
         await this.writeCompletedIndexMarker(codebasePath, codeFiles.length, expectedChunks.length, collectionName);
+    }
+
+    private async ensureNavigationArtifactsReadyForMarkerRefresh(codebasePath: string): Promise<void> {
+        const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
+        const registry = await readSymbolRegistrySidecar({
+            stateRoot: this.symbolRegistryStateRoot,
+            normalizedRootPath: canonicalPath,
+        });
+        if (registry.status === 'ok') {
+            const relationships = await readRelationshipSidecar({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: canonicalPath,
+                expectedSymbolRegistryManifestHash: registry.manifestHash,
+            });
+            if (relationships.status === 'ok') {
+                return;
+            }
+        }
+        await this.rebuildNavigationArtifacts(codebasePath);
+    }
+
+    private async clearCompletionMarkerAfterSyncFailure(codebasePath: string, collectionName: string, targetKnown: boolean): Promise<void> {
+        if (targetKnown) {
+            await this.clearIndexCompletionMarkerFromCollection(collectionName);
+            return;
+        }
+        await this.clearIndexCompletionMarker(codebasePath);
+    }
+
+    private async verifyCollectionPayloadMatchesCurrentSource(
+        collectionName: string,
+        codeFiles: string[],
+        expectedChunks: ExpectedIndexedChunk[]
+    ): Promise<CollectionPayloadVerification> {
+        if (codeFiles.length === 0) {
+            if (await this.collectionHasAnyIndexedPayload(collectionName)) {
+                return {
+                    ok: false,
+                    message: `collection '${collectionName}' contains remote chunks but the current index policy finds no indexable files.`,
+                };
+            }
+            return { ok: true, indexedFiles: 0, totalChunks: 0 };
+        }
+
+        const existingIds = new Set<string>();
+        const expectedIds = expectedChunks.map((chunk) => chunk.id);
+        const chunkIdBatchSize = 512;
+        for (let index = 0; index < expectedIds.length; index += chunkIdBatchSize) {
+            const batch = expectedIds.slice(index, index + chunkIdBatchSize);
+            const rows = await this.vectorDatabase.query(
+                collectionName,
+                buildMilvusIdInFilter(batch),
+                ['id'],
+                batch.length
+            );
+            for (const row of rows) {
+                const id = typeof row?.id === 'string' ? row.id : '';
+                if (id && id !== INDEX_COMPLETION_MARKER_DOC_ID) {
+                    existingIds.add(id);
+                }
+            }
+        }
+
+        let missingChunksCount = 0;
+        for (const chunk of expectedChunks) {
+            if (!existingIds.has(chunk.id)) {
+                missingChunksCount++;
+            }
+        }
+        if (missingChunksCount > 0) {
+            return {
+                ok: false,
+                message: `${missingChunksCount} expected chunk(s) are missing from collection '${collectionName}'.`,
+            };
+        }
+
+        const maxExactPayloadProbeRows = 16384;
+        const remotePayloadLimit = expectedChunks.length + 1;
+        if (remotePayloadLimit > maxExactPayloadProbeRows) {
+            return {
+                ok: false,
+                message: `cannot prove exact remote payload equality for ${expectedChunks.length} expected chunks with the current vector query limit.`,
+            };
+        }
+
+        const expectedIdsSet = new Set(expectedIds);
+        // Repair/sync marker restoration relies on vector backends returning up to limit rows
+        // for this un-ordered payload query; limit=N+1 lets us detect stale extra chunks.
+        const remotePayloadRows = await this.vectorDatabase.query(
+            collectionName,
+            'fileExtension != ".satori_meta"',
+            ['id'],
+            remotePayloadLimit
+        );
+        const extraRemoteIds = new Set<string>();
+        for (const row of remotePayloadRows) {
+            const id = typeof row?.id === 'string' ? row.id : '';
+            if (id && !expectedIdsSet.has(id)) {
+                extraRemoteIds.add(id);
+            }
+        }
+
+        if (remotePayloadRows.length !== expectedChunks.length || extraRemoteIds.size > 0) {
+            const extraCount = Math.max(0, remotePayloadRows.length - expectedChunks.length, extraRemoteIds.size);
+            return {
+                ok: false,
+                message: `collection '${collectionName}' contains ${extraCount || 'unexpected'} stale remote chunk(s) outside the current indexable source set.`,
+            };
+        }
+
+        return { ok: true, indexedFiles: codeFiles.length, totalChunks: expectedChunks.length };
     }
 
     /**

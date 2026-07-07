@@ -7568,10 +7568,12 @@ test('handleSearchCode syncs missing completion marker when snapshot is verified
             lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
             indexFingerprint: RUNTIME_FINGERPRINT,
             fingerprintSource: 'verified',
+            collectionName: 'hybrid_code_chunks_committed',
         };
         const snapshotManager = {
             getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
             getCodebaseInfo: () => codebaseInfo,
+            getCodebaseCollectionName: () => 'hybrid_code_chunks_committed',
             getCodebaseStatus: () => 'indexed',
             getIndexedCodebases: () => [repoPath],
             getIndexingCodebases: () => [],
@@ -7687,9 +7689,8 @@ test('handleSearchCode fails closed when readiness degrades to stale_local after
         assert.equal(payload.hints?.create?.tool, 'manage_index');
         assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
         assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
-        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'sync', path: repoPath });
-        assert.equal(payload.hints?.sync?.tool, 'manage_index');
-        assert.deepEqual(payload.hints?.sync?.args, { action: 'sync', path: repoPath });
+        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'repair', path: repoPath });
+        assert.equal(payload.hints?.sync, undefined);
     });
 });
 

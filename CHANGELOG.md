@@ -5,15 +5,16 @@ All notable changes to this repository are documented in this file.
 ## Unreleased
 
 ### Release Versions
-- Repository version: `0.5.7`
-- `@zokizuan/satori-core`: `1.6.5`
-- `@zokizuan/satori-mcp`: `4.11.9`
-- `@zokizuan/satori-cli`: `0.4.7`
+- Repository version: `0.5.8`
+- `@zokizuan/satori-core`: `1.6.6`
+- `@zokizuan/satori-mcp`: `4.11.10`
+- `@zokizuan/satori-cli`: `0.4.8`
 
 ### Fixed
 - Removed stale `humanText` duplication from `search_codebase` and `file_outline`/`call_graph` error envelopes; `humanText` remains a `manage_index`-only contract field.
 - Improved vector backend diagnostic messages with actionable next steps for Zilliz cluster stopped, missing provider config, and connection closed errors.
-- Corrected Zilliz free-tier collection limit constant from 5 to match actual tier behavior.
+- Corrected Zilliz free-tier collection limit constant to match actual tier behavior.
+- Fixed Zilliz collection limit detection and zombie collection handling in manage_index preflight.
 
 ## [2026-06-13] Release Dependency Hardening
 

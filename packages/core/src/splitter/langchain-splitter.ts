@@ -65,7 +65,7 @@ export class LangChainCodeSplitter implements Splitter {
             }
 
             const overlap = Math.min(this.chunkOverlap, Math.max(0, endOffset - startOffset - 1));
-            startOffset = Math.max(startOffset + 1, endOffset - overlap);
+            startOffset = this.adjustStartOffset(code, Math.max(startOffset + 1, endOffset - overlap));
         }
 
         return chunks;
@@ -87,7 +87,39 @@ export class LangChainCodeSplitter implements Splitter {
             }
         }
 
-        return maxEnd;
+        return this.adjustEndOffset(code, startOffset, maxEnd);
+    }
+
+    private adjustEndOffset(code: string, startOffset: number, endOffset: number): number {
+        if (
+            endOffset > startOffset
+            && endOffset < code.length
+            && this.isHighSurrogate(code.charCodeAt(endOffset - 1))
+            && this.isLowSurrogate(code.charCodeAt(endOffset))
+        ) {
+            return endOffset - 1;
+        }
+        return endOffset;
+    }
+
+    private adjustStartOffset(code: string, startOffset: number): number {
+        if (
+            startOffset > 0
+            && startOffset < code.length
+            && this.isLowSurrogate(code.charCodeAt(startOffset))
+            && this.isHighSurrogate(code.charCodeAt(startOffset - 1))
+        ) {
+            return startOffset + 1;
+        }
+        return startOffset;
+    }
+
+    private isHighSurrogate(code: number): boolean {
+        return code >= 0xd800 && code <= 0xdbff;
+    }
+
+    private isLowSurrogate(code: number): boolean {
+        return code >= 0xdc00 && code <= 0xdfff;
     }
 
     private collectNewlineOffsets(code: string): number[] {

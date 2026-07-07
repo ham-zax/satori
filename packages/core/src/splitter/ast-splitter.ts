@@ -287,7 +287,7 @@ export class AstCodeSplitter implements Splitter {
             // Add overlap from previous chunk
             if (i > 0 && this.chunkOverlap > 0 && this.shouldApplyOverlap(chunks[i - 1], chunks[i])) {
                 const prevChunk = chunks[i - 1];
-                const overlapText = prevChunk.content.slice(-this.chunkOverlap);
+                const overlapText = this.takeSafeSuffix(prevChunk.content, this.chunkOverlap);
                 content = overlapText + '\n' + content;
                 metadata.startLine = Math.max(1, metadata.startLine - this.getLineCount(overlapText));
             }
@@ -314,6 +314,27 @@ export class AstCodeSplitter implements Splitter {
             return previousChunk.metadata.symbolLabel === currentChunk.metadata.symbolLabel;
         }
         return false;
+    }
+
+    private takeSafeSuffix(text: string, codeUnits: number): string {
+        let start = Math.max(0, text.length - codeUnits);
+        if (
+            start > 0
+            && start < text.length
+            && this.isLowSurrogate(text.charCodeAt(start))
+            && this.isHighSurrogate(text.charCodeAt(start - 1))
+        ) {
+            start -= 1;
+        }
+        return text.slice(start);
+    }
+
+    private isHighSurrogate(code: number): boolean {
+        return code >= 0xd800 && code <= 0xdbff;
+    }
+
+    private isLowSurrogate(code: number): boolean {
+        return code >= 0xdc00 && code <= 0xdfff;
     }
 
     private getLineCount(text: string): number {

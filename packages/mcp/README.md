@@ -45,7 +45,7 @@ For Codex, add `--install-guidance-hook` only when you want an installer-managed
 Advanced direct execution is available through the package bin:
 
 ```bash
-npx -y @zokizuan/satori-mcp@4.11.8 --help
+npx -y @zokizuan/satori-mcp@4.11.13 --help
 ```
 
 Use direct package execution for inspection, smoke tests, or unsupported harnesses. For supported clients, prefer `satori-cli install` so startup does not depend on package-manager resolution.

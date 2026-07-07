@@ -1184,8 +1184,14 @@ test('markCodebaseCleared removes existing codebase entry and scopes tombstone t
         manager.markCodebaseCleared(codebase, 'hybrid_code_chunks_deadbeef');
 
         assert.equal(manager.getCodebaseInfo(codebase), undefined);
+        assert.equal(manager.getCodebaseCollectionName(codebase), undefined);
         assert.equal(manager.isCodebaseCleared(codebase, 'hybrid_code_chunks_deadbeef'), true);
         assert.equal(manager.isCodebaseCleared(codebase, 'hybrid_code_chunks_newvalid'), false);
+
+        manager.saveCodebaseSnapshot();
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseCollectionName(codebase), undefined);
     });
 });
 

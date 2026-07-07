@@ -1172,6 +1172,9 @@ export class ToolHandlers {
         if (info.fingerprintSource !== 'verified' || !info.indexFingerprint) {
             return false;
         }
+        if (!this.getSnapshotCollectionName(codebasePath)) {
+            return false;
+        }
         if (!this.fingerprintsEqual(info.indexFingerprint, this.runtimeFingerprint)) {
             return false;
         }

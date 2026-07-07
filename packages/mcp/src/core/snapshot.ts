@@ -927,7 +927,7 @@ export class SnapshotManager {
     public getCodebaseCollectionName(codebasePath: string): string | undefined {
         const collectionName = this.codebaseInfoMap.get(codebasePath)?.collectionName;
         return typeof collectionName === "string" && collectionName.trim().length > 0
-            ? collectionName
+            ? collectionName.trim()
             : undefined;
     }
 

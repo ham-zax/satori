@@ -816,6 +816,116 @@ test('Context.reindexByChange rebuilds navigation sidecars when tracked files ch
     }
 });
 
+test('Context.reindexByChange writes changed chunks to the active staged collection', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-staged-target-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const auth = true;\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+
+        const stableCollection = context.resolveCollectionName(codebasePath);
+        const stagedCollection = context.resolveStagedCollectionName(codebasePath, 'ready');
+        const stableDocs = vectorDatabase.collections.get(stableCollection);
+        assert.ok(stableDocs);
+        vectorDatabase.collections.set(stagedCollection, new Map(stableDocs));
+        await vectorDatabase.dropCollection(stableCollection);
+        assert.equal(await context.getActiveIndexedCollectionName(codebasePath), stagedCollection);
+
+        fs.writeFileSync(sourcePath, 'export const auth = false;\n', 'utf8');
+        const result = await context.reindexByChange(codebasePath);
+        const stagedDocs = Array.from(vectorDatabase.collections.get(stagedCollection)?.values() || [])
+            .filter((document) => document.fileExtension !== COMPLETION_MARKER_EXTENSION);
+
+        assert.equal(result.modified, 1);
+        assert.equal(await vectorDatabase.hasCollection(stableCollection), false);
+        assert.ok(stagedDocs.some((document) => document.content.includes('auth = false')));
+        assert.equal(stagedDocs.some((document) => document.content.includes('auth = true')), false);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange restores missing completion marker in trusted target collection', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-marker-restore-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'runtime.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function runtime() { return true; }\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+
+        const collectionName = context.resolveCollectionName(codebasePath);
+        await context.clearIndexCompletionMarker(codebasePath);
+        assert.equal(await context.getIndexCompletionMarker(codebasePath), null);
+
+        const result = await context.reindexByChange(codebasePath, undefined, {
+            targetCollectionName: collectionName,
+            maintainCompletionMarker: true,
+        });
+
+        const marker = await context.getIndexCompletionMarker(codebasePath);
+        assert.equal(result.added, 0);
+        assert.equal(result.removed, 0);
+        assert.equal(result.modified, 0);
+        assert.equal(result.collectionName, collectionName);
+        assert.ok(marker);
+        assert.equal(marker.indexedFiles, 1);
+        assert.equal(marker.totalChunks > 0, true);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange marker-maintaining sync refuses to create a fresh collection implicitly', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-marker-no-collection-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'runtime.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function runtime() { return true; }\n', 'utf8');
+
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+
+        await assert.rejects(
+            () => context.reindexByChange(codebasePath, undefined, { maintainCompletionMarker: true }),
+            /no existing collection could be resolved/
+        );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context.reindexByChange reuses unchanged file symbols while retargeting cross-file relationships', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-delta-symbols-'));
     const stateRoot = path.join(tempRoot, 'state');

@@ -54,6 +54,7 @@ interface SyncStats {
     modified: number;
     changedFiles: string[];
     navigationRecovery?: 'rebuilt' | 'failed';
+    collectionName?: string;
 }
 
 type WatchSyncReason = 'watch_event' | 'ignore_rules_changed';
@@ -414,7 +415,12 @@ export class SyncManager {
 
         try {
             // Incremental sync
-            const stats = await this.context.reindexByChange(codebasePath);
+            const collectionName = this.snapshotManager.getCodebaseCollectionName?.(codebasePath);
+            const syncOptions = {
+                ...(collectionName ? { targetCollectionName: collectionName } : {}),
+                maintainCompletionMarker: true,
+            };
+            const stats: SyncStats = await this.context.reindexByChange(codebasePath, undefined, syncOptions);
 
             if (typeof this.context.getTrackedRelativePaths === 'function') {
                 const trackedPaths = this.context.getTrackedRelativePaths(codebasePath);
@@ -437,7 +443,7 @@ export class SyncManager {
             }
 
             // Persist Snapshot
-            this.snapshotManager.setCodebaseSyncCompleted(codebasePath, stats);
+            this.snapshotManager.setCodebaseSyncCompleted(codebasePath, stats, undefined, 'verified', stats.collectionName || collectionName);
             this.snapshotManager.saveCodebaseSnapshot();
 
             if (this.onSyncCompleted) {

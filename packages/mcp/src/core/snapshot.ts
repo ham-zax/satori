@@ -463,6 +463,9 @@ export class SnapshotManager {
         if (rawInfo.indexFingerprint !== undefined && !this.isValidIndexFingerprint(rawInfo.indexFingerprint)) {
             return false;
         }
+        if (rawInfo.collectionName !== undefined && typeof rawInfo.collectionName !== "string") {
+            return false;
+        }
         if (rawInfo.fingerprintSource !== undefined && rawInfo.fingerprintSource !== "verified" && rawInfo.fingerprintSource !== "assumed_v2") {
             return false;
         }
@@ -921,6 +924,13 @@ export class SnapshotManager {
         return this.codebaseInfoMap.get(codebasePath);
     }
 
+    public getCodebaseCollectionName(codebasePath: string): string | undefined {
+        const collectionName = this.codebaseInfoMap.get(codebasePath)?.collectionName;
+        return typeof collectionName === "string" && collectionName.trim().length > 0
+            ? collectionName
+            : undefined;
+    }
+
     public getAllCodebases(): Array<{ path: string; info: CodebaseInfo }> {
         return Array.from(this.codebaseInfoMap.entries()).map(([p, info]) => ({ path: p, info }));
     }
@@ -974,6 +984,7 @@ export class SnapshotManager {
             indexFingerprint: existing?.indexFingerprint,
             fingerprintSource: existing?.fingerprintSource,
             reindexReason: existing?.reindexReason,
+            collectionName: existing?.collectionName,
             callGraphSidecar: existing?.callGraphSidecar,
             indexManifest: existing?.indexManifest,
             ignoreRulesVersion: existing?.ignoreRulesVersion,
@@ -988,16 +999,21 @@ export class SnapshotManager {
         codebasePath: string,
         stats: { indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' },
         indexFingerprint?: IndexFingerprint,
-        fingerprintSource: FingerprintSource = 'verified'
+        fingerprintSource: FingerprintSource = 'verified',
+        collectionName?: string
     ): void {
         this.markCodebasePresent(codebasePath);
         const existing = this.codebaseInfoMap.get(codebasePath);
+        const resolvedCollectionName = typeof collectionName === "string" && collectionName.trim().length > 0
+            ? collectionName.trim()
+            : existing?.collectionName;
         const info: CodebaseInfoIndexed = {
             status: 'indexed',
             indexedFiles: stats.indexedFiles,
             totalChunks: stats.totalChunks,
             indexStatus: stats.status,
             lastUpdated: new Date().toISOString(),
+            collectionName: resolvedCollectionName,
             indexFingerprint: indexFingerprint || this.runtimeFingerprint,
             fingerprintSource,
             callGraphSidecar: existing?.callGraphSidecar,
@@ -1018,6 +1034,7 @@ export class SnapshotManager {
             errorMessage,
             lastAttemptedPercentage,
             lastUpdated: new Date().toISOString(),
+            collectionName: existing?.collectionName,
             indexFingerprint: existing?.indexFingerprint,
             fingerprintSource: existing?.fingerprintSource,
             callGraphSidecar: existing?.callGraphSidecar,
@@ -1034,11 +1051,15 @@ export class SnapshotManager {
         codebasePath: string,
         stats: { added: number; removed: number; modified: number },
         indexFingerprint?: IndexFingerprint,
-        fingerprintSource: FingerprintSource = 'verified'
+        fingerprintSource: FingerprintSource = 'verified',
+        collectionName?: string
     ): void {
         this.markCodebasePresent(codebasePath);
         const totalChanges = stats.added + stats.removed + stats.modified;
         const existing = this.codebaseInfoMap.get(codebasePath);
+        const resolvedCollectionName = typeof collectionName === "string" && collectionName.trim().length > 0
+            ? collectionName.trim()
+            : existing?.collectionName;
         const info: CodebaseInfoSyncCompleted = {
             status: 'sync_completed',
             added: stats.added,
@@ -1046,6 +1067,7 @@ export class SnapshotManager {
             modified: stats.modified,
             totalChanges,
             lastUpdated: new Date().toISOString(),
+            collectionName: resolvedCollectionName,
             indexFingerprint: indexFingerprint || existing?.indexFingerprint || this.runtimeFingerprint,
             fingerprintSource,
             callGraphSidecar: existing?.callGraphSidecar,
@@ -1070,6 +1092,7 @@ export class SnapshotManager {
             message: message || 'Index is incompatible with the current runtime fingerprint and must be rebuilt.',
             reindexReason: reason,
             lastUpdated: new Date().toISOString(),
+            collectionName: existing?.collectionName,
             indexFingerprint: existing?.indexFingerprint,
             fingerprintSource: existing?.fingerprintSource,
             callGraphSidecar: existing?.callGraphSidecar,
@@ -1090,6 +1113,7 @@ export class SnapshotManager {
             modified: 0,
             totalChanges: 0,
             lastUpdated: new Date().toISOString(),
+            collectionName: info.collectionName,
             indexFingerprint: info.indexFingerprint,
             fingerprintSource: info.fingerprintSource,
             callGraphSidecar: info.callGraphSidecar,

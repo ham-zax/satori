@@ -234,7 +234,10 @@ class ContextMcpServer {
                 : null;
             const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
             if (decision.action === "promote_indexed") {
-                toolContext.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified");
+                const collectionName = typeof toolContext.context.getActiveIndexedCollectionName === "function"
+                    ? await toolContext.context.getActiveIndexedCollectionName(codebasePath) ?? undefined
+                    : undefined;
+                toolContext.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
                 promotedCount++;
                 const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
                     ? "indexed (fingerprint recovered from marker; current runtime differs)"

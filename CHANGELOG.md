@@ -5,10 +5,10 @@ All notable changes to this repository are documented in this file.
 ## Unreleased
 
 ### Release Versions
-- Repository version: `0.5.9`
-- `@zokizuan/satori-core`: `1.6.7`
-- `@zokizuan/satori-mcp`: `4.11.11`
-- `@zokizuan/satori-cli`: `0.4.9`
+- Repository version: `0.5.10`
+- `@zokizuan/satori-core`: `1.6.8`
+- `@zokizuan/satori-mcp`: `4.11.12`
+- `@zokizuan/satori-cli`: `0.4.10`
 
 ### Added
 - `manage_index` `repair` action: rebuilds local readiness (completion marker + navigation sidecars) without re-embedding vectors when the existing vector payload and trusted runtime fingerprint match.

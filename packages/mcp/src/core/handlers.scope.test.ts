@@ -7536,6 +7536,87 @@ test('handleSearchCode allows successful coalesced freshness reuse', async () =>
     assert.equal(payload.results.length, 1);
 });
 
+test('handleSearchCode syncs missing completion marker when snapshot is verified', async () => {
+    let semanticSearchCalls = 0;
+    let ensureFreshnessCalls = 0;
+    let completionProofCalls = 0;
+
+    await withTempRepo(async (repoPath) => {
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                semanticSearchCalls += 1;
+                return [{
+                    content: 'export function syncedRuntime() { return true; }',
+                    relativePath: 'src/runtime.ts',
+                    startLine: 1,
+                    endLine: 1,
+                    language: 'typescript',
+                    score: 0.99,
+                    indexedAt: '2026-01-01T00:30:00.000Z',
+                    symbolId: 'synced_runtime',
+                    symbolLabel: 'function syncedRuntime()'
+                }];
+            }
+        } as unknown as HandlerContext;
+
+        const codebaseInfo = {
+            status: 'indexed',
+            indexedFiles: 1,
+            totalChunks: 1,
+            indexStatus: 'completed',
+            lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified',
+        };
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
+            getCodebaseInfo: () => codebaseInfo,
+            getCodebaseStatus: () => 'indexed',
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
+        } as unknown as HandlerSnapshotManager;
+
+        const syncManager = {
+            ensureFreshness: async () => {
+                ensureFreshnessCalls += 1;
+                return {
+                    mode: 'synced',
+                    checkedAt: '2026-01-01T00:00:00.000Z',
+                    thresholdMs: 180000,
+                    changed: true,
+                    lastSyncAt: '2026-01-01T00:00:00.000Z'
+                };
+            }
+        } as unknown as HandlerSyncManager;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => {
+            completionProofCalls += 1;
+            return completionProofCalls === 1
+                ? { outcome: 'stale_local', reason: 'missing_marker_doc' }
+                : { outcome: 'valid' };
+        };
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(ensureFreshnessCalls, 1);
+        assert.equal(completionProofCalls, 2);
+        assert.equal(semanticSearchCalls > 0, true);
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.freshnessDecision?.mode, 'synced');
+    });
+});
+
 test('handleSearchCode fails closed when readiness degrades to stale_local after freshness', async () => {
     let semanticSearchCalls = 0;
     let ensureFreshnessCalls = 0;
@@ -7606,7 +7687,9 @@ test('handleSearchCode fails closed when readiness degrades to stale_local after
         assert.equal(payload.hints?.create?.tool, 'manage_index');
         assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
         assert.equal(payload.recommendedNextAction?.tool, 'manage_index');
-        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'repair', path: repoPath });
+        assert.deepEqual(payload.recommendedNextAction?.args, { action: 'sync', path: repoPath });
+        assert.equal(payload.hints?.sync?.tool, 'manage_index');
+        assert.deepEqual(payload.hints?.sync?.args, { action: 'sync', path: repoPath });
     });
 });
 

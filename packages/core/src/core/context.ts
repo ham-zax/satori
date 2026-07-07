@@ -86,6 +86,11 @@ type RepairIndexOptions = {
     trustedFingerprint?: IndexCompletionFingerprint;
 };
 
+type ReindexByChangeOptions = {
+    targetCollectionName?: string;
+    maintainCompletionMarker?: boolean;
+};
+
 export class Context {
     private embedding: Embedding;
     private vectorDatabase: VectorDatabase;
@@ -724,13 +729,15 @@ export class Context {
 
     async reindexByChange(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
+        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        options: ReindexByChangeOptions = {}
     ): Promise<{
         added: number;
         removed: number;
         modified: number;
         changedFiles: string[];
         navigationRecovery?: 'rebuilt' | 'failed';
+        collectionName?: string;
     }> {
         this.loadIndexProfileForCodebase(codebasePath);
         const synchronizerKey = this.resolveCollectionName(codebasePath);
@@ -751,8 +758,17 @@ export class Context {
         }
 
         const currentSynchronizer = this.synchronizers.get(synchronizerKey)!;
-        const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
-        let collectionName = activeCollectionName;
+        let collectionName = typeof options.targetCollectionName === 'string' && options.targetCollectionName.trim().length > 0
+            ? options.targetCollectionName.trim()
+            : null;
+        if (collectionName) {
+            if (!(await this.vectorDatabase.hasCollection(collectionName))) {
+                throw new Error(`Cannot incremental sync '${codebasePath}': target collection '${collectionName}' does not exist.`);
+            }
+        } else {
+            const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
+            collectionName = activeCollectionName;
+        }
         if (!collectionName) {
             const fallbackCollectionName = this.resolveCollectionName(codebasePath);
             if (await this.vectorDatabase.hasCollection(fallbackCollectionName)) {
@@ -762,6 +778,9 @@ export class Context {
         const collectionExists = collectionName !== null;
 
         if (!collectionExists) {
+            if (options.maintainCompletionMarker === true) {
+                throw new Error(`Cannot incremental sync '${codebasePath}': no existing collection could be resolved for completion marker maintenance.`);
+            }
             console.warn(`[Context] ⚠️  No proven collection exists for '${codebasePath}'. Rebuilding full index before incremental sync resumes.`);
             const changedFiles = this.normalizeRelativePathsForCodebase(codebasePath, await this.getCodeFiles(codebasePath));
             if (changedFiles.length === 0) {
@@ -774,7 +793,8 @@ export class Context {
                 added: changedFiles.length,
                 removed: 0,
                 modified: 0,
-                changedFiles
+                changedFiles,
+                collectionName: this.getWriteCollectionName(codebasePath),
             };
         }
         if (!collectionName) {
@@ -787,9 +807,12 @@ export class Context {
         const totalChanges = added.length + removed.length + modified.length;
 
         if (totalChanges === 0) {
+            if (options.maintainCompletionMarker === true) {
+                await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName);
+            }
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
             console.log('[Context] ✅ No file changes detected.');
-            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+            return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: targetCollectionName };
         }
 
         console.log(`[Context] 🔄 Found changes: ${added.length} added, ${removed.length} removed, ${modified.length} modified.`);
@@ -807,6 +830,7 @@ export class Context {
         };
 
         let navigationRecovery: 'rebuilt' | 'failed' | undefined;
+        let deltaIndexCompleted = true;
 
         try {
             // Handle removed files
@@ -844,9 +868,11 @@ export class Context {
                     codebasePath,
                     (filePath, fileIndex, totalFiles) => {
                         updateProgress(`Indexed ${filePath} (${fileIndex}/${totalFiles})`);
-                    }
+                    },
+                    targetCollectionName
                 );
             }
+            deltaIndexCompleted = indexedDelta.status === 'completed';
 
             const canPublishNavigationDelta = canRebuildNavigationArtifacts && indexedDelta.status === 'completed';
             if (canPublishNavigationDelta) {
@@ -897,6 +923,10 @@ export class Context {
             throw error;
         }
 
+        if (options.maintainCompletionMarker === true && deltaIndexCompleted && navigationRecovery !== 'failed') {
+            await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName);
+        }
+
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
         progressCallback?.({ phase: 'Re-indexing complete!', current: totalChanges, total: totalChanges, percentage: 100 });
 
@@ -905,6 +935,7 @@ export class Context {
             removed: removed.length,
             modified: modified.length,
             changedFiles: Array.from(new Set([...added, ...removed, ...modified])),
+            collectionName: targetCollectionName,
             ...(navigationRecovery ? { navigationRecovery } : {}),
         };
     }
@@ -1553,7 +1584,8 @@ export class Context {
     private async processFileList(
         filePaths: string[],
         codebasePath: string,
-        onFileProcessed?: (filePath: string, fileIndex: number, totalFiles: number) => void
+        onFileProcessed?: (filePath: string, fileIndex: number, totalFiles: number) => void,
+        collectionName: string = this.getWriteCollectionName(codebasePath)
     ): Promise<{
         processedFiles: number;
         totalChunks: number;
@@ -1625,7 +1657,7 @@ export class Context {
                     // Process batch when buffer reaches EMBEDDING_BATCH_SIZE
                     if (chunkBuffer.length >= EMBEDDING_BATCH_SIZE) {
                         try {
-                            await this.processChunkBuffer(chunkBuffer);
+                            await this.processChunkBuffer(chunkBuffer, collectionName);
                         } catch (error) {
                             const searchType = isHybrid === true ? 'hybrid' : 'regular';
                             console.error(`[Context] ❌ Failed to process chunk batch for ${searchType}:`, error);
@@ -1664,7 +1696,7 @@ export class Context {
             const searchType = isHybrid === true ? 'hybrid' : 'regular';
             console.log(`📝 Processing final batch of ${chunkBuffer.length} chunks for ${searchType}`);
             try {
-                await this.processChunkBuffer(chunkBuffer);
+                await this.processChunkBuffer(chunkBuffer, collectionName);
             } catch (error) {
                 console.error(`[Context] ❌ Failed to process final chunk batch for ${searchType}:`, error);
                 if (error instanceof Error) {
@@ -1770,6 +1802,13 @@ export class Context {
         };
     }
 
+    private async refreshCompletionMarkerFromCurrentSource(codebasePath: string, collectionName: string): Promise<void> {
+        await this.loadIgnorePatterns(codebasePath);
+        const codeFiles = await this.getCodeFiles(codebasePath);
+        const { expectedChunks } = await this.getExpectedChunksAndSymbols(codeFiles, codebasePath);
+        await this.writeCompletedIndexMarker(codebasePath, codeFiles.length, expectedChunks.length, collectionName);
+    }
+
     /**
      * Repair index for codebase path by rebuilding metadata without vector writes.
      */
@@ -1785,6 +1824,7 @@ export class Context {
         indexedFiles?: number;
         totalChunks?: number;
         trackedRelativePaths?: string[];
+        collectionName?: string;
     }> {
         const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
 
@@ -1865,6 +1905,7 @@ export class Context {
                 totalChunks: 0,
                 warnings: [],
                 trackedRelativePaths,
+                collectionName: selectedCollection,
             };
         }
 
@@ -1981,6 +2022,7 @@ export class Context {
             totalChunks: expectedChunks.length,
             warnings: [],
             trackedRelativePaths,
+            collectionName: selectedCollection,
         };
     }
 
@@ -2190,7 +2232,10 @@ export class Context {
     /**
  * Process accumulated chunk buffer
  */
-    private async processChunkBuffer(chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string }>): Promise<void> {
+    private async processChunkBuffer(
+        chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string }>,
+        collectionName: string
+    ): Promise<void> {
         if (chunkBuffer.length === 0) return;
 
         // Extract chunks and ensure they all have the same codebasePath
@@ -2203,13 +2248,13 @@ export class Context {
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid' : 'regular';
         console.log(`[Context] 🔄 Processing batch of ${chunks.length} chunks (~${estimatedTokens} tokens) for ${searchType}`);
-        await this.processChunkBatch(chunks, codebasePath);
+        await this.processChunkBatch(chunks, codebasePath, collectionName);
     }
 
     /**
      * Process a batch of chunks
      */
-    private async processChunkBatch(chunks: CodeChunk[], codebasePath: string): Promise<void> {
+    private async processChunkBatch(chunks: CodeChunk[], codebasePath: string, collectionName: string): Promise<void> {
         const isHybrid = this.getIsHybrid();
         const indexedAt = new Date().toISOString();
 
@@ -2250,7 +2295,7 @@ export class Context {
             });
 
             // Store to vector database
-            await this.vectorDatabase.insertHybrid(this.getWriteCollectionName(codebasePath), documents);
+            await this.vectorDatabase.insertHybrid(collectionName, documents);
         } else {
             // Create regular vector documents
             const documents: VectorDocument[] = chunks.map((chunk, index) => {
@@ -2284,7 +2329,7 @@ export class Context {
             });
 
             // Store to vector database
-            await this.vectorDatabase.insert(this.getWriteCollectionName(codebasePath), documents);
+            await this.vectorDatabase.insert(collectionName, documents);
         }
     }
 

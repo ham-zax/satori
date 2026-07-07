@@ -3,6 +3,7 @@ import * as crypto from "node:crypto";
 import {
     COLLECTION_LIMIT_MESSAGE,
     Context,
+    deleteCollectionWithVerification,
     IndexCompletionMarkerDocument,
     RemoteCollectionDeletePendingError,
 } from "@zokizuan/satori-core";
@@ -209,6 +210,22 @@ function isBackendTimeoutError(error: unknown): boolean {
 
 export class ManageIndexingHandlers {
     constructor(private readonly host: ManageIndexingHandlersHost) {}
+
+    private isStagedCollectionName(collectionName: string | undefined): collectionName is string {
+        return typeof collectionName === "string" && collectionName.includes("__gen_");
+    }
+
+    private async cleanupFailedStagedCollection(codebasePath: string, collectionName: string | undefined): Promise<void> {
+        if (!this.isStagedCollectionName(collectionName)) {
+            return;
+        }
+        try {
+            await deleteCollectionWithVerification(this.host.context.getVectorStore(), collectionName);
+            console.log(`[BACKGROUND-INDEX] Cleaned failed staged collection '${collectionName}' for '${codebasePath}'.`);
+        } catch (cleanupError) {
+            console.warn(`[BACKGROUND-INDEX] Failed to clean staged collection '${collectionName}' after indexing failure for '${codebasePath}': ${formatUnknownError(cleanupError)}`);
+        }
+    }
 
     public async handleIndexCodebase(args: IndexCodebaseArgs): Promise<ToolTextResponse> {
         const { path: codebasePath, force, customExtensions, ignorePatterns, zillizDropCollection } = args;
@@ -573,11 +590,12 @@ export class ManageIndexingHandlers {
     private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean, writeCollectionName?: string): Promise<void> {
         const absolutePath = codebasePath;
         let lastSaveTime = 0;
+        let targetCollectionName: string | undefined;
 
         try {
             console.log(`[BACKGROUND-INDEX] Starting background indexing for: ${absolutePath}`);
 
-            const targetCollectionName = typeof writeCollectionName === "string" && writeCollectionName.trim().length > 0
+            targetCollectionName = typeof writeCollectionName === "string" && writeCollectionName.trim().length > 0
                 ? writeCollectionName
                 : this.host.resolveCollectionName(absolutePath);
             this.host.setWriteCollectionOverride(absolutePath, targetCollectionName);
@@ -668,6 +686,7 @@ export class ManageIndexingHandlers {
             } catch (clearError) {
                 console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
             }
+            await this.cleanupFailedStagedCollection(absolutePath, targetCollectionName);
 
             this.host.snapshotManager.setCodebaseIndexFailed(
                 absolutePath,

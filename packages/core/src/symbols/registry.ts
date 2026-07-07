@@ -225,6 +225,42 @@ function buildLineSpan(startLine: number, endLine: number): SymbolSpan {
     };
 }
 
+function buildChunkSymbolSpan(chunk: CodeChunk): SymbolSpan {
+    return {
+        ...buildLineSpan(chunk.metadata.startLine, chunk.metadata.endLine),
+        ...(chunk.metadata.startByte !== undefined ? { startByte: chunk.metadata.startByte } : {}),
+        ...(chunk.metadata.endByte !== undefined ? { endByte: chunk.metadata.endByte } : {}),
+        ...(chunk.metadata.startColumn !== undefined ? { startColumn: chunk.metadata.startColumn } : {}),
+        ...(chunk.metadata.endColumn !== undefined ? { endColumn: chunk.metadata.endColumn } : {}),
+    };
+}
+
+function mergeSymbolSpans(first: SymbolSpan, second: SymbolSpan): SymbolSpan {
+    const startsFirst = first.startLine < second.startLine
+        || (first.startLine === second.startLine && (first.startColumn ?? 0) <= (second.startColumn ?? 0));
+    const endsFirst = first.endLine > second.endLine
+        || (first.endLine === second.endLine && (first.endColumn ?? 0) >= (second.endColumn ?? 0));
+    const startSpan = startsFirst ? first : second;
+    const endSpan = endsFirst ? first : second;
+    const merged: SymbolSpan = buildLineSpan(
+        startSpan.startLine,
+        endSpan.endLine,
+    );
+    if (first.startByte !== undefined || second.startByte !== undefined) {
+        merged.startByte = Math.min(first.startByte ?? second.startByte!, second.startByte ?? first.startByte!);
+    }
+    if (first.endByte !== undefined || second.endByte !== undefined) {
+        merged.endByte = Math.max(first.endByte ?? second.endByte!, second.endByte ?? first.endByte!);
+    }
+    if (startSpan.startColumn !== undefined) {
+        merged.startColumn = startSpan.startColumn;
+    }
+    if (endSpan.endColumn !== undefined) {
+        merged.endColumn = endSpan.endColumn;
+    }
+    return merged;
+}
+
 function buildExtractedSymbolSpan(symbol: ExtractedSymbol): SymbolSpan {
     return {
         startLine: symbol.span.startLine,
@@ -368,7 +404,7 @@ export function buildSymbolRecordsForFile(input: BuildSymbolRecordsForFileInput)
             normalizedParentQualifiedNamePath = normalizedParentQualifiedNamePath.slice(0, -1);
         }
         const qualifiedName = buildQualifiedName(parsed.name, normalizedParentQualifiedNamePath);
-        const span = buildLineSpan(chunk.metadata.startLine, chunk.metadata.endLine);
+        const span = buildChunkSymbolSpan(chunk);
         const symbolKey = createSymbolKey({
             relativePath,
             language: input.language,
@@ -386,10 +422,7 @@ export function buildSymbolRecordsForFile(input: BuildSymbolRecordsForFileInput)
         const existing = chunkRecordsByLogicalIdentity.get(logicalIdentity);
 
         if (existing) {
-            const mergedSpan = buildLineSpan(
-                Math.min(existing.span.startLine, span.startLine),
-                Math.max(existing.span.endLine, span.endLine),
-            );
+            const mergedSpan = mergeSymbolSpans(existing.span, span);
             chunkRecordsByLogicalIdentity.set(logicalIdentity, {
                 ...existing,
                 symbolInstanceId: createSymbolInstanceId({

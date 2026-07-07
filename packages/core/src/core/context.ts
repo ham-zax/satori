@@ -23,6 +23,7 @@ import {
     INDEX_COMPLETION_MARKER_RELATIVE_PATH,
     deleteCollectionWithVerification
 } from '../vectordb';
+import { buildMilvusIdInFilter } from '../vectordb/filters';
 import { SemanticSearchRequest, SemanticSearchResult } from '../types';
 import { envManager } from '../utils/env-manager';
 import {
@@ -80,6 +81,10 @@ interface CodebaseIgnoreState {
     effectivePatterns: string[];
     matcher: ReturnType<typeof ignore> | null;
 }
+
+type RepairIndexOptions = {
+    trustedFingerprint?: IndexCompletionFingerprint;
+};
 
 export class Context {
     private embedding: Embedding;
@@ -456,6 +461,11 @@ export class Context {
         });
     }
 
+    private async collectionHasAnyIndexedPayload(collectionName: string): Promise<boolean> {
+        const rows = await this.vectorDatabase.query(collectionName, 'fileExtension != ".satori_meta"', ['id'], 1);
+        return rows.some((row) => typeof row?.id === 'string' && row.id !== INDEX_COMPLETION_MARKER_DOC_ID);
+    }
+
     private getEmbeddingModelForFingerprint(): string {
         const embeddingWithConfig = this.embedding as unknown as {
             config?: {
@@ -478,10 +488,23 @@ export class Context {
         };
     }
 
+    private indexCompletionFingerprintsMatch(left: unknown, right: IndexCompletionFingerprint): boolean {
+        if (!left || typeof left !== 'object') {
+            return false;
+        }
+        const record = left as Record<string, unknown>;
+        return record.embeddingProvider === right.embeddingProvider
+            && record.embeddingModel === right.embeddingModel
+            && Number(record.embeddingDimension) === Number(right.embeddingDimension)
+            && record.vectorStoreProvider === right.vectorStoreProvider
+            && record.schemaVersion === right.schemaVersion;
+    }
+
     private async writeCompletedIndexMarker(
         codebasePath: string,
         indexedFiles: number,
-        totalChunks: number
+        totalChunks: number,
+        collectionName?: string
     ): Promise<void> {
         await this.writeIndexCompletionMarker(codebasePath, {
             kind: 'satori_index_completion_v1',
@@ -491,7 +514,7 @@ export class Context {
             totalChunks,
             completedAt: new Date().toISOString(),
             runId: crypto.randomUUID(),
-        });
+        }, collectionName);
     }
 
     private async resolveActiveIndexedCollection(
@@ -590,6 +613,28 @@ export class Context {
         return droppedCollections.sort((left, right) => left.localeCompare(right));
     }
 
+    public async pruneUnprovenStagedCollectionFamily(codebasePath: string): Promise<string[]> {
+        const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
+        const droppedCollections: string[] = [];
+
+        for (const collectionName of familyCollectionNames) {
+            if (!collectionName.includes('__gen_')) {
+                continue;
+            }
+            const marker = await this.resolveCompletionMarkerForCollection(codebasePath, collectionName);
+            if (marker && await this.collectionHasIndexedPayload(collectionName, marker)) {
+                continue;
+            }
+            if (!marker && await this.collectionHasAnyIndexedPayload(collectionName)) {
+                continue;
+            }
+            await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
+            droppedCollections.push(collectionName);
+        }
+
+        return droppedCollections.sort((left, right) => left.localeCompare(right));
+    }
+
     /**
      * Index a codebase for semantic search
      * @param codebasePath Codebase root path
@@ -615,6 +660,7 @@ export class Context {
         progressCallback?.({ phase: 'Preparing collection...', current: 0, total: 100, percentage: 0 });
         console.log(`Debug2: Preparing vector collection for codebase${forceReindex ? ' (FORCE REINDEX)' : ''}`);
         await this.prepareCollection(codebasePath, forceReindex);
+        await this.clearIndexCompletionMarker(codebasePath);
 
         // 3. Recursively traverse codebase to get all supported files
         progressCallback?.({ phase: 'Scanning files...', current: 5, total: 100, percentage: 5 });
@@ -830,6 +876,7 @@ export class Context {
                     console.log('[Context] 🧭 Rebuilt navigation sidecars after incremental sync found no compatible pre-sync registry.');
                 } catch (error) {
                     await this.clearSymbolRegistryForCodebase(codebasePath);
+                    await this.clearIndexCompletionMarker(codebasePath);
                     navigationRecovery = 'failed';
                     console.warn(
                         `[Context] ⚠️  Failed to recover navigation sidecars after incremental sync; reindex is required: ${error instanceof Error ? error.message : String(error)}`
@@ -837,6 +884,7 @@ export class Context {
                 }
             } else {
                 await this.clearSymbolRegistryForCodebase(codebasePath);
+                await this.clearIndexCompletionMarker(codebasePath);
                 if (!canRebuildNavigationArtifacts) {
                     console.log('[Context] ⏭️ Skipping navigation rebuild because no compatible symbol registry existed before incremental sync.');
                 } else {
@@ -845,6 +893,7 @@ export class Context {
             }
         } catch (error) {
             await this.clearSymbolRegistryForCodebase(codebasePath);
+            await this.clearIndexCompletionMarker(codebasePath);
             throw error;
         }
 
@@ -1116,25 +1165,7 @@ export class Context {
         );
     }
 
-    async clearIndexCompletionMarker(codebasePath: string): Promise<void> {
-        const collectionName = this.getWriteCollectionName(codebasePath);
-        const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
-        if (!hasCollection) {
-            const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
-            if (!activeCollectionName) {
-                return;
-            }
-            const activeRows = await this.queryCompletionMarkerRows(activeCollectionName);
-            const activeMarkerIds = activeRows
-                .map((row) => (typeof row.id === 'string' ? row.id : ''))
-                .filter((id) => id.length > 0);
-            if (activeMarkerIds.length === 0) {
-                return;
-            }
-            await this.vectorDatabase.delete(activeCollectionName, Array.from(new Set(activeMarkerIds)));
-            return;
-        }
-
+    private async clearIndexCompletionMarkerFromCollection(collectionName: string): Promise<void> {
         const rows = await this.queryCompletionMarkerRows(collectionName);
         const markerIds = rows
             .map((row) => (typeof row.id === 'string' ? row.id : ''))
@@ -1145,14 +1176,33 @@ export class Context {
         await this.vectorDatabase.delete(collectionName, Array.from(new Set(markerIds)));
     }
 
-    async writeIndexCompletionMarker(codebasePath: string, marker: IndexCompletionMarkerDocument): Promise<void> {
+    async clearIndexCompletionMarker(codebasePath: string): Promise<void> {
         const collectionName = this.getWriteCollectionName(codebasePath);
+        const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
+        if (!hasCollection) {
+            const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
+            if (!activeCollectionName) {
+                return;
+            }
+            await this.clearIndexCompletionMarkerFromCollection(activeCollectionName);
+            return;
+        }
+
+        await this.clearIndexCompletionMarkerFromCollection(collectionName);
+    }
+
+    async writeIndexCompletionMarker(
+        codebasePath: string,
+        marker: IndexCompletionMarkerDocument,
+        collectionNameOverride?: string
+    ): Promise<void> {
+        const collectionName = collectionNameOverride || this.getWriteCollectionName(codebasePath);
         const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
         if (!hasCollection) {
             throw new Error(`Cannot write completion marker: collection '${collectionName}' does not exist.`);
         }
 
-        await this.clearIndexCompletionMarker(codebasePath);
+        await this.clearIndexCompletionMarkerFromCollection(collectionName);
 
         const vector = new Array<number>(this.embedding.getDimension()).fill(0);
         const markerDoc: VectorDocument = {
@@ -1630,6 +1680,307 @@ export class Context {
             status: limitReached ? 'limit_reached' : 'completed',
             symbolRecords,
             symbolManifestFiles
+        };
+    }
+
+    /**
+     * Rebuild expected chunks and symbol registry records from source files without embedding.
+     */
+    public async getExpectedChunksAndSymbols(
+        filePaths: string[],
+        codebasePath: string
+    ): Promise<{
+        expectedChunks: Array<{
+            id: string;
+            relativePath: string;
+            startLine: number;
+            endLine: number;
+            content: string;
+            language: string;
+            chunkIndex: number;
+        }>;
+        symbolRecords: SymbolRecord[];
+        symbolManifestFiles: SymbolRegistryManifestFile[];
+    }> {
+        const expectedChunks: Array<{
+            id: string;
+            relativePath: string;
+            startLine: number;
+            endLine: number;
+            content: string;
+            language: string;
+            chunkIndex: number;
+        }> = [];
+        const symbolRecords: SymbolRecord[] = [];
+        const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
+
+        for (const filePath of filePaths) {
+            const content = await fs.promises.readFile(filePath, 'utf-8');
+            const language = this.getLanguageFromFilePath(filePath);
+            const chunks = await this.codeSplitter.split(content, language, filePath);
+            const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
+            if (!relativePath) {
+                throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
+            }
+            const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+            const extractedSymbols = this.extractSymbolsForFile(language, content, relativePath);
+            const fileSymbols = buildSymbolRecordsForFile({
+                relativePath,
+                language,
+                content,
+                fileHash,
+                extractorVersion: this.getSymbolExtractorVersion(),
+                ...(extractedSymbols !== undefined ? { extractedSymbols } : {}),
+                chunks,
+            });
+            for (let index = 0; index < chunks.length; index++) {
+                const chunk = chunks[index];
+                const owner = resolveOwnerSymbolForChunk({ chunk, symbols: fileSymbols });
+                chunk.metadata.ownerSymbolKey = owner.symbolKey;
+                chunk.metadata.ownerSymbolInstanceId = owner.symbolInstanceId;
+                chunk.metadata.symbolKind = owner.kind;
+
+                const startLine = chunk.metadata.startLine || 0;
+                const endLine = chunk.metadata.endLine || 0;
+                const id = this.generateId(relativePath, startLine, endLine, chunk.content);
+
+                expectedChunks.push({
+                    id,
+                    relativePath,
+                    startLine,
+                    endLine,
+                    content: chunk.content,
+                    language: chunk.metadata.language || 'unknown',
+                    chunkIndex: index,
+                });
+            }
+            symbolRecords.push(...fileSymbols);
+            symbolManifestFiles.push({
+                path: relativePath,
+                hash: fileHash,
+                language,
+                symbolCount: fileSymbols.length,
+            });
+        }
+
+        return {
+            expectedChunks,
+            symbolRecords,
+            symbolManifestFiles,
+        };
+    }
+
+    /**
+     * Repair index for codebase path by rebuilding metadata without vector writes.
+     */
+    public async repairIndex(
+        codebasePath: string,
+        options: RepairIndexOptions = {}
+    ): Promise<{
+        status: 'ok' | 'blocked' | 'requires_reindex';
+        reason?: 'needs_create' | 'requires_reindex';
+        message: string;
+        missingCount?: number;
+        warnings?: string[];
+        indexedFiles?: number;
+        totalChunks?: number;
+        trackedRelativePaths?: string[];
+    }> {
+        const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
+
+        // 1. Resolve collection
+        const familyCollectionNames = await this.listRelatedCollectionNames(canonicalPath);
+        const activeCollectionName = this.getWriteCollectionName(canonicalPath);
+        let selectedCollection: string | null = null;
+        if (familyCollectionNames.includes(activeCollectionName)) {
+            selectedCollection = activeCollectionName;
+        } else {
+            const { alternateFamilyName } = this.buildCollectionFamilies(canonicalPath);
+            if (familyCollectionNames.includes(alternateFamilyName)) {
+                selectedCollection = alternateFamilyName;
+            } else {
+                const stagedCollections = familyCollectionNames.filter((collectionName) => collectionName.includes('__gen_'));
+                if (stagedCollections.length === 1) {
+                    selectedCollection = stagedCollections[0];
+                } else if (stagedCollections.length > 1) {
+                    return {
+                        status: 'blocked',
+                        reason: 'needs_create',
+                        message: `Repair found multiple staged collections for '${canonicalPath}' and cannot choose one deterministically.`,
+                        missingCount: 0,
+                    };
+                }
+            }
+        }
+
+        if (!selectedCollection) {
+            return {
+                status: 'blocked',
+                reason: 'needs_create',
+                message: 'No existing collection found for this codebase family.',
+                missingCount: 0
+            };
+        }
+
+        // 2. Check completion marker if present in the selected collection
+        const currentFingerprint = this.buildIndexCompletionFingerprint();
+        const marker = await this.resolveCompletionMarkerForCollection(canonicalPath, selectedCollection);
+        if (marker) {
+            if (!this.indexCompletionFingerprintsMatch(marker.fingerprint, currentFingerprint)) {
+                return {
+                    status: 'requires_reindex',
+                    reason: 'requires_reindex',
+                    message: 'The existing index is incompatible with the current runtime fingerprint.',
+                };
+            }
+        } else if (!this.indexCompletionFingerprintsMatch(options.trustedFingerprint, currentFingerprint)) {
+            return {
+                status: 'requires_reindex',
+                reason: 'requires_reindex',
+                message: `Repair cannot prove vector provenance for collection '${selectedCollection}' because the completion marker is missing and no trusted matching fingerprint was supplied.`,
+            };
+        }
+
+        // 3. Load ignore/index policy and indexable files
+        await this.loadIgnorePatterns(canonicalPath);
+        const codeFiles = await this.getCodeFiles(canonicalPath);
+        const trackedRelativePaths = this.normalizeRelativePathsForCodebase(canonicalPath, codeFiles);
+
+        if (codeFiles.length === 0) {
+            if (await this.collectionHasAnyIndexedPayload(selectedCollection)) {
+                return {
+                    status: 'blocked',
+                    reason: 'needs_create',
+                    message: `Coverage verification failed: collection '${selectedCollection}' contains remote chunks but the current index policy finds no indexable files.`,
+                    missingCount: 0,
+                    trackedRelativePaths,
+                };
+            }
+            await this.clearSymbolRegistryForCodebase(canonicalPath);
+            await this.writeCompletedIndexMarker(canonicalPath, 0, 0, selectedCollection);
+            return {
+                status: 'ok',
+                message: 'No files to index. Local readiness repaired (navigation sidecars rebuilt, fresh completion marker written) without vector writes.',
+                indexedFiles: 0,
+                totalChunks: 0,
+                warnings: [],
+                trackedRelativePaths,
+            };
+        }
+
+        // 4. Split source files and compute expected chunk IDs
+        const { expectedChunks, symbolRecords, symbolManifestFiles } = await this.getExpectedChunksAndSymbols(codeFiles, canonicalPath);
+
+        // 5. Query vector backend for expected chunk IDs.
+        const existingIds = new Set<string>();
+        const expectedIds = expectedChunks.map((chunk) => chunk.id);
+        const chunkIdBatchSize = 512;
+        for (let index = 0; index < expectedIds.length; index += chunkIdBatchSize) {
+            const batch = expectedIds.slice(index, index + chunkIdBatchSize);
+            const rows = await this.vectorDatabase.query(
+                selectedCollection,
+                buildMilvusIdInFilter(batch),
+                ['id'],
+                batch.length
+            );
+            for (const row of rows) {
+                const id = typeof row?.id === 'string' ? row.id : '';
+                if (id && id !== INDEX_COMPLETION_MARKER_DOC_ID) {
+                    existingIds.add(id);
+                }
+            }
+        }
+
+        // Check chunk coverage
+        let missingChunksCount = 0;
+        for (const chunk of expectedChunks) {
+            if (!existingIds.has(chunk.id)) {
+                missingChunksCount++;
+            }
+        }
+
+        // Check file coverage (every expected indexed file must have at least one chunk in existingIds, unless it legitimately produces 0 chunks)
+        const fileToChunksMap = new Map<string, string[]>();
+        for (const chunk of expectedChunks) {
+            if (!fileToChunksMap.has(chunk.relativePath)) {
+                fileToChunksMap.set(chunk.relativePath, []);
+            }
+            fileToChunksMap.get(chunk.relativePath)!.push(chunk.id);
+        }
+
+        let hasFileCoverageIssue = false;
+        for (const file of codeFiles) {
+            const relPath = this.normalizeRelativePathForCodebase(canonicalPath, file);
+            if (!relPath) continue;
+            const expectedIdsForFile = fileToChunksMap.get(relPath) || [];
+            if (expectedIdsForFile.length > 0) {
+                const hasAny = expectedIdsForFile.some(id => existingIds.has(id));
+                if (!hasAny) {
+                    hasFileCoverageIssue = true;
+                }
+            }
+        }
+
+        if (missingChunksCount > 0 || hasFileCoverageIssue) {
+            return {
+                status: 'blocked',
+                reason: 'needs_create',
+                message: `Coverage verification failed: ${missingChunksCount || (hasFileCoverageIssue ? 1 : 0)} expected chunk(s) are missing from collection '${selectedCollection}'.`,
+                missingCount: missingChunksCount || 1,
+            };
+        }
+
+        const expectedIdsSet = new Set(expectedChunks.map(c => c.id));
+        const maxExactPayloadProbeRows = 16384;
+        const remotePayloadLimit = expectedChunks.length + 1;
+        if (remotePayloadLimit > maxExactPayloadProbeRows) {
+            return {
+                status: 'blocked',
+                reason: 'needs_create',
+                message: `Coverage verification failed: repair cannot prove exact remote payload equality for ${expectedChunks.length} expected chunks with the current vector query limit.`,
+                missingCount: 0,
+                trackedRelativePaths,
+            };
+        }
+        // Repair relies on query(filter, limit=N+1) returning N+1 rows when more than N payload rows exist.
+        const remotePayloadRows = await this.vectorDatabase.query(
+            selectedCollection,
+            'fileExtension != ".satori_meta"',
+            ['id'],
+            remotePayloadLimit
+        );
+        const extraRemoteIds = new Set<string>();
+        for (const row of remotePayloadRows) {
+            const id = typeof row?.id === 'string' ? row.id : '';
+            if (id && !expectedIdsSet.has(id)) {
+                extraRemoteIds.add(id);
+            }
+        }
+
+        if (remotePayloadRows.length !== expectedChunks.length || extraRemoteIds.size > 0) {
+            const extraCount = Math.max(0, remotePayloadRows.length - expectedChunks.length, extraRemoteIds.size);
+            return {
+                status: 'blocked',
+                reason: 'needs_create',
+                message: `Coverage verification failed: collection '${selectedCollection}' contains ${extraCount || 'unexpected'} stale remote chunk(s) outside the current indexable source set.`,
+                missingCount: 0,
+                trackedRelativePaths,
+            };
+        }
+
+        // 6. Rebuild symbol registry/relationship sidecars
+        await this.writeSymbolRegistryForCompletedIndex(canonicalPath, symbolRecords, symbolManifestFiles);
+
+        // 7. Write new completion marker
+        await this.writeCompletedIndexMarker(canonicalPath, codeFiles.length, expectedChunks.length, selectedCollection);
+
+        return {
+            status: 'ok',
+            message: 'Local readiness repaired (navigation sidecars rebuilt, fresh completion marker written) without vector writes.',
+            indexedFiles: codeFiles.length,
+            totalChunks: expectedChunks.length,
+            warnings: [],
+            trackedRelativePaths,
         };
     }
 

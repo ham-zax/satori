@@ -74,9 +74,11 @@ export type SearchFrontDoorHost = {
         rationale: string,
     ) => SearchRecommendedNextAction;
     buildCreateHint: (codebasePath: string) => { tool: string; args: { action: string; path: string } };
+    buildSyncHint: (codebasePath: string) => { tool: string; args: { action: string; path: string } };
     buildRepairHint: (codebasePath: string) => { tool: string; args: { action: string; path: string } };
     buildStaleLocalHint: (codebasePath: string, reason: CompletionProofReason) => Record<string, unknown>;
     buildStaleLocalMessage: (codebasePath: string, requestedPath: string, reason: CompletionProofReason) => string;
+    canSyncStaleLocal: (codebasePath: string, reason: CompletionProofReason) => boolean;
     withProofDebugHint: <T extends object>(payload: T, proofDebugHint?: CompletionProbeDebugHint) => T;
     isPartialIndexNavigationUnavailable: (info: unknown) => boolean;
     partialIndexWarnings: readonly string[];
@@ -145,7 +147,9 @@ function buildBlockedReadinessPayload(
     }
 
     if (state.state === "stale_local") {
-        const preferRepair = state.reason === "missing_marker_doc";
+        const preferSync = host.canSyncStaleLocal(state.codebasePath, state.reason);
+        const preferRepair = !preferSync && state.reason === "missing_marker_doc";
+        const action = preferSync ? "sync" : preferRepair ? "repair" : "create";
         return {
             status: "not_indexed",
             reason: "not_indexed",
@@ -158,13 +162,16 @@ function buildBlockedReadinessPayload(
             freshnessDecision: null,
             message: host.buildStaleLocalMessage(state.codebasePath, searchContext.path, state.reason),
             recommendedNextAction: host.buildManageIndexRecommendedAction(
-                preferRepair ? "repair" : "create",
+                action,
                 state.codebasePath,
-                preferRepair
-                    ? "Repair local readiness because completion marker proof is missing but vector rows may still be reusable."
+                preferSync
+                    ? "Run incremental sync; the local snapshot proves the committed collection and can restore the missing completion marker."
+                    : preferRepair
+                    ? "Repair local readiness because completion marker proof is missing and no syncable snapshot collection is available."
                     : "Create a fresh index because local readiness metadata is stale.",
             ),
             hints: {
+                ...(preferSync ? { sync: host.buildSyncHint(state.codebasePath) } : {}),
                 ...(preferRepair ? { repair: host.buildRepairHint(state.codebasePath) } : {}),
                 create: host.buildCreateHint(state.codebasePath),
                 staleLocal: host.buildStaleLocalHint(state.codebasePath, state.reason),
@@ -220,21 +227,25 @@ export async function runSearchFrontDoor(
     trackCodebasePath(absolutePath);
 
     const trackedRootState = await host.prepareInitialTrackedRootRead(absolutePath);
-    const blockedReadinessPayload = buildBlockedReadinessPayload(trackedRootState, searchContext, host);
-    if (blockedReadinessPayload) {
-        return {
-            kind: "blocked",
-            payload: blockedReadinessPayload,
-        };
+    const canSyncInitialStaleLocal = trackedRootState.state === "stale_local"
+        && host.canSyncStaleLocal(trackedRootState.codebasePath, trackedRootState.reason);
+    if (!canSyncInitialStaleLocal) {
+        const blockedReadinessPayload = buildBlockedReadinessPayload(trackedRootState, searchContext, host);
+        if (blockedReadinessPayload) {
+            return {
+                kind: "blocked",
+                payload: blockedReadinessPayload,
+            };
+        }
     }
-    if (trackedRootState.state !== "ready") {
+    if (trackedRootState.state !== "ready" && !canSyncInitialStaleLocal) {
         throw new Error(`Unexpected non-ready tracked root state after readiness gating: ${trackedRootState.state}`);
     }
 
-    let searchableRoot = trackedRootState.root;
-    let effectiveRoot = searchableRoot.path || absolutePath;
-    let proofDebugHint = trackedRootState.proofDebugHint;
-    let partialIndexSearchWarnings = buildPartialIndexWarnings(host, searchableRoot);
+    let searchableRoot = trackedRootState.state === "ready" ? trackedRootState.root : null;
+    let effectiveRoot = searchableRoot?.path || (trackedRootState.state === "stale_local" ? trackedRootState.codebasePath : absolutePath);
+    let proofDebugHint = trackedRootState.state === "ready" ? trackedRootState.proofDebugHint : undefined;
+    let partialIndexSearchWarnings = searchableRoot ? buildPartialIndexWarnings(host, searchableRoot) : [];
 
     const freshnessDecision = await host.ensureSearchFreshness(effectiveRoot);
     host.noteFreshnessMode(freshnessDecision.mode);

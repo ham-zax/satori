@@ -4,7 +4,6 @@ import {
     COLLECTION_LIMIT_MESSAGE,
     Context,
     deleteCollectionWithVerification,
-    IndexCompletionMarkerDocument,
     RemoteCollectionDeletePendingError,
 } from "@zokizuan/satori-core";
 import type { SnapshotManager } from "./snapshot.js";
@@ -99,7 +98,7 @@ type ManageIndexingHandlersHost = {
     recoverIndexedSnapshotFromCompletionProof(
         codebasePath: string,
         proof: CompletionProofValidationResult,
-    ): boolean;
+    ): Promise<boolean>;
     isZillizBackend(): boolean;
     resolveCollectionName(codebasePath: string): string;
     dropZillizCollectionForCreate(collectionName: string): Promise<{ droppedCodebasePath?: string }>;
@@ -118,7 +117,6 @@ type ManageIndexingHandlersHost = {
     getContextActiveIgnorePatterns(codebasePath: string): string[];
     getContextIndexedExtensions(codebasePath: string): string[];
     canonicalizeCodebasePath(codebasePath: string): string;
-    writeIndexCompletionMarker(codebasePath: string, marker: IndexCompletionMarkerDocument): Promise<void>;
     pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string): Promise<string[]>;
     pruneUnprovenStagedCollectionFamily(codebasePath: string): Promise<string[]>;
     getContextTrackedRelativePaths(codebasePath: string): string[];
@@ -334,7 +332,7 @@ export class ManageIndexingHandlers {
             const isIndexedInSnapshot = this.host.getSnapshotIndexedCodebases().includes(absolutePath);
             if (!forceReindex && !isIndexedInSnapshot) {
                 const proof = await this.host.validateCompletionProof(absolutePath);
-                if (this.host.recoverIndexedSnapshotFromCompletionProof(absolutePath, proof)) {
+                if (await this.host.recoverIndexedSnapshotFromCompletionProof(absolutePath, proof)) {
                     if (proof.outcome === "fingerprint_mismatch") {
                         return this.host.manageResponse(
                             manageAction,
@@ -682,7 +680,13 @@ export class ManageIndexingHandlers {
                     totalChunks: result.totalChunks || 0,
                     status: "completed" as const
                 };
-                this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified");
+                this.host.snapshotManager.setCodebaseIndexed(
+                    absolutePath,
+                    stats,
+                    this.host.runtimeFingerprint,
+                    "verified",
+                    result.collectionName
+                );
                 const trackedRelativePaths = (result as { trackedRelativePaths?: unknown }).trackedRelativePaths;
                 this.host.snapshotManager.setCodebaseIndexManifest(
                     absolutePath,
@@ -797,16 +801,6 @@ export class ManageIndexingHandlers {
             });
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
 
-            await this.host.writeIndexCompletionMarker(absolutePath, {
-                kind: "satori_index_completion_v1",
-                codebasePath: this.host.canonicalizeCodebasePath(absolutePath),
-                fingerprint: this.host.runtimeFingerprint,
-                indexedFiles: stats.indexedFiles,
-                totalChunks: stats.totalChunks,
-                completedAt: new Date().toISOString(),
-                runId: `run_${crypto.randomUUID()}`,
-            });
-
             try {
                 const droppedCollections = await this.host.pruneIndexedCollectionFamily(absolutePath, targetCollectionName);
                 if (droppedCollections.length > 0) {
@@ -816,7 +810,7 @@ export class ManageIndexingHandlers {
                 console.warn(`[BACKGROUND-INDEX] Failed to retire superseded generations for '${absolutePath}': ${formatUnknownError(pruneError)}`);
             }
 
-            this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified");
+            this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified", targetCollectionName);
             this.host.snapshotManager.setCodebaseIndexManifest(absolutePath, this.host.getContextTrackedRelativePaths(absolutePath));
             this.host.setIndexingStats({ indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks });
             await this.host.syncManager.recordCurrentIgnoreControlSignature(absolutePath);

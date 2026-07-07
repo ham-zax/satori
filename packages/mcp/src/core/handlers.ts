@@ -196,6 +196,7 @@ type TrackedCodebaseInfo = Record<string, unknown> & {
     indexFingerprint?: IndexFingerprint;
     fingerprintSource?: CodebaseInfo['fingerprintSource'];
     reindexReason?: CodebaseInfo['reindexReason'];
+    collectionName?: unknown;
     message?: unknown;
 };
 type TrackedRootEntry = {
@@ -205,7 +206,7 @@ type TrackedRootEntry = {
 
 type IndexCompletionMarkerContext = {
     getIndexCompletionMarker?: (codebasePath: string) => Promise<IndexCompletionMarkerDocument | null>;
-    writeIndexCompletionMarker?: (codebasePath: string, marker: IndexCompletionMarkerDocument) => Promise<void>;
+    getActiveIndexedCollectionName?: (codebasePath: string) => Promise<string | null>;
     clearIndexCompletionMarker?: (codebasePath: string) => Promise<void>;
     pruneIndexedCollectionFamily?: (codebasePath: string, keepCollectionName: string) => Promise<string[]>;
     pruneUnprovenStagedCollectionFamily?: (codebasePath: string) => Promise<string[]>;
@@ -266,6 +267,7 @@ type SnapshotManagerCapabilities = {
     getIndexingCodebases?: () => string[];
     getIndexingProgress?: (codebasePath: string) => number | undefined;
     ensureFingerprintCompatibilityOnAccess?: (codebasePath: string) => SnapshotAccessGateResult;
+    getCodebaseCollectionName?: (codebasePath: string) => string | undefined;
     markCodebaseCleared?: (codebasePath: string, collectionName?: string) => void;
     saveCodebaseSnapshot?: () => void;
 };
@@ -599,8 +601,10 @@ export class ToolHandlers {
             buildStaleLocalMessage: this.buildStaleLocalMessage.bind(this),
             enforceFingerprintGate: this.enforceFingerprintGate.bind(this),
             buildReindexHint: this.buildReindexHint.bind(this),
+            buildSyncHint: this.buildSyncHint.bind(this),
             touchWatchedCodebase: this.touchWatchedCodebase.bind(this),
             manageVectorBackendResponse: this.toolResponseBuilders.manageVectorBackendResponse.bind(this.toolResponseBuilders),
+            canSyncStaleLocal: this.canSyncStaleLocal.bind(this),
         };
         this.manageMaintenanceHandlers = new ManageMaintenanceHandlers(manageMaintenanceHandlersHost);
 
@@ -659,7 +663,6 @@ export class ToolHandlers {
             getContextActiveIgnorePatterns: this.getContextActiveIgnorePatterns.bind(this),
             getContextIndexedExtensions: this.getContextIndexedExtensions.bind(this),
             canonicalizeCodebasePath: this.canonicalizeCodebasePath.bind(this),
-            writeIndexCompletionMarker: this.writeIndexCompletionMarker.bind(this),
             pruneIndexedCollectionFamily: this.pruneIndexedCollectionFamily.bind(this),
             pruneUnprovenStagedCollectionFamily: this.pruneUnprovenStagedCollectionFamily.bind(this),
             getContextTrackedRelativePaths: this.getContextTrackedRelativePaths.bind(this),
@@ -745,6 +748,16 @@ export class ToolHandlers {
             tool: "manage_index",
             args: {
                 action: "create",
+                path: codebasePath
+            }
+        };
+    }
+
+    private buildSyncHint(codebasePath: string): { tool: string; args: { action: string; path: string } } {
+        return {
+            tool: "manage_index",
+            args: {
+                action: "sync",
                 path: codebasePath
             }
         };
@@ -970,10 +983,6 @@ export class ToolHandlers {
         return Array.isArray(paths) ? paths.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 
-    private async writeIndexCompletionMarker(codebasePath: string, marker: IndexCompletionMarkerDocument): Promise<void> {
-        await this.contextLifecycle().writeIndexCompletionMarker?.(codebasePath, marker);
-    }
-
     private async clearIndexCompletionMarker(codebasePath: string): Promise<void> {
         await this.contextLifecycle().clearIndexCompletionMarker?.(codebasePath);
     }
@@ -1082,7 +1091,8 @@ export class ToolHandlers {
 
         const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
         if (decision.action === "promote_indexed") {
-            this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified");
+            const collectionName = await this.getActiveIndexedCollectionNameForSnapshotRecovery(codebasePath);
+            this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
             this.saveSnapshotIfSupported();
             const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
                 ? " using completion marker proof from a different runtime fingerprint"
@@ -1126,14 +1136,46 @@ export class ToolHandlers {
     }
 
     private buildStaleLocalHint(codebasePath: string, reason: CompletionProofReason): Record<string, unknown> {
-        const preferRepair = reason === "missing_marker_doc";
+        const preferSync = this.canSyncStaleLocal(codebasePath, reason);
+        const preferRepair = !preferSync && reason === "missing_marker_doc";
         return {
             completionProof: reason,
-            recommendedAction: preferRepair
+            recommendedAction: preferSync
+                ? this.buildSyncHint(codebasePath)
+                : preferRepair
                 ? this.buildRepairHint(codebasePath)
                 : this.buildCreateHint(codebasePath),
+            ...(preferSync ? { sync: this.buildSyncHint(codebasePath) } : {}),
             ...(preferRepair ? { create: this.buildCreateHint(codebasePath) } : {})
         };
+    }
+
+    private getSnapshotCollectionName(codebasePath: string): string | undefined {
+        const fromSnapshot = this.snapshotCapabilities().getCodebaseCollectionName?.(codebasePath);
+        if (typeof fromSnapshot === 'string' && fromSnapshot.trim().length > 0) {
+            return fromSnapshot.trim();
+        }
+        const fromInfo = this.getSnapshotCodebaseInfo(codebasePath)?.collectionName;
+        return typeof fromInfo === 'string' && fromInfo.trim().length > 0
+            ? fromInfo.trim()
+            : undefined;
+    }
+
+    private canSyncStaleLocal(codebasePath: string, reason: CompletionProofReason): boolean {
+        if (reason !== "missing_marker_doc") {
+            return false;
+        }
+        const info = this.getSnapshotCodebaseInfo(codebasePath);
+        if (!info || (info.status !== 'indexed' && info.status !== 'sync_completed')) {
+            return false;
+        }
+        if (info.fingerprintSource !== 'verified' || !info.indexFingerprint) {
+            return false;
+        }
+        if (!this.fingerprintsEqual(info.indexFingerprint, this.runtimeFingerprint)) {
+            return false;
+        }
+        return true;
     }
 
     private buildStaleLocalMessage(codebasePath: string, requestedPath: string, reason: CompletionProofReason): string {
@@ -1232,23 +1274,36 @@ export class ToolHandlers {
         };
     }
 
-    private recoverIndexedSnapshotFromCompletionProof(
+    private async recoverIndexedSnapshotFromCompletionProof(
         codebasePath: string,
         completionProof: CompletionProofValidationResult
-    ): boolean {
+    ): Promise<boolean> {
         const recovered = this.extractIndexedRecoveryFromCompletionProof(completionProof);
         if (!recovered) {
             return false;
         }
 
+        const collectionName = await this.getActiveIndexedCollectionNameForSnapshotRecovery(codebasePath);
         this.snapshotManager.setCodebaseIndexed(
             codebasePath,
             recovered.stats,
             recovered.indexFingerprint,
-            'verified'
+            'verified',
+            collectionName
         );
         this.saveSnapshotIfSupported();
         return true;
+    }
+
+    private async getActiveIndexedCollectionNameForSnapshotRecovery(codebasePath: string): Promise<string | undefined> {
+        const context = this.context as unknown as IndexCompletionMarkerContext;
+        if (typeof context.getActiveIndexedCollectionName !== 'function') {
+            return undefined;
+        }
+        const collectionName = await context.getActiveIndexedCollectionName(codebasePath);
+        return typeof collectionName === 'string' && collectionName.trim().length > 0
+            ? collectionName.trim()
+            : undefined;
     }
 
     private refreshSnapshotStateFromDisk(): void {
@@ -1304,7 +1359,10 @@ export class ToolHandlers {
 
         let collectionName: string;
         try {
-            if (typeof context.getActiveIndexedCollectionName === 'function') {
+            const snapshotCollectionName = this.getSnapshotCollectionName(codebasePath);
+            if (snapshotCollectionName) {
+                collectionName = snapshotCollectionName;
+            } else if (typeof context.getActiveIndexedCollectionName === 'function') {
                 const activeCollectionName = await context.getActiveIndexedCollectionName(codebasePath);
                 if (typeof activeCollectionName === 'string' && activeCollectionName.trim().length > 0) {
                     collectionName = activeCollectionName;
@@ -2184,6 +2242,7 @@ export class ToolHandlers {
                     rationale
                 ),
                 buildCreateHint: (codebasePath) => this.buildCreateHint(codebasePath),
+                buildSyncHint: (codebasePath) => this.buildSyncHint(codebasePath),
                 buildRepairHint: (codebasePath) => this.buildRepairHint(codebasePath),
                 buildStaleLocalHint: (codebasePath, reason) => this.buildStaleLocalHint(codebasePath, reason),
                 buildStaleLocalMessage: (codebasePath, requestedPath, reason) => this.buildStaleLocalMessage(
@@ -2191,6 +2250,7 @@ export class ToolHandlers {
                     requestedPath,
                     reason
                 ),
+                canSyncStaleLocal: (codebasePath, reason) => this.canSyncStaleLocal(codebasePath, reason),
                 withProofDebugHint: (payload, proofDebugHint) => this.withProofDebugHint(payload, proofDebugHint),
                 isPartialIndexNavigationUnavailable: (info) => this.isPartialIndexNavigationUnavailable(info),
                 partialIndexWarnings: [

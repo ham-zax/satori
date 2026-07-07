@@ -78,8 +78,10 @@ type ManageMaintenanceHandlersHost = {
     buildReindexInstruction(codebasePath: string, detail?: string): string;
     buildCompatibilityStatusLines(codebasePath: string): string;
     buildManageRequiresReindexHints(codebasePath: string): Record<string, unknown>;
+    buildSyncHint(codebasePath: string): Record<string, unknown>;
     buildStaleLocalHint(codebasePath: string, reason: string): Record<string, unknown>;
     buildStaleLocalMessage(codebasePath: string, requestedPath: string, reason: string): string;
+    canSyncStaleLocal(codebasePath: string, reason: string): boolean;
     enforceFingerprintGate(codebasePath: string): { blockedResponse?: ToolTextResponse; message?: string };
     buildReindexHint(codebasePath: string): Record<string, unknown>;
     touchWatchedCodebase(codebasePath: string): Promise<void>;
@@ -344,12 +346,15 @@ export class ManageMaintenanceHandlers {
                 envelopePath = trackedRootState.codebasePath;
                 envelopeStatus = "not_indexed";
                 envelopeReason = "not_indexed";
+                const syncable = this.host.canSyncStaleLocal(trackedRootState.codebasePath, trackedRootState.reason);
                 envelopeHints = {
+                    ...(syncable ? { sync: this.host.buildSyncHint(trackedRootState.codebasePath) } : {}),
                     create: this.host.buildCreateHint(trackedRootState.codebasePath),
                     staleLocal: this.host.buildStaleLocalHint(trackedRootState.codebasePath, trackedRootState.reason),
                 };
-                const repairAction = trackedRootState.reason === "missing_marker_doc" ? "repair" : "create";
-                statusMessage = `❌ ${this.host.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason)} Run manage_index with {"action":"${repairAction}","path":"${trackedRootState.codebasePath}"} to repair it.`;
+                const nextAction = syncable ? "sync" : trackedRootState.reason === "missing_marker_doc" ? "repair" : "create";
+                const nextVerb = syncable ? "sync it" : nextAction === "repair" ? "repair it" : "create it";
+                statusMessage = `❌ ${this.host.buildStaleLocalMessage(trackedRootState.codebasePath, absolutePath, trackedRootState.reason)} Run manage_index with {"action":"${nextAction}","path":"${trackedRootState.codebasePath}"} to ${nextVerb}.`;
             } else if (trackedRootState.state === "missing_collection") {
                 envelopePath = trackedRootState.codebasePath;
                 envelopeStatus = "not_indexed";

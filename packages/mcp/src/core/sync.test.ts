@@ -147,7 +147,7 @@ test('ensureFreshness clears core index artifacts when an indexed path is delete
     });
 
     fs.rmSync(codebasePath, { recursive: true, force: true });
-    const decision = await manager.ensureFreshness(codebasePath, 0);
+    const decision = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
 
     assert.equal(decision.mode, 'skipped_missing_path');
     assert.equal(clearCalls, 1);
@@ -156,6 +156,101 @@ test('ensureFreshness clears core index artifacts when an indexed path is delete
     assert.equal(statusByPath.has(codebasePath), false);
 
     await manager.stopWatcherMode();
+});
+
+test('ensureFreshness passes trusted snapshot collection to incremental sync', async () => {
+    const codebasePath = createTempDir();
+    const committedCollection = 'hybrid_code_chunks_committed';
+    let receivedOptions: unknown;
+    let persistedCollection: string | undefined;
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return ['node_modules/**'];
+        },
+        hasSynchronizerForCodebase() {
+            return true;
+        },
+        async reindexByChange(_path: string, _progress: unknown, options: unknown) {
+            receivedOptions = options;
+            return { added: 1, removed: 0, modified: 0, changedFiles: ['src/new.ts'], collectionName: committedCollection };
+        },
+        getTrackedRelativePaths() {
+            return ['src/new.ts'];
+        }
+    };
+    const snapshot = {
+        getCodebaseStatus: () => 'indexed',
+        getCodebaseCollectionName: () => committedCollection,
+        getCodebaseIgnoreControlSignature: () => 'current',
+        setCodebaseIndexManifest() {},
+        setCodebaseSyncCompleted(_path: string, _stats: unknown, _fingerprint: unknown, _source: unknown, collectionName?: string) {
+            persistedCollection = collectionName;
+        },
+        saveCodebaseSnapshot() {},
+        setCodebaseIgnoreControlSignature() {},
+    };
+
+    fs.writeFileSync(path.join(codebasePath, '.gitignore'), '', 'utf8');
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
+        watchEnabled: false,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+
+    assert.equal(decision.mode, 'synced');
+    assert.deepEqual(receivedOptions, {
+        targetCollectionName: committedCollection,
+        maintainCompletionMarker: true,
+    });
+    assert.equal(persistedCollection, committedCollection);
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness persists collection resolved by incremental sync for legacy snapshots', async () => {
+    const codebasePath = createTempDir();
+    const resolvedCollection = 'hybrid_code_chunks_resolved';
+    let receivedOptions: unknown;
+    let persistedCollection: string | undefined;
+
+    const context = {
+        getActiveIgnorePatterns() {
+            return ['node_modules/**'];
+        },
+        hasSynchronizerForCodebase() {
+            return true;
+        },
+        async reindexByChange(_path: string, _progress: unknown, options: unknown) {
+            receivedOptions = options;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: resolvedCollection };
+        },
+        getTrackedRelativePaths() {
+            return ['src/existing.ts'];
+        }
+    };
+    const snapshot = {
+        getCodebaseStatus: () => 'indexed',
+        getCodebaseCollectionName: () => undefined,
+        getCodebaseIgnoreControlSignature: () => 'current',
+        setCodebaseIndexManifest() {},
+        setCodebaseSyncCompleted(_path: string, _stats: unknown, _fingerprint: unknown, _source: unknown, collectionName?: string) {
+            persistedCollection = collectionName;
+        },
+        saveCodebaseSnapshot() {},
+        setCodebaseIgnoreControlSignature() {},
+    };
+
+    fs.writeFileSync(path.join(codebasePath, '.gitignore'), '', 'utf8');
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
+        watchEnabled: false,
+    });
+
+    const decision = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+
+    assert.equal(decision.mode, 'synced');
+    assert.deepEqual(receivedOptions, { maintainCompletionMarker: true });
+    assert.equal(persistedCollection, resolvedCollection);
+    fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
 test('ensureFreshness treats satori.toml as an index-policy control file', async () => {

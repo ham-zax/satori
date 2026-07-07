@@ -71,6 +71,7 @@ export interface CodebaseSnapshotV1 {
 
 interface CodebaseInfoBase {
     lastUpdated: string;
+    collectionName?: string;
     indexFingerprint?: IndexFingerprint;
     fingerprintSource?: FingerprintSource;
     reindexReason?: 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';

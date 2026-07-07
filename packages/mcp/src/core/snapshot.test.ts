@@ -124,6 +124,30 @@ test('fingerprint mismatch does not persistently downgrade searchable entry', ()
     });
 });
 
+test('snapshot persists committed collection name across indexed and sync states', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-collection-name');
+        fs.mkdirSync(codebase, { recursive: true });
+        const collectionName = 'hybrid_code_chunks_committed';
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setCodebaseIndexed(codebase, {
+            indexedFiles: 3,
+            totalChunks: 12,
+            status: 'completed'
+        }, FINGERPRINT_A, 'verified', collectionName);
+        writer.setCodebaseSyncCompleted(codebase, { added: 1, removed: 0, modified: 0 });
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const info = reader.getCodebaseInfo(codebase);
+
+        assert.equal(info?.collectionName, collectionName);
+        assert.equal(reader.getCodebaseCollectionName(codebase), collectionName);
+    });
+});
+
 test('fingerprint mismatch remains runtime-local across save/load', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo-persisted-mismatch');

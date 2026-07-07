@@ -326,6 +326,110 @@ test('buildSymbolRecordsForFile collapses overlapping chunk-derived symbols by s
     assert.notEqual(matches[0]?.symbolInstanceId, matches[0]?.symbolKey);
 });
 
+test('buildSymbolRecordsForFile keeps same-line anonymous callbacks distinct with byte spans', () => {
+    const records = buildSymbolRecordsForFile({
+        relativePath: 'src/sidecar.ts',
+        language: 'typescript',
+        content: 'entries.filter((candidate) => candidate.isFile()).sort((a, b) => compare(a.name, b.name));\n',
+        fileHash: 'file-hash',
+        extractorVersion: 'extractor-v1',
+        chunks: [
+            {
+                content: '(candidate) => candidate.isFile()',
+                metadata: {
+                    startLine: 1,
+                    endLine: 1,
+                    startByte: 15,
+                    endByte: 47,
+                    language: 'typescript',
+                    filePath: 'src/sidecar.ts',
+                    symbolLabel: 'function <anonymous>(candidate)',
+                    breadcrumbs: ['function parent()', 'function <anonymous>(candidate)'],
+                },
+            },
+            {
+                content: '(a, b) => compare(a.name, b.name)',
+                metadata: {
+                    startLine: 1,
+                    endLine: 1,
+                    startByte: 54,
+                    endByte: 87,
+                    language: 'typescript',
+                    filePath: 'src/sidecar.ts',
+                    symbolLabel: 'function <anonymous>(a, b)',
+                    breadcrumbs: ['function parent()', 'function <anonymous>(a, b)'],
+                },
+            },
+        ],
+    });
+
+    const callbacks = records
+        .filter((record) => record.name === '<anonymous>')
+        .sort((a, b) => (a.span.startByte ?? 0) - (b.span.startByte ?? 0));
+
+    assert.equal(callbacks.length, 2);
+    assert.deepEqual(callbacks.map((record) => record.span.startByte), [15, 54]);
+    assert.equal(new Set(callbacks.map((record) => record.symbolInstanceId)).size, 2);
+    assert.doesNotThrow(() => buildSymbolRegistry({
+        manifest: manifest([{ path: 'src/sidecar.ts', hash: 'file-hash', language: 'typescript', symbolCount: records.length }]),
+        symbols: records,
+    }));
+});
+
+test('buildSymbolRecordsForFile merges multiline symbol columns from selected boundary lines', () => {
+    const label = 'function render()';
+    const records = buildSymbolRecordsForFile({
+        relativePath: 'src/view.ts',
+        language: 'typescript',
+        content: 'export function render() {}\n',
+        fileHash: 'file-hash',
+        extractorVersion: 'extractor-v1',
+        chunks: [
+            {
+                content: 'middle',
+                metadata: {
+                    startLine: 10,
+                    endLine: 20,
+                    startByte: 100,
+                    endByte: 300,
+                    startColumn: 40,
+                    endColumn: 5,
+                    language: 'typescript',
+                    filePath: 'src/view.ts',
+                    symbolLabel: label,
+                    breadcrumbs: [label],
+                },
+            },
+            {
+                content: 'start',
+                metadata: {
+                    startLine: 8,
+                    endLine: 12,
+                    startByte: 50,
+                    endByte: 180,
+                    startColumn: 2,
+                    endColumn: 80,
+                    language: 'typescript',
+                    filePath: 'src/view.ts',
+                    symbolLabel: label,
+                    breadcrumbs: [label],
+                },
+            },
+        ],
+    });
+
+    const match = records.find((record) => record.label === label);
+
+    assert.deepEqual(match?.span, {
+        startLine: 8,
+        endLine: 20,
+        startByte: 50,
+        endByte: 300,
+        startColumn: 2,
+        endColumn: 5,
+    });
+});
+
 test('resolveOwnerSymbolForChunk chooses tightest extracted line owner before synthesized file fallback', () => {
     const records = buildSymbolRecordsForFile({
         relativePath: 'src/auth.ts',

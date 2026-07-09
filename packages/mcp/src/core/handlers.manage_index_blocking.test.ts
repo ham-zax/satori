@@ -300,6 +300,59 @@ test('handleGetIndexingStatus does not consult runtime owner mutation gate', asy
     });
 });
 
+// FLC-08: limit_reached is searchable-with-warnings, not "fully indexed".
+test('handleGetIndexingStatus reports partial limit_reached instead of fully indexed', async () => {
+    await withTempRepo(async (repoPath) => {
+        const info = {
+            status: 'indexed' as const,
+            indexedFiles: 12,
+            totalChunks: 450000,
+            indexStatus: 'limit_reached' as const,
+            lastUpdated: '2026-02-28T08:00:00.000Z',
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified' as const,
+        };
+        const context = {
+            getIndexCompletionMarker: async () => ({
+                kind: 'satori_index_completion_v1',
+                codebasePath: repoPath,
+                fingerprint: RUNTIME_FINGERPRINT,
+                indexedFiles: 12,
+                totalChunks: 450000,
+                completedAt: '2026-02-28T08:00:00.000Z',
+                runId: 'partial-run',
+            }),
+            getVectorStore: () => ({
+                hasCollection: async () => true,
+            }),
+            resolveCollectionName: () => 'hybrid_code_chunks_test',
+            hasIndexedCollection: async () => true,
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => info,
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined,
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+        } as unknown as HandlerSyncManager;
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.action, 'status');
+        assert.equal(envelope.status, 'ok');
+        assert.match(envelope.humanText, /partially indexed \(limit_reached\)/i);
+        assert.match(envelope.humanText, /file_outline\/call_graph are unavailable/i);
+        assert.doesNotMatch(envelope.humanText, /fully indexed and ready for search/i);
+    });
+});
+
 test('handleSyncCodebase returns vector backend diagnostics when freshness sync hits stopped cluster', async () => {
     await withTempRepo(async (repoPath) => {
         const context = {} as unknown as HandlerContext;

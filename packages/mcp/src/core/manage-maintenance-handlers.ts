@@ -427,7 +427,15 @@ export class ManageMaintenanceHandlers {
                 const info = trackedRootState.root.info || this.host.getSnapshotCodebaseInfo(trackedRootState.root.path);
                 switch (status) {
                     case "indexed":
-                        if (info?.status === "indexed") {
+                        if (info?.status === "indexed" && info.indexStatus === "limit_reached") {
+                            statusMessage = `⚠️ Codebase '${trackedRootState.root.path}' is partially indexed (limit_reached).`;
+                            statusMessage += `\n📊 Statistics: ${info.indexedFiles} files, ${info.totalChunks} chunks`;
+                            statusMessage += `\n📅 Status: ${info.indexStatus}`;
+                            statusMessage += `\nSearch may return incomplete results; file_outline/call_graph are unavailable until a full reindex completes.`;
+                            if (typeof info.lastUpdated === "string") {
+                                statusMessage += `\n🕐 Last updated: ${new Date(info.lastUpdated).toLocaleString()}`;
+                            }
+                        } else if (info?.status === "indexed") {
                             statusMessage = `✅ Codebase '${trackedRootState.root.path}' is fully indexed and ready for search.`;
                             statusMessage += `\n📊 Statistics: ${info.indexedFiles} files, ${info.totalChunks} chunks`;
                             statusMessage += `\n📅 Status: ${info.indexStatus}`;

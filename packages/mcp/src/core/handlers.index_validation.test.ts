@@ -625,3 +625,31 @@ test('handleIndexCodebase create validation pending delete does not mutate local
         assert.deepEqual(snapshotEvents.indexing, []);
     });
 });
+
+// FLC-05: create kickoff prose must match fail-closed readiness (not "search while indexing").
+test('handleIndexCodebase create kickoff states search is blocked until indexing completes', async () => {
+    await withTempRepo(async (repoPath) => {
+        const { handlers, snapshotEvents } = createHandlersForValidation({
+            checkCollectionLimitImpl: async () => true,
+        });
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.action, 'create');
+        assert.equal(envelope.status, 'ok');
+        assert.equal(typeof envelope.humanText, 'string');
+
+        const humanText = envelope.humanText;
+        assert.match(humanText, /Started background indexing/i);
+        assert.match(humanText, /Search and navigation are blocked until indexing completes/i);
+        assert.match(humanText, /action":"status"/i);
+        assert.match(humanText, /do not search for partial results while status is indexing/i);
+        assert.doesNotMatch(
+            humanText,
+            /You can search the codebase while indexing is in progress/i,
+        );
+        assert.doesNotMatch(humanText, /results may be incomplete until indexing completes/i);
+        assert.deepEqual(snapshotEvents.indexing, [repoPath]);
+    });
+});

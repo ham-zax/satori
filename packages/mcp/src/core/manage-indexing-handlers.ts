@@ -549,7 +549,7 @@ export class ManageIndexingHandlers {
                 manageAction,
                 absolutePath,
                 "ok",
-                `Started background indexing for codebase '${absolutePath}'.${pathInfo}${dropSummaryLine}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`,
+                `Started background indexing for codebase '${absolutePath}'.${pathInfo}${dropSummaryLine}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. Search and navigation are blocked until indexing completes. Poll manage_index with {"action":"status","path":"${absolutePath}"} (or wait for completion); do not search for partial results while status is indexing.`,
                 preflightOptions,
             );
         } catch (error: unknown) {
@@ -828,18 +828,27 @@ export class ManageIndexingHandlers {
                 console.warn(`[BACKGROUND-INDEX] Failed to retire superseded generations for '${absolutePath}': ${formatUnknownError(pruneError)}`);
             }
 
+            // indexStatus is carried on stats (completed | limit_reached). limit_reached remains
+            // searchable only when core wrote a completion marker for partial vector proof;
+            // navigation still fails closed via indexStatus checks (partial_index_navigation_unavailable).
             this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified", targetCollectionName);
             this.host.snapshotManager.setCodebaseIndexManifest(absolutePath, this.host.getContextTrackedRelativePaths(absolutePath));
             this.host.setIndexingStats({ indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks });
             await this.host.syncManager.recordCurrentIgnoreControlSignature(absolutePath);
 
             this.host.saveSnapshotIfSupported();
-            await this.host.rebuildCallGraphForIndex(absolutePath);
+            // Full navigation rebuild only for completed indexes; partial indexes have no registry seal.
+            if (stats.status === "completed") {
+                await this.host.rebuildCallGraphForIndex(absolutePath);
+            }
             await this.host.touchWatchedCodebase(absolutePath);
 
             let message = `Background indexing completed for '${absolutePath}'.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`;
             if (stats.status === "limit_reached") {
-                message += "\n⚠️  Warning: Indexing stopped because the chunk limit (450,000) was reached. The index may be incomplete.";
+                message += "\n⚠️  Warning: Indexing stopped because the chunk limit (450,000) was reached."
+                    + " Search may return incomplete results with SEARCH_PARTIAL_INDEX warnings."
+                    + " file_outline/call_graph are unavailable until a full reindex completes successfully."
+                    + " This is not a fully complete index.";
             }
 
             console.log(`[BACKGROUND-INDEX] ${message}`);

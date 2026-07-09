@@ -84,3 +84,9 @@ evaluation/retrieval_results*
 package-lock.json
 .gitnexus
 .codebase-memory/
+
+# Generated local metrics (regenerate via pnpm benchmark)
+build-benchmark.json
+
+# Local example runtime configs (use config.example.json)
+examples/**/config.json

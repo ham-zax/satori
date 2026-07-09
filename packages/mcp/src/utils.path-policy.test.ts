@@ -6,6 +6,7 @@ import {
     requireAbsoluteFilesystemPath,
     requireRepoRelativeFilePath,
 } from "./utils.js";
+import { repoRelativeFilePathSchema } from "./tools/types.js";
 
 test("requireAbsoluteFilesystemPath rejects relative paths without CWD resolve", () => {
     const relative = requireAbsoluteFilesystemPath("repo/src", "path");
@@ -37,6 +38,22 @@ test("requireRepoRelativeFilePath rejects absolute and .. escapes", () => {
     if (ok.ok) {
         assert.equal(ok.relativePath, "src/app.ts");
     }
+});
+
+test("requireRepoRelativeFilePath rejects Windows drive-relative C:foo", () => {
+    for (const driveRelative of ["C:foo", "C:secret.ts", "C:/secret.ts", "C:\\secret.ts", "d:bar"]) {
+        const result = requireRepoRelativeFilePath(driveRelative, "file");
+        assert.equal(result.ok, false, `expected reject for ${driveRelative}`);
+    }
+});
+
+test("repoRelativeFilePathSchema rejects Windows drive-relative C:foo", () => {
+    const schema = repoRelativeFilePathSchema("repo-relative file");
+    for (const driveRelative of ["C:foo", "C:secret.ts", "C:/secret.ts", "C:\\secret.ts", "d:bar"]) {
+        const parsed = schema.safeParse(driveRelative);
+        assert.equal(parsed.success, false, `expected schema reject for ${driveRelative}`);
+    }
+    assert.equal(schema.safeParse("src/app.ts").success, true);
 });
 
 test("absolutePathOrRaw preserves relative inputs for error envelopes", () => {

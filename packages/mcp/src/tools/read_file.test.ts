@@ -259,6 +259,32 @@ test('read_file denies path outside all indexed roots', async () => {
     });
 });
 
+test('read_file ignores relative snapshot codebase roots without CWD resolving them', async () => {
+    await withTempDir(async (parent) => {
+        const indexedRoot = path.join(parent, 'indexed-root');
+        fs.mkdirSync(path.join(indexedRoot, 'src'), { recursive: true });
+        const filePath = path.join(indexedRoot, 'src', 'app.ts');
+        fs.writeFileSync(filePath, 'RELATIVE_SNAPSHOT_SECRET\n', 'utf8');
+
+        const previousCwd = process.cwd();
+        process.chdir(parent);
+        try {
+            const response = await runReadFile({ path: filePath }, 1000, {
+                snapshotManager: {
+                    // Legacy/corrupt relative root must not become valid via process CWD.
+                    getAllCodebases: () => [{
+                        path: 'indexed-root',
+                        info: { status: 'indexed' },
+                    }],
+                } as unknown as SnapshotManagerLike,
+            });
+            assertOutsideIndexedRoot(response, 'RELATIVE_SNAPSHOT_SECRET');
+        } finally {
+            process.chdir(previousCwd);
+        }
+    });
+});
+
 test('read_file denies sibling repo path while another root is indexed', async () => {
     await withTempDir(async (dir) => {
         const indexedRoot = path.join(dir, 'indexed');

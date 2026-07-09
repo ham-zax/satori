@@ -104,3 +104,38 @@ jobs:
         run: |
           Get-ChildItem packages/core/dist -ErrorAction SilentlyContinue | Format-Table -AutoSize || Write-Host "packages/core/dist not found"
           Get-ChildItem packages/mcp/dist -ErrorAction SilentlyContinue | Format-Table -AutoSize || Write-Host "packages/mcp/dist not found"
+
+  # OWN-7: enforce package unit tests (fakes only; no live Milvus/provider network).
+  # Single OS/Node cell keeps cost bounded; matrix already covers build/docs.
+  package_unit_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run core unit tests
+        run: pnpm --filter @zokizuan/satori-core test
+
+      - name: Run MCP unit tests
+        run: pnpm --filter @zokizuan/satori-mcp test
+
+      - name: Run CLI unit tests
+        run: pnpm --filter @zokizuan/satori-cli test

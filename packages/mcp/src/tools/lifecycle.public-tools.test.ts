@@ -11,11 +11,11 @@ import path from "node:path";
 import {
     AstCodeSplitter,
     Context,
+    Embedding,
     resetSharedRuntimeNavigationStoreForTests,
 } from "@zokizuan/satori-core";
 import type {
     CollectionDetails,
-    Embedding,
     EmbeddingVector,
     HybridSearchOptions,
     HybridSearchRequest,
@@ -55,7 +55,7 @@ const CAPABILITIES = new CapabilityResolver({
 
 type JsonObject = Record<string, unknown>;
 
-class TestEmbedding implements Embedding {
+class TestEmbedding extends Embedding {
     protected maxTokens = 8192;
 
     async detectDimension(): Promise<number> {

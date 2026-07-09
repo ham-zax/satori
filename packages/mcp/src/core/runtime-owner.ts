@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import { compareContractStrings } from "@zokizuan/satori-core";
 import type { ContextMcpConfig, IndexFingerprint } from "../config.js";
 
-export type RuntimeOwnerMutationAction = "create" | "reindex" | "sync" | "clear";
+/** Mutating manage_index actions that must honor the runtime-owner gate. */
+export type RuntimeOwnerMutationAction = "create" | "reindex" | "sync" | "clear" | "repair";
+
 
 export interface RuntimeOwnerConfigSummary {
     embeddingProvider: string;

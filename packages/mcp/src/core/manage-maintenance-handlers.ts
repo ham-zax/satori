@@ -19,8 +19,14 @@ import {
     type VectorBackendDiagnostic,
 } from "./backend-diagnostics.js";
 import { requireAbsoluteFilesystemPath } from "../utils.js";
+import type {
+    ManageIndexAction,
+    ManageIndexReason,
+    ManageIndexStatus,
+} from "./manage-types.js";
 import {
     formatRuntimeOwnersStatusLine,
+    type RuntimeOwnerMutationAction,
     type RuntimeOwnersSummary,
 } from "./runtime-owner.js";
 
@@ -30,23 +36,6 @@ type ToolTextResponse = {
     content: Array<{ type: "text"; text: string }>;
     isError?: boolean;
 };
-
-type ManageIndexStatus =
-    | "ok"
-    | "error"
-    | "not_ready"
-    | "not_indexed"
-    | "blocked"
-    | "requires_reindex";
-
-type ManageIndexReason =
-    | "indexing"
-    | "not_indexed"
-    | "requires_reindex"
-    | "unnecessary_reindex_ignore_only"
-    | "remote_delete_pending"
-    | "backend_timeout"
-    | "needs_create";
 
 type ManageMaintenanceHandlersHost = {
     context: Pick<Context, "clearIndex">;
@@ -62,17 +51,23 @@ type ManageMaintenanceHandlersHost = {
     getSnapshotCodebaseStatus(codebasePath: string): string;
     getSnapshotCodebaseInfo(codebasePath: string): Record<string, unknown> | undefined;
     getSnapshotCorruptionWarning(): SnapshotCorruptionWarning | undefined;
-    buildRuntimeOwnerConflictResponseIfBlocked(action: "clear" | "sync", codebasePath: string): Promise<ToolTextResponse | null>;
+    buildRuntimeOwnerConflictResponseIfBlocked(
+        action: Extract<RuntimeOwnerMutationAction, "clear" | "sync">,
+        codebasePath: string,
+    ): Promise<ToolTextResponse | null>;
     recoverStaleIndexingStateIfNeeded(codebasePath: string): Promise<void>;
     manageResponse(
-        action: string,
+        action: ManageIndexAction | string,
         path: string,
         status: ManageIndexStatus | string,
         message: string,
         options?: Record<string, unknown>,
     ): ToolTextResponse;
     buildCreateHint(codebasePath: string): Record<string, unknown>;
-    buildManageActionBlockedMessage(codebasePath: string, action: "clear" | "sync"): string;
+    buildManageActionBlockedMessage(
+        codebasePath: string,
+        action: Extract<RuntimeOwnerMutationAction, "clear" | "sync">,
+    ): string;
     buildStatusHint(codebasePath: string): Record<string, unknown>;
     getManageRetryAfterMs(): number;
     buildIndexingMetadata(codebasePath: string): Record<string, unknown> | undefined;

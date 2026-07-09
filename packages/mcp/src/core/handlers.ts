@@ -1123,7 +1123,7 @@ export class ToolHandlers {
         console.log(`[INDEX-RECOVERY] Marked stale indexing state as failed for '${codebasePath}' (${decision.reason}).`);
     }
 
-    private buildManageActionBlockedMessage(codebasePath: string, action: 'create' | 'reindex' | 'sync' | 'clear' | 'repair'): string {
+    private buildManageActionBlockedMessage(codebasePath: string, action: RuntimeOwnerMutationAction): string {
         const indexing = this.buildIndexingMetadata(codebasePath);
         const retryAfterMs = this.getManageRetryAfterMs();
 

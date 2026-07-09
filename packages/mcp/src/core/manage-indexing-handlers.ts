@@ -8,7 +8,7 @@ import {
 } from "@zokizuan/satori-core";
 import type { SnapshotManager } from "./snapshot.js";
 import type { SyncManager } from "./sync.js";
-import { ManageIndexAction } from "./manage-types.js";
+import type { ManageIndexAction } from "./manage-types.js";
 import type { CompletionProofValidationResult } from "./completion-proof.js";
 import {
     classifyVectorBackendError,
@@ -17,6 +17,7 @@ import {
 import type { IndexFingerprint } from "../config.js";
 import { absolutePathOrRaw, requireAbsoluteFilesystemPath, trackCodebasePath } from "../utils.js";
 import type { ReindexPreflightResult } from "./working-tree-state.js";
+import type { RuntimeOwnerMutationAction } from "./runtime-owner.js";
 
 type ToolTextResponse = {
     content: Array<{ type: "text"; text: string }>;
@@ -80,14 +81,17 @@ type ManageIndexingHandlersHost = {
         options?: Record<string, unknown>,
     ): ToolTextResponse;
     buildRuntimeOwnerConflictResponseIfBlocked(
-        action: ManageIndexAction | "reindex",
+        action: RuntimeOwnerMutationAction,
         codebasePath: string,
     ): Promise<ToolTextResponse | null>;
     recoverStaleIndexingStateIfNeeded(codebasePath: string): Promise<void>;
     getSnapshotIndexingCodebases(): string[];
     getSnapshotCodebaseInfo(codebasePath: string): Record<string, unknown> | undefined;
     getSnapshotIndexedCodebases(): string[];
-    buildManageActionBlockedMessage(codebasePath: string, action: "create" | "reindex" | "repair"): string;
+    buildManageActionBlockedMessage(
+        codebasePath: string,
+        action: Extract<RuntimeOwnerMutationAction, "create" | "reindex" | "repair">,
+    ): string;
     buildCreateHint(codebasePath: string): Record<string, unknown>;
     buildStatusHint(codebasePath: string): Record<string, unknown>;
     getManageRetryAfterMs(): number;

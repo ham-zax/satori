@@ -592,8 +592,7 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
                     },
                     reason: 'Open the selected owner before graph traversal so edits are grounded in source.',
                 },
-                fallbacks: [{
-                    when: 'call_graph returns no edges or relationship confidence is lower than the edit needs',
+                inboundRecovery: {
                     tool: 'search_codebase',
                     args: {
                         path: '<repo>',
@@ -603,7 +602,20 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
                         groupBy: 'symbol',
                         limit: 5,
                     },
-                    reason: 'Inbound graph coverage can be incomplete; exact lexical search verifies references before impact analysis.',
+                    reason: 'call_graph inbound is advisory/low confidence; verify callers with must: before blast-radius edits',
+                },
+                fallbacks: [{
+                    when: 'before treating call_graph inbound edges as empty or complete for blast radius',
+                    tool: 'search_codebase',
+                    args: {
+                        path: '<repo>',
+                        query: 'must:validateSession validateSession',
+                        scope: 'runtime',
+                        resultMode: 'grouped',
+                        groupBy: 'symbol',
+                        limit: 5,
+                    },
+                    reason: 'call_graph inbound is advisory/low confidence; verify callers with must: before blast-radius edits',
                 }],
                 preview: 'function validateSession(token: string)\nreturn normalizeToken(token).length > 0;',
             }],

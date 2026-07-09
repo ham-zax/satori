@@ -246,7 +246,7 @@ test('different runtime fingerprint blocks create reindex sync and clear', async
         });
         registry.registerCurrentOwner();
 
-        for (const action of ['create', 'reindex', 'sync', 'clear'] as const) {
+        for (const action of ['create', 'reindex', 'sync', 'clear', 'repair'] as const) {
             const result = registry.checkMutation(action, '/repo');
             assert.equal(result.blocked, true, action);
             assert.equal(result.reason, 'runtime_owner_conflict');

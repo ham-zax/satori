@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { isLanguageCapabilitySupportedForExtension } from "@zokizuan/satori-core";
-import { McpTool, ToolContext, formatZodError } from "./types.js";
+import {
+    McpTool,
+    ToolContext,
+    absoluteFilesystemPathSchema,
+    formatZodError,
+} from "./types.js";
 import { resolveVectorBackedToolContext } from "./provider-context.js";
 import { requireAbsoluteFilesystemPath } from "../utils.js";
 import type {
@@ -12,7 +17,9 @@ import type {
 } from "../core/search-types.js";
 
 const readFileInputSchema = z.object({
-    path: z.string().min(1).describe("ABSOLUTE path to the file."),
+    path: absoluteFilesystemPathSchema(
+        "ABSOLUTE path to the file under an indexed/searchable codebase root (relative paths are rejected).",
+    ),
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive)."),
     mode: z.enum(["plain", "annotated"]).default("plain").optional().describe("Output mode. plain returns text only; annotated returns content plus sidecar-backed outline metadata."),
@@ -323,6 +330,16 @@ export const readFileTool: McpTool = {
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});
         if (!parsed.success) {
+            // Preserve structured relative-path rejection for agent recovery when path is the failure.
+            const rawArgs = args && typeof args === "object" ? args as Record<string, unknown> : {};
+            const rawPath = typeof rawArgs.path === "string" ? rawArgs.path : "";
+            const pathFailedAbsolute = parsed.error.issues.some((issue) => (
+                issue.path[0] === "path"
+                && !path.isAbsolute(rawPath)
+            ));
+            if (rawPath.length > 0 && pathFailedAbsolute) {
+                return relativePathRejectedResponse(rawPath);
+            }
             return {
                 content: [{
                     type: "text",
@@ -336,11 +353,7 @@ export const readFileTool: McpTool = {
         const mode = input.mode || "plain";
 
         try {
-            if (!path.isAbsolute(input.path)) {
-                return relativePathRejectedResponse(input.path);
-            }
-
-            // Collapse . / .. segments; realpath when the path (or a prefix) exists.
+            // Schema already requires an absolute path; collapse . / .. and realpath when present.
             const resolvedPath = path.resolve(input.path);
             const absolutePath = canonicalizeFilesystemPath(resolvedPath);
             const wantsStructuredError = mode === "annotated" || Boolean(input.open_symbol);

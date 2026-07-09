@@ -15,7 +15,7 @@ import {
     classifyVectorBackendError,
     type VectorBackendDiagnostic,
 } from "./backend-diagnostics.js";
-import { ensureAbsolutePath } from "../utils.js";
+import { requireAbsoluteFilesystemPath } from "../utils.js";
 
 type ToolArgs = Record<string, unknown>;
 
@@ -173,7 +173,11 @@ export class ManageMaintenanceHandlers {
 
     public async handleClearIndex(args: ToolArgs): Promise<ToolTextResponse> {
         const codebasePath = typeof args.path === "string" ? args.path : "";
-        const requestedPath = ensureAbsolutePath(codebasePath);
+        const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
+        if (!absolutePathResult.ok) {
+            return this.host.manageResponse("clear", codebasePath, "error", absolutePathResult.message);
+        }
+        const requestedPath = absolutePathResult.absolutePath;
 
         if (this.host.getSnapshotAllCodebases().length === 0) {
             return this.host.manageResponse(
@@ -293,7 +297,11 @@ export class ManageMaintenanceHandlers {
 
     public async handleGetIndexingStatus(args: ToolArgs): Promise<ToolTextResponse> {
         const codebasePath = typeof args.path === "string" ? args.path : "";
-        const requestedPath = ensureAbsolutePath(codebasePath);
+        const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
+        if (!absolutePathResult.ok) {
+            return this.host.manageResponse("status", codebasePath, "error", absolutePathResult.message);
+        }
+        const requestedPath = absolutePathResult.absolutePath;
 
         try {
             const absolutePath = requestedPath;
@@ -491,7 +499,11 @@ export class ManageMaintenanceHandlers {
 
     public async handleSyncCodebase(args: ToolArgs): Promise<ToolTextResponse> {
         const codebasePath = typeof args.path === "string" ? args.path : "";
-        const requestedPath = ensureAbsolutePath(codebasePath);
+        const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
+        if (!absolutePathResult.ok) {
+            return this.host.manageResponse("sync", codebasePath, "error", absolutePathResult.message);
+        }
+        const requestedPath = absolutePathResult.absolutePath;
 
         try {
             const absolutePath = requestedPath;

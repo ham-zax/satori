@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { McpTool, MissingProviderConfigIssue, ToolContext, ToolResponse, formatZodError } from "./types.js";
+import { requireAbsoluteFilesystemPath } from "../utils.js";
+import {
+    McpTool,
+    MissingProviderConfigIssue,
+    ToolContext,
+    ToolResponse,
+    absoluteFilesystemPathSchema,
+    formatZodError,
+} from "./types.js";
 import { emitSearchTelemetry } from "../telemetry/search.js";
 import {
     classifyVectorBackendError,
@@ -139,7 +147,7 @@ function emitSearchBackendErrorTelemetry(args: {
 }
 
 const buildSearchSchema = (ctx: ToolContext) => z.object({
-    path: z.string().min(1).describe("ABSOLUTE path to an indexed codebase or subdirectory."),
+    path: absoluteFilesystemPathSchema("ABSOLUTE filesystem path to an indexed codebase or subdirectory (relative paths are rejected)."),
     query: z.string().min(1).describe("Natural-language query."),
     scope: z.enum(["runtime", "mixed", "docs"]).default("runtime").optional().describe("Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns docs/tests only; mixed includes all. Docs scope skips reranker by policy in the current tool surface."),
     resultMode: z.enum(["grouped", "raw"]).default("grouped").optional().describe("Output mode. grouped returns merged search groups, raw returns chunk hits."),
@@ -167,8 +175,20 @@ export const searchCodebaseTool: McpTool = {
             };
         }
 
+        const absolutePathResult = requireAbsoluteFilesystemPath(parsed.data.path, "path");
+        if (!absolutePathResult.ok) {
+            return {
+                content: [{
+                    type: "text",
+                    text: absolutePathResult.message,
+                }],
+                isError: true,
+            };
+        }
+
         const input = {
             ...parsed.data,
+            path: absolutePathResult.absolutePath,
             scope: parsed.data.scope ?? "runtime",
             resultMode: parsed.data.resultMode ?? "grouped",
             groupBy: parsed.data.groupBy ?? "symbol",

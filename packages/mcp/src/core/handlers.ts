@@ -17,7 +17,7 @@ import {
 import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
 import { AccessGateReason, SnapshotManager } from "./snapshot.js";
-import { ensureAbsolutePath } from "../utils.js";
+import { absolutePathOrRaw, requireAbsoluteFilesystemPath } from "../utils.js";
 import { SyncManager, type FreshnessDecision } from "./sync.js";
 import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint, type CodebaseInfo } from "../config.js";
 import {
@@ -2501,7 +2501,7 @@ export class ToolHandlers {
             const vectorBackendDiagnostic = classifyVectorBackendError(error);
             if (vectorBackendDiagnostic) {
                 const payload = this.buildVectorBackendSearchPayload(vectorBackendDiagnostic, {
-                    path: ensureAbsolutePath(input.path),
+                    path: absolutePathOrRaw(input.path),
                     query: input.query,
                     scope: input.scope,
                     groupBy: input.groupBy,
@@ -2522,7 +2522,7 @@ export class ToolHandlers {
 
             if (errorMessage === COLLECTION_LIMIT_MESSAGE || errorMessage.includes(COLLECTION_LIMIT_MESSAGE)) {
                 const payload = this.buildInvalidSearchRequestPayload({
-                    path: typeof input.path === 'string' ? ensureAbsolutePath(input.path) : '',
+                    path: typeof input.path === 'string' ? absolutePathOrRaw(input.path) : '',
                     query: typeof input.query === 'string' ? input.query : '',
                     scope: input.scope,
                     groupBy: input.groupBy,
@@ -2548,7 +2548,7 @@ export class ToolHandlers {
             }
 
             const payload = this.buildInvalidSearchRequestPayload({
-                path: typeof input.path === 'string' ? ensureAbsolutePath(input.path) : '',
+                path: typeof input.path === 'string' ? absolutePathOrRaw(input.path) : '',
                 query: typeof input.query === 'string' ? input.query : '',
                 scope: input.scope,
                 groupBy: input.groupBy,
@@ -2588,7 +2588,14 @@ export class ToolHandlers {
         const filePath = typeof args.path === 'string' ? args.path : '';
 
         try {
-            const absolutePath = ensureAbsolutePath(filePath);
+            const absolutePathResult = requireAbsoluteFilesystemPath(filePath, "path");
+            if (!absolutePathResult.ok) {
+                return {
+                    content: [{ type: "text", text: absolutePathResult.message }],
+                    isError: true
+                };
+            }
+            const absolutePath = absolutePathResult.absolutePath;
 
             if (!fs.existsSync(absolutePath)) {
                 return {

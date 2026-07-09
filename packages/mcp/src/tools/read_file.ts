@@ -4,7 +4,7 @@ import { z } from "zod";
 import { isLanguageCapabilitySupportedForExtension } from "@zokizuan/satori-core";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { resolveVectorBackedToolContext } from "./provider-context.js";
-import { ensureAbsolutePath } from "../utils.js";
+import { absolutePathOrRaw } from "../utils.js";
 import type {
     ReadFileAnnotatedOutlineStatus,
     ReadFileAnnotatedResponseEnvelope,
@@ -185,7 +185,7 @@ function collectCodebaseCandidatesForFile(
         if (!item || typeof item.path !== "string") {
             continue;
         }
-        const candidatePath = canonicalizeFilesystemPath(ensureAbsolutePath(item.path));
+        const candidatePath = canonicalizeFilesystemPath(absolutePathOrRaw(item.path));
         if (!isPathInsideRoot(canonicalTarget, candidatePath)) {
             continue;
         }
@@ -279,7 +279,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
         if (!item || typeof item.path !== "string" || !item.info || item.info.status !== "indexing") {
             continue;
         }
-        const codebaseRoot = canonicalizeFilesystemPath(ensureAbsolutePath(item.path));
+        const codebaseRoot = canonicalizeFilesystemPath(absolutePathOrRaw(item.path));
         candidates.push({
             codebaseRoot,
             info: item.info,

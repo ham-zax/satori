@@ -32,7 +32,7 @@ import type {
     FileOutlineResponseEnvelope,
     FileOutlineStatus,
 } from "./search-types.js";
-import { ensureAbsolutePath, trackCodebasePath } from "../utils.js";
+import { requireAbsoluteFilesystemPath, requireRepoRelativeFilePath, trackCodebasePath } from "../utils.js";
 
 type ToolArgs = Record<string, unknown>;
 
@@ -241,8 +241,38 @@ export class NavigationHandlers {
         const symbolLabelExact = typeof args?.symbolLabelExact === "string" ? args.symbolLabelExact.trim() : undefined;
 
         try {
-            const absoluteRoot = ensureAbsolutePath(args.path);
-            const normalizedFile = this.host.normalizeRelativeFilePath(args.file);
+            const absoluteRootResult = requireAbsoluteFilesystemPath(args.path, "path");
+            if (!absoluteRootResult.ok) {
+                const payload = this.host.buildInvalidFileOutlineRequestPayload(
+                    absoluteRootResult.path,
+                    typeof args.file === "string" ? args.file : "",
+                    absoluteRootResult.message,
+                    "not_indexed",
+                    "not_indexed",
+                );
+                return {
+                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                    isError: true,
+                };
+            }
+            const absoluteRoot = absoluteRootResult.absolutePath;
+            const relativeFileResult = requireRepoRelativeFilePath(
+                typeof args.file === "string" ? args.file : "",
+                "file",
+            );
+            if (!relativeFileResult.ok) {
+                const payload = this.host.buildInvalidFileOutlineRequestPayload(
+                    absoluteRoot,
+                    relativeFileResult.path,
+                    relativeFileResult.message,
+                    "not_found",
+                );
+                return {
+                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                    isError: true,
+                };
+            }
+            const normalizedFile = this.host.normalizeRelativeFilePath(relativeFileResult.relativePath);
 
             if (!fs.existsSync(absoluteRoot)) {
                 const payload = this.host.buildInvalidFileOutlineRequestPayload(
@@ -520,8 +550,12 @@ export class NavigationHandlers {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
             };
         } catch (error: unknown) {
+            const pathResult = typeof args?.path === "string"
+                ? requireAbsoluteFilesystemPath(args.path)
+                : null;
+            const pathForError = pathResult?.ok ? pathResult.absolutePath : (typeof args?.path === "string" ? args.path : "");
             const payload = this.host.buildInvalidFileOutlineRequestPayload(
-                typeof args?.path === "string" ? ensureAbsolutePath(args.path) : "",
+                pathForError,
                 typeof args?.file === "string" ? this.host.normalizeRelativeFilePath(args.file) : "",
                 `Unexpected file_outline failure: ${formatUnknownError(error)}`,
                 "not_ready",
@@ -541,19 +575,53 @@ export class NavigationHandlers {
         const depth = Number.isFinite(args?.depth) ? Math.max(1, Math.min(3, Number(args.depth))) : 1;
         const limit = Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 20;
         const symbolRef = args?.symbolRef as CallGraphSymbolRef | undefined;
+        const symbolFileResult = typeof symbolRef?.file === "string"
+            ? requireRepoRelativeFilePath(symbolRef.file, "symbolRef.file")
+            : { ok: false as const, path: "", message: "symbolRef.file is required." };
         const normalizedSymbolRef: CallGraphSymbolRef = {
-            file: typeof symbolRef?.file === "string" ? this.host.normalizeRelativeFilePath(symbolRef.file) : "",
+            file: symbolFileResult.ok
+                ? this.host.normalizeRelativeFilePath(symbolFileResult.relativePath)
+                : (typeof symbolRef?.file === "string" ? this.host.normalizeRelativeFilePath(symbolRef.file) : ""),
             symbolId: typeof symbolRef?.symbolId === "string" ? symbolRef.symbolId : "",
             ...(typeof symbolRef?.symbolLabel === "string" ? { symbolLabel: symbolRef.symbolLabel } : {}),
             ...(symbolRef?.span ? { span: symbolRef.span } : {}),
         };
+        const absolutePathResult = typeof args?.path === "string"
+            ? requireAbsoluteFilesystemPath(args.path, "path")
+            : { ok: false as const, path: "", message: "path is required." };
         const invalidSymbolRefContext = {
-            path: typeof args?.path === "string" ? ensureAbsolutePath(args.path) : "",
+            path: absolutePathResult.ok ? absolutePathResult.absolutePath : (typeof args?.path === "string" ? args.path : ""),
             symbolRef: normalizedSymbolRef,
             direction,
             depth,
             limit,
         };
+
+        if (!absolutePathResult.ok) {
+            const payload = this.host.buildInvalidCallGraphRequestPayload(
+                invalidSymbolRefContext,
+                absolutePathResult.message,
+                "not_indexed",
+                "not_indexed",
+            );
+            return {
+                content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                isError: true,
+            };
+        }
+
+        if (!symbolFileResult.ok) {
+            const payload = this.host.buildInvalidCallGraphRequestPayload(
+                invalidSymbolRefContext,
+                symbolFileResult.message,
+                "not_found",
+                "invalid_symbol_ref",
+            );
+            return {
+                content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                isError: true,
+            };
+        }
 
         if (!symbolRef || typeof symbolRef.file !== "string" || typeof symbolRef.symbolId !== "string") {
             const payload = this.host.buildInvalidCallGraphRequestPayload(
@@ -569,7 +637,7 @@ export class NavigationHandlers {
         }
 
         try {
-            const absolutePath = ensureAbsolutePath(typeof args.path === "string" ? args.path : "");
+            const absolutePath = absolutePathResult.absolutePath;
             if (!fs.existsSync(absolutePath)) {
                 const payload = this.host.buildInvalidCallGraphRequestPayload(
                     {
@@ -945,9 +1013,12 @@ export class NavigationHandlers {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
             };
         } catch (error: unknown) {
+            const pathResult = typeof args?.path === "string"
+                ? requireAbsoluteFilesystemPath(args.path)
+                : null;
             const payload = this.host.buildInvalidCallGraphRequestPayload(
                 {
-                    path: typeof args?.path === "string" ? ensureAbsolutePath(args.path) : "",
+                    path: pathResult?.ok ? pathResult.absolutePath : (typeof args?.path === "string" ? args.path : ""),
                     symbolRef: normalizedSymbolRef,
                     direction,
                     depth,

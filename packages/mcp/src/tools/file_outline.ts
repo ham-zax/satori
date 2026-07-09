@@ -1,10 +1,17 @@
 import { z } from 'zod';
-import { McpTool, ToolContext, formatZodError } from './types.js';
+import { requireAbsoluteFilesystemPath } from '../utils.js';
+import {
+    McpTool,
+    ToolContext,
+    absoluteFilesystemPathSchema,
+    formatZodError,
+    repoRelativeFilePathSchema,
+} from './types.js';
 import { resolveVectorBackedToolContext } from './provider-context.js';
 
 const fileOutlineInputSchema = z.object({
-    path: z.string().min(1).describe('ABSOLUTE path to the indexed codebase root.'),
-    file: z.string().min(1).describe('Relative file path inside the codebase root.'),
+    path: absoluteFilesystemPathSchema('ABSOLUTE filesystem path to the indexed codebase root (relative paths are rejected).'),
+    file: repoRelativeFilePathSchema('Repo-relative file path inside the codebase root (not absolute; resolved only against that root).'),
     start_line: z.number().int().positive().optional().describe('Optional start line filter (1-based, inclusive).'),
     end_line: z.number().int().positive().optional().describe('Optional end line filter (1-based, inclusive).'),
     limitSymbols: z.number().int().positive().default(500).optional().describe('Maximum number of returned symbols after line filtering.'),
@@ -39,15 +46,28 @@ export const fileOutlineTool: McpTool = {
             };
         }
 
+        const absolutePathResult = requireAbsoluteFilesystemPath(parsed.data.path, 'path');
+        if (!absolutePathResult.ok) {
+            return {
+                content: [{ type: 'text', text: absolutePathResult.message }],
+                isError: true,
+            };
+        }
+
+        const input = {
+            ...parsed.data,
+            path: absolutePathResult.absolutePath,
+        };
+
         const executionContext = await resolveVectorBackedToolContext(ctx, {
             tool: 'file_outline',
-            path: parsed.data.path,
-            file: parsed.data.file,
+            path: input.path,
+            file: input.file,
         });
         if (!executionContext.ok) {
             return executionContext.response;
         }
 
-        return executionContext.context.toolHandlers.handleFileOutline(parsed.data);
+        return executionContext.context.toolHandlers.handleFileOutline(input);
     }
 };

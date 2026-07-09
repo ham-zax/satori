@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { MANAGE_INDEX_ACTIONS } from "../core/manage-types.js";
-import { McpTool, MissingProviderConfigIssue, ToolContext, ToolResponse, formatZodError } from "./types.js";
+import { requireAbsoluteFilesystemPath } from "../utils.js";
+import {
+    McpTool,
+    MissingProviderConfigIssue,
+    ToolContext,
+    ToolResponse,
+    absoluteFilesystemPathSchema,
+    formatZodError,
+} from "./types.js";
 import {
     classifyVectorBackendError,
     formatManageProviderConfigError,
@@ -15,7 +23,7 @@ const actionEnum = z.enum(MANAGE_INDEX_ACTIONS);
 
 const manageIndexInputSchema = z.object({
     action: actionEnum.describe("Required operation to run."),
-    path: z.string().min(1).describe("ABSOLUTE path to the target codebase."),
+    path: absoluteFilesystemPathSchema("ABSOLUTE filesystem path to the target codebase (relative paths are rejected)."),
     force: z.boolean().optional().describe("Only for action='create'. Force rebuild from scratch."),
     allowUnnecessaryReindex: z.boolean().optional().describe("Only for action='reindex'. Override preflight block when reindex is detected as unnecessary ignore-only churn."),
     customExtensions: z.array(z.string()).optional().describe("Only for action='create'. Additional file extensions to include."),
@@ -40,7 +48,21 @@ export const manageIndexTool: McpTool = {
             };
         }
 
-        const input = parsed.data;
+        const absolutePathResult = requireAbsoluteFilesystemPath(parsed.data.path, "path");
+        if (!absolutePathResult.ok) {
+            return {
+                content: [{
+                    type: "text",
+                    text: absolutePathResult.message,
+                }],
+                isError: true,
+            };
+        }
+
+        const input = {
+            ...parsed.data,
+            path: absolutePathResult.absolutePath,
+        };
         const providerOperation = input.action === "clear" || input.action === "status"
             ? "vector_only"
             : (input.action === "create" || input.action === "reindex" || input.action === "sync" || input.action === "repair")

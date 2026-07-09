@@ -39,6 +39,27 @@ function captureTelemetry(run: () => Promise<void>): Promise<string[]> {
     }).then(() => lines);
 }
 
+test('search_codebase rejects relative path without CWD resolve', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const ctx = {
+        capabilities,
+        toolHandlers: {
+            handleSearchCode: async () => {
+                throw new Error('handler must not run for relative path');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await searchCodebaseTool.execute({
+        path: 'relative/repo',
+        query: 'auth',
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0].text, /absolute filesystem path|Invalid arguments for 'search_codebase'/i);
+    assert.doesNotMatch(response.content[0].text, /handler must not run/);
+});
+
 test('search_codebase emits telemetry with diagnostics from handler meta', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const responseText = JSON.stringify({

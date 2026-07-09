@@ -354,9 +354,9 @@ findings:
   risk_class: contract
   moving_resource: filesystem paths passed to MCP tools
   boundary: path semantics must be explicit and stable; no hidden CWD dependence
-  current_status: verified_not_patch_ready
-  evidence_grade: E2
-  patch_readiness: P1
+  current_status: patched_awaiting_final_proof
+  evidence_grade: E3
+  patch_readiness: P4
   owner: main-agent
   batch: A
   dependencies:
@@ -364,9 +364,9 @@ findings:
   verdict: partially_verified
   notes:
   - F1 closed absolute+realpath containment for read_file content (E4/P5).
-  - Other tools still use ensureAbsolutePath (relative → path.resolve(cwd)); schemas only describe ABSOLUTE.
-  - Risk is wrong codebase root / CWD dependence, not F1-class host file content read.
-  - Needs product choice reject-relative vs document CWD resolve; then P2 with per-tool tests.
+  - 'Product policy 2026-07-09: reject relative on ABSOLUTE fields; repo-relative only against validated root; no silent CWD resolve.'
+  - 'Patch 2026-07-09: requireAbsoluteFilesystemPath + zod absolute/repo-relative schemas; wired search/manage/outline/call_graph/handlers; tests added.'
+  - Final proof still required for E4/P5.
   evidence_required:
     source_locations:
     - 'packages/mcp/src/utils.ts:16-25 ensureAbsolutePath soft absolute'

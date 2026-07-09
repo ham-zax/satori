@@ -43,15 +43,16 @@ batch_A_evidence_status:
   - satori_remediation_backlog.v2.yaml
   scale_note: 'Evidence E0–E3 investigation; E4–E5 only after patch+proof. Patch readiness P0=not patchable … P2=patch-ready … P5=closed.'
   ranking_rule: Only E2+ scored; patch only if P2+
-  recommended_next_patch: batch_B_remainder
-  recommended_next_patch_reason: 'F1/F4/F11/F5 fixed_proven; F7 lifecycle harness added; F6 AGENTS trust calibration closed accepted_risk. Next: F8/F9/F10 operability or F2 SSOT decision; F3 parked.'
+  recommended_next_patch: F10
+  recommended_next_patch_reason: 'Closed fixed_proven: F1 F4 F5 F7 F11; closed accepted_risk: F6. Open gauges/ownership: F10 (next hygiene) → F8 doctor versions → F2 SSOT decision → F9 design. F3 parked. Ledger cleaned 2026-07-09.'
   scores_desc:
   - 'F4 score=9 E4/P5 closed fixed_proven'
   - 'F11 score=8 E4/P5 closed fixed_proven'
-  - 'F5 score=7 E4/P5 closed fixed_proven'
+  - 'F5 score=7 E4/P5 closed fixed_proven (merkle-only; search ranking deferred)'
   - 'F6 score=8 E3/P5 closed accepted_risk (AGENTS+skill trust calibration)'
-  - 'F7 score= lifecycle harness E4/P5 closed fixed_proven'
+  - 'F7 score=E4/P5 closed fixed_proven (lifecycle.public-tools.test.ts)'
   - 'F2 score=6 E2/P1 need SSOT decision + drift guard'
+  - 'F8/F9/F10 E2/P1 open (coordinator evidence; not patched)'
 findings:
 - id: F1
   claim: read_file could read arbitrary host files outside indexed roots
@@ -230,9 +231,10 @@ findings:
   verdict: verified
   notes:
   - 'Merkle-first patch 2026-07-09: compareContractStrings (code-unit) in computeMerkleRoot; tests monkey-patch localeCompare + insertion order.'
-  - Search ranking localeCompare intentionally NOT changed in this patch (follow-up if needed).
+  - Scope is merkle-only; search ranking localeCompare intentionally deferred (follow-up if needed).
   - Compatibility: Merkle roots may change once vs old locale-sensitive path order.
   - 'Final proof 2026-07-09: merkle.test.ts 3/3; tsc clean; merkle.ts has no localeCompare call; monkey-patch independence proven at runtime.'
+  - 'Commit 19ae8d7 fix(core): make Merkle root ordering locale-independent (F5).'
   evidence_required:
     source_locations:
     - 'packages/core/src/sync/merkle.ts:11-22 computeMerkleRoot sorts with a.localeCompare(b)'
@@ -281,7 +283,7 @@ findings:
     regression_risk: 2
     patch_size_penalty: 1
     total_priority_score: 7
-  closure_decision: open — design failing tests then P2; prefer merkle-first thin patch
+  closure_decision: fixed_proven
 - id: F6
   claim: Call graph is heuristic/name-based and agents may over-trust it
   risk_class: contract
@@ -349,7 +351,7 @@ findings:
     regression_risk: 1
     patch_size_penalty: 0
     total_priority_score: 8
-  closure_decision: open — prefer accepted_risk or docs-only after F4; not algorithm work
+  closure_decision: accepted_risk
 - id: F11
   claim: Path APIs say absolute path but relative paths may be silently resolved against CWD
   risk_class: contract
@@ -422,7 +424,7 @@ findings:
     regression_risk: 2
     patch_size_penalty: 1
     total_priority_score: 8
-  closure_decision: open — product path policy then P2; after F4
+  closure_decision: fixed_proven
 - id: F7
   claim: MCP integration/E2E proof is thin for lifecycle behavior
   risk_class: correctness
@@ -433,9 +435,12 @@ findings:
   patch_readiness: P5
   batch: B
   closure_type: fixed_proven
+  closure_decision: fixed_proven
   notes:
   - 'Closed 2026-07-09: packages/mcp/src/tools/lifecycle.public-tools.test.ts — fake embed + in-memory VDB; index → manage status → list_codebases → search_codebase (auth content) → file_outline → read_file → manage clear via public tool execute.'
   - InMemory VDB must honor id== filter so completion-marker clear does not wipe chunks (mirrors core test harness).
+  - 'Commits: 4c0294f test(mcp): add deterministic public-tool lifecycle harness (F7); 075cea7 TestEmbedding extends Embedding (type-correct follow-up).'
+  - Harness path: packages/mcp/src/tools/lifecycle.public-tools.test.ts
   evidence_required:
     source_locations:
     - tests/integration/**
@@ -460,10 +465,13 @@ findings:
   risk_class: operability
   moving_resource: package version/compatibility information
   boundary: operators should know what compatible package set they are running
-  current_status: evidence_needed
-  evidence_grade: E0
-  patch_readiness: P0
+  current_status: verified_not_patched
+  evidence_grade: E2
+  patch_readiness: P1
   batch: B
+  notes:
+  - 'Coordinator investigation elevated E2/P1: package versions are independent; doctor/version surface needs explicit package set visibility.'
+  - Not patched yet. Next after F10: doctor evidence card then narrow patch if P2.
   evidence_required:
     source_locations:
     - root package.json
@@ -490,10 +498,13 @@ findings:
   risk_class: operability
   moving_resource: language parser capability and fallback splitter state
   boundary: operators/agents should know when index is symbol-rich vs fallback-only
-  current_status: evidence_needed
-  evidence_grade: E0
-  patch_readiness: P0
+  current_status: verified_not_patched
+  evidence_grade: E2
+  patch_readiness: P1
   batch: B
+  notes:
+  - 'Coordinator investigation elevated E2/P1: fallback can degrade symbol quality; surface decision still open (doctor vs list_codebases vs status vs search warnings).'
+  - Not patched. Design surface ownership before implementation; no console-only warning.
   evidence_required:
     source_locations:
     - tree-sitter imports
@@ -520,10 +531,13 @@ findings:
   risk_class: hygiene
   moving_resource: repository top-level documentation signal
   boundary: authoritative docs should be clear; temporary notes should not compete
-  current_status: evidence_needed
-  evidence_grade: E0
-  patch_readiness: P0
+  current_status: verified_not_patched
+  evidence_grade: E2
+  patch_readiness: P1
   batch: B
+  notes:
+  - 'Coordinator investigation elevated E2/P1: temp/backup/process files at repo root compete with authoritative orientation docs.'
+  - Not patched yet. Recommended next hygiene-only patch (delete/move/gitignore; no runtime/docs rewrite).
   evidence_required:
     source_locations:
     - root tree listing
@@ -548,13 +562,16 @@ findings:
   risk_class: maintainability
   moving_resource: runtime responsibilities concentrated in large orchestration files
   boundary: one file should not own unrelated lifecycles and contracts
-  current_status: evidence_needed
+  current_status: parked
   evidence_grade: E0
   patch_readiness: P0
+  closure_type: parked
+  closure_decision: parked
   batch: B
   notes:
+  - Parked by process decision: do not open as a standalone refactor project.
+  - Only extract seams when another verified finding forces an edit into these files.
   - Do not patch as a broad refactor.
-  - Convert into seam extraction only when touching a related behavior for another verified finding.
   evidence_required:
     source_locations:
     - LOC/method count for Context and ToolHandlers

@@ -52,7 +52,8 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 Architecture in words:
 - Core sync (`packages/core`) tracks file state (stats, hashes, merkle root, partial-scan metadata).
 - MCP runtime (`packages/mcp`) owns snapshot status, freshness gating, search orchestration, call graph sidecar lifecycle, and tool routing.
-- Shell CLI runtime (`packages/mcp/src/cli`) is transport/client glue plus install/uninstall lifecycle commands; it must not duplicate MCP tool logic.
+- Public installer/doctor ownership is `packages/cli` (`satori-cli`). Install/uninstall mutate client config and managed runtime under `~/.satori/`; they are not MCP tools.
+- `packages/mcp/src/cli` is residual non-bin tool-shell glue (list/call wrappers). `install`/`uninstall` there are hard-deprecated and exit with guidance to `satori-cli`; they must not write configs or install managed runtime.
 - Installer runtime cache paths are private implementation details; public setup remains the one-command CLI installer flow.
 - Sidecar/index artifacts are consumed by `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - Agent-visible entrypoints are only the six tools from `toolRegistry`.
@@ -96,7 +97,10 @@ Behavior contract:
 - [index.ts](/home/hamza/repo/satori/packages/mcp/src/index.ts) (bootstrap entrypoint with run-mode and stdio-safety wiring).
 - [start-server.ts](/home/hamza/repo/satori/packages/mcp/src/server/start-server.ts) (`ContextMcpServer`, `start`, `setupTools`, run-mode startup lifecycle).
 - [stdio-safety.ts](/home/hamza/repo/satori/packages/mcp/src/server/stdio-safety.ts) (console-to-stderr and cli-mode stdout guard).
-- [cli/index.ts](/home/hamza/repo/satori/packages/mcp/src/cli/index.ts) (`tools list`, `tool call`, wrapper path, envelope-aware exit mapping).
+- [packages/cli/src/index.ts](/home/hamza/repo/satori/packages/cli/src/index.ts) (public `satori-cli`: install/doctor + tool shell).
+- [packages/cli/src/install.ts](/home/hamza/repo/satori/packages/cli/src/install.ts) (installer SSOT).
+- [packages/mcp/src/cli/index.ts](/home/hamza/repo/satori/packages/mcp/src/cli/index.ts) (legacy non-bin tool shell; install hard-deprecated).
+- [packages/mcp/src/cli/install.ssot.test.ts](/home/hamza/repo/satori/packages/mcp/src/cli/install.ssot.test.ts) (MCP install mutation surface must stay gone).
 - [registry.ts](/home/hamza/repo/satori/packages/mcp/src/tools/registry.ts) (6-tool surface).
 - [handlers.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.ts) (`handleSearchCode`, `handleFileOutline`, `handleCallGraph`).
 - [search-types.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-types.ts) (envelopes/contracts).
@@ -837,7 +841,7 @@ Behavior contract:
 | Symbol-owned retrieval contract types | [contracts.test.ts](/home/hamza/repo/satori/packages/core/src/symbols/contracts.test.ts) schema versions, manifest guards, canonical span serialization, relationship manifest validation |
 | Owner metadata assignment and persistence | [registry.test.ts](/home/hamza/repo/satori/packages/core/src/symbols/registry.test.ts) owner resolver tightest span/fallback/tie-break tests; [context.test.ts](/home/hamza/repo/satori/packages/core/src/core/context.test.ts) vector document owner metadata assertions |
 | Symbol-owned grouped search aggregation | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped symbol mode collapses chunks by owner symbol key...`, `grouped symbol mode repairs legacy chunks from compatible symbol registry ownership`, `keeps same-label declaration groups separate...` |
-| Installer `--profile` repo config | [install.test.ts](/home/hamza/repo/satori/packages/cli/src/install.test.ts) `install --profile writes repo config`, [install.test.ts](/home/hamza/repo/satori/packages/mcp/src/cli/install.test.ts) `install --profile writes repo config` |
+| Installer `--profile` repo config | [install.test.ts](/home/hamza/repo/satori/packages/cli/src/install.test.ts) `install --profile writes repo-local Satori config once for all clients` (CLI SSOT; MCP install path hard-deprecated, see `install.ssot.test.ts`) |
 | `satori.toml` freshness reconciliation | [sync.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/sync.test.ts) `ensureFreshness treats satori.toml as an index-policy control file` |
 | Search scope runtime/docs invariants + ordering determinism | [search.eval.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/search.eval.test.ts) `search eval matrix invariants hold...` |
 | Operator parsing + escaping | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `parses operators from query prefix...` |

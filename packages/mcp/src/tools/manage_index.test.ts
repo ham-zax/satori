@@ -188,6 +188,14 @@ test("public docs and skills list manage_index repair and do not claim text-only
         e2e,
         /manage_index` action router supports `create\|reindex\|sync\|status\|clear`;/,
     );
+    // OWN-3: installer SSOT is packages/cli; MCP install path is hard-deprecated (no deleted test cites).
+    assert.match(e2e, /Public installer\/doctor ownership is `packages\/cli`/);
+    assert.match(e2e, /hard-deprecated/);
+    assert.doesNotMatch(e2e, /packages\/mcp\/src\/cli\/install\.test\.ts/);
+    assert.doesNotMatch(
+        e2e,
+        /Shell CLI runtime \(`packages\/mcp\/src\/cli`\) is transport\/client glue plus install\/uninstall/,
+    );
 
     for (const skillRel of [
         "packages/cli/assets/skills/satori/SKILL.md",

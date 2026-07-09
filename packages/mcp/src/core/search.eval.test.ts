@@ -147,10 +147,10 @@ test('search eval matrix invariants hold for runtime/docs scope and deterministi
                 expectedNotIn: ['docs/auth.md']
             },
             {
-                name: 'docs scope includes docs and tests only',
+                name: 'docs scope includes docs only (excludes tests)',
                 args: { scope: 'docs', resultMode: 'raw', groupBy: 'symbol', query: 'auth docs', limit: 5 },
-                expectedIn: ['docs/auth.md', 'src/auth/auth.test.ts'],
-                expectedNotIn: ['src/auth/runtime.ts']
+                expectedIn: ['docs/auth.md'],
+                expectedNotIn: ['src/auth/runtime.ts', 'src/auth/auth.test.ts']
             }
         ] as const;
 

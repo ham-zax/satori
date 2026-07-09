@@ -282,7 +282,8 @@ export function shouldIncludeCategoryInScope(scope: SearchScope, category: PathC
             && category !== "fixture";
     }
     if (scope === "docs") {
-        return category === "docs" || category === "tests";
+        // Docs-only: tests stay in runtime/mixed so "docs scope" is trustworthy for contract reading.
+        return category === "docs";
     }
     return true;
 }

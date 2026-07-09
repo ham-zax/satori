@@ -149,7 +149,7 @@ function emitSearchBackendErrorTelemetry(args: {
 const buildSearchSchema = (ctx: ToolContext) => z.object({
     path: absoluteFilesystemPathSchema("ABSOLUTE filesystem path to an indexed codebase or subdirectory (relative paths are rejected)."),
     query: z.string().min(1).describe("Natural-language query."),
-    scope: z.enum(["runtime", "mixed", "docs"]).default("runtime").optional().describe("Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns docs/tests only; mixed includes all. Docs scope skips reranker by policy in the current tool surface."),
+    scope: z.enum(["runtime", "mixed", "docs"]).default("runtime").optional().describe("Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns documentation paths only (not tests); mixed includes all. Docs scope skips reranker by policy in the current tool surface."),
     resultMode: z.enum(["grouped", "raw"]).default("grouped").optional().describe("Output mode. grouped returns merged search groups, raw returns chunk hits."),
     groupBy: z.enum(["symbol", "file"]).default("symbol").optional().describe("Grouping strategy in grouped mode."),
     rankingMode: z.enum(["default", "auto_changed_first"]).default("auto_changed_first").optional().describe("Ranking policy. auto_changed_first boosts files changed in the current git working tree when available."),

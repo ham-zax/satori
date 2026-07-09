@@ -151,7 +151,7 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 |---|---|---|---|---|
 | `path` | string | yes |  | ABSOLUTE path to an indexed codebase or subdirectory. |
 | `query` | string | yes |  | Natural-language query. |
-| `scope` | enum("runtime", "mixed", "docs") | no | `"runtime"` | Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns docs/tests only; mixed includes all. Docs scope skips reranker by policy in the current tool surface. |
+| `scope` | enum("runtime", "mixed", "docs") | no | `"runtime"` | Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns documentation paths only (not tests); mixed includes all. Docs scope skips reranker by policy in the current tool surface. |
 | `resultMode` | enum("grouped", "raw") | no | `"grouped"` | Output mode. grouped returns merged search groups, raw returns chunk hits. |
 | `groupBy` | enum("symbol", "file") | no | `"symbol"` | Grouping strategy in grouped mode. |
 | `rankingMode` | enum("default", "auto_changed_first") | no | `"auto_changed_first"` | Ranking policy. auto_changed_first boosts files changed in the current git working tree when available. |

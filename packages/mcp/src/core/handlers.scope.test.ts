@@ -3103,7 +3103,7 @@ test('handleSearchCode runtime scope includes tests but excludes docs and artifa
     });
 });
 
-test('handleSearchCode docs scope only returns docs and tests', async () => {
+test('handleSearchCode docs scope only returns docs (excludes tests)', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [
             {
@@ -3155,7 +3155,9 @@ test('handleSearchCode docs scope only returns docs and tests', async () => {
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const files = payload.results.map((r: SearchPayloadResultView) => r.file).sort();
-        assert.deepEqual(files, ['docs/runtime-helper.ts', 'docs/runtime.md', 'src/runtime.test.ts']);
+        assert.deepEqual(files, ['docs/runtime-helper.ts', 'docs/runtime.md']);
+        assert.ok(!files.includes('src/runtime.test.ts'));
+        assert.ok(!files.includes('src/runtime.ts'));
     });
 });
 

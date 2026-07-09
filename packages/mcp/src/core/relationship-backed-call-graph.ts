@@ -101,12 +101,33 @@ function compareNullableStringsAsc(a?: string | null, b?: string | null): number
     return compareContractStrings(left, right);
 }
 
+/** True when a repo-relative path looks like a test/fixture site (not production call graph signal). */
+export function isTestOrFixtureCallerFile(file: string): boolean {
+    const normalized = file.trim().replace(/\\/g, "/");
+    if (!normalized) {
+        return false;
+    }
+    const base = normalized.split("/").pop() || normalized;
+    if (/\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) {
+        return true;
+    }
+    if (/(^|\/)(__tests__|__mocks__|fixtures|testdata|test-data)(\/|$)/i.test(normalized)) {
+        return true;
+    }
+    if (/(^|\/)tests?(\/|$)/i.test(normalized) && !/(^|\/)packages\/[^/]+\/src\//i.test(normalized)) {
+        return true;
+    }
+    return false;
+}
+
 /**
  * Prefer a single unique suppressed inbound caller *site* file for recovery search.
+ * Prefer production files when both production and test sites exist.
  * Never use the callee defining file when sites disagree or are multi-file.
  */
 export function uniqueInboundCallerSiteFile(notes: readonly CallGraphNote[]): string | undefined {
-    const sites = new Set<string>();
+    const productionSites = new Set<string>();
+    const allSites = new Set<string>();
     for (const note of notes) {
         if (note.type !== "suppressed_edge") {
             continue;
@@ -118,12 +139,57 @@ export function uniqueInboundCallerSiteFile(notes: readonly CallGraphNote[]): st
         if (!file) {
             continue;
         }
-        sites.add(file);
+        allSites.add(file);
+        if (!isTestOrFixtureCallerFile(file)) {
+            productionSites.add(file);
+        }
     }
-    if (sites.size !== 1) {
+    const preferred = productionSites.size > 0 ? productionSites : allSites;
+    if (preferred.size !== 1) {
         return undefined;
     }
-    return [...sites][0];
+    return [...preferred][0];
+}
+
+const MAX_DETAILED_TEST_SUPPRESSED_CALLER_NOTES = 3;
+
+/**
+ * Production suppressed callers first; collapse excess test/fixture caller notes into one summary.
+ */
+export function prioritizeInboundSuppressedNotes(notes: readonly CallGraphNote[]): CallGraphNote[] {
+    const productionCallerNotes: CallGraphNote[] = [];
+    const testCallerNotes: CallGraphNote[] = [];
+    const otherNotes: CallGraphNote[] = [];
+
+    for (const note of notes) {
+        const isCallerSuppressed = note.type === "suppressed_edge"
+            && typeof note.detail === "string"
+            && note.detail.includes("caller candidate");
+        if (!isCallerSuppressed) {
+            otherNotes.push(note);
+            continue;
+        }
+        const file = typeof note.file === "string" ? note.file : "";
+        if (isTestOrFixtureCallerFile(file)) {
+            testCallerNotes.push(note);
+        } else {
+            productionCallerNotes.push(note);
+        }
+    }
+
+    const keptTestNotes = testCallerNotes.slice(0, MAX_DETAILED_TEST_SUPPRESSED_CALLER_NOTES);
+    const collapsedTestCount = testCallerNotes.length - keptTestNotes.length;
+    const summaryNotes: CallGraphNote[] = collapsedTestCount > 0
+        ? [{
+            type: "suppressed_edge",
+            file: "(aggregate)",
+            startLine: 0,
+            confidence: 0.35,
+            detail: `Suppressed ${collapsedTestCount} additional low-confidence test/fixture caller candidate(s); prefer production callers and must: recovery search for call sites.`,
+        }]
+        : [];
+
+    return [...productionCallerNotes, ...keptTestNotes, ...summaryNotes, ...otherNotes];
 }
 
 function formatUnknownError(error: unknown): string {
@@ -411,11 +477,12 @@ export class RelationshipBackedCallGraph {
             ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),
             ...(addedDynamicCallerEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLERS:${addedDynamicCallerEdges.length}`] : []),
         ])].sort(compareContractStrings);
-        const combinedNotes = this.sortNotes([
+        // Sort first for determinism within bands, then production-first inbound note priority.
+        const combinedNotes = prioritizeInboundSuppressedNotes(this.sortNotes([
             ...suppressedLowConfidenceNotes,
             ...(addedDynamicCalleeEdges.length > 0 ? dynamicCalleeFallback.notes : []),
             ...(addedDynamicCallerEdges.length > 0 ? dynamicCallerFallback.notes : []),
-        ]);
+        ]));
 
         const wantsInbound = input.direction === "callers" || input.direction === "both";
         const inboundEdgeCount = combinedEdges.filter((edge) => (
@@ -427,8 +494,8 @@ export class RelationshipBackedCallGraph {
             && note.detail.includes("caller candidate")
         ));
         // Notes-only inbound: promote executable must: identifier search (no fake edges).
-        // path: uses unique suppressed *caller site* file when available — never the callee
-        // defining file alone (that would miss cross-file call sites).
+        // path: uses unique suppressed *caller site* file when available — prefer production
+        // over test/fixture sites (never the callee defining file alone).
         let hints: Record<string, unknown> | undefined;
         if (wantsInbound && inboundEdgeCount === 0 && hasInboundSuppressedNotes) {
             const constructed = buildInboundNotesOnlySearchQuery({
@@ -447,7 +514,7 @@ export class RelationshipBackedCallGraph {
                                 scope: "runtime",
                                 resultMode: "grouped",
                             },
-                            reason: "Inbound graph edges were suppressed as low-confidence; use deterministic must: search to find call sites.",
+                            reason: "Inbound graph edges were suppressed as low-confidence or incomplete; use deterministic must: search to find production call sites.",
                         },
                     ],
                 };

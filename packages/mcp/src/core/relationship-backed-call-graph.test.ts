@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     collapseRegistryDuplicateKeyWarnings,
+    isTestOrFixtureCallerFile,
+    prioritizeInboundSuppressedNotes,
     uniqueInboundCallerSiteFile,
 } from "./relationship-backed-call-graph.js";
 import type { CallGraphNote } from "./call-graph.js";
@@ -79,6 +81,77 @@ test("uniqueInboundCallerSiteFile returns sole suppressed caller site, else unde
     ];
     assert.equal(uniqueInboundCallerSiteFile(multi), undefined);
 
+    const mixedProdAndTest: CallGraphNote[] = [
+        {
+            type: "suppressed_edge",
+            file: "src/core/gate.test.ts",
+            startLine: 1,
+            detail: "Suppressed low-confidence caller candidate async function <anonymous>() at src/core/gate.test.ts:1.",
+        },
+        {
+            type: "suppressed_edge",
+            file: "src/core/handlers.ts",
+            startLine: 20,
+            detail: "Suppressed low-confidence caller candidate method run() at src/core/handlers.ts:20.",
+        },
+        {
+            type: "suppressed_edge",
+            file: "src/core/gate.spec.ts",
+            startLine: 5,
+            detail: "Suppressed low-confidence caller candidate function now() at src/core/gate.spec.ts:5.",
+        },
+    ];
+    assert.equal(uniqueInboundCallerSiteFile(mixedProdAndTest), "src/core/handlers.ts");
+});
+
+test("isTestOrFixtureCallerFile detects test and fixture paths", () => {
+    assert.equal(isTestOrFixtureCallerFile("packages/mcp/src/core/runtime-owner.test.ts"), true);
+    assert.equal(isTestOrFixtureCallerFile("packages/mcp/src/core/runtime-owner.ts"), false);
+    assert.equal(isTestOrFixtureCallerFile("fixtures/navigation/go-basic-symbols/svc.go"), true);
+});
+
+test("prioritizeInboundSuppressedNotes puts production callers first and collapses excess tests", () => {
+    const notes: CallGraphNote[] = [
+        {
+            type: "suppressed_edge",
+            file: "a.test.ts",
+            detail: "Suppressed low-confidence caller candidate t1 at a.test.ts:1.",
+        },
+        {
+            type: "suppressed_edge",
+            file: "b.test.ts",
+            detail: "Suppressed low-confidence caller candidate t2 at b.test.ts:1.",
+        },
+        {
+            type: "suppressed_edge",
+            file: "c.test.ts",
+            detail: "Suppressed low-confidence caller candidate t3 at c.test.ts:1.",
+        },
+        {
+            type: "suppressed_edge",
+            file: "d.test.ts",
+            detail: "Suppressed low-confidence caller candidate t4 at d.test.ts:1.",
+        },
+        {
+            type: "suppressed_edge",
+            file: "src/prod.ts",
+            detail: "Suppressed low-confidence caller candidate method run() at src/prod.ts:1.",
+        },
+        {
+            type: "suppressed_edge",
+            file: "src/other.ts",
+            detail: "Suppressed low-confidence callee candidate x at src/other.ts:1.",
+        },
+    ];
+    const prioritized = prioritizeInboundSuppressedNotes(notes);
+    assert.equal(prioritized[0]?.file, "src/prod.ts");
+    const testDetailed = prioritized.filter((n) => n.file && isTestOrFixtureCallerFile(n.file));
+    assert.equal(testDetailed.length, 3);
+    assert.ok(prioritized.some((n) => typeof n.detail === "string" && n.detail.includes("additional low-confidence test/fixture")));
+    assert.ok(prioritized.some((n) => n.detail?.includes("callee candidate")));
+});
+
+test("uniqueInboundCallerSiteFile ignores callee-only suppressed notes", () => {
     const calleeOnly: CallGraphNote[] = [{
         type: "suppressed_edge",
         file: "src/callee.ts",

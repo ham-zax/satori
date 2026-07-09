@@ -23,22 +23,37 @@ All notable changes to this repository are documented in this file.
 ### Changed
 - **Installer SSOT:** `packages/cli` (`satori-cli`) is the sole installer owner. MCP CLI `install` / `uninstall` hard-deprecate with `E_USAGE` migration guidance to `npx -y @zokizuan/satori-cli@latest install|uninstall`; no config writes or dual installer implementation.
 - Aligned `manage_index` public contract across AGENTS, E2E spec, skills, and live schema (JSON envelopes; actions include `repair`).
-- Documented `call_graph` CALLS v0 as heuristic/advisory (not sole blast-radius authority) in AGENTS and skills.
+- Documented `call_graph` CALLS v0 as heuristic/advisory (not sole blast-radius authority) in AGENTS, skills, and the MCP `call_graph` tool description (bounded, name-based, not blast-radius authority).
+- E2E installer ownership docs: `packages/cli` SSOT; MCP install path hard-deprecated (removed stale `packages/mcp/src/cli/install.test.ts` cites).
 - Remediation process docs moved under `docs/remediation/`; root temp/backup noise removed from tracking.
+- `manage_index create` kickoff prose: search/navigation blocked until indexing completes (poll status); no “search while indexing” guidance.
+- MCP server default version reads `@zokizuan/satori-mcp` package.json (override via `MCP_SERVER_VERSION`); install JSON result includes `packageSpecifier`.
+- CI adds `package_unit_tests` job running MCP + CLI unit suites (no live providers).
 
 ### Fixed
 - `read_file` host filesystem containment (indexed-root gate + realpath checks).
 - Path policy edge cases: snapshot roots absolute-only; drive-relative rejection.
 - Merkle root ordering locale independence (monkey-patch proven).
+- Synchronizer snapshot JSON key order uses `compareContractStrings` (locale-independent).
+- Full index `limit_reached`: writes completion marker with `indexStatus: limit_reached` for partial vector proof (no symbol registry); interrupted-index recovery preserves partial status; status reports partial index (not “fully indexed”); navigation remains fail-closed.
+- CI `package_unit_tests` job runs core + MCP + CLI unit suites.
 
 ### Compatibility
 - Relative public paths that previously soft-resolved against CWD now fail validation.
 - Direct MCP CLI install/uninstall (non-bin path) exits with use-`satori-cli` guidance.
 - Merkle roots may change once vs older locale-sensitive packing order.
+- Snapshot on-disk JSON key order may change once vs locale-sensitive packing (content of maps unchanged).
 - Additive `symbolQuality` on `manage_index status` and compact marker on `list_codebases` Ready lines; clients ignoring unknown JSON fields remain compatible.
+- MCP handshake version may report package version (e.g. `4.11.13`) instead of historical default `1.0.0` when `MCP_SERVER_VERSION` is unset.
+- Install result gains optional `packageSpecifier` field.
+- `limit_reached` indexes become readiness-ready for warned partial search when marker is present (navigation still blocked).
 
 ### Tests
 - F1/F4/F5/F7/F8/F9/F11 contract and harness coverage; MCP install SSOT guards; doctor package-version tests.
+- Residual board: FLC-05 create prose; OWN-7 CI unit gates; FLC-08 limit_reached marker/status; OWN-3 E2E install ownership; F-AC-01 call_graph description; F-D2 snapshot sort; F-OP version/specifier; hygiene artifact cleanup.
+
+### Hygiene
+- Removed tracked stale `build-benchmark.json` (vscode/chrome packages) and host-path example `config.json`; gitignored regenerable local artifacts.
 
 ### Prior unreleased (carried)
 - `manage_index` `repair` action: rebuilds local readiness without re-embedding when vector payload and trusted fingerprint match.

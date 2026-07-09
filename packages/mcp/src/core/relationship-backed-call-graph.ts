@@ -1,4 +1,5 @@
 import {
+    compareContractStrings,
     getGraphNeighbors,
     type NavigationStore,
     type RelationshipRecord,
@@ -19,6 +20,34 @@ import {
     buildSourceBackedPythonCallerFallback,
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
+import { buildInboundNotesOnlySearchQuery } from "./search-response-helpers.js";
+
+const DUPLICATE_SYMBOL_KEY_WARNING_RE = /^Duplicate symbolKey '([^']+)' has (\d+) candidates$/;
+
+/**
+ * Collapse per-key registry duplicate warnings into one count + sample line.
+ * Presentation-only: registry build still retains full diagnostics.
+ */
+export function collapseRegistryDuplicateKeyWarnings(warnings: readonly string[]): string[] {
+    const samples: string[] = [];
+    let dupCount = 0;
+    const rest: string[] = [];
+    for (const warning of warnings) {
+        const match = DUPLICATE_SYMBOL_KEY_WARNING_RE.exec(warning);
+        if (match) {
+            dupCount += 1;
+            samples.push(match[1]);
+            continue;
+        }
+        rest.push(warning);
+    }
+    if (dupCount > 0) {
+        samples.sort(compareContractStrings);
+        const sample = samples.slice(0, 3).join(",");
+        rest.push(`DUPLICATE_SYMBOL_KEY:${dupCount}${sample ? ` sample=${sample}` : ""}`);
+    }
+    return rest;
+}
 
 type RelationshipBackedCallGraphHost = {
     navigationStore: NavigationStore;
@@ -57,6 +86,7 @@ type RelationshipBackedCallGraphResult = {
         nodeCount: number;
         edgeCount: number;
     };
+    hints?: Record<string, unknown>;
 };
 
 function compareNullableNumbersAsc(a?: number | null, b?: number | null): number {
@@ -68,7 +98,32 @@ function compareNullableNumbersAsc(a?: number | null, b?: number | null): number
 function compareNullableStringsAsc(a?: string | null, b?: string | null): number {
     const left = typeof a === "string" ? a : "";
     const right = typeof b === "string" ? b : "";
-    return left.localeCompare(right);
+    return compareContractStrings(left, right);
+}
+
+/**
+ * Prefer a single unique suppressed inbound caller *site* file for recovery search.
+ * Never use the callee defining file when sites disagree or are multi-file.
+ */
+export function uniqueInboundCallerSiteFile(notes: readonly CallGraphNote[]): string | undefined {
+    const sites = new Set<string>();
+    for (const note of notes) {
+        if (note.type !== "suppressed_edge") {
+            continue;
+        }
+        if (typeof note.detail !== "string" || !note.detail.includes("caller candidate")) {
+            continue;
+        }
+        const file = typeof note.file === "string" ? note.file.trim() : "";
+        if (!file) {
+            continue;
+        }
+        sites.add(file);
+    }
+    if (sites.size !== 1) {
+        return undefined;
+    }
+    return [...sites][0];
 }
 
 function formatUnknownError(error: unknown): string {
@@ -350,17 +405,54 @@ export class RelationshipBackedCallGraph {
             [...nodeById.values()].filter((node) => referencedNodeIds.has(node.symbolId))
         );
         const warnings = [...new Set([
-            ...input.registry.warnings,
+            ...collapseRegistryDuplicateKeyWarnings(input.registry.warnings),
             ...neighbors.warnings,
             ...(droppedEdgesOutsideSourceSpan > 0 ? [`CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:${droppedEdgesOutsideSourceSpan}`] : []),
             ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),
             ...(addedDynamicCallerEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLERS:${addedDynamicCallerEdges.length}`] : []),
-        ])].sort((a, b) => a.localeCompare(b));
+        ])].sort(compareContractStrings);
         const combinedNotes = this.sortNotes([
             ...suppressedLowConfidenceNotes,
             ...(addedDynamicCalleeEdges.length > 0 ? dynamicCalleeFallback.notes : []),
             ...(addedDynamicCallerEdges.length > 0 ? dynamicCallerFallback.notes : []),
         ]);
+
+        const wantsInbound = input.direction === "callers" || input.direction === "both";
+        const inboundEdgeCount = combinedEdges.filter((edge) => (
+            edge.dstSymbolId === input.resolvedSymbol.symbolInstanceId
+        )).length;
+        const hasInboundSuppressedNotes = combinedNotes.some((note) => (
+            note.type === "suppressed_edge"
+            && typeof note.detail === "string"
+            && note.detail.includes("caller candidate")
+        ));
+        // Notes-only inbound: promote executable must: identifier search (no fake edges).
+        // path: uses unique suppressed *caller site* file when available — never the callee
+        // defining file alone (that would miss cross-file call sites).
+        let hints: Record<string, unknown> | undefined;
+        if (wantsInbound && inboundEdgeCount === 0 && hasInboundSuppressedNotes) {
+            const constructed = buildInboundNotesOnlySearchQuery({
+                symbolLabel: input.resolvedSymbol.label,
+                symbolId: input.resolvedSymbol.symbolInstanceId,
+                file: uniqueInboundCallerSiteFile(combinedNotes),
+            });
+            if (constructed.query) {
+                hints = {
+                    nextSteps: [
+                        {
+                            tool: "search_codebase",
+                            args: {
+                                path: input.codebaseRoot,
+                                query: constructed.query,
+                                scope: "runtime",
+                                resultMode: "grouped",
+                            },
+                            reason: "Inbound graph edges were suppressed as low-confidence; use deterministic must: search to find call sites.",
+                        },
+                    ],
+                };
+            }
+        }
 
         return {
             supported: true,
@@ -379,6 +471,7 @@ export class RelationshipBackedCallGraph {
                 nodeCount: combinedNodes.length,
                 edgeCount: combinedEdges.length,
             },
+            ...(hints ? { hints } : {}),
         };
     }
 

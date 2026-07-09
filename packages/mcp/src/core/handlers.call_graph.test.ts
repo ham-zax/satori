@@ -1079,6 +1079,369 @@ test('handleCallGraph does not synthesize Python caller fallback when the suppre
             && note.detail.includes('src/phases.py:4')
         )));
         assert.ok(!callersPayload.notes.some((note: CallGraphNoteView) => note.type === 'dynamic_edge'));
+        // C1: notes-only inbound promotes executable must: identifier search.
+        const nextStep = callersPayload.hints?.nextSteps?.[0];
+        assert.equal(nextStep?.tool, 'search_codebase');
+        assert.match(String(nextStep?.args?.query || ''), /^must:[A-Za-z_$][\w$]* /);
+        // Same-file suppressed site: path: is the call-site file (not a different callee file).
+        assert.match(String(nextStep?.args?.query || ''), / path:src\/phases\.py$/);
+        assert.equal(nextStep?.args?.path, repoPath);
+        assert.equal(nextStep?.args?.scope, 'runtime');
+    }));
+});
+
+test('handleCallGraph notes-only inbound fallback path uses unique cross-file caller site, not callee file', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        // TypeScript avoids Python source-backed caller recovery so the graph stays notes-only.
+        const calleeSource = [
+            'export function targetSymbol() {',
+            '  return 1;',
+            '}',
+            '',
+        ].join('\n');
+        const callerSource = [
+            'import { targetSymbol } from "./target";',
+            '',
+            'export function invokeTarget() {',
+            '  return targetSymbol();',
+            '}',
+            '',
+        ].join('\n');
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, 'src', 'target.ts'), calleeSource);
+        fs.writeFileSync(path.join(repoPath, 'src', 'caller.ts'), callerSource);
+        const calleeHash = sha256Content(calleeSource);
+        const callerHash = sha256Content(callerSource);
+        const target = createFunctionSymbol({
+            file: 'src/target.ts',
+            name: 'targetSymbol',
+            label: 'function targetSymbol()',
+            startLine: 1,
+            endLine: 3,
+            fileHash: calleeHash,
+            language: 'typescript',
+        });
+        const invoke = createFunctionSymbol({
+            file: 'src/caller.ts',
+            name: 'invokeTarget',
+            label: 'function invokeTarget()',
+            startLine: 3,
+            endLine: 5,
+            fileHash: callerHash,
+            language: 'typescript',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [target, invoke],
+            records: [{
+                sourceKey: invoke.symbolKey,
+                sourceInstanceId: invoke.symbolInstanceId,
+                targetKey: target.symbolKey,
+                targetInstanceId: target.symbolInstanceId,
+                type: 'CALLS',
+                // Call site lives in the caller file — recovery path: must use this, not target.ts.
+                file: 'src/caller.ts',
+                span: { startLine: 4, endLine: 4 },
+                confidence: 'low',
+            }],
+        });
+
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            getVectorStore: () => ({ listCollections: async () => [] }),
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseInfo: () => undefined,
+            getCodebaseCallGraphSidecar: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({
+                allowed: true,
+                changed: false,
+            }),
+            saveCodebaseSnapshot: () => undefined,
+            getAllCodebases: () => [],
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/target.ts',
+                symbolId: target.symbolInstanceId,
+                symbolLabel: target.label,
+            },
+            direction: 'callers',
+            depth: 1,
+            limit: 20,
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.edges.length, 0);
+        assert.ok(payload.notes.some((note: CallGraphNoteView) => (
+            note.type === 'suppressed_edge'
+            && note.file === 'src/caller.ts'
+            && note.detail.includes('caller candidate')
+        )));
+        const nextStep = payload.hints?.nextSteps?.[0];
+        assert.equal(nextStep?.tool, 'search_codebase');
+        const query = String(nextStep?.args?.query || '');
+        assert.match(query, /must:targetSymbol targetSymbol/);
+        assert.match(query, / path:src\/caller\.ts$/);
+        assert.doesNotMatch(query, /path:src\/target\.ts/);
+    }));
+});
+
+test('handleCallGraph notes-only inbound omits path: when suppressed callers span multiple files', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const calleeSource = 'export function multiTarget() { return 1; }\n';
+        const aSource = 'import { multiTarget } from "./target";\nexport function a() { return multiTarget(); }\n';
+        const bSource = 'import { multiTarget } from "./target";\nexport function b() { return multiTarget(); }\n';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, 'src', 'target.ts'), calleeSource);
+        fs.writeFileSync(path.join(repoPath, 'src', 'a.ts'), aSource);
+        fs.writeFileSync(path.join(repoPath, 'src', 'b.ts'), bSource);
+        const target = createFunctionSymbol({
+            file: 'src/target.ts',
+            name: 'multiTarget',
+            label: 'function multiTarget()',
+            startLine: 1,
+            endLine: 1,
+            fileHash: sha256Content(calleeSource),
+            language: 'typescript',
+        });
+        const a = createFunctionSymbol({
+            file: 'src/a.ts',
+            name: 'a',
+            label: 'function a()',
+            startLine: 2,
+            endLine: 2,
+            fileHash: sha256Content(aSource),
+            language: 'typescript',
+        });
+        const b = createFunctionSymbol({
+            file: 'src/b.ts',
+            name: 'b',
+            label: 'function b()',
+            startLine: 2,
+            endLine: 2,
+            fileHash: sha256Content(bSource),
+            language: 'typescript',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [target, a, b],
+            records: [
+                {
+                    sourceKey: a.symbolKey,
+                    sourceInstanceId: a.symbolInstanceId,
+                    targetKey: target.symbolKey,
+                    targetInstanceId: target.symbolInstanceId,
+                    type: 'CALLS',
+                    file: 'src/a.ts',
+                    span: { startLine: 2, endLine: 2 },
+                    confidence: 'low',
+                },
+                {
+                    sourceKey: b.symbolKey,
+                    sourceInstanceId: b.symbolInstanceId,
+                    targetKey: target.symbolKey,
+                    targetInstanceId: target.symbolInstanceId,
+                    type: 'CALLS',
+                    file: 'src/b.ts',
+                    span: { startLine: 2, endLine: 2 },
+                    confidence: 'low',
+                },
+            ],
+        });
+
+        const handlers = new ToolHandlers(
+            {
+                getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+                getVectorStore: () => ({ listCollections: async () => [] }),
+            } as unknown as HandlerContext,
+            {
+                getIndexedCodebases: () => [repoPath],
+                getCodebaseInfo: () => undefined,
+                getCodebaseCallGraphSidecar: () => undefined,
+                ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+                saveCodebaseSnapshot: () => undefined,
+                getAllCodebases: () => [],
+            } as unknown as HandlerSnapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+
+        const response = await handlers.handleCallGraph({
+            path: repoPath,
+            symbolRef: {
+                file: 'src/target.ts',
+                symbolId: target.symbolInstanceId,
+                symbolLabel: target.label,
+            },
+            direction: 'callers',
+            depth: 1,
+            limit: 20,
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.edges.length, 0);
+        const query = String(payload.hints?.nextSteps?.[0]?.args?.query || '');
+        assert.match(query, /must:multiTarget multiTarget/);
+        assert.doesNotMatch(query, / path:/);
+    }));
+});
+
+test('handleCallGraph node ordering is independent of String.prototype.localeCompare', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const source = [
+            'def beta():',
+            '    return 1',
+            '',
+            'def alpha():',
+            '    return beta()',
+            '',
+            'def gamma():',
+            '    return beta()',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source); // keep extension from fixture
+        fs.writeFileSync(path.join(repoPath, 'src', 'order.py'), source);
+        const hash = sha256Content(source);
+        const beta = createFunctionSymbol({
+            file: 'src/order.py',
+            name: 'beta',
+            label: 'function beta()',
+            startLine: 1,
+            endLine: 2,
+            fileHash: hash,
+            language: 'python',
+        });
+        const alpha = createFunctionSymbol({
+            file: 'src/order.py',
+            name: 'alpha',
+            label: 'function alpha()',
+            startLine: 4,
+            endLine: 5,
+            fileHash: hash,
+            language: 'python',
+        });
+        const gamma = createFunctionSymbol({
+            file: 'src/order.py',
+            name: 'gamma',
+            label: 'function gamma()',
+            startLine: 7,
+            endLine: 8,
+            fileHash: hash,
+            language: 'python',
+        });
+        await writeTestNavigation({
+            stateRoot,
+            repoPath,
+            symbols: [beta, alpha, gamma],
+            records: [
+                {
+                    sourceKey: alpha.symbolKey,
+                    sourceInstanceId: alpha.symbolInstanceId,
+                    targetKey: beta.symbolKey,
+                    targetInstanceId: beta.symbolInstanceId,
+                    type: 'CALLS',
+                    file: 'src/order.py',
+                    span: { startLine: 5, endLine: 5 },
+                    confidence: 'high',
+                },
+                {
+                    sourceKey: gamma.symbolKey,
+                    sourceInstanceId: gamma.symbolInstanceId,
+                    targetKey: beta.symbolKey,
+                    targetInstanceId: beta.symbolInstanceId,
+                    type: 'CALLS',
+                    file: 'src/order.py',
+                    span: { startLine: 8, endLine: 8 },
+                    confidence: 'high',
+                },
+            ],
+        });
+
+        const handlers = new ToolHandlers(
+            {
+                getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+                getVectorStore: () => ({ listCollections: async () => [] }),
+            } as unknown as HandlerContext,
+            {
+                getIndexedCodebases: () => [repoPath],
+                getCodebaseInfo: () => undefined,
+                getCodebaseCallGraphSidecar: () => undefined,
+                ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+                saveCodebaseSnapshot: () => undefined,
+                getAllCodebases: () => [],
+            } as unknown as HandlerSnapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+
+        const original = String.prototype.localeCompare;
+        String.prototype.localeCompare = function patchedLocaleCompare(this: string): number {
+            return -original.call(this, arguments[0] as string);
+        };
+        try {
+            const response = await handlers.handleCallGraph({
+                path: repoPath,
+                symbolRef: {
+                    file: 'src/order.py',
+                    symbolId: beta.symbolInstanceId,
+                    symbolLabel: beta.label,
+                },
+                direction: 'callers',
+                depth: 1,
+                limit: 20,
+            });
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.edges.length, 2);
+            // Contract order: src by symbolId (instance ids are deterministic hashes) — at least
+            // edge order must not reverse relative to a second poisoned call.
+            const first = payload.edges.map((edge: { srcSymbolId: string; dstSymbolId: string }) => (
+                `${edge.srcSymbolId}->${edge.dstSymbolId}`
+            ));
+            const response2 = await handlers.handleCallGraph({
+                path: repoPath,
+                symbolRef: {
+                    file: 'src/order.py',
+                    symbolId: beta.symbolInstanceId,
+                    symbolLabel: beta.label,
+                },
+                direction: 'callers',
+                depth: 1,
+                limit: 20,
+            });
+            const second = JSON.parse(response2.content[0]?.text || '{}').edges.map(
+                (edge: { srcSymbolId: string; dstSymbolId: string }) => `${edge.srcSymbolId}->${edge.dstSymbolId}`,
+            );
+            assert.deepEqual(first, second);
+            // Node order stable under poison (code-unit, not localeCompare).
+            const nodeIds = payload.nodes.map((node: CallGraphNodeView) => node.symbolId);
+            const expectedNodeOrder = [...nodeIds].sort((a, b) => (a! < b! ? -1 : a! > b! ? 1 : 0));
+            // Nodes sort by file, span, label, then id — file equal; span start alpha=4 before beta=1? 
+            // Actually sort is file, startLine, label, id. alpha start 4, beta 1, gamma 7 → beta, alpha, gamma by startLine.
+            assert.deepEqual(
+                payload.nodes.map((n: CallGraphNodeView) => n.symbolLabel),
+                ['function beta()', 'function alpha()', 'function gamma()'],
+            );
+            assert.deepEqual(nodeIds, payload.nodes.map((n: CallGraphNodeView) => n.symbolId));
+            void expectedNodeOrder;
+        } finally {
+            String.prototype.localeCompare = original;
+        }
     }));
 });
 

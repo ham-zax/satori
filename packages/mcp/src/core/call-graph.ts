@@ -105,6 +105,8 @@ export interface CallGraphResponseSupported {
         nodeCount: number;
         edgeCount: number;
     };
+    /** Executable recovery steps when graph evidence is incomplete (e.g. notes-only inbound). */
+    hints?: Record<string, unknown>;
 }
 
 export type CallGraphQueryResponse = CallGraphResponseSupported | CallGraphResponseUnsupported;

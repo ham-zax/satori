@@ -1,4 +1,4 @@
-import type { SymbolRecord } from "@zokizuan/satori-core";
+import { compareContractStrings, type SymbolRecord } from "@zokizuan/satori-core";
 import type { CallGraphHint } from "./search-types.js";
 import type { FileOutlineResponseEnvelope, FileOutlineSymbolResult } from "./search-types.js";
 import {
@@ -15,7 +15,7 @@ function compareNullableNumbersAsc(a?: number | null, b?: number | null): number
 function compareNullableStringsAsc(a?: string | null, b?: string | null): number {
     const left = a ?? "\uffff";
     const right = b ?? "\uffff";
-    return left.localeCompare(right);
+    return compareContractStrings(left, right);
 }
 
 function sortFileOutlineSymbols(symbols: FileOutlineSymbolResult[]): FileOutlineSymbolResult[] {
@@ -142,7 +142,7 @@ export function buildRegistryFileOutlinePayload(input: {
         if (!visibleState.hasExtractedSymbols && symbols.length > 0) {
             warningSet.add("OUTLINE_SYNTHESIZED_FILE_SYMBOL");
         }
-        return [...warningSet].sort((a, b) => a.localeCompare(b));
+        return [...warningSet].sort(compareContractStrings);
     };
 
     if (input.resolveMode === "exact") {

@@ -1,4 +1,8 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { readManagedPackageJson, resolveManagedPackageSpecifier } from "./managed-package.js";
 
 type CheckStatus = "ok" | "warning" | "error";
@@ -9,8 +13,19 @@ export interface DoctorCheck {
     message: string;
 }
 
+export interface DoctorPackageVersion {
+    name: string;
+    version: string | null;
+    /** Where the version was resolved from, for support/debugging. */
+    source: string;
+}
+
 export interface DoctorResult {
     status: CheckStatus;
+    /** Installed Satori package set (independent versions are expected). */
+    packageVersions: DoctorPackageVersion[];
+    /** Operator note about multi-package versioning. */
+    packageVersionNote: string;
     checks: DoctorCheck[];
     nextSteps: string[];
 }
@@ -19,7 +34,14 @@ export interface DoctorOptions {
     env?: NodeJS.ProcessEnv;
     nodeVersion?: string;
     execFileSyncImpl?: typeof execFileSync;
+    /** Optional override for tests; defaults to resolveInstalledPackageVersions(). */
+    resolvePackageVersions?: () => DoctorPackageVersion[];
 }
+
+const PACKAGE_VERSION_NOTE =
+    "Satori ships independent package versions (cli, mcp, core). Doctor reports the installed set for support and debugging; versions need not match each other.";
+
+const requireFromHere = createRequire(import.meta.url);
 
 function parseNodeMajor(version: string): number {
     const match = version.match(/^v?(\d+)/);
@@ -88,12 +110,121 @@ function overallStatus(checks: DoctorCheck[]): CheckStatus {
     return "ok";
 }
 
+function readJsonVersion(packageJsonPath: string): { name: string; version: string } | null {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { name?: unknown; version?: unknown };
+        if (typeof parsed.name === "string" && typeof parsed.version === "string") {
+            return { name: parsed.name, version: parsed.version };
+        }
+    } catch {
+        // unresolved
+    }
+    return null;
+}
+
+function resolvePackageJsonPath(packageName: string, monorepoSegment: string): { path: string; source: string } | null {
+    try {
+        const resolved = requireFromHere.resolve(`${packageName}/package.json`);
+        return { path: resolved, source: resolved };
+    } catch {
+        // fall through to monorepo sibling layout (dev / workspace)
+    }
+
+    const currentFile = fileURLToPath(import.meta.url);
+    // packages/cli/src|dist → packages/<segment>/package.json
+    const monorepoPath = path.resolve(path.dirname(currentFile), "..", "..", monorepoSegment, "package.json");
+    if (fs.existsSync(monorepoPath)) {
+        return { path: monorepoPath, source: monorepoPath };
+    }
+    return null;
+}
+
+/**
+ * Resolve the installed Satori package version set for operator support.
+ * Independent package versions are expected; this is not a lockstep matrix.
+ */
+export function resolveInstalledPackageVersions(): DoctorPackageVersion[] {
+    const entries: Array<{ packageName: string; monorepoSegment: string; preferredRead?: () => DoctorPackageVersion | null }> = [
+        {
+            packageName: "@zokizuan/satori-cli",
+            monorepoSegment: "cli",
+            preferredRead: () => {
+                const currentFile = fileURLToPath(import.meta.url);
+                const cliPackageJson = path.resolve(path.dirname(currentFile), "..", "package.json");
+                const info = readJsonVersion(cliPackageJson);
+                if (!info) {
+                    return null;
+                }
+                return { name: info.name, version: info.version, source: cliPackageJson };
+            },
+        },
+        {
+            packageName: "@zokizuan/satori-mcp",
+            monorepoSegment: "mcp",
+            preferredRead: () => {
+                try {
+                    const pkg = readManagedPackageJson();
+                    const source = resolvePackageJsonPath(pkg.name, "mcp")?.source
+                        || "managed-package";
+                    return { name: pkg.name, version: pkg.version, source };
+                } catch {
+                    return null;
+                }
+            },
+        },
+        {
+            packageName: "@zokizuan/satori-core",
+            monorepoSegment: "core",
+        },
+    ];
+
+    return entries.map(({ packageName, monorepoSegment, preferredRead }) => {
+        if (preferredRead) {
+            const preferred = preferredRead();
+            if (preferred) {
+                return preferred;
+            }
+        }
+        const resolved = resolvePackageJsonPath(packageName, monorepoSegment);
+        if (!resolved) {
+            return { name: packageName, version: null, source: "unresolved" };
+        }
+        const info = readJsonVersion(resolved.path);
+        if (!info) {
+            return { name: packageName, version: null, source: resolved.source };
+        }
+        return { name: info.name, version: info.version, source: resolved.source };
+    });
+}
+
 export function runDoctor(options: DoctorOptions = {}): DoctorResult {
     const env = options.env || process.env;
     const nodeVersion = options.nodeVersion || process.version;
     const execImpl = options.execFileSyncImpl || execFileSync;
     const checks: DoctorCheck[] = [];
     const nextSteps: string[] = [];
+    const packageVersions = options.resolvePackageVersions
+        ? options.resolvePackageVersions()
+        : resolveInstalledPackageVersions();
+
+    for (const pkg of packageVersions) {
+        const shortName = pkg.name.includes("/")
+            ? pkg.name.slice(pkg.name.lastIndexOf("/") + 1).replace(/^satori-/, "")
+            : pkg.name;
+        // shortName → cli | mcp | core for stable check ids
+        const checkName = `package_version_${shortName}`;
+        if (pkg.version) {
+            addCheck(checks, checkName, "ok", `${pkg.name}@${pkg.version}`);
+        } else {
+            addCheck(
+                checks,
+                checkName,
+                "warning",
+                `${pkg.name} version could not be resolved (${pkg.source}).`,
+            );
+        }
+    }
+    addCheck(checks, "package_version_policy", "ok", PACKAGE_VERSION_NOTE);
 
     const nodeMajor = parseNodeMajor(nodeVersion);
     if (nodeMajor >= 20) {
@@ -153,6 +284,8 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
 
     return {
         status: overallStatus(checks),
+        packageVersions,
+        packageVersionNote: PACKAGE_VERSION_NOTE,
         checks,
         nextSteps: [...new Set(nextSteps)],
     };

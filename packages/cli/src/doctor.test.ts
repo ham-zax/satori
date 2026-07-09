@@ -1,14 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DoctorOptions, runDoctor } from "./doctor.js";
+import { DoctorOptions, DoctorPackageVersion, runDoctor } from "./doctor.js";
 
 const successfulExecFileSync = (() => "0.0.0") as NonNullable<DoctorOptions["execFileSyncImpl"]>;
+
+const fixedPackageVersions = (): DoctorPackageVersion[] => [
+    { name: "@zokizuan/satori-cli", version: "0.4.11", source: "test" },
+    { name: "@zokizuan/satori-mcp", version: "4.11.13", source: "test" },
+    { name: "@zokizuan/satori-core", version: "1.6.9", source: "test" },
+];
 
 test("runDoctor reports missing default VoyageAI and Milvus env", () => {
     const result = runDoctor({
         nodeVersion: "v20.11.0",
         env: {},
         execFileSyncImpl: successfulExecFileSync,
+        resolvePackageVersions: fixedPackageVersions,
     });
 
     assert.equal(result.status, "error");
@@ -32,6 +39,7 @@ test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () 
             MILVUS_ADDRESS: "localhost:19530",
         },
         execFileSyncImpl: successfulExecFileSync,
+        resolvePackageVersions: fixedPackageVersions,
     });
 
     assert.equal(result.status, "ok");
@@ -51,8 +59,55 @@ test("runDoctor flags unsupported Node versions", () => {
             MILVUS_ADDRESS: "localhost:19530",
         },
         execFileSyncImpl: successfulExecFileSync,
+        resolvePackageVersions: fixedPackageVersions,
     });
 
     assert.equal(result.status, "error");
     assert.equal(result.checks.find((check) => check.name === "node_version")?.status, "error");
+});
+
+test("runDoctor reports Satori package version set and independent-version policy", () => {
+    const result = runDoctor({
+        nodeVersion: "v20.11.0",
+        env: {
+            VOYAGEAI_API_KEY: "pa-test",
+            MILVUS_ADDRESS: "localhost:19530",
+        },
+        execFileSyncImpl: successfulExecFileSync,
+        resolvePackageVersions: fixedPackageVersions,
+    });
+
+    assert.equal(result.packageVersions.length, 3);
+    assert.deepEqual(
+        result.packageVersions.map((entry) => `${entry.name}@${entry.version}`),
+        [
+            "@zokizuan/satori-cli@0.4.11",
+            "@zokizuan/satori-mcp@4.11.13",
+            "@zokizuan/satori-core@1.6.9",
+        ],
+    );
+    assert.match(result.packageVersionNote, /independent package versions/i);
+    assert.equal(result.checks.find((check) => check.name === "package_version_cli")?.message, "@zokizuan/satori-cli@0.4.11");
+    assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.message, "@zokizuan/satori-mcp@4.11.13");
+    assert.equal(result.checks.find((check) => check.name === "package_version_core")?.message, "@zokizuan/satori-core@1.6.9");
+    assert.equal(result.checks.find((check) => check.name === "package_version_policy")?.status, "ok");
+});
+
+test("runDoctor warns when a package version cannot be resolved", () => {
+    const result = runDoctor({
+        nodeVersion: "v20.11.0",
+        env: {
+            VOYAGEAI_API_KEY: "pa-test",
+            MILVUS_ADDRESS: "localhost:19530",
+        },
+        execFileSyncImpl: successfulExecFileSync,
+        resolvePackageVersions: () => [
+            { name: "@zokizuan/satori-cli", version: "0.4.11", source: "test" },
+            { name: "@zokizuan/satori-mcp", version: null, source: "unresolved" },
+            { name: "@zokizuan/satori-core", version: "1.6.9", source: "test" },
+        ],
+    });
+
+    assert.equal(result.status, "warning");
+    assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.status, "warning");
 });

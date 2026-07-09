@@ -209,6 +209,10 @@ test("runCli doctor emits diagnostics without starting an MCP session", async ()
         env: { ...process.env, VOYAGEAI_API_KEY: "", MILVUS_ADDRESS: "" },
         doctorRunner: ({ env }) => ({
             status: env.MILVUS_ADDRESS ? "ok" : "error",
+            packageVersions: [
+                { name: "@zokizuan/satori-cli", version: "0.0.0", source: "test" },
+            ],
+            packageVersionNote: "independent package versions",
             checks: [
                 { name: "node_version", status: "ok", message: "Node is supported." },
                 { name: "milvus_address", status: "error", message: "MILVUS_ADDRESS is required." }
@@ -236,6 +240,10 @@ test("runCli doctor text mode prints next steps to stderr", async () => {
         env: { ...process.env },
         doctorRunner: () => ({
             status: "warning",
+            packageVersions: [
+                { name: "@zokizuan/satori-cli", version: "0.0.0", source: "test" },
+            ],
+            packageVersionNote: "independent package versions",
             checks: [
                 { name: "milvus_token", status: "warning", message: "optional token missing" }
             ],

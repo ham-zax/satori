@@ -213,21 +213,29 @@ Behavior contract:
 ### 4.2 Tool Surface
 
 ```
-manage_index     create | reindex | sync | status | clear
+manage_index     create | reindex | sync | status | clear | repair
 search_codebase  runtime-first semantic search (scope + grouped/raw)
 call_graph       callers/callees traversal from symbolRef
 file_outline     sidecar-backed per-file symbol navigation
-read_file        safe read with optional line ranges
+read_file        safe read with optional line ranges / open_symbol
 list_codebases   tracked state summary
 ```
 
 Tool schemas are defined in Zod, then converted to JSON Schema for MCP `ListTools`.
+
+**Semantic readiness vs navigation richness**
+
+- `search_codebase` depends on **semantic readiness** (snapshot + fingerprint + completion marker + collection presence; see §5.4).
+- `file_outline`, `call_graph`, and `read_file(open_symbol)` depend on **navigation/symbol artifacts** (registry and relationship sidecars).
+- A codebase may be **searchable without being symbol-rich**. Check `manage_index status` / `list_codebases` `symbolQuality` (`symbol_rich` | `mixed` | `symbol_sparse` | `search_only` | `unknown`) before treating outline/call_graph as rich evidence.
+- `indexed` / ready lifecycle means searchable-readable, not automatically symbol-rich.
 
 ### 4.3 ToolHandlers
 
 - Absolute path normalization/validation
 - Cloud/local reconciliation before key operations
 - Fingerprint compatibility gate before searchable access
+- Completion-marker proof validation on read paths (fail closed; read tools never write proof)
 - Background indexing kickoff for `manage_index(action=create)`
 - Subdirectory smart-resolution to indexed parent root for search
 
@@ -308,6 +316,114 @@ Legacy v1/v2 snapshots auto-migrate on load but get flagged as legacy.
 - Missing fingerprint field
 - Provider, model, or dimension mismatch
 - Schema version mismatch (any non-v3 fingerprint)
+
+### 5.4 Readiness & Proof
+
+Do not blur these roles:
+
+```text
+snapshot           = local bookkeeping (lifecycle status, last stats, stored fingerprint)
+completion marker  = remote commit proof (vector collection document)
+sync               = cheap maintenance of an already-trusted collection
+repair             = re-proof local readiness without embedding/vector chunk writes
+reindex / create   = recreate trust from scratch (full vector rewrite)
+```
+
+```text
+Readiness invariant:
+A semantic index is ready only when local snapshot state, runtime fingerprint,
+remote completion marker, and vector collection presence agree.
+
+Navigation richness is separate:
+A ready semantic index may still be symbol_sparse or search_only.
+```
+
+#### What proves an index is ready (semantic)
+
+Readiness is layered. Snapshot status alone is **not** proof.
+
+| Layer | Source of truth | Ready when |
+|-------|-----------------|------------|
+| A. Snapshot searchable | `~/.satori` snapshot | Status is `indexed` or `sync_completed` |
+| B. Runtime fingerprint gate | Snapshot fingerprint vs current runtime | Provider, model, dimension, vector store, and `schemaVersion` match; not legacy-unverified / missing |
+| C. Completion proof | Marker doc in the vector collection (`satori_index_completion_v1`) | Shape valid, path matches, fingerprint matches runtime → `validateCompletionProof` outcome `valid` |
+| D. Collection presence | Configured vector backend | Collection for the root still exists |
+
+Implementation path: `TrackedRootReadiness.prepareTrackedRootForRead` returns `state: "ready"` only when those layers agree for the access mode.
+
+**Navigation nuance:** under fingerprint / completion-proof mismatch, source-backed `file_outline` / `call_graph` may still run; semantic search must not pretend the vector index matches the current runtime.
+
+#### What invalidates that proof
+
+| Condition | Typical outcome |
+|-----------|-----------------|
+| Marker missing, wrong kind, bad payload, or path mismatch | `stale_local` (local snapshot can lie) |
+| Marker fingerprint ≠ runtime fingerprint | `fingerprint_mismatch` → `requires_reindex` |
+| Snapshot fingerprint mismatch / missing / legacy unverified | `requires_reindex` |
+| Vector collection gone | `missing_collection` (fail closed; no implicit rebuild on read) |
+| Provider config incomplete at runtime | Failed / not ready (config) — not a forged fingerprint story |
+| Indexing failed mid-run | `indexfailed` — no successful completion marker |
+| Incremental sync navigation recovery fails | `requires_reindex` (`navigation_recovery_failed`) |
+| Remote chunks missing/extra vs current source set | Blocks **repair**; needs create/reindex |
+
+Sync does **not** replace proof after a model/schema/provider change.
+
+#### Who may write the completion marker
+
+```text
+Only create, reindex, repair, and trusted marker-maintaining sync may write a completion marker.
+Read tools never write proof.
+Snapshot recovery may restore local state from an existing valid marker, but does not create a marker.
+```
+
+| Path | Writes / recreates marker? | Notes |
+|------|----------------------------|--------|
+| `manage_index` **create** | Yes | Full index → marker + snapshot `indexed` (verified) |
+| `manage_index` **reindex** | Yes | Full rebuild under current fingerprint |
+| `manage_index` **repair** | Yes, conditional | See repair rule below; no vector chunk rewrite |
+| **sync** / background sync / search sync-on-read | Maintains only | May refresh a marker only for an already-trusted committed collection; must not forge proof for an untrusted or unknown collection |
+| **clear** | Destroys | User-explicit destructive |
+| Read tools | Never | Fail closed; may recommend create / reindex / repair |
+| Startup snapshot recovery from marker | No new marker | Restores local readiness view when the existing marker is valid |
+
+#### Repair rule (precise)
+
+```text
+repair only when vector payload can be proven complete and fingerprint provenance is trusted
+```
+
+- Marker present and fingerprint matches runtime → repair may re-prove (rebuild nav sidecars, rewrite marker).
+- Marker **missing**, but a **verified** snapshot fingerprint matches runtime and payload coverage is complete → repair may still succeed (this is the missing-marker recovery path).
+- Marker missing and no trusted matching fingerprint → refuse (do not forge current fingerprint over unproven vectors).
+- Fingerprint mismatch → `requires_reindex`, not repair.
+- Missing/extra remote chunks vs expected split → blocked (`needs_create`); use create/reindex.
+
+#### Cost ladder: sync vs repair vs reindex
+
+```text
+cheapest ──────────────────────────────────────────────── most expensive
+  sync          repair              reindex / create(force)
+  (incremental) (local re-proof)    (full vector rewrite)
+```
+
+| Path | Cost profile | When to use |
+|------|--------------|-------------|
+| **sync** | Cheap: merkle/change-driven embed upsert/delete | Already trusted index; working-tree or ignore/policy convergence |
+| **repair** | Mid: CPU/IO to verify coverage + rebuild sidecars; **no** embedding spend | Local readiness broken; vectors complete; fingerprint provenance trusted |
+| **reindex** / **create** | Expensive: full re-split, re-embed, re-insert | Fingerprint mismatch, missing collection, coverage failure, `indexfailed`, or repair returns reindex/create |
+
+**Decision cheat sheet**
+
+| Symptom | Prefer |
+|---------|--------|
+| Files changed, same embed model/backend | **sync** |
+| `.satoriignore` / index-policy only | **sync** (unnecessary reindex often blocked by preflight) |
+| Marker/sidecars broken; vectors match + trusted provenance | **repair** |
+| Changed embedding model / dims / schema / provider | **reindex** (not sync, not repair) |
+| Collection deleted / empty / chunk gaps | **create** / **reindex** |
+| `provider_incomplete` | Fix env + restart MCP, then re-evaluate |
+
+Primary code owners: `packages/mcp/src/core/completion-proof.ts`, `tracked-root-readiness.ts`, `snapshot.ts`, `sync.ts`, `manage-indexing-handlers.ts`; `packages/core/src/core/context.ts` (`writeIndexCompletionMarker`, `repairIndex`, `reindexByChange`).
 
 ---
 

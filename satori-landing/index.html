@@ -7,28 +7,28 @@
   <link rel="icon" type="image/svg+xml" href="logo.svg" />
   <title>Satori | Codebase Map for AI Coding Agents</title>
   <meta name="description"
-    content="Satori gives AI coding agents a structured map of your repo before they edit: plain-English search, symbols, exact reads, related code paths, and freshness warnings." />
+    content="Most agents can search files — that is not enough. Satori is a read-only codebase map for MCP-compatible coding agents: less grep chaining, less context waste, fewer blind edits." />
   <meta name="keywords" content="Satori, MCP server, AI coding agents, code search, semantic code search, repo indexing, Codex, Claude Code, OpenCode, Milvus, Zilliz" />
   <meta name="robots" content="index,follow" />
-  <link rel="canonical" href="https://hamza.my.id/satori/" />
+  <link rel="canonical" href="https://satori.hamza.my.id/" />
   <meta property="og:title" content="Satori | Codebase Map for AI Coding Agents" />
-  <meta property="og:description" content="Stop making agents build context through grep chains. Satori gives MCP coding agents a route from plain-English intent to symbols, exact evidence, related paths, and stale-context warnings." />
+  <meta property="og:description" content="Real repos are not flat text dumps. Satori gives MCP-compatible coding agents a route from plain-English intent to owner symbols, exact evidence, and freshness-aware recovery — before they edit." />
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://hamza.my.id/satori/" />
+  <meta property="og:url" content="https://satori.hamza.my.id/" />
   <meta property="og:site_name" content="Satori" />
-  <meta property="og:image" content="https://hamza.my.id/satori/og-image.svg" />
+  <meta property="og:image" content="https://satori.hamza.my.id/og-image.svg" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Satori | Codebase Map for AI Coding Agents" />
-  <meta name="twitter:description" content="A structured codebase map for AI coding agents before they edit." />
-  <meta name="twitter:image" content="https://hamza.my.id/satori/og-image.svg" />
+  <meta name="twitter:description" content="Most agents can search files. That is not enough. Satori gives them a structured map before the first diff." />
+  <meta name="twitter:image" content="https://satori.hamza.my.id/og-image.svg" />
   <script type="application/ld+json">
     {
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
       "name": "Satori",
-      "description": "Satori gives AI coding agents a structured codebase map before they edit: intent search, symbol-aware navigation, exact code reads, related paths, and freshness warnings.",
+      "description": "Read-only codebase map for MCP-compatible coding agents: plain-English intent to owner symbols, exact reads, advisory call context, and freshness-aware recovery — with less token waste and fewer blind edits.",
       "codeRepository": "https://github.com/ham-zax/satori",
-      "url": "https://hamza.my.id/satori/",
+      "url": "https://satori.hamza.my.id/",
       "programmingLanguage": "TypeScript",
       "runtimePlatform": "Node.js",
       "license": "https://opensource.org/license/mit",
@@ -392,11 +392,16 @@
     }
 
     .hero p {
-      margin-top: 1rem;
+      margin: 0.85rem auto 0;
       color: var(--muted);
       max-width: 700px;
       font-weight: 300;
       font-size: 1.16rem;
+      line-height: 1.6;
+    }
+
+    .hero p + p {
+      margin-top: 0.75rem;
     }
 
     .hero-actions {
@@ -762,6 +767,38 @@
       max-width: 720px;
       margin-bottom: 2rem;
       line-height: 1.6;
+    }
+
+    .section-intro + .section-intro {
+      margin-top: -1rem;
+    }
+
+    .goal-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin: 0 0 2rem;
+    }
+
+    .goal-strip span {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(0, 0, 0, 0.18);
+      padding: 0.85rem 1rem;
+      font-family: var(--sans);
+      font-size: 0.92rem;
+      font-weight: 400;
+      color: var(--text);
+      line-height: 1.4;
+    }
+
+    .goal-strip strong {
+      display: block;
+      color: var(--accent);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 0.35rem;
     }
 
     .sel {
@@ -1191,7 +1228,17 @@
       pointer-events: none;
     }
 
+    @media (max-width: 520px) {
+      .goal-strip {
+        grid-template-columns: 1fr;
+      }
+    }
+
     @media (max-width: 860px) {
+      .goal-strip {
+        grid-template-columns: 1fr 1fr;
+      }
+
       :root {
         --serif: ui-serif, Georgia, serif;
         --sans:
@@ -1425,11 +1472,16 @@
     <section class="hero" id="top">
       <h1><img class="hero-logo" src="logo-mark.svg" alt="" aria-hidden="true" />Satori</h1>
       <h2>Give coding agents the route from intent to evidence.</h2>
+      <p>Most AI coding agents can search files. That is not enough.</p>
       <p>
-        Most agents can search files. That is not enough. Satori gives
-        MCP-compatible coding agents a structured way to understand real repos
-        before editing: plain-English intent search, symbol-aware navigation,
-        exact reads, related code paths, and freshness warnings.
+        Real codebases are not flat text dumps. They have symbols, ownership
+        boundaries, wrappers, callers, callees, stale files, and logic spread
+        across folders.
+      </p>
+      <p>
+        Satori is an open-source, read-only codebase map for MCP-compatible
+        agents: less grep chaining, less context waste, fewer blind edits, and
+        more visible evidence before the first diff.
       </p>
       <div class="hero-terminal" role="group" aria-labelledby="hero-install-label">
         <div class="terminal-label">
@@ -1471,38 +1523,55 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
     <section class="section">
       <h3>Agents Still Build Context the Hard Way</h3>
       <p class="section-intro">
-        The problem is not access to search. It is how agents assemble context:
-        grep chains, nearby matches, broad file dumps, and guesses about what
-        matters. Real codebases need a better path from intent to implementation.
-        And when an agent makes a decision, you still need to see the evidence it used.
+        The problem is not access to search. Without structured repo context,
+        agents assemble evidence the expensive way — and you still cannot see a
+        clean path from intent to the code that actually owns the behavior.
+      </p>
+      <p class="section-intro">
+        That burns budget on frontier models. It is even harder for smaller,
+        local, or non-frontier models, where every token matters more.
       </p>
       <div class="grid">
         <article class="card">
-          <h4>It follows grep chains</h4>
+          <h4>It burns tokens on broad dumps</h4>
           <p>
-            Agents search one file, then another, trying to reconstruct the system
-            from fragments instead of navigating a structured map.
+            Agents pull large files into context to “be safe,” then still lack a
+            precise owner symbol or the right span for the edit.
           </p>
         </article>
         <article class="card">
-          <h4>It edits the obvious file</h4>
+          <h4>It still lacks the full picture</h4>
           <p>
-            Nearby text is not always the implementation that owns the behavior.
-            The obvious match can be a wrapper, test, or stale clue.
+            More context is not structured context. Fragments from grep chains do
+            not explain ownership, wrappers, or how logic is spread across folders.
           </p>
         </article>
         <article class="card">
-          <h4>It misses related code</h4>
+          <h4>It guesses who owns the behavior</h4>
           <p>
-            A small change can affect callers or callees. Satori surfaces that
-            nearby context when graph support is available.
+            Nearby text is not always the implementation. The obvious match can be
+            a wrapper, test helper, generated clue, or stale path.
           </p>
         </article>
         <article class="card">
-          <h4>It trusts stale context</h4>
+          <h4>It misses callers and wrappers</h4>
           <p>
-            Real repos move while agents work. Satori checks freshness and warns
-            when context needs repair before the agent relies on it.
+            A small change can touch callers, callees, and adapters. Without an
+            investigation path, agents edit one file and leave related paths unexamined.
+          </p>
+        </article>
+        <article class="card">
+          <h4>It trusts stale repo state</h4>
+          <p>
+            Real repos move while agents work. Without freshness signals, agents
+            can plan against an outdated map and ship a confident wrong diff.
+          </p>
+        </article>
+        <article class="card">
+          <h4>It gets worse on smaller models</h4>
+          <p>
+            Token-heavy exploration hurts frontier runs — and hurts even more when
+            the model is smaller, local, or cost-constrained. Efficiency is part of quality.
           </p>
         </article>
       </div>
@@ -1511,10 +1580,15 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
     <section class="section" id="demo">
       <h3>One Flow: From Intent to Evidence</h3>
       <p class="section-intro">
-        Satori turns codebase investigation into a fixed path agents can follow:
-        ask by intent, land on symbols, open exact evidence, check related context,
-        then propose changes with less guesswork.
+        Satori turns codebase investigation into a fixed path MCP agents can follow
+        before they touch code:
       </p>
+      <div class="goal-strip" role="list" aria-label="Satori goals">
+        <span role="listitem"><strong>Less</strong> grep chaining</span>
+        <span role="listitem"><strong>Less</strong> context waste</span>
+        <span role="listitem"><strong>Fewer</strong> blind edits</span>
+        <span role="listitem"><strong>More</strong> visible evidence</span>
+      </div>
       <div class="flow-strip">
         <div class="flow-item">
           <span class="flow-index">01</span>
@@ -1526,32 +1600,34 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
         </div>
         <div class="flow-item">
           <span class="flow-index">02</span>
-          <strong>Navigate by symbols</strong>
+          <strong>Land on owner symbols</strong>
           <p>
-            Move from search results to file outlines, functions, classes, and
-            implementation spans that match how code is structured.
+            Grouped search is symbol-owned: chunks are supporting evidence, not the
+            final unit of navigation.
           </p>
         </div>
         <div class="flow-item">
           <span class="flow-index">03</span>
-          <strong>Open exact evidence</strong>
+          <strong>Outline, then exact reads</strong>
           <p>
-            Read the function, class, or line range that matters instead of flooding
-            the agent with broad file context.
+            Open the function, class, or line range that matters instead of flooding
+            the agent with broad file dumps.
           </p>
         </div>
         <div class="flow-item">
           <span class="flow-index">04</span>
           <strong>Check related context</strong>
           <p>
-            Inspect callers and callees when supported, with fallbacks instead of
-            guessed graph context.
+            Inspect advisory callers and callees when supported, with recovery paths
+            when graph confidence is low — not guessed blast radius.
           </p>
         </div>
       </div>
       <p class="section-intro">
-        Satori does not edit your source code. It gives agents better evidence
-        before edits happen in your editor or agent host.
+        Freshness-aware recovery sits under the whole path: if the index is stale,
+        partial, or not ready, Satori returns clear next steps instead of silent
+        confidence. Satori does not edit your source code — edits stay in your
+        editor or agent host.
       </p>
       <div class="section-actions">
         <a class="btn primary" href="#quickstart">Install Satori</a>
@@ -1563,8 +1639,9 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
       <h3>Core Capabilities</h3>
       <p class="section-intro">
         Satori is not another semantic search box. It gives coding agents structured
-        repo context they can act on: intent retrieval, symbols, exact reads,
-        related paths, freshness state, and recovery steps.
+        repo context they can act on: intent retrieval, owner symbols, exact reads,
+        advisory related paths, freshness state, and recovery steps — so investigation
+        costs less and leaves evidence you can inspect.
       </p>
       <div class="grid">
         <article class="card">
@@ -1590,8 +1667,8 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
         <article class="card">
           <h4>Related code paths</h4>
           <p>
-            Check nearby relationships when graph support is available for the
-            language and symbol.
+            Check advisory callers and callees when graph support is available —
+            useful navigation context, not sole blast-radius authority.
           </p>
         </article>
         <article class="card">
@@ -1613,7 +1690,8 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
       <h3>Built for Real Agent Work</h3>
       <p class="section-intro">
         Satori is for the moment when search-and-hope is not enough: real repos,
-        real changes, and agents that need context before the first diff.
+        real changes, and agents that need efficient context before the first diff —
+        whether you run frontier models or tighter local budgets.
       </p>
       <div class="grid">
         <article class="card">

@@ -356,7 +356,7 @@ Satori ships a deterministic comparison harness (`pnpm run vs:code-intelligence`
 | Action | Link |
 |---|---|
 | **GitHub** | [github.com/ham-zax/satori](https://github.com/ham-zax/satori) |
-| **Landing Page** | [hamza.my.id/satori](https://hamza.my.id/satori) |
+| **Landing Page** | [satori.hamza.my.id](https://satori.hamza.my.id/) |
 | **Install** | `npx -y @zokizuan/satori-cli@latest install --client all` |
 | **Eval harness** | `pnpm run vs:code-intelligence` |
 | **Package** | [npm: @zokizuan/satori-cli](https://www.npmjs.com/package/@zokizuan/satori-cli) |

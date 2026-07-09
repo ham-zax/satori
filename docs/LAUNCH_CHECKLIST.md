@@ -26,7 +26,7 @@ Satori is a read-only MCP server and installer that helps AI coding agents inves
 ## Product Hunt Assets
 
 - Product name: `Satori`
-- Website URL: `https://hamza.my.id/satori/`
+- Website URL: `https://satori.hamza.my.id/` (legacy path `https://hamza.my.id/satori/` 301s here)
 - GitHub URL: `https://github.com/ham-zax/satori`
 - Tagline: `Repo retrieval for MCP coding agents.`
 - Thumbnail/social image: `satori-landing/og-image.svg`

@@ -744,7 +744,7 @@ test('golden MCP call_graph invalid symbol ref shape', async () => {
             notesTruncated: false,
             totalNoteCount: 0,
             returnedNoteCount: 0,
-            message: 'symbolRef with { file, symbolId } is required.',
+            message: 'symbolRef.file is required.',
         });
     }));
 });

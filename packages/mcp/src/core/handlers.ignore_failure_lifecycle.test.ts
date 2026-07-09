@@ -429,7 +429,9 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
             }, toolContext);
             assert.equal(staleReadResponse.isError, true);
             const staleReadPayload = parsePayload(staleReadResponse);
-            assert.equal(staleReadPayload.status, 'requires_reindex');
+            // File is no longer under a searchable indexed root after ignore reconciliation;
+            // read_file fail-closes with outside_indexed_root (F1 containment) rather than serving content.
+            assert.equal(staleReadPayload.status, 'outside_indexed_root');
             assert.doesNotMatch(staleReadResponse.content[0]?.text || '', /export function ignoredLogin/);
 
             const staleCallGraph = parsePayload(await handlers.handleCallGraph({

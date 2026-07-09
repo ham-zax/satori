@@ -5,27 +5,45 @@ All notable changes to this repository are documented in this file.
 ## Unreleased
 
 ### Release Versions
-- Repository version: `0.5.10`
-- `@zokizuan/satori-core`: `1.6.8`
-- `@zokizuan/satori-mcp`: `4.11.12`
-- `@zokizuan/satori-cli`: `0.4.10`
+- Repository version: `0.5.11`
+- `@zokizuan/satori-core`: `1.6.9`
+- `@zokizuan/satori-mcp`: `4.11.13`
+- `@zokizuan/satori-cli`: `0.4.11`
+
+### Security
+- Contained `read_file` to tracked searchable codebase roots (`indexed` / `sync_completed`); relative paths, sibling repos, symlink escapes, and `..` escapes are denied with structured `outside_indexed_root` before content is read.
+- Public ABSOLUTE path fields on `search_codebase`, `manage_index`, `file_outline`, `call_graph`, and `read_file` reject CWD-relative paths (no hidden process.cwd resolve).
 
 ### Added
-- `manage_index` `repair` action: rebuilds local readiness (completion marker + navigation sidecars) without re-embedding vectors when the existing vector payload and trusted runtime fingerprint match.
-- `Context.repairIndex` verifies chunk coverage, rebuilds symbol registry and relationship sidecars, and writes a fresh completion marker.
-- `Context.pruneUnprovenStagedCollectionFamily` drops failed staged generations (marker-only or empty collections) before collection limit validation.
-- AST splitter now emits `startByte`, `endByte`, `startColumn`, `endColumn` on chunk metadata for anonymous callbacks.
-- Symbol registry merges byte-level spans when deduplicating symbols from overlapping chunks.
+- Deterministic public-tool lifecycle harness (`lifecycle.public-tools.test.ts`): index → status/list → search → outline → read → clear with fake embeddings and in-memory vector DB.
+- `satori-cli doctor` reports installed package versions (`satori-cli` / `satori-mcp` / `satori-core`) with an independent-version policy note.
+- Observed `symbolQuality` gauge from symbol registry evidence on `manage_index status` (structured) and `list_codebases` Ready lines (compact `symbolQuality=<status>`). Statuses: `symbol_rich` | `mixed` | `symbol_sparse` | `search_only` | `unknown` with `basis: "symbol_registry"` (not parser-cause diagnosis).
+- Host-stable Merkle path ordering via `compareContractStrings` (code-unit order; independent of `localeCompare` / host locale).
 
 ### Changed
-- Stale-local readiness (`missing_marker_doc`) now recommends `repair` over `create` in `search_codebase`, `file_outline`, and `call_graph` responses.
-- `file_outline` and `call_graph` missing sidecar hints now suggest `repair` when the issue is a missing (not incompatible) sidecar.
+- **Installer SSOT:** `packages/cli` (`satori-cli`) is the sole installer owner. MCP CLI `install` / `uninstall` hard-deprecate with `E_USAGE` migration guidance to `npx -y @zokizuan/satori-cli@latest install|uninstall`; no config writes or dual installer implementation.
+- Aligned `manage_index` public contract across AGENTS, E2E spec, skills, and live schema (JSON envelopes; actions include `repair`).
+- Documented `call_graph` CALLS v0 as heuristic/advisory (not sole blast-radius authority) in AGENTS and skills.
+- Remediation process docs moved under `docs/remediation/`; root temp/backup noise removed from tracking.
 
 ### Fixed
-- Removed stale `humanText` duplication from `search_codebase` and `file_outline`/`call_graph` error envelopes; `humanText` remains a `manage_index`-only contract field.
-- Improved vector backend diagnostic messages with actionable next steps for Zilliz cluster stopped, missing provider config, and connection closed errors.
-- Corrected Zilliz free-tier collection limit constant to match actual tier behavior.
-- Fixed Zilliz collection limit detection and zombie collection handling in manage_index preflight.
+- `read_file` host filesystem containment (indexed-root gate + realpath checks).
+- Path policy edge cases: snapshot roots absolute-only; drive-relative rejection.
+- Merkle root ordering locale independence (monkey-patch proven).
+
+### Compatibility
+- Relative public paths that previously soft-resolved against CWD now fail validation.
+- Direct MCP CLI install/uninstall (non-bin path) exits with use-`satori-cli` guidance.
+- Merkle roots may change once vs older locale-sensitive packing order.
+- Additive `symbolQuality` on `manage_index status` and compact marker on `list_codebases` Ready lines; clients ignoring unknown JSON fields remain compatible.
+
+### Tests
+- F1/F4/F5/F7/F8/F9/F11 contract and harness coverage; MCP install SSOT guards; doctor package-version tests.
+
+### Prior unreleased (carried)
+- `manage_index` `repair` action: rebuilds local readiness without re-embedding when vector payload and trusted fingerprint match.
+- `Context.repairIndex` / staged collection pruning; AST byte-level spans; symbol registry span merge.
+- Stale-local readiness recommends `repair` when appropriate; vector backend diagnostic message improvements.
 
 ## [2026-06-13] Release Dependency Hardening
 

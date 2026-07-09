@@ -310,19 +310,20 @@ test('integration: reindex_by_change tracks add/modify/remove deltas', async () 
     await context.indexCodebase(codebasePath);
 
     const baseline = await context.reindexByChange(codebasePath);
-    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+    assert.equal(baseline.added, 0);
+    assert.equal(baseline.removed, 0);
+    assert.equal(baseline.modified, 0);
+    assert.deepEqual(baseline.changedFiles, []);
 
     fs.writeFileSync(path.join(codebasePath, 'src/service.ts'), 'export const version = 2;', 'utf8');
     fs.rmSync(path.join(codebasePath, 'src/obsolete.ts'));
     fs.writeFileSync(path.join(codebasePath, 'src/new.ts'), 'export const featureFlag = true;', 'utf8');
 
     const delta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(delta, {
-      added: 1,
-      removed: 1,
-      modified: 1,
-      changedFiles: ['src/new.ts', 'src/obsolete.ts', 'src/service.ts'],
-    });
+    assert.equal(delta.added, 1);
+    assert.equal(delta.removed, 1);
+    assert.equal(delta.modified, 1);
+    assert.deepEqual(delta.changedFiles, ['src/new.ts', 'src/obsolete.ts', 'src/service.ts']);
 
     const results = await context.semanticSearch({
       codebasePath,
@@ -348,12 +349,10 @@ test('integration: clearIndex resets sync state so reindex_by_change rebuilds a 
     assert.equal(await context.hasIndexedCollection(codebasePath), false);
 
     const delta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(delta, {
-      added: 1,
-      removed: 0,
-      modified: 0,
-      changedFiles: ['src/service.ts'],
-    });
+    assert.equal(delta.added, 1);
+    assert.equal(delta.removed, 0);
+    assert.equal(delta.modified, 0);
+    assert.deepEqual(delta.changedFiles, ['src/service.ts']);
 
     assert.equal(await context.hasIndexedCollection(codebasePath), true);
     const results = await context.semanticSearch({
@@ -473,7 +472,10 @@ test('integration: clearIndex removes local sync state when remote collection is
   try {
     await context.indexCodebase(codebasePath);
     const baseline = await context.reindexByChange(codebasePath);
-    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+    assert.equal(baseline.added, 0);
+    assert.equal(baseline.removed, 0);
+    assert.equal(baseline.modified, 0);
+    assert.deepEqual(baseline.changedFiles, []);
 
     const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(codebasePath);
     assert.equal(fs.existsSync(snapshotPath), true);
@@ -599,11 +601,17 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
 
     fs.writeFileSync(path.join(codebasePath, 'generated/drop.ts'), 'export const dropped = false;', 'utf8');
     const ignoredOnlyDelta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(ignoredOnlyDelta, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+    assert.equal(ignoredOnlyDelta.added, 0);
+    assert.equal(ignoredOnlyDelta.removed, 0);
+    assert.equal(ignoredOnlyDelta.modified, 0);
+    assert.deepEqual(ignoredOnlyDelta.changedFiles, []);
 
     fs.writeFileSync(path.join(codebasePath, 'generated/keep.ts'), 'export const kept = 2;', 'utf8');
     const negatedDelta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(negatedDelta, { added: 0, removed: 0, modified: 1, changedFiles: ['generated/keep.ts'] });
+    assert.equal(negatedDelta.added, 0);
+    assert.equal(negatedDelta.removed, 0);
+    assert.equal(negatedDelta.modified, 1);
+    assert.deepEqual(negatedDelta.changedFiles, ['generated/keep.ts']);
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }
@@ -620,18 +628,19 @@ test('integration: reindex_by_change tracks safe-broad text and config file chan
     await context.indexCodebase(codebasePath);
 
     const baseline = await context.reindexByChange(codebasePath);
-    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+    assert.equal(baseline.added, 0);
+    assert.equal(baseline.removed, 0);
+    assert.equal(baseline.modified, 0);
+    assert.deepEqual(baseline.changedFiles, []);
 
     fs.writeFileSync(path.join(codebasePath, 'notes.txt'), 'updated note', 'utf8');
     fs.writeFileSync(path.join(codebasePath, 'data.json'), '{"ok":true}', 'utf8');
 
     const delta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(delta, {
-      added: 1,
-      removed: 0,
-      modified: 1,
-      changedFiles: ['data.json', 'notes.txt'],
-    });
+    assert.equal(delta.added, 1);
+    assert.equal(delta.removed, 0);
+    assert.equal(delta.modified, 1);
+    assert.deepEqual(delta.changedFiles, ['data.json', 'notes.txt']);
 
     const results = await context.semanticSearch({
       codebasePath,
@@ -665,7 +674,10 @@ test('integration: hidden supported files stay synchronized when not ignored', a
     assert.ok(firstResults.some((r) => r.relativePath === '.hidden/runtime.ts'));
 
     const baseline = await context.reindexByChange(codebasePath);
-    assert.deepEqual(baseline, { added: 0, removed: 0, modified: 0, changedFiles: [] });
+    assert.equal(baseline.added, 0);
+    assert.equal(baseline.removed, 0);
+    assert.equal(baseline.modified, 0);
+    assert.deepEqual(baseline.changedFiles, []);
 
     fs.writeFileSync(
       path.join(codebasePath, '.hidden/runtime.ts'),
@@ -674,7 +686,10 @@ test('integration: hidden supported files stay synchronized when not ignored', a
     );
 
     const delta = await context.reindexByChange(codebasePath);
-    assert.deepEqual(delta, { added: 0, removed: 0, modified: 1, changedFiles: ['.hidden/runtime.ts'] });
+    assert.equal(delta.added, 0);
+    assert.equal(delta.removed, 0);
+    assert.equal(delta.modified, 1);
+    assert.deepEqual(delta.changedFiles, ['.hidden/runtime.ts']);
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }

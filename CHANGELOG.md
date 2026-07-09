@@ -4,6 +4,28 @@ All notable changes to this repository are documented in this file.
 
 ## Unreleased
 
+## [2026-07-09] Call Graph, Search Latency, Runtime Owners, Contract SSOT
+
+### Release Versions
+- Repository version: `0.5.14`
+- `@zokizuan/satori-core`: `1.6.11`
+- `@zokizuan/satori-mcp`: `4.11.16`
+- `@zokizuan/satori-cli`: `0.4.14`
+
+### Added
+- Grouped `search_codebase` results expose `inboundRecovery` (`must:` lexical search) when call-graph callers are supported but advisory/low confidence.
+- `manage_index status` and `list_codebases` surface live runtime owners (pid/version summary) when the owner registry is readable.
+
+### Changed
+- CALLS v0: import-unique cross-file method targets can promote to medium confidence for advisory inbound navigation (high-confidence path still requires EXPORTS-grade evidence).
+- Exact lexical pin that owns rank one skips the expensive rerank path (latency win; no ranking contract change for pinned hits).
+- `repair` is typed on `RuntimeOwnerMutationAction` (already gated at runtime).
+- Manage status/reason types are SSOT via `manage-types` (no private maintenance-handler unions).
+- `read_file.path` uses shared `absoluteFilesystemPathSchema` while preserving structured `relative_path_not_allowed` recovery.
+
+### Fixed
+- Golden grouped-search fixture aligned with public `inboundRecovery` and advisory inbound fallback copy.
+
 ## [2026-07-09] Runtime Owner Conflict Guidance
 
 ### Release Versions

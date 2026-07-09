@@ -14,8 +14,8 @@ import {
 const successfulExecFileSync = (() => "0.0.0") as NonNullable<DoctorOptions["execFileSyncImpl"]>;
 
 const fixedPackageVersions = (): DoctorPackageVersion[] => [
-    { name: "@zokizuan/satori-cli", version: "0.4.12", source: "test" },
-    { name: "@zokizuan/satori-mcp", version: "4.11.14", source: "test" },
+    { name: "@zokizuan/satori-cli", version: "0.4.13", source: "test" },
+    { name: "@zokizuan/satori-mcp", version: "4.11.15", source: "test" },
     { name: "@zokizuan/satori-core", version: "1.6.10", source: "test" },
 ];
 
@@ -114,14 +114,14 @@ test("runDoctor reports Satori package version set and independent-version polic
     assert.deepEqual(
         result.packageVersions.map((entry) => `${entry.name}@${entry.version}`),
         [
-            "@zokizuan/satori-cli@0.4.12",
-            "@zokizuan/satori-mcp@4.11.14",
+            "@zokizuan/satori-cli@0.4.13",
+            "@zokizuan/satori-mcp@4.11.15",
             "@zokizuan/satori-core@1.6.10",
         ],
     );
     assert.match(result.packageVersionNote, /independent package versions/i);
-    assert.equal(result.checks.find((check) => check.name === "package_version_cli")?.message, "@zokizuan/satori-cli@0.4.12");
-    assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.message, "@zokizuan/satori-mcp@4.11.14");
+    assert.equal(result.checks.find((check) => check.name === "package_version_cli")?.message, "@zokizuan/satori-cli@0.4.13");
+    assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.message, "@zokizuan/satori-mcp@4.11.15");
     assert.equal(result.checks.find((check) => check.name === "package_version_core")?.message, "@zokizuan/satori-core@1.6.10");
     assert.equal(result.checks.find((check) => check.name === "package_version_policy")?.status, "ok");
 });
@@ -134,7 +134,7 @@ test("runDoctor warns when a package version cannot be resolved", () => {
             MILVUS_ADDRESS: "localhost:19530",
         },
         resolvePackageVersions: () => [
-            { name: "@zokizuan/satori-cli", version: "0.4.12", source: "test" },
+            { name: "@zokizuan/satori-cli", version: "0.4.13", source: "test" },
             { name: "@zokizuan/satori-mcp", version: null, source: "unresolved" },
             { name: "@zokizuan/satori-core", version: "1.6.10", source: "test" },
         ],

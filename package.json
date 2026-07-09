@@ -1,6 +1,6 @@
 {
   "name": "satori",
-  "version": "0.5.12",
+  "version": "0.5.13",
   "description": "A codebase map for AI coding agents before they edit.",
   "private": true,
   "scripts": {

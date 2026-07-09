@@ -4,11 +4,20 @@ All notable changes to this repository are documented in this file.
 
 ## Unreleased
 
+## [2026-07-09] Runtime Owner Conflict Guidance
+
 ### Release Versions
-- Repository version: `0.5.12`
-- `@zokizuan/satori-core`: `1.6.10`
-- `@zokizuan/satori-mcp`: `4.11.14`
-- `@zokizuan/satori-cli`: `0.4.12`
+- Repository version: `0.5.13`
+- `@zokizuan/satori-core`: `1.6.10` (unchanged)
+- `@zokizuan/satori-mcp`: `4.11.15`
+- `@zokizuan/satori-cli`: `0.4.13`
+
+### Changed
+- `runtime_owner_conflict` manage envelopes now list conflicting MCP **pids**, **package versions**, and conflict reasons, with concrete `hints.nextStep` / `hints.nextSteps` recovery guidance. Tools still never kill other processes.
+- `satori-cli doctor` reports multi-version live owners in `~/.satori/runtime/owners.json` and errors when mixed package versions would block create/reindex/sync/clear.
+
+### Fixed
+- Agents stuck on multi-runtime version skew (e.g. leftover 4.11.13 vs 4.11.14) get actionable stop-pid guidance instead of a generic multi-runtime message and a non-existent “CLI runtime-owner cleanup command.”
 
 ## [2026-07-09] Residual Navigation, Search, and Installer Alignment
 

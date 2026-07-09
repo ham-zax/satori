@@ -292,7 +292,7 @@ Rerank decision:
 ```
 {
   embeddingProvider    "VoyageAI"
-  embeddingModel       "voyage-4-large"
+  embeddingModel       "voyage-code-3"
   embeddingDimension   1024
   vectorStoreProvider  "Milvus"
   schemaVersion        "dense_v3" | "hybrid_v3"

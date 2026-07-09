@@ -45,7 +45,7 @@ const CODEX_ENV_TEMPLATE_LINES = [
     "# This template is outside the launcher block so reinstall keeps edits.",
     "# [mcp_servers.satori.env]",
     "# EMBEDDING_PROVIDER = \"VoyageAI\"",
-    "# EMBEDDING_MODEL = \"voyage-4-large\"",
+    "# EMBEDDING_MODEL = \"voyage-code-3\"",
     "# EMBEDDING_OUTPUT_DIMENSION = \"1024\"",
     "# VOYAGEAI_API_KEY = \"pa-...\"",
     "# VOYAGEAI_RERANKER_MODEL = \"rerank-2.5\"",
@@ -369,6 +369,34 @@ function mergeRuntimeEnv(existing: unknown, defaults: Record<string, string>): R
         ...defaults,
         ...(objectValue(existing) ?? {}),
     };
+}
+
+/** Bash-style `${VAR:-}` expands unset vars to empty string and can override host env. */
+function isEmptyDefaultingShellExpansion(value: string): boolean {
+    return /^\$\{[A-Z0-9_]+:-\}$/.test(value.trim());
+}
+
+/**
+ * Keep only non-empty managed env entries. Prefer omitting keys over writing
+ * empty-defaulting placeholders that inject "" into the MCP process.
+ */
+function buildPreservedManagedEnv(existing: unknown): Record<string, string> {
+    const out: Record<string, string> = {};
+    const existingEnv = objectValue(existing);
+    if (!existingEnv) {
+        return out;
+    }
+    for (const name of SATORI_RUNTIME_ENV_VARS) {
+        const raw = existingEnv[name];
+        if (typeof raw !== "string") {
+            continue;
+        }
+        if (raw.trim().length === 0 || isEmptyDefaultingShellExpansion(raw)) {
+            continue;
+        }
+        out[name] = raw;
+    }
+    return out;
 }
 
 function packageNameFromSpecifier(packageSpecifier: string): string {
@@ -715,11 +743,13 @@ function parseJsonObject(filePath: string): Record<string, unknown> {
 }
 
 function buildClaudeServerConfig(runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>): Record<string, unknown> {
+    // Always return an env object so reinstall replaces legacy empty-defaulting maps.
+    // Empty object means "omit env" (host process env supplies credentials).
     return {
         type: "stdio",
         command: runtimeCommand.command,
         args: runtimeCommand.args,
-        env: mergeRuntimeEnv(existing?.env, runtimeEnvMap((name) => `\${${name}:-}`)),
+        env: buildPreservedManagedEnv(existing?.env),
     };
 }
 
@@ -776,6 +806,11 @@ function prepareClaudeInstall(filePath: string, runtimeCommand: ManagedRuntimeCo
         ...desiredServer,
     };
     delete (mcpServers.satori as Record<string, unknown>).timeout;
+    // Drop empty env map so clients inherit host process env instead of overriding with {}.
+    const desiredEnv = (mcpServers.satori as Record<string, unknown>).env;
+    if (desiredEnv && typeof desiredEnv === "object" && !Array.isArray(desiredEnv) && Object.keys(desiredEnv).length === 0) {
+        delete (mcpServers.satori as Record<string, unknown>).env;
+    }
     currentObject.mcpServers = mcpServers;
 
     const next = `${JSON.stringify(currentObject, null, 2)}\n`;

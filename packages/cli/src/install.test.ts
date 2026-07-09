@@ -141,7 +141,7 @@ test("install writes managed Codex config block and copies packaged skill", () =
         assert.equal(content.includes("\"EMBEDDING_OUTPUT_DIMENSION\""), true);
         assert.equal(content.includes("\"MILVUS_ADDRESS\""), true);
         assert.equal(content.includes("# [mcp_servers.satori.env]"), true);
-        assert.equal(content.includes("# EMBEDDING_MODEL = \"voyage-4-large\""), true);
+        assert.equal(content.includes("# EMBEDDING_MODEL = \"voyage-code-3\""), true);
         assert.equal(content.indexOf("# [mcp_servers.satori.env]") > content.indexOf("# <<< satori-cli managed satori end <<<"), true);
         assert.equal(content.includes("node_modules"), false);
         assert.equal(content.includes("dist/index.js"), false);
@@ -615,9 +615,8 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
         assert.equal(installed.mcpServers.satori.type, "stdio");
         assert.equal(installed.mcpServers.satori.command, process.execPath);
         assert.deepEqual(installed.mcpServers.satori.args, fakeClientCommand(homeDir).args);
-        assert.equal(installed.mcpServers.satori.env.VOYAGEAI_API_KEY, "${VOYAGEAI_API_KEY:-}");
-        assert.equal(installed.mcpServers.satori.env.EMBEDDING_OUTPUT_DIMENSION, "${EMBEDDING_OUTPUT_DIMENSION:-}");
-        assert.equal(installed.mcpServers.satori.env.MILVUS_ADDRESS, "${MILVUS_ADDRESS:-}");
+        // Omit unset provider keys so empty ${VAR:-} defaults cannot override host env with "".
+        assert.equal(installed.mcpServers.satori.env, undefined);
         assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori, "timeout"), false);
         assert.equal(fs.existsSync(path.join(skillsDir, "satori", "SKILL.md")), true);
 
@@ -663,8 +662,40 @@ test("install preserves direct Claude Satori env values on reinstall", () => {
         const installed = JSON.parse(readFile(configPath));
         assert.equal(installed.mcpServers.satori.env.VOYAGEAI_API_KEY, "direct-key");
         assert.equal(installed.mcpServers.satori.env.MILVUS_TOKEN, "direct-token");
-        assert.equal(installed.mcpServers.satori.env.EMBEDDING_OUTPUT_DIMENSION, "${EMBEDDING_OUTPUT_DIMENSION:-}");
+        // Unset keys are omitted (not rewritten as empty-defaulting ${VAR:-}).
+        assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori.env, "EMBEDDING_OUTPUT_DIMENSION"), false);
         assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori, "timeout"), false);
+    });
+});
+
+test("install strips empty-defaulting Claude env expansions on reinstall", () => {
+    withTempHome((homeDir) => {
+        const configPath = path.join(homeDir, ".claude.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify({
+            mcpServers: {
+                satori: {
+                    command: process.execPath,
+                    args: [launcherPath(homeDir)],
+                    env: {
+                        VOYAGEAI_API_KEY: "${VOYAGEAI_API_KEY:-}",
+                        MILVUS_ADDRESS: "${MILVUS_ADDRESS:-}",
+                        EMBEDDING_PROVIDER: "VoyageAI",
+                    },
+                },
+            },
+        }, null, 2), "utf8");
+
+        executeInstallCommand({
+            kind: "install",
+            client: "claude",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        const installed = JSON.parse(readFile(configPath));
+        assert.equal(installed.mcpServers.satori.env.EMBEDDING_PROVIDER, "VoyageAI");
+        assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori.env, "VOYAGEAI_API_KEY"), false);
+        assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori.env, "MILVUS_ADDRESS"), false);
     });
 });
 
@@ -807,9 +838,7 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(claudeConfig.mcpServers.satori.type, "stdio");
         assert.equal(claudeConfig.mcpServers.satori.command, process.execPath);
         assert.deepEqual(claudeConfig.mcpServers.satori.args, fakeClientCommand(homeDir).args);
-        assert.equal(claudeConfig.mcpServers.satori.env.VOYAGEAI_API_KEY, "${VOYAGEAI_API_KEY:-}");
-        assert.equal(claudeConfig.mcpServers.satori.env.EMBEDDING_OUTPUT_DIMENSION, "${EMBEDDING_OUTPUT_DIMENSION:-}");
-        assert.equal(claudeConfig.mcpServers.satori.env.MILVUS_ADDRESS, "${MILVUS_ADDRESS:-}");
+        assert.equal(claudeConfig.mcpServers.satori.env, undefined);
         assert.equal(Object.prototype.hasOwnProperty.call(claudeConfig.mcpServers.satori, "timeout"), false);
         assert.equal(JSON.stringify(claudeConfig.mcpServers.satori).includes("node_modules"), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".claude", "skills", "satori", "SKILL.md")), true);

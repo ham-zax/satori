@@ -79,7 +79,7 @@ If you want a client to store literal values, replace the generated pass-through
 ```toml
 [mcp_servers.satori.env]
 EMBEDDING_PROVIDER = "VoyageAI"
-EMBEDDING_MODEL = "voyage-4-large"
+EMBEDDING_MODEL = "voyage-code-3"
 EMBEDDING_OUTPUT_DIMENSION = "1024"
 VOYAGEAI_API_KEY = "pa-..."
 VOYAGEAI_RERANKER_MODEL = "rerank-2.5"

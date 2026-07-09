@@ -29,7 +29,7 @@ test("runDoctor reports missing default VoyageAI and Milvus env", () => {
 
     assert.equal(result.status, "error");
     assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "Embedding provider: VoyageAI.");
-    assert.equal(result.checks.find((check) => check.name === "embedding_model")?.message, "Embedding model: voyage-4-large.");
+    assert.equal(result.checks.find((check) => check.name === "embedding_model")?.message, "Embedding model: voyage-code-3.");
     assert.equal(result.checks.find((check) => check.name === "embedding_dimension")?.message, "Embedding output dimension: 1024.");
     assert.equal(result.checks.some((check) => check.name === "embedding_provider_env" && check.status === "error"), true);
     assert.equal(result.checks.some((check) => check.name === "milvus_address" && check.status === "error"), true);
@@ -38,6 +38,28 @@ test("runDoctor reports missing default VoyageAI and Milvus env", () => {
         "Set MILVUS_ADDRESS to a Zilliz Cloud public endpoint or local Milvus address such as localhost:19530.",
         "Restart your MCP client after changing Satori environment variables.",
     ]);
+});
+
+test("runDoctor treats whitespace-only provider env as incomplete", () => {
+    const result = runDoctor({
+        nodeVersion: "v20.11.0",
+        env: {
+            VOYAGEAI_API_KEY: "   ",
+            MILVUS_ADDRESS: "",
+        },
+        execFileSyncImpl: successfulExecFileSync,
+        resolvePackageVersions: fixedPackageVersions,
+    });
+
+    assert.equal(result.status, "error");
+    assert.match(
+        result.checks.find((check) => check.name === "embedding_provider_env")?.message || "",
+        /non-empty VOYAGEAI_API_KEY/i,
+    );
+    assert.match(
+        result.checks.find((check) => check.name === "milvus_address")?.message || "",
+        /non-empty/i,
+    );
 });
 
 test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () => {

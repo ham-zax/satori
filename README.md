@@ -120,7 +120,7 @@ Installer config and runtime config are intentionally separate:
 ```toml
 [mcp_servers.satori.env]
 EMBEDDING_PROVIDER = "VoyageAI"
-EMBEDDING_MODEL = "voyage-4-large"
+EMBEDDING_MODEL = "voyage-code-3"
 EMBEDDING_OUTPUT_DIMENSION = "1024"
 VOYAGEAI_API_KEY = "pa-..."
 VOYAGEAI_RERANKER_MODEL = "rerank-2.5"
@@ -162,7 +162,7 @@ Cloud quality start:
 
 ```bash
 EMBEDDING_PROVIDER=VoyageAI
-EMBEDDING_MODEL=voyage-4-large
+EMBEDDING_MODEL=voyage-code-3
 EMBEDDING_OUTPUT_DIMENSION=1024
 VOYAGEAI_API_KEY=your-api-key
 VOYAGEAI_RERANKER_MODEL=rerank-2.5

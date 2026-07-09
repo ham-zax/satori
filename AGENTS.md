@@ -38,7 +38,7 @@ Only these public tools exist:
 
 | Tool | Contract |
 |------|----------|
-| `list_codebases` | Plain-text readiness buckets; deterministic ordering. Ready roots include compact `symbolQuality=<status>` (observed registry evidence). |
+| `list_codebases` | Plain-text readiness buckets; deterministic ordering. Ready roots include compact `symbolQuality=<status>` (observed registry evidence). Incomplete provider config surfaces as Failed reason `provider_incomplete:…` (not fake missing-marker); fingerprint mismatch stays Requires Reindex. |
 | `manage_index` | JSON envelope serialized in MCP text content for lifecycle actions `create\|reindex\|sync\|status\|clear\|repair`. `path` must be an absolute filesystem path (relative paths rejected). `clear` is destructive and requires explicit user request. `repair` rebuilds local readiness only when vector payload and trusted fingerprint proof match; otherwise use create/reindex. `status` may include structured `symbolQuality` (observed symbol richness from the registry — not parser-cause diagnosis). |
 | `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. `path` must be an absolute filesystem path (relative paths rejected; not CWD-resolved). |
 | `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. `path` is absolute codebase root; `file` is repo-relative under that root only. |
@@ -54,6 +54,7 @@ Do not invent tools, parameters, write capabilities, rerank knobs, or output sha
 - If a grouped search result has `callGraphHint.supported=false`, treat `navigationFallback` as authoritative and call tools from its args. Do not reconstruct spans from prose.
 - Prefer `recommendedNextAction` when present; inspect `warnings[].action`, `capabilities`, and result `fallbacks` before deciding the next proof step.
 - If any tool returns `requires_reindex` or `hints.reindex`, stop and run `manage_index(action="reindex", path=<hinted path or indexed root>)`; do not substitute `sync`.
+- If `list_codebases` or `manage_index status` reports `provider_incomplete` / `missing_provider_config` / `MISSING_PROVIDER_CONFIG`, set the missing env vars and restart the MCP server before treating fingerprint or marker failures as index truth.
 - `search_codebase` is the sync-on-read freshness tool. Other tools may run compatibility gates but do not imply the same freshness behavior.
 - `search_codebase` defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `debug=false`.
 - Search operators are limited to deterministic prefix operators: `lang:`, `path:`, `-path:`, `must:`, `exclude:`. Path matching is gitignore-style against normalized repo-relative paths.

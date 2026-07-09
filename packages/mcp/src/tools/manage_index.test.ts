@@ -276,6 +276,113 @@ test("manage_index status uses provider vector context when available", async ()
     assert.equal(response.content[0].text, "provider-backed status");
 });
 
+test("manage_index status prefers missing_provider_config over fingerprint requires_reindex when provider is incomplete", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const missingIssue = {
+        ok: false as const,
+        code: "MISSING_PROVIDER_CONFIG" as const,
+        missingEnv: ["MILVUS_ADDRESS", "VOYAGEAI_API_KEY"],
+        message: "Satori provider setup is incomplete. Missing required environment variable(s): MILVUS_ADDRESS, VOYAGEAI_API_KEY.",
+        hints: {
+            setup: {
+                code: "MISSING_PROVIDER_CONFIG" as const,
+                missingEnv: ["MILVUS_ADDRESS", "VOYAGEAI_API_KEY"],
+                nextSteps: [
+                    "Set MILVUS_ADDRESS, restart the MCP server, then retry the tool call.",
+                    "Set VOYAGEAI_API_KEY, restart the MCP server, then retry the tool call.",
+                ],
+            },
+        },
+    };
+    const ctx = {
+        capabilities,
+        providerRuntime: {
+            requireToolContext: async () => missingIssue,
+        },
+        toolHandlers: {
+            handleGetIndexingStatus: async () => ({
+                content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        tool: "manage_index",
+                        version: 1,
+                        action: "status",
+                        path: "/repo",
+                        status: "requires_reindex",
+                        reason: "requires_reindex",
+                        message: "Index fingerprint mismatch.",
+                        humanText: "Index fingerprint mismatch.\n🧬 Reindex reason: fingerprint_mismatch",
+                        hints: { reindex: { tool: "manage_index", args: { action: "reindex", path: "/repo" } } },
+                    }),
+                }],
+            }),
+        },
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({
+        action: "status",
+        path: "/repo",
+    }, ctx);
+    const payload = JSON.parse(response.content[0].text);
+
+    assert.equal(payload.status, "not_ready");
+    assert.equal(payload.reason, "missing_provider_config");
+    assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
+    assert.deepEqual(payload.hints.setup.missingEnv, ["MILVUS_ADDRESS", "VOYAGEAI_API_KEY"]);
+    assert.doesNotMatch(payload.message, /fingerprint/i);
+});
+
+test("manage_index status still reports not_indexed without provider when path is untracked", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const missingIssue = {
+        ok: false as const,
+        code: "MISSING_PROVIDER_CONFIG" as const,
+        missingEnv: ["MILVUS_ADDRESS"],
+        message: "Satori provider setup is incomplete. Missing required environment variable(s): MILVUS_ADDRESS.",
+        hints: {
+            setup: {
+                code: "MISSING_PROVIDER_CONFIG" as const,
+                missingEnv: ["MILVUS_ADDRESS"],
+                nextSteps: ["Set MILVUS_ADDRESS, restart the MCP server, then retry the tool call."],
+            },
+        },
+    };
+    const ctx = {
+        capabilities,
+        providerRuntime: {
+            requireToolContext: async () => missingIssue,
+        },
+        toolHandlers: {
+            handleGetIndexingStatus: async () => ({
+                content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                        tool: "manage_index",
+                        version: 1,
+                        action: "status",
+                        path: "/repo",
+                        status: "not_indexed",
+                        reason: "not_indexed",
+                        message: "Codebase is not indexed.",
+                        humanText: "Codebase is not indexed.",
+                        hints: { create: { tool: "manage_index", args: { action: "create", path: "/repo" } } },
+                    }),
+                }],
+            }),
+        },
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({
+        action: "status",
+        path: "/repo",
+    }, ctx);
+    const payload = JSON.parse(response.content[0].text);
+
+    assert.equal(payload.status, "not_indexed");
+    assert.equal(payload.reason, "not_indexed");
+    assert.equal(payload.code, undefined);
+});
+
 test("manage_index returns structured backend diagnostics when handler backend call fails", async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const ctx = {

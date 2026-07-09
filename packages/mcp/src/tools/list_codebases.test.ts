@@ -297,3 +297,97 @@ test('list_codebases preserves getIndexCompletionMarker receiver binding', async
     assert.deepEqual(extractPaths(sections.get('Ready') || []), ['/repo/a']);
     assert.deepEqual(extractPaths(sections.get('Failed') || []), []);
 });
+
+test('list_codebases prefers provider_incomplete over missing_marker when provider config is incomplete', async () => {
+    const ctx = buildContext([
+        { path: '/repo/a', info: { status: 'indexed' } },
+        { path: '/repo/b', info: { status: 'sync_completed' } },
+    ], {
+        // Markers deliberately missing — without provider priority this becomes stale_local:missing_marker_doc.
+        '/repo/a': null,
+        '/repo/b': null,
+    });
+    (ctx as unknown as ProviderRuntimeOverride).providerRuntime = {
+        requireToolContext: async () => ({
+            ok: false,
+            code: 'MISSING_PROVIDER_CONFIG',
+            missingEnv: ['MILVUS_ADDRESS', 'VOYAGEAI_API_KEY'],
+            message: 'Satori provider setup is incomplete. Missing required environment variable(s): MILVUS_ADDRESS, VOYAGEAI_API_KEY.',
+            hints: {
+                setup: {
+                    code: 'MISSING_PROVIDER_CONFIG',
+                    missingEnv: ['MILVUS_ADDRESS', 'VOYAGEAI_API_KEY'],
+                    nextSteps: [
+                        'Set MILVUS_ADDRESS, restart the MCP server, then retry the tool call.',
+                        'Set VOYAGEAI_API_KEY, restart the MCP server, then retry the tool call.',
+                    ],
+                },
+            },
+        }) as unknown as ToolContext,
+    };
+
+    const response = await listCodebasesTool.execute({}, ctx);
+    const text = response.content[0]?.text || '';
+    const sections = parseSectionLines(text);
+
+    assert.deepEqual(extractPaths(sections.get('Ready') || []), []);
+    assert.deepEqual(extractPaths(sections.get('Failed') || []), ['/repo/a', '/repo/b']);
+    assert.match(text, /provider_incomplete/);
+    assert.doesNotMatch(text, /stale_local:missing_marker_doc/);
+    // Existing buckets only — no new section.
+    assert.deepEqual(parseHeadings(text), ['Failed']);
+});
+
+test('list_codebases prefers provider_incomplete over snapshot requires_reindex when provider is incomplete', async () => {
+    // HI-2: same recovery class as manage_index status for ready/requires_reindex roots.
+    // indexfailed maps to status:"error" on manage_index and must keep the real failure reason.
+    const ctx = buildContext([
+        { path: '/repo/reindex', info: { status: 'requires_reindex', reindexReason: 'fingerprint_mismatch' } },
+        { path: '/repo/ready-looking', info: { status: 'indexed' } },
+        { path: '/repo/failed', info: { status: 'indexfailed', errorMessage: 'prior_error' } },
+    ], {
+        '/repo/ready-looking': null,
+    });
+    (ctx as unknown as ProviderRuntimeOverride).providerRuntime = {
+        requireToolContext: async () => ({
+            ok: false,
+            code: 'MISSING_PROVIDER_CONFIG',
+            missingEnv: ['MILVUS_ADDRESS'],
+            message: 'missing',
+            hints: {
+                setup: {
+                    code: 'MISSING_PROVIDER_CONFIG',
+                    missingEnv: ['MILVUS_ADDRESS'],
+                    nextSteps: ['Set MILVUS_ADDRESS, restart the MCP server, then retry the tool call.'],
+                },
+            },
+        }) as unknown as ToolContext,
+    };
+
+    const response = await listCodebasesTool.execute({}, ctx);
+    const text = response.content[0]?.text || '';
+    const sections = parseSectionLines(text);
+
+    assert.deepEqual(extractPaths(sections.get('Requires Reindex') || []), []);
+    assert.deepEqual(extractPaths(sections.get('Failed') || []), [
+        '/repo/failed',
+        '/repo/ready-looking',
+        '/repo/reindex',
+    ]);
+    assert.match(sections.get('Failed')?.find((line) => line.includes('/repo/failed')) || '', /prior_error/);
+    assert.match(sections.get('Failed')?.find((line) => line.includes('/repo/reindex')) || '', /provider_incomplete:MILVUS_ADDRESS/);
+    assert.match(sections.get('Failed')?.find((line) => line.includes('/repo/ready-looking')) || '', /provider_incomplete:MILVUS_ADDRESS/);
+    assert.doesNotMatch(text, /fingerprint_mismatch/);
+    assert.doesNotMatch(text, /stale_local:missing_marker_doc/);
+    assert.deepEqual(parseHeadings(text), ['Failed']);
+});
+
+test('list_codebases still maps true missing marker to stale_local when provider is available', async () => {
+    const response = await runListCodebases(
+        [{ path: '/repo/stale', info: { status: 'indexed' } }],
+        { '/repo/stale': null },
+    );
+    const text = response.content[0]?.text || '';
+    assert.match(text, /stale_local:missing_marker_doc/);
+    assert.doesNotMatch(text, /provider_incomplete/);
+});

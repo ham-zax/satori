@@ -669,7 +669,7 @@ Supported providers:
 Default models:
 
 - OpenAI: `text-embedding-3-small`
-- VoyageAI: `voyage-4-large`
+- VoyageAI: `voyage-code-3`
 - Gemini: `gemini-embedding-001`
 - Ollama: `nomic-embed-text`
 
@@ -1424,7 +1424,7 @@ Goal: quickly get strong retrieval quality.
 Setup:
 
 - `EMBEDDING_PROVIDER=VoyageAI`
-- `EMBEDDING_MODEL=voyage-4-large`
+- `EMBEDDING_MODEL=voyage-code-3`
 - `EMBEDDING_OUTPUT_DIMENSION=1024`
 - Zilliz/Milvus backend,
 - optional Voyage reranker.

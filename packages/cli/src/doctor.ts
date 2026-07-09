@@ -61,13 +61,13 @@ function defaultModelForProvider(provider: string): string {
         case "OpenAI":
             return "text-embedding-3-small";
         case "VoyageAI":
-            return "voyage-4-large";
+            return "voyage-code-3";
         case "Gemini":
             return "gemini-embedding-001";
         case "Ollama":
             return "nomic-embed-text";
         default:
-            return "voyage-4-large";
+            return "voyage-code-3";
     }
 }
 
@@ -287,8 +287,17 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
     addCheck(checks, "embedding_dimension", "ok", `Embedding output dimension: ${selectedDimension(env, provider)}.`);
 
     const requiredKey = requiredEmbeddingEnv(provider);
-    if (requiredKey && !env[requiredKey]) {
-        addCheck(checks, "embedding_provider_env", "error", `${provider} requires ${requiredKey}.`);
+    const requiredKeyValue = requiredKey ? env[requiredKey]?.trim() : undefined;
+    if (requiredKey && !requiredKeyValue) {
+        const blankButPresent = requiredKey in env;
+        addCheck(
+            checks,
+            "embedding_provider_env",
+            "error",
+            blankButPresent
+                ? `${provider} requires a non-empty ${requiredKey} (empty string is incomplete).`
+                : `${provider} requires ${requiredKey}.`,
+        );
         if (provider === "VoyageAI") {
             nextSteps.push("Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.");
         } else {
@@ -298,8 +307,17 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
         addCheck(checks, "embedding_provider_env", "ok", requiredKey ? `${requiredKey} is present.` : `${provider} does not require an API key.`);
     }
 
-    if (!env.MILVUS_ADDRESS) {
-        addCheck(checks, "milvus_address", "error", "MILVUS_ADDRESS is required for index/search/clear operations.");
+    const milvusAddress = env.MILVUS_ADDRESS?.trim();
+    if (!milvusAddress) {
+        const blankButPresent = "MILVUS_ADDRESS" in env;
+        addCheck(
+            checks,
+            "milvus_address",
+            "error",
+            blankButPresent
+                ? "MILVUS_ADDRESS is required and must be non-empty (empty string is incomplete)."
+                : "MILVUS_ADDRESS is required for index/search/clear operations.",
+        );
         nextSteps.push("Set MILVUS_ADDRESS to a Zilliz Cloud public endpoint or local Milvus address such as localhost:19530.");
     } else {
         addCheck(checks, "milvus_address", "ok", "MILVUS_ADDRESS is present.");

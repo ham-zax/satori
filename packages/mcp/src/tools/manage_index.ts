@@ -69,6 +69,7 @@ export const manageIndexTool: McpTool = {
                 ? "embedding_vector"
                 : null;
         let executionContext: ToolContext | MissingProviderConfigIssue;
+        let statusProviderIssue: MissingProviderConfigIssue | null = null;
         try {
             executionContext = providerOperation && ctx.providerRuntime
                 ? await ctx.providerRuntime.requireToolContext(providerOperation)
@@ -86,6 +87,9 @@ export const manageIndexTool: McpTool = {
         }
         if (isMissingProviderConfigIssue(executionContext)) {
             if (input.action === "status") {
+                // Status remains usable without credentials for pure not_indexed / path errors.
+                // For tracked roots, provider gaps must beat fake fingerprint / marker narratives.
+                statusProviderIssue = executionContext;
                 executionContext = ctx;
             } else {
                 return formatManageProviderConfigError(input.action, input.path, executionContext);
@@ -106,6 +110,13 @@ export const manageIndexTool: McpTool = {
                     break;
                 case 'status':
                     response = await executionContext.toolHandlers.handleGetIndexingStatus(input);
+                    if (statusProviderIssue) {
+                        response = preferProviderIncompleteForStatus(
+                            response,
+                            input.path,
+                            statusProviderIssue,
+                        );
+                    }
                     break;
                 case 'clear':
                     response = await executionContext.toolHandlers.handleClearIndex(input);
@@ -132,3 +143,59 @@ export const manageIndexTool: McpTool = {
         }
     }
 };
+
+/**
+ * When provider config is incomplete, status may still load snapshot fingerprints and
+ * report requires_reindex/stale narratives driven by defaulted runtime config. Prefer
+ * missing_provider_config for those cases; keep pure not_indexed / path errors intact.
+ */
+function preferProviderIncompleteForStatus(
+    response: ToolResponse,
+    path: string,
+    issue: MissingProviderConfigIssue,
+): ToolResponse {
+    const text = response.content?.[0]?.text;
+    if (typeof text !== "string" || text.trim().length === 0) {
+        return formatManageProviderConfigError("status", path, issue);
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+        payload = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+        return formatManageProviderConfigError("status", path, issue);
+    }
+
+    const status = typeof payload.status === "string" ? payload.status : "";
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    const hints = payload.hints && typeof payload.hints === "object" && !Array.isArray(payload.hints)
+        ? payload.hints as Record<string, unknown>
+        : null;
+    const hasStaleLocalHint = Boolean(hints && hints.staleLocal);
+
+    // Untracked / never-indexed roots and hard path errors remain valid without provider env.
+    if (status === "error") {
+        return response;
+    }
+    if (status === "not_indexed" && reason === "not_indexed" && !hasStaleLocalHint) {
+        return response;
+    }
+
+    return {
+        content: [{
+            type: "text",
+            text: JSON.stringify({
+                tool: "manage_index",
+                version: 1,
+                action: "status",
+                path: typeof payload.path === "string" ? payload.path : path,
+                status: "not_ready",
+                reason: "missing_provider_config",
+                code: issue.code,
+                message: issue.message,
+                humanText: issue.message,
+                hints: issue.hints,
+            }),
+        }],
+    };
+}

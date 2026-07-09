@@ -69,10 +69,14 @@ export const listCodebasesTool: McpTool = {
         lines.push('');
 
         let proofContext = ctx;
+        let providerIncomplete: { missingEnv: string[] } | null = null;
         if (ctx.providerRuntime) {
             try {
                 const providerContext = await ctx.providerRuntime.requireToolContext("vector_only");
-                if (!isMissingProviderConfigIssue(providerContext)) {
+                if (isMissingProviderConfigIssue(providerContext)) {
+                    // Provider gaps beat fake missing-marker / fingerprint narratives from a weak local context.
+                    providerIncomplete = { missingEnv: providerContext.missingEnv };
+                } else {
                     proofContext = providerContext;
                 }
             } catch (error) {
@@ -86,49 +90,69 @@ export const listCodebasesTool: McpTool = {
 
         const readyCandidates = all
             .filter((e) => e.info.status === "indexed" || e.info.status === "sync_completed");
-        const completionProofChecks = await Promise.all(readyCandidates.map(async (entry) => ({
-            entry,
-            proof: await validateCompletionProof({
-                codebasePath: entry.path,
-                runtimeFingerprint: proofContext.runtimeFingerprint,
-                getIndexCompletionMarker: getCompletionMarkerReader(proofContext.context)
-            })
-        })));
-
         const ready: Array<{ path: string; probeFailed?: boolean }> = [];
-        const requiresReindex = all
-            .filter((e) => e.info.status === "requires_reindex")
-            .map((entry) => ({
-                path: entry.path,
-                reason: "reindexReason" in entry.info && entry.info.reindexReason
-                    ? String(entry.info.reindexReason)
-                    : "unknown"
-            }));
-        const failed = all
+        const requiresReindex: Array<{ path: string; reason: string }> = [];
+        // Real index failures always keep their original message. manage_index status
+        // reports these as status:"error" and preferProviderIncompleteForStatus preserves them.
+        const failed: Array<{ path: string; reason: string }> = all
             .filter((e) => e.info.status === "indexfailed")
             .map((entry) => ({
                 path: entry.path,
                 reason: "errorMessage" in entry.info
                     ? String(entry.info.errorMessage)
-                    : "unknown"
+                    : "unknown",
             }));
 
-        for (const { entry, proof } of completionProofChecks) {
-            if (proof.outcome === "valid") {
-                ready.push({ path: entry.path });
-                continue;
+        if (providerIncomplete) {
+            // Align with manage_index status (missing_provider_config):
+            // provider gaps beat fake ready / requires_reindex narratives, but never mask
+            // status:"error" / indexfailed root causes.
+            const missing = providerIncomplete.missingEnv.length > 0
+                ? providerIncomplete.missingEnv.join(",")
+                : "unknown";
+            const reason = `provider_incomplete:${missing}`;
+            for (const entry of readyCandidates) {
+                failed.push({ path: entry.path, reason });
             }
-            if (proof.outcome === "probe_failed") {
-                // Probe failure is non-authoritative: keep local ready status stable.
-                ready.push({ path: entry.path, probeFailed: true });
-                continue;
+            for (const entry of all.filter((e) => e.info.status === "requires_reindex")) {
+                failed.push({ path: entry.path, reason });
             }
-            if (proof.outcome === "fingerprint_mismatch") {
-                requiresReindex.push({ path: entry.path, reason: "completion_proof_fingerprint_mismatch" });
-                continue;
+        } else {
+            for (const entry of all.filter((e) => e.info.status === "requires_reindex")) {
+                requiresReindex.push({
+                    path: entry.path,
+                    reason: "reindexReason" in entry.info && entry.info.reindexReason
+                        ? String(entry.info.reindexReason)
+                        : "unknown",
+                });
             }
-            const staleReason = proof.reason || "missing_marker_doc";
-            failed.push({ path: entry.path, reason: `stale_local:${staleReason}` });
+
+            const completionProofChecks = await Promise.all(readyCandidates.map(async (entry) => ({
+                entry,
+                proof: await validateCompletionProof({
+                    codebasePath: entry.path,
+                    runtimeFingerprint: proofContext.runtimeFingerprint,
+                    getIndexCompletionMarker: getCompletionMarkerReader(proofContext.context)
+                })
+            })));
+
+            for (const { entry, proof } of completionProofChecks) {
+                if (proof.outcome === "valid") {
+                    ready.push({ path: entry.path });
+                    continue;
+                }
+                if (proof.outcome === "probe_failed") {
+                    // Probe failure is non-authoritative: keep local ready status stable.
+                    ready.push({ path: entry.path, probeFailed: true });
+                    continue;
+                }
+                if (proof.outcome === "fingerprint_mismatch") {
+                    requiresReindex.push({ path: entry.path, reason: "completion_proof_fingerprint_mismatch" });
+                    continue;
+                }
+                const staleReason = proof.reason || "missing_marker_doc";
+                failed.push({ path: entry.path, reason: `stale_local:${staleReason}` });
+            }
         }
 
         const byStatus = {

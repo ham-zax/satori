@@ -1,35 +1,125 @@
 import type { SearchGroupResult } from "./search-types.js";
 
+/** Relative score gap treated as a near-tie for tight-owner preference. */
+export const GROUPED_SCORE_NEAR_TIE_RATIO = 0.05;
+
 function compareNullableNumbersAsc(a?: number | null, b?: number | null): number {
     const av = a === undefined || a === null ? Number.POSITIVE_INFINITY : a;
     const bv = b === undefined || b === null ? Number.POSITIVE_INFINITY : b;
     return av - bv;
 }
 
-function compareNullableStringsAsc(a?: string | null, b?: string | null): number {
+/** Deterministic string order (no localeCompare). */
+function compareContractStringsAsc(a?: string | null, b?: string | null): number {
     if (!a && !b) return 0;
     if (!a) return 1;
     if (!b) return -1;
-    return a.localeCompare(b);
+    if (a === b) return 0;
+    return a < b ? -1 : 1;
+}
+
+export function scoresNearlyEqual(a: number, b: number): boolean {
+    const max = Math.max(Math.abs(a), Math.abs(b), 1e-9);
+    return Math.abs(a - b) / max <= GROUPED_SCORE_NEAR_TIE_RATIO;
+}
+
+function symbolKindRank(kind?: string): number {
+    const normalized = (kind || "").trim().toLowerCase();
+    if (normalized === "method" || normalized === "function") {
+        return 0;
+    }
+    if (normalized === "const" || normalized === "variable" || normalized === "property") {
+        return 1;
+    }
+    if (
+        normalized === "class"
+        || normalized === "interface"
+        || normalized === "type"
+        || normalized === "enum"
+        || normalized === "struct"
+    ) {
+        return 2;
+    }
+    if (normalized === "file") {
+        return 4;
+    }
+    return 3;
+}
+
+function resolveOwnerSpan(group: SearchGroupResult): { startLine?: number; endLine?: number } | undefined {
+    return group.symbolSpan || group.span;
+}
+
+function spanLineCount(group: SearchGroupResult): number {
+    const span = resolveOwnerSpan(group);
+    if (!span || typeof span.startLine !== "number" || typeof span.endLine !== "number") {
+        return Number.POSITIVE_INFINITY;
+    }
+    return Math.max(0, span.endLine - span.startLine);
+}
+
+/**
+ * On near-tied scores, prefer tighter proof units:
+ * - method/function over class/file (cross-file ok)
+ * - declaration over comment/prose (cross-file ok)
+ * - smaller span only within the same file (avoid demoting large core owners vs tiny wrappers)
+ */
+function compareTightOwnerPreference(a: SearchGroupResult, b: SearchGroupResult): number {
+    const aKind = a.symbolKind?.trim();
+    const bKind = b.symbolKind?.trim();
+    if (aKind || bKind) {
+        const kindCmp = symbolKindRank(a.symbolKind) - symbolKindRank(b.symbolKind);
+        if (kindCmp !== 0) {
+            return kindCmp;
+        }
+    }
+
+    const aDecl = isDeclarationSearchGroup(a);
+    const bDecl = isDeclarationSearchGroup(b);
+    if (aDecl !== bDecl) {
+        return aDecl ? -1 : 1;
+    }
+
+    if (a.file && b.file && a.file === b.file) {
+        const spanCmp = spanLineCount(a) - spanLineCount(b);
+        if (spanCmp !== 0) {
+            return spanCmp;
+        }
+    }
+
+    return 0;
 }
 
 function compareGroupedSearchResults(
     a: SearchGroupResult,
     b: SearchGroupResult,
 ): number {
-    if (b.score !== a.score) return b.score - a.score;
-    const fileCmp = a.file.localeCompare(b.file);
+    if (!scoresNearlyEqual(a.score, b.score)) {
+        return b.score - a.score;
+    }
+
+    const tightCmp = compareTightOwnerPreference(a, b);
+    if (tightCmp !== 0) {
+        return tightCmp;
+    }
+
+    // Clear score winner when tight preference is equal (preserve ranking signal).
+    if (b.score !== a.score) {
+        return b.score - a.score;
+    }
+
+    const fileCmp = compareContractStringsAsc(a.file, b.file);
     if (fileCmp !== 0) return fileCmp;
     const spanCmp = compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
     if (spanCmp !== 0) return spanCmp;
-    const labelCmp = compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+    const labelCmp = compareContractStringsAsc(a.symbolLabel, b.symbolLabel);
     if (labelCmp !== 0) return labelCmp;
-    return compareNullableStringsAsc(a.symbolId, b.symbolId);
+    return compareContractStringsAsc(a.symbolId, b.symbolId);
 }
 
 function isDeclarationSearchGroup(group: SearchGroupResult): boolean {
     const label = (group.symbolLabel || "").trim().toLowerCase();
-    if (/^(class|type|interface|enum|struct|function|def)\b/.test(label)) {
+    if (/^(?:async\s+)?(?:class|type|interface|enum|struct|function|method|def)\b/.test(label)) {
         return true;
     }
     if (/^(const|let|var)\s+[a-z0-9_$]+\s*=/.test(label)) {

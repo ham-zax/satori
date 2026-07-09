@@ -167,7 +167,7 @@ export function getDefaultModelForProvider(provider: string): string {
         case 'OpenAI':
             return 'text-embedding-3-small';
         case 'VoyageAI':
-            return 'voyage-4-large';
+            return 'voyage-code-3';
         case 'Gemini':
             return 'gemini-embedding-001';
         case 'Ollama':
@@ -385,7 +385,7 @@ Examples:
   OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 satori
 
   # Start MCP server with VoyageAI and specific model
-  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-4-large MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
+  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-code-3 MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
 
   # Start MCP server with Gemini and specific model
   EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori

@@ -424,6 +424,13 @@ export const readFileTool: McpTool = {
             let startLine = 1;
             let endLine = totalLines > 0 ? totalLines : 0;
             let addContinuationHint = false;
+            // Exact open_symbol already resolved one symbol — reuse it for annotated outline
+            // instead of a windowed re-outline that reintroduces overlapping siblings (M4/A1).
+            let exactOpenOutline: {
+                symbols: unknown[];
+                warnings?: string[];
+                hints?: Record<string, unknown>;
+            } | null = null;
 
             if (totalLines === 0) {
                 startLine = 1;
@@ -530,6 +537,18 @@ export const readFileTool: McpTool = {
                     startLine = clamp(Number(resolvedSymbol.span.startLine), 1, totalLines);
                     endLine = clamp(Number(resolvedSymbol.span.endLine), startLine, totalLines);
                     addContinuationHint = false;
+                    const outlineWarnings = Array.isArray(parsedOutline?.warnings)
+                        ? parsedOutline.warnings.filter((item: unknown): item is string => typeof item === "string")
+                        : undefined;
+                    const outlineHints = parsedOutline?.hints && typeof parsedOutline.hints === "object"
+                        ? parsedOutline.hints as Record<string, unknown>
+                        : undefined;
+                    exactOpenOutline = {
+                        // Only the exact resolved symbol — drop siblings even if exact outline returned more.
+                        symbols: [resolvedSymbol],
+                        ...(outlineWarnings && outlineWarnings.length > 0 ? { warnings: outlineWarnings } : {}),
+                        ...(outlineHints ? { hints: outlineHints } : {}),
+                    };
                 } else if (spanStart !== undefined) {
                     startLine = clamp(spanStart, 1, totalLines);
                     endLine = spanEnd !== undefined
@@ -566,7 +585,14 @@ export const readFileTool: McpTool = {
             let warnings: string[] | undefined;
             let hints: Record<string, unknown> | undefined;
 
-            if (!supportedByExtension) {
+            if (exactOpenOutline) {
+                // Exact open already owns identity + span; do not re-query a windowed outline.
+                outlineStatus = "ok";
+                outline = { symbols: exactOpenOutline.symbols };
+                hasMore = false;
+                warnings = exactOpenOutline.warnings;
+                hints = exactOpenOutline.hints;
+            } else if (!supportedByExtension) {
                 outlineStatus = "unsupported";
             } else if (!resolvedRoot || !relativeFile) {
                 outlineStatus = "requires_reindex";

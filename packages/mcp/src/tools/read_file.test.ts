@@ -1107,6 +1107,164 @@ test('read_file open_symbol catch-all returns json envelope', async () => {
     });
 });
 
+test('read_file open_symbol annotated outline drops overlapping sibling symbols', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'recovery.ts');
+        // Lines 1–3 sibling-ish header; 4–6 target body (resolved span 4–6).
+        fs.writeFileSync(filePath, [
+            'function normalizeMarkerFingerprint() {',
+            '  return 1;',
+            '}',
+            'function decideInterruptedIndexingRecovery() {',
+            '  return 2;',
+            '}',
+            '',
+        ].join('\n'), 'utf8');
+
+        let outlineCalls = 0;
+        const response = await runReadFile({
+            path: filePath,
+            mode: 'annotated',
+            open_symbol: {
+                symbolId: 'sym_decide_recovery',
+            },
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            } as unknown as SnapshotManagerLike,
+            toolHandlers: {
+                handleFileOutline: async (args: FileOutlineInput) => {
+                    outlineCalls += 1;
+                    // Windowed re-outline would return both overlapping/adjacent symbols.
+                    if (args.resolveMode === 'exact') {
+                        return {
+                            content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    status: 'ok',
+                                    path: repoPath,
+                                    file: 'src/recovery.ts',
+                                    outline: {
+                                        symbols: [{
+                                            symbolId: 'sym_decide_recovery',
+                                            symbolLabel: 'function decideInterruptedIndexingRecovery()',
+                                            span: { startLine: 4, endLine: 6 },
+                                            callGraphHint: {
+                                                supported: true,
+                                                symbolRef: {
+                                                    file: 'src/recovery.ts',
+                                                    symbolId: 'sym_decide_recovery',
+                                                },
+                                            },
+                                        }],
+                                    },
+                                    hasMore: false,
+                                }),
+                            }],
+                        };
+                    }
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'ok',
+                                path: repoPath,
+                                file: 'src/recovery.ts',
+                                outline: {
+                                    symbols: [
+                                        {
+                                            symbolId: 'sym_normalize',
+                                            symbolLabel: 'function normalizeMarkerFingerprint()',
+                                            span: { startLine: 1, endLine: 3 },
+                                        },
+                                        {
+                                            symbolId: 'sym_decide_recovery',
+                                            symbolLabel: 'function decideInterruptedIndexingRecovery()',
+                                            span: { startLine: 4, endLine: 6 },
+                                        },
+                                    ],
+                                },
+                                hasMore: false,
+                            }),
+                        }],
+                    };
+                },
+            } as unknown as ToolHandlersLike,
+        });
+
+        assert.equal(response.isError, undefined);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.mode, 'annotated');
+        assert.equal(payload.outlineStatus, 'ok');
+        assert.equal(payload.outline.symbols.length, 1);
+        assert.equal(payload.outline.symbols[0].symbolId, 'sym_decide_recovery');
+        assert.doesNotMatch(JSON.stringify(payload.outline.symbols), /normalizeMarkerFingerprint/);
+        assert.match(payload.content, /decideInterruptedIndexingRecovery/);
+        assert.doesNotMatch(payload.content, /normalizeMarkerFingerprint/);
+        // Exact open must not re-query a windowed outline that reintroduces siblings.
+        assert.equal(outlineCalls, 1);
+    });
+});
+
+test('read_file open_symbol plain content uses resolved span only even if request span is wider', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\nline5\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: {
+                symbolId: 'sym_runtime_instance',
+                start_line: 1,
+                end_line: 5,
+            },
+        }, 1000, {
+            snapshotManager: {
+                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            } as unknown as SnapshotManagerLike,
+            toolHandlers: {
+                handleFileOutline: async (args: FileOutlineInput) => {
+                    assert.equal(args.resolveMode, 'exact');
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                status: 'ok',
+                                path: repoPath,
+                                file: 'src/runtime.ts',
+                                outline: {
+                                    symbols: [{
+                                        symbolId: 'sym_runtime_instance',
+                                        symbolLabel: 'function run()',
+                                        span: { startLine: 2, endLine: 3 },
+                                        callGraphHint: {
+                                            supported: true,
+                                            symbolRef: {
+                                                file: 'src/runtime.ts',
+                                                symbolId: 'sym_runtime_instance',
+                                            },
+                                        },
+                                    }],
+                                },
+                                hasMore: false,
+                            }),
+                        }],
+                    };
+                },
+            } as unknown as ToolHandlersLike,
+        });
+
+        assert.equal(response.isError, undefined);
+        assert.equal(response.content[0].text, 'line2\nline3');
+    });
+});
+
 test('read_file open_symbol does not bypass exact resolution when stale symbolInstanceId also includes a span', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');

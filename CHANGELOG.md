@@ -5,10 +5,18 @@ All notable changes to this repository are documented in this file.
 ## Unreleased
 
 ### Release Versions
-- Repository version: `0.5.11`
-- `@zokizuan/satori-core`: `1.6.9`
-- `@zokizuan/satori-mcp`: `4.11.13`
-- `@zokizuan/satori-cli`: `0.4.11`
+- Repository version: `0.5.12`
+- `@zokizuan/satori-core`: `1.6.10`
+- `@zokizuan/satori-mcp`: `4.11.14`
+- `@zokizuan/satori-cli`: `0.4.12`
+
+## [2026-07-09] Residual Navigation, Search, and Installer Alignment
+
+### Release Versions
+- Repository version: `0.5.12`
+- `@zokizuan/satori-core`: `1.6.10`
+- `@zokizuan/satori-mcp`: `4.11.14`
+- `@zokizuan/satori-cli`: `0.4.12`
 
 ### Security
 - Contained `read_file` to tracked searchable codebase roots (`indexed` / `sync_completed`); relative paths, sibling repos, symlink escapes, and `..` escapes are denied with structured `outside_indexed_root` before content is read.
@@ -29,6 +37,12 @@ All notable changes to this repository are documented in this file.
 - `manage_index create` kickoff prose: search/navigation blocked until indexing completes (poll status); no “search while indexing” guidance.
 - MCP server default version reads `@zokizuan/satori-mcp` package.json (override via `MCP_SERVER_VERSION`); install JSON result includes `packageSpecifier`.
 - CI adds `package_unit_tests` job running MCP + CLI unit suites (no live providers).
+- Default VoyageAI embedding model is `voyage-code-3` (runtime, doctor, install templates, public docs/landing).
+- `search_codebase` `scope=docs` is documentation-only (tests remain under `runtime` / `mixed`).
+- Installer omits empty Claude env defaults; doctor treats blank/whitespace provider env as incomplete.
+- Near-tie search ranking prefers method/function groups over mega-class owners (same-file span tie-break only).
+- Oversized symbols: top `recommendedNextAction` prefers plain `read_file` preview before exact `open_symbol` (primary `span` / `symbolSpan` / call-graph refs stay full-symbol).
+- Public landing HTML documents repair, absolute paths, and scope policy.
 
 ### Fixed
 - `read_file` host filesystem containment (indexed-root gate + realpath checks).
@@ -37,6 +51,11 @@ All notable changes to this repository are documented in this file.
 - Synchronizer snapshot JSON key order uses `compareContractStrings` (locale-independent).
 - Full index `limit_reached`: writes completion marker with `indexStatus: limit_reached` for partial vector proof (no symbol registry); interrupted-index recovery preserves partial status; status reports partial index (not “fully indexed”); navigation remains fail-closed.
 - CI `package_unit_tests` job runs core + MCP + CLI unit suites.
+- `list_codebases` / `manage_index status` share provider-incomplete recovery class (provider gaps beat fake ready/requires_reindex narratives; real `indexfailed` / status `error` keep original failure reasons).
+- Exact `open_symbol` annotated mode reuses the resolved symbol only (no sibling window re-outline).
+- Call graph: collapse registry duplicate-key warning spam; public node/edge/note order uses `compareContractStrings`; notes-only inbound promotes `must:<identifier>` search with unique **caller site** `path:` when safe.
+- Outline registry warnings structured with count/action/sample.
+- AST splitter: empty-input guard, safer setLanguage/parse fallback, rate-limited fallback logs.
 
 ### Compatibility
 - Relative public paths that previously soft-resolved against CWD now fail validation.
@@ -44,13 +63,16 @@ All notable changes to this repository are documented in this file.
 - Merkle roots may change once vs older locale-sensitive packing order.
 - Snapshot on-disk JSON key order may change once vs locale-sensitive packing (content of maps unchanged).
 - Additive `symbolQuality` on `manage_index status` and compact marker on `list_codebases` Ready lines; clients ignoring unknown JSON fields remain compatible.
-- MCP handshake version may report package version (e.g. `4.11.13`) instead of historical default `1.0.0` when `MCP_SERVER_VERSION` is unset.
+- MCP handshake version may report package version (e.g. `4.11.14`) instead of historical default `1.0.0` when `MCP_SERVER_VERSION` is unset.
 - Install result gains optional `packageSpecifier` field.
 - `limit_reached` indexes become readiness-ready for warned partial search when marker is present (navigation still blocked).
+- Fresh installs without `EMBEDDING_MODEL` default to `voyage-code-3` (reindex if an existing index was built with another model).
+- `scope=docs` no longer returns test files; use `runtime` or `mixed` for tests.
 
 ### Tests
 - F1/F4/F5/F7/F8/F9/F11 contract and harness coverage; MCP install SSOT guards; doctor package-version tests.
 - Residual board: FLC-05 create prose; OWN-7 CI unit gates; FLC-08 limit_reached marker/status; OWN-3 E2E install ownership; F-AC-01 call_graph description; F-D2 snapshot sort; F-OP version/specifier; hygiene artifact cleanup.
+- Residual navigation/search: open_symbol annotated siblings; call_graph warning collapse + inbound recovery; docs scope; search recommended actions; AST splitter fallback rate-limit.
 
 ### Hygiene
 - Removed tracked stale `build-benchmark.json` (vscode/chrome packages) and host-path example `config.json`; gitignored regenerable local artifacts.

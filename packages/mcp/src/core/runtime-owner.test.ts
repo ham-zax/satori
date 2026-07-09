@@ -7,6 +7,8 @@ import type { IndexFingerprint } from '../config.js';
 import {
     RuntimeOwnerRegistry,
     buildRuntimeOwnerIdentity,
+    formatRuntimeOwnerConflictMessage,
+    formatRuntimeOwnerConflictNextStep,
     type ProcessInspector,
     type ProcessSnapshot,
     type RuntimeOwnerRecord,
@@ -248,8 +250,48 @@ test('different runtime fingerprint blocks create reindex sync and clear', async
             assert.equal(result.reason, 'runtime_owner_conflict');
             assert.equal(result.conflictingOwners?.[0]?.pid, 202);
             assert.deepEqual(result.conflictingOwners?.[0]?.conflictReasons, ['runtimeFingerprint', 'runtimeOwnerIdentityHash']);
+            assert.match(result.message || '', /pid=202/);
+            assert.match(result.message || '', /pid=101/);
+            assert.match(result.message || '', /MCP tools do not kill processes/);
         }
     });
+});
+
+test('formatRuntimeOwnerConflictMessage lists pids versions and recovery steps', () => {
+    const message = formatRuntimeOwnerConflictMessage({
+        currentVersion: '4.11.14',
+        currentPid: 101,
+        conflictingOwners: [{
+            ownerId: 'other',
+            pid: 202,
+            satoriVersion: '4.11.13',
+            runtimeOwnerIdentityHash: 'other-hash',
+            configSource: 'env',
+            startedAt: '2026-01-01T00:00:00.000Z',
+            lastSeenAt: '2026-01-01T00:00:00.000Z',
+            conflictReasons: ['satoriVersion', 'runtimeOwnerIdentityHash'],
+        }],
+    });
+    assert.match(message, /pid=101/);
+    assert.match(message, /satori@4\.11\.14/);
+    assert.match(message, /pid=202/);
+    assert.match(message, /satori@4\.11\.13/);
+    assert.match(message, /Satori package version/);
+    assert.match(message, /kill 202/);
+    assert.match(message, /owners\.json/);
+
+    const nextStep = formatRuntimeOwnerConflictNextStep([{
+        ownerId: 'other',
+        pid: 202,
+        satoriVersion: '4.11.13',
+        runtimeOwnerIdentityHash: 'other-hash',
+        configSource: 'env',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        lastSeenAt: '2026-01-01T00:00:00.000Z',
+        conflictReasons: ['satoriVersion'],
+    }]);
+    assert.match(nextStep, /pid=202/);
+    assert.match(nextStep, /Do not retry create\/reindex\/sync/);
 });
 
 test('different Satori version blocks mutation', async () => {

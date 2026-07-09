@@ -113,7 +113,12 @@ function runtimeOwnerConflictGate(): RuntimeOwnerMutationGate {
         checkMutation: async () => ({
             blocked: true,
             reason: 'runtime_owner_conflict',
-            message: 'Index mutation is blocked because multiple Satori runtimes with different fingerprints/configs are active.',
+            message: [
+                'Index mutation is blocked: this runtime pid=111 satori@4.11.14 conflicts with 1 other live Satori MCP runtime(s).',
+                'Conflicting owners: pid=4242 satori@4.10.0 differs on Satori package version.',
+                'MCP tools do not kill processes.',
+                'Stop those clients (or only if they are orphaned Satori MCP servers: kill 4242), leave a single Satori version/config running, then retry create/reindex/sync/clear.',
+            ].join(' '),
             conflictingOwners: [{
                 ownerId: 'other-owner',
                 pid: 4242,
@@ -210,9 +215,12 @@ test('handleIndexCodebase blocks create before mutation when runtime owners conf
         assert.equal(envelope.action, 'create');
         assert.equal(envelope.status, 'blocked');
         assert.equal(envelope.reason, 'runtime_owner_conflict');
-        assert.match(envelope.humanText, /multiple Satori runtimes/i);
+        assert.match(envelope.humanText, /conflicts with|multiple Satori runtimes|blocked/i);
+        assert.match(envelope.humanText, /pid=4242/);
+        assert.match(envelope.humanText, /satori@4\.10\.0/);
         assert.equal((envelope.hints?.runtimeOwners as RuntimeOwnerHint | undefined)?.[0]?.pid, 4242);
-        assert.match(String(envelope.hints?.nextStep), /Restart all Satori MCP clients/i);
+        assert.match(String(envelope.hints?.nextStep), /Stop conflicting Satori MCP process|pid=4242/i);
+        assert.equal(Array.isArray(envelope.hints?.nextSteps), true);
         assert.equal(counters.collectionLimitCalls ?? 0, 0);
         assert.equal(counters.setIndexingCalls ?? 0, 0);
     });

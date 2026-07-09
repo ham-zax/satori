@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -40,6 +41,10 @@ export interface DoctorOptions {
     execFileSyncImpl?: typeof execFileSync;
     /** Optional override for tests; defaults to resolveInstalledPackageVersions(). */
     resolvePackageVersions?: () => DoctorPackageVersion[];
+    /** Override runtime owner registry path (default: ~/.satori/runtime/owners.json). */
+    runtimeOwnersPath?: string;
+    /** Override process liveness check (default: process.kill(pid, 0)). */
+    isProcessLive?: (pid: number) => boolean;
 }
 
 const PACKAGE_VERSION_NOTE =
@@ -329,6 +334,18 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
         addCheck(checks, "milvus_token", "ok", "MILVUS_TOKEN is not set; local/unauthenticated Milvus endpoints are supported.");
     }
 
+    const runtimeOwnersPath = options.runtimeOwnersPath
+        || path.join(os.homedir(), ".satori", "runtime", "owners.json");
+    const isProcessLive = options.isProcessLive || ((pid: number) => {
+        try {
+            process.kill(pid, 0);
+            return true;
+        } catch {
+            return false;
+        }
+    });
+    appendRuntimeOwnerChecks(checks, nextSteps, runtimeOwnersPath, isProcessLive);
+
     if (nextSteps.length > 0) {
         nextSteps.push("Restart your MCP client after changing Satori environment variables.");
     }
@@ -340,4 +357,82 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
         checks,
         nextSteps: [...new Set(nextSteps)],
     };
+}
+
+function appendRuntimeOwnerChecks(
+    checks: DoctorCheck[],
+    nextSteps: string[],
+    runtimeOwnersPath: string,
+    isProcessLive: (pid: number) => boolean,
+): void {
+    if (!fs.existsSync(runtimeOwnersPath)) {
+        addCheck(checks, "runtime_owners", "ok", "No runtime owner registry yet (no concurrent MCP owners recorded).");
+        return;
+    }
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(fs.readFileSync(runtimeOwnersPath, "utf8"));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        addCheck(checks, "runtime_owners", "warning", `Could not parse runtime owner registry at ${runtimeOwnersPath}: ${message}`);
+        nextSteps.push(`Inspect or remove the corrupt runtime owner file at ${runtimeOwnersPath}, then restart Satori MCP clients.`);
+        return;
+    }
+
+    if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { owners?: unknown }).owners)) {
+        addCheck(checks, "runtime_owners", "warning", `Runtime owner registry shape is invalid at ${runtimeOwnersPath}.`);
+        nextSteps.push(`Fix or remove ${runtimeOwnersPath}, then restart Satori MCP clients.`);
+        return;
+    }
+
+    const owners = (parsed as { owners: Array<Record<string, unknown>> }).owners;
+    const live = owners.filter((owner) => typeof owner.pid === "number" && isProcessLive(owner.pid));
+    const dead = owners.length - live.length;
+    if (live.length === 0) {
+        addCheck(
+            checks,
+            "runtime_owners",
+            dead > 0 ? "warning" : "ok",
+            dead > 0
+                ? `Runtime owner registry has ${dead} stale (dead) entr${dead === 1 ? "y" : "ies"} and no live MCP owners at ${runtimeOwnersPath}.`
+                : `Runtime owner registry is empty at ${runtimeOwnersPath}.`,
+        );
+        if (dead > 0) {
+            nextSteps.push("Start any Satori MCP client once so dead runtime owners prune, or remove stale entries from ~/.satori/runtime/owners.json after all MCP processes exit.");
+        }
+        return;
+    }
+
+    const versions = [...new Set(live.map((owner) => String(owner.satoriVersion || "unknown")))];
+    const pids = live.map((owner) => String(owner.pid)).join(", ");
+    if (versions.length > 1) {
+        addCheck(
+            checks,
+            "runtime_owners",
+            "error",
+            `Multiple live Satori MCP versions are registered (pids ${pids}; versions ${versions.join(", ")}). manage_index create/reindex/sync/clear will return runtime_owner_conflict.`,
+        );
+        nextSteps.push(
+            `Stop extra Satori MCP clients so only one version remains (live pids: ${pids}). Do not leave mixed package versions (e.g. 4.11.13 and 4.11.14) attached to the same ~/.satori state.`,
+        );
+        return;
+    }
+
+    if (live.length > 1) {
+        addCheck(
+            checks,
+            "runtime_owners",
+            "ok",
+            `${live.length} live Satori MCP processes share version ${versions[0]} (pids ${pids}). Same identity is allowed; stop extras only if you want a single client.`,
+        );
+        return;
+    }
+
+    addCheck(
+        checks,
+        "runtime_owners",
+        "ok",
+        `One live Satori MCP owner: pid=${pids} satori@${versions[0]}.`,
+    );
 }

@@ -71,8 +71,9 @@ Important defaults:
 - `read_file` is bounded and can return continuation hints.
 - `requires_reindex` means reindex first, then retry the original call.
 - `manage_index action="clear"` is destructive and should be explicit.
-- After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, restart all Satori MCP clients before running `manage_index create`, `reindex`, `sync`, or `clear`.
-- Satori records live runtime owners in `~/.satori/runtime/owners.json` and blocks those index mutations with `status="blocked"` / `reason="runtime_owner_conflict"` if another live Satori MCP runtime has a different fingerprint, package version, or config identity. MCP tools do not kill processes or ask interactive cleanup questions.
+- After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, restart **all** Satori MCP clients before running `manage_index create`, `reindex`, `sync`, or `clear`.
+- Satori records live runtime owners in `~/.satori/runtime/owners.json` and blocks those index mutations with `status="blocked"` / `reason="runtime_owner_conflict"` if another live Satori MCP runtime has a different fingerprint, package version, or config identity.
+- On `runtime_owner_conflict`, the manage envelope lists conflicting **pids**, **versions**, and conflict reasons, plus a concrete `hints.nextStep`. MCP tools never kill other processes. Stop the listed host clients (or only orphaned Satori MCP node PIDs), leave a single package version/config running, then retry. `satori-cli doctor` reports multi-version live owners.
 
 ## Navigation Sidecars
 
@@ -136,7 +137,7 @@ Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `action` | enum("create", "reindex", "sync", "status", "clear", "repair") | yes |  | Required operation to run. |
-| `path` | string | yes |  | ABSOLUTE path to the target codebase. |
+| `path` | string | yes |  | ABSOLUTE filesystem path to the target codebase (relative paths are rejected). |
 | `force` | boolean | no |  | Only for action='create'. Force rebuild from scratch. |
 | `allowUnnecessaryReindex` | boolean | no |  | Only for action='reindex'. Override preflight block when reindex is detected as unnecessary ignore-only churn. |
 | `customExtensions` | array<string> | no |  | Only for action='create'. Additional file extensions to include. |
@@ -149,7 +150,7 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `path` | string | yes |  | ABSOLUTE path to an indexed codebase or subdirectory. |
+| `path` | string | yes |  | ABSOLUTE filesystem path to an indexed codebase or subdirectory (relative paths are rejected). |
 | `query` | string | yes |  | Natural-language query. |
 | `scope` | enum("runtime", "mixed", "docs") | no | `"runtime"` | Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns documentation paths only (not tests); mixed includes all. Docs scope skips reranker by policy in the current tool surface. |
 | `resultMode` | enum("grouped", "raw") | no | `"grouped"` | Output mode. grouped returns merged search groups, raw returns chunk hits. |
@@ -160,11 +161,11 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 
 ### `call_graph`
 
-Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. On symbol-owned indexes, call_graph uses compatible relationship sidecars for conservative CALLS v0 traversal and upgrades low-confidence cross-file calls only when current IMPORTS/EXPORTS evidence deterministically supports the target symbol. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report the counts returned in that response, not whole-sidecar totals for the indexed codebase.
+Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph): unique same-file name matches are high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them. Traversal is bounded (depth/limit) and incomplete by design—empty or short edge lists are not proof of “no callers.” Output is advisory navigation context, not authoritative blast-radius proof; confirm impact with search_codebase, read_file, tests, and references before editing. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report counts returned in that response, not whole-sidecar totals.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `path` | string | yes |  | ABSOLUTE path to the indexed codebase root (or subdirectory). |
+| `path` | string | yes |  | ABSOLUTE filesystem path to the indexed codebase root or subdirectory (relative paths are rejected). |
 | `symbolRef` | object | yes |  | Symbol reference from a grouped search result callGraphHint. |
 | `direction` | enum("callers", "callees", "both") | no | `"both"` | Traversal direction from the starting symbol. |
 | `depth` | integer | no | `1` | Traversal depth (max 3). |
@@ -176,8 +177,8 @@ Return a sidecar-backed symbol outline for one file, including call_graph jump h
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `path` | string | yes |  | ABSOLUTE path to the indexed codebase root. |
-| `file` | string | yes |  | Relative file path inside the codebase root. |
+| `path` | string | yes |  | ABSOLUTE filesystem path to the indexed codebase root (relative paths are rejected). |
+| `file` | string | yes |  | Repo-relative file path inside the codebase root (not absolute; resolved only against that root). |
 | `start_line` | integer | no |  | Optional start line filter (1-based, inclusive). |
 | `end_line` | integer | no |  | Optional end line filter (1-based, inclusive). |
 | `limitSymbols` | integer | no | `500` | Maximum number of returned symbols after line filtering. |
@@ -187,7 +188,7 @@ Return a sidecar-backed symbol outline for one file, including call_graph jump h
 
 ### `read_file`
 
-Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). The path must be absolute and its canonical real path must lie inside a tracked root with status `indexed` or `sync_completed`. Optional 1-based inclusive line ranges and safe truncation are supported.
+Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). Requires an absolute path whose canonical real path is inside a tracked root with status indexed or sync_completed. Supports optional 1-based inclusive line ranges and safe truncation.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|

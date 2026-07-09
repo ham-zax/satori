@@ -142,10 +142,12 @@ import type {
     SearchQueryPlan,
     SearchResultLike,
 } from "./search-lexical-scoring.js";
-import type {
-    RuntimeOwnerMutationAction,
-    RuntimeOwnerMutationGate,
-    RuntimeOwnerMutationGateResult,
+import {
+    formatRuntimeOwnerConflictMessage,
+    formatRuntimeOwnerConflictNextStep,
+    type RuntimeOwnerMutationAction,
+    type RuntimeOwnerMutationGate,
+    type RuntimeOwnerMutationGateResult,
 } from "./runtime-owner.js";
 
 const SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING = 'SEARCH_PARTIAL_INDEX:limit_reached';
@@ -1024,13 +1026,21 @@ export class ToolHandlers {
         codebasePath: string,
         result: RuntimeOwnerMutationGateResult
     ): { content: Array<{ type: "text"; text: string }> } {
+        const conflictingOwners = result.conflictingOwners || [];
         const message = result.message
-            || "Index mutation is blocked because multiple Satori runtimes with different fingerprints/configs are active.";
+            || formatRuntimeOwnerConflictMessage({
+                conflictingOwners,
+            });
         return this.toolResponseBuilders.manageResponse(action, codebasePath, "blocked", message, {
             reason: "runtime_owner_conflict",
             hints: {
-                runtimeOwners: result.conflictingOwners || [],
-                nextStep: "Restart all Satori MCP clients or run the CLI runtime-owner cleanup command, then retry.",
+                runtimeOwners: conflictingOwners,
+                nextStep: formatRuntimeOwnerConflictNextStep(conflictingOwners),
+                nextSteps: [
+                    formatRuntimeOwnerConflictNextStep(conflictingOwners),
+                    "Do not loop create/reindex/sync while runtime_owner_conflict is returned.",
+                    "Search may still work with degraded freshness; mutations stay blocked until a single runtime identity remains.",
+                ],
             }
         });
     }

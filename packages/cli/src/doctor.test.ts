@@ -19,13 +19,23 @@ const fixedPackageVersions = (): DoctorPackageVersion[] => [
     { name: "@zokizuan/satori-core", version: "1.6.10", source: "test" },
 ];
 
-test("runDoctor reports missing default VoyageAI and Milvus env", () => {
-    const result = runDoctor({
-        nodeVersion: "v20.11.0",
-        env: {},
+/** Isolate doctor from the operator machine's ~/.satori/runtime/owners.json. */
+const noRuntimeOwnersPath = path.join(os.tmpdir(), "satori-doctor-no-owners-registry.json");
+
+function baseDoctorOptions(overrides: DoctorOptions = {}): DoctorOptions {
+    return {
         execFileSyncImpl: successfulExecFileSync,
         resolvePackageVersions: fixedPackageVersions,
-    });
+        runtimeOwnersPath: noRuntimeOwnersPath,
+        ...overrides,
+    };
+}
+
+test("runDoctor reports missing default VoyageAI and Milvus env", () => {
+    const result = runDoctor(baseDoctorOptions({
+        nodeVersion: "v20.11.0",
+        env: {},
+    }));
 
     assert.equal(result.status, "error");
     assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "Embedding provider: VoyageAI.");
@@ -41,15 +51,13 @@ test("runDoctor reports missing default VoyageAI and Milvus env", () => {
 });
 
 test("runDoctor treats whitespace-only provider env as incomplete", () => {
-    const result = runDoctor({
+    const result = runDoctor(baseDoctorOptions({
         nodeVersion: "v20.11.0",
         env: {
             VOYAGEAI_API_KEY: "   ",
             MILVUS_ADDRESS: "",
         },
-        execFileSyncImpl: successfulExecFileSync,
-        resolvePackageVersions: fixedPackageVersions,
-    });
+    }));
 
     assert.equal(result.status, "error");
     assert.match(
@@ -63,15 +71,13 @@ test("runDoctor treats whitespace-only provider env as incomplete", () => {
 });
 
 test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () => {
-    const result = runDoctor({
+    const result = runDoctor(baseDoctorOptions({
         nodeVersion: "v22.0.0",
         env: {
             EMBEDDING_PROVIDER: "Ollama",
             MILVUS_ADDRESS: "localhost:19530",
         },
-        execFileSyncImpl: successfulExecFileSync,
-        resolvePackageVersions: fixedPackageVersions,
-    });
+    }));
 
     assert.equal(result.status, "ok");
     assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "Embedding provider: Ollama.");
@@ -83,30 +89,26 @@ test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () 
 });
 
 test("runDoctor flags unsupported Node versions", () => {
-    const result = runDoctor({
+    const result = runDoctor(baseDoctorOptions({
         nodeVersion: "v18.19.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
             MILVUS_ADDRESS: "localhost:19530",
         },
-        execFileSyncImpl: successfulExecFileSync,
-        resolvePackageVersions: fixedPackageVersions,
-    });
+    }));
 
     assert.equal(result.status, "error");
     assert.equal(result.checks.find((check) => check.name === "node_version")?.status, "error");
 });
 
 test("runDoctor reports Satori package version set and independent-version policy", () => {
-    const result = runDoctor({
+    const result = runDoctor(baseDoctorOptions({
         nodeVersion: "v20.11.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
             MILVUS_ADDRESS: "localhost:19530",
         },
-        execFileSyncImpl: successfulExecFileSync,
-        resolvePackageVersions: fixedPackageVersions,
-    });
+    }));
 
     assert.equal(result.packageVersions.length, 3);
     assert.deepEqual(
@@ -125,22 +127,77 @@ test("runDoctor reports Satori package version set and independent-version polic
 });
 
 test("runDoctor warns when a package version cannot be resolved", () => {
-    const result = runDoctor({
+    const result = runDoctor(baseDoctorOptions({
         nodeVersion: "v20.11.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
             MILVUS_ADDRESS: "localhost:19530",
         },
-        execFileSyncImpl: successfulExecFileSync,
         resolvePackageVersions: () => [
             { name: "@zokizuan/satori-cli", version: "0.4.12", source: "test" },
             { name: "@zokizuan/satori-mcp", version: null, source: "unresolved" },
             { name: "@zokizuan/satori-core", version: "1.6.10", source: "test" },
         ],
-    });
+    }));
 
     assert.equal(result.status, "warning");
     assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.status, "warning");
+});
+
+test("runDoctor errors when multiple live Satori MCP package versions are registered", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-owners-"));
+    const ownersPath = path.join(tempDir, "owners.json");
+    try {
+        fs.writeFileSync(ownersPath, JSON.stringify({
+            formatVersion: "v1",
+            updatedAt: new Date().toISOString(),
+            owners: [
+                {
+                    ownerId: "a",
+                    pid: 111,
+                    satoriVersion: "4.11.13",
+                    runtimeFingerprint: {},
+                    runtimeOwnerIdentityHash: "hash-a",
+                    configSource: "env",
+                    startedAt: new Date().toISOString(),
+                    lastSeenAt: new Date().toISOString(),
+                },
+                {
+                    ownerId: "b",
+                    pid: 222,
+                    satoriVersion: "4.11.14",
+                    runtimeFingerprint: {},
+                    runtimeOwnerIdentityHash: "hash-b",
+                    configSource: "env",
+                    startedAt: new Date().toISOString(),
+                    lastSeenAt: new Date().toISOString(),
+                },
+            ],
+        }), "utf8");
+
+        const result = runDoctor(baseDoctorOptions({
+            nodeVersion: "v20.11.0",
+            env: {
+                VOYAGEAI_API_KEY: "pa-test",
+                MILVUS_ADDRESS: "localhost:19530",
+            },
+            runtimeOwnersPath: ownersPath,
+            isProcessLive: (pid) => pid === 111 || pid === 222,
+        }));
+
+        assert.equal(result.status, "error");
+        const ownersCheck = result.checks.find((check) => check.name === "runtime_owners");
+        assert.equal(ownersCheck?.status, "error");
+        assert.match(ownersCheck?.message || "", /4\.11\.13/);
+        assert.match(ownersCheck?.message || "", /4\.11\.14/);
+        assert.match(ownersCheck?.message || "", /runtime_owner_conflict/);
+        assert.equal(
+            result.nextSteps.some((step) => /Stop extra Satori MCP|single version|4\.11/.test(step)),
+            true,
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 // Doctor finding: core nested under mcp must still resolve (createRequire from MCP package.json).

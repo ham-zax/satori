@@ -193,6 +193,73 @@ export function readMcpPackageVersion(): string {
     }
 }
 
+const CONFLICT_REASON_LABELS: Record<RuntimeOwnerConflictSummary["conflictReasons"][number], string> = {
+    runtimeFingerprint: "runtime fingerprint (embedding/vector/schema)",
+    satoriVersion: "Satori package version",
+    runtimeOwnerIdentityHash: "config identity hash",
+};
+
+/**
+ * Operator-facing conflict text for manage_index mutation blocks.
+ * MCP tools never kill other processes; this message must list concrete PIDs.
+ */
+export function formatRuntimeOwnerConflictMessage(args: {
+    currentVersion?: string;
+    currentPid?: number;
+    conflictingOwners: RuntimeOwnerConflictSummary[];
+    registryError?: string;
+}): string {
+    if (args.registryError) {
+        return [
+            "Index mutation is blocked because the Satori runtime owner registry could not be validated.",
+            `Registry error: ${args.registryError}`,
+            `Inspect ${path.join(defaultRuntimeStateDir(), OWNER_FILE_NAME)} and remove a stale lock at ${path.join(defaultRuntimeStateDir(), OWNER_LOCK_NAME)} if present, then retry.`,
+        ].join(" ");
+    }
+
+    const me = args.currentPid !== undefined
+        ? `this runtime pid=${args.currentPid}${args.currentVersion ? ` satori@${args.currentVersion}` : ""}`
+        : (args.currentVersion ? `this runtime satori@${args.currentVersion}` : "this runtime");
+
+    if (args.conflictingOwners.length === 0) {
+        return `Index mutation is blocked because multiple Satori runtimes with different fingerprints/configs are active (${me}). Stop other Satori MCP clients, then retry.`;
+    }
+
+    const ownerLines = args.conflictingOwners.map((owner) => {
+        const reasons = owner.conflictReasons
+            .map((reason) => CONFLICT_REASON_LABELS[reason] || reason)
+            .join(", ");
+        const cmd = owner.cmd ? ` cmd=${JSON.stringify(owner.cmd)}` : "";
+        return `pid=${owner.pid} satori@${owner.satoriVersion} differs on ${reasons}${cmd}`;
+    });
+
+    const pids = args.conflictingOwners.map((owner) => String(owner.pid)).join(" ");
+    return [
+        `Index mutation is blocked: ${me} conflicts with ${args.conflictingOwners.length} other live Satori MCP runtime(s).`,
+        `Conflicting owners: ${ownerLines.join("; ")}.`,
+        "MCP tools do not kill processes.",
+        `Stop those clients (or only if they are orphaned Satori MCP servers: kill ${pids}), leave a single Satori version/config running, then retry create/reindex/sync/clear.`,
+        `Registry: ${path.join(defaultRuntimeStateDir(), OWNER_FILE_NAME)}.`,
+    ].join(" ");
+}
+
+export function formatRuntimeOwnerConflictNextStep(conflictingOwners: RuntimeOwnerConflictSummary[]): string {
+    if (conflictingOwners.length === 0) {
+        return [
+            "Stop every other Satori MCP client (IDE/agent sessions) so only one package version and config remain.",
+            `Inspect ${path.join(defaultRuntimeStateDir(), OWNER_FILE_NAME)}, restart this MCP client, then retry the same manage_index action.`,
+        ].join(" ");
+    }
+    const pidList = conflictingOwners.map((owner) => owner.pid).join(", ");
+    const versions = [...new Set(conflictingOwners.map((owner) => owner.satoriVersion))].join(", ");
+    return [
+        `Stop conflicting Satori MCP process(es) pid=${pidList} (versions: ${versions}) by quitting their host clients.`,
+        "Do not retry create/reindex/sync while those PIDs are live.",
+        "After only one runtime identity remains, retry the same manage_index action.",
+        `If a PID is an orphaned node server, terminate only that process, then re-check ${path.join(defaultRuntimeStateDir(), OWNER_FILE_NAME)}.`,
+    ].join(" ");
+}
+
 function defaultRuntimeStateDir(): string {
     return path.join(os.homedir(), ".satori", "runtime");
 }
@@ -362,14 +429,23 @@ export class RuntimeOwnerRegistry implements RuntimeOwnerMutationGate {
             return {
                 blocked: true,
                 reason: "runtime_owner_conflict",
-                message: "Index mutation is blocked because multiple Satori runtimes with different fingerprints/configs are active.",
+                message: formatRuntimeOwnerConflictMessage({
+                    currentVersion: this.identity.satoriVersion,
+                    currentPid: this.currentProcess.pid,
+                    conflictingOwners,
+                }),
                 conflictingOwners,
             };
         } catch (error) {
             return {
                 blocked: true,
                 reason: "runtime_owner_conflict",
-                message: `Index mutation is blocked because the Satori runtime owner registry could not be validated: ${error instanceof Error ? error.message : String(error)}`,
+                message: formatRuntimeOwnerConflictMessage({
+                    currentVersion: this.identity.satoriVersion,
+                    currentPid: this.currentProcess.pid,
+                    conflictingOwners: [],
+                    registryError: error instanceof Error ? error.message : String(error),
+                }),
                 conflictingOwners: [],
             };
         }

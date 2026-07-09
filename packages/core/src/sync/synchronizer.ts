@@ -6,6 +6,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import ignore from 'ignore';
 import { computeMerkleRoot } from './merkle';
+import { compareContractStrings } from '../utils/compare-contract-strings';
 import { DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
 import {
     isIndexableFileByPolicy,
@@ -302,7 +303,7 @@ export class FileSynchronizer {
             return;
         }
 
-        entries.sort((a, b) => a.name.localeCompare(b.name));
+        entries.sort((a, b) => compareContractStrings(a.name, b.name));
 
         for (const entry of entries) {
             const absolutePath = path.join(directoryPath, entry.name);
@@ -512,8 +513,8 @@ export class FileSynchronizer {
         const merkleDir = path.dirname(this.snapshotPath);
         await fsp.mkdir(merkleDir, { recursive: true });
 
-        const fileHashes = Array.from(this.fileHashes.entries()).sort(([a], [b]) => a.localeCompare(b));
-        const fileStats = Array.from(this.fileStats.entries()).sort(([a], [b]) => a.localeCompare(b));
+        const fileHashes = Array.from(this.fileHashes.entries()).sort(([a], [b]) => compareContractStrings(a, b));
+        const fileStats = Array.from(this.fileStats.entries()).sort(([a], [b]) => compareContractStrings(a, b));
 
         const payload: SnapshotV2 = {
             snapshotVersion: SNAPSHOT_VERSION,

@@ -4,7 +4,7 @@ Read-only MCP server for Satori. It gives coding agents six deterministic tools 
 
 ## Install
 
-Use the CLI installer for normal setup:
+Installer ownership is **`@zokizuan/satori-cli` only** (this package serves MCP tools; it does not install client configs). Use the CLI installer for normal setup:
 
 ```bash
 npx -y @zokizuan/satori-cli@latest install --client all

@@ -17,8 +17,6 @@ export type RawArgsMode =
 export type ParsedCommand =
     | { kind: "help" }
     | { kind: "version" }
-    | { kind: "install"; client: InstallClient; dryRun: boolean; installGuidanceHook: boolean; profile?: InstallProfile }
-    | { kind: "uninstall"; client: InstallClient; dryRun: boolean }
     | { kind: "tools-list" }
     | { kind: "tool-call"; toolName: string; rawArgsMode: RawArgsMode }
     | { kind: "wrapper"; toolName: string; rawArgsMode: RawArgsMode; wrapperArgs: string[] };
@@ -33,10 +31,15 @@ export interface ResolveRawArgsOptions {
     stdinTimeoutMs: number;
 }
 
-export type InstallClient = "all" | "claude" | "codex" | "opencode";
-export type InstallProfile = "default" | "minimal" | "all-text";
-
+/** Installer SSOT is packages/cli (satori-cli). MCP CLI keeps these reserved so they never become tool wrappers. */
 const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "install", "uninstall"]);
+
+/** Hard-deprecation messages only — no installer work, no config writes. */
+export const MCP_INSTALL_USE_SATORI_CLI_MESSAGE =
+    "Install is owned by @zokizuan/satori-cli. Use: npx -y @zokizuan/satori-cli@latest install --client <client>";
+export const MCP_UNINSTALL_USE_SATORI_CLI_MESSAGE =
+    "Uninstall is owned by @zokizuan/satori-cli. Use: npx -y @zokizuan/satori-cli@latest uninstall --client <client>";
+
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
 interface WrapperJsonSchema {
@@ -173,48 +176,6 @@ function parseRawArgsMode(args: string[]): { rawArgsMode: RawArgsMode; remaining
     return { rawArgsMode, remaining };
 }
 
-function parseInstallCommand(kind: "install" | "uninstall", args: string[]): ParsedCommand {
-    let client: InstallClient = "all";
-    let dryRun = false;
-    let installGuidanceHook = false;
-    let profile: InstallProfile | undefined;
-
-    for (let i = 0; i < args.length; i += 1) {
-        const token = args[i];
-        if (token === "--client") {
-            const next = args[i + 1];
-            if (next !== "all" && next !== "claude" && next !== "codex" && next !== "opencode") {
-                throw new CliError("E_USAGE", "--client must be one of: all, claude, codex, opencode.", 2);
-            }
-            client = next;
-            i += 1;
-            continue;
-        }
-        if (token === "--dry-run") {
-            dryRun = true;
-            continue;
-        }
-        if (kind === "install" && token === "--install-guidance-hook") {
-            installGuidanceHook = true;
-            continue;
-        }
-        if (kind === "install" && token === "--profile") {
-            const next = args[i + 1];
-            if (next !== "default" && next !== "minimal" && next !== "all-text") {
-                throw new CliError("E_USAGE", "--profile must be one of: default, minimal, all-text.", 2);
-            }
-            profile = next;
-            i += 1;
-            continue;
-        }
-        throw new CliError("E_USAGE", `Unknown arguments for ${kind}: ${args.slice(i).join(" ")}`, 2);
-    }
-
-    return kind === "install"
-        ? { kind, client, dryRun, installGuidanceHook, profile }
-        : { kind, client, dryRun };
-}
-
 export function parseCliArgs(argv: string[]): ParsedCliInput {
     const { globals, rest } = parseGlobalOptions(argv);
     if (rest.length === 0 || rest[0] === "help" || rest.includes("--help") || rest.includes("-h")) {
@@ -232,17 +193,10 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
     }
 
     if (rest[0] === "install") {
-        return {
-            globals,
-            command: parseInstallCommand("install", rest.slice(1))
-        };
+        throw new CliError("E_USAGE", MCP_INSTALL_USE_SATORI_CLI_MESSAGE, 2);
     }
-
     if (rest[0] === "uninstall") {
-        return {
-            globals,
-            command: parseInstallCommand("uninstall", rest.slice(1))
-        };
+        throw new CliError("E_USAGE", MCP_UNINSTALL_USE_SATORI_CLI_MESSAGE, 2);
     }
 
     if (rest[0] === "tools") {

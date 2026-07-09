@@ -105,13 +105,6 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
     };
 }
 
-function fakeInstallRuntimeCommand(homeDir: string) {
-    return {
-        command: process.execPath,
-        args: [path.join(homeDir, ".satori", "mcp-runtime", "fake", "node_modules", "@zokizuan", "satori-mcp", "dist", "index.js")],
-    };
-}
-
 test("runCli tools list succeeds and emits JSON to stdout", async () => {
     const io = captureIo();
 
@@ -172,85 +165,34 @@ test("runCli treats structured non-ok envelope as tool error even when isError=f
     assert.doesNotMatch(compactEnvelope, /\n\s+"/);
 });
 
-test("runCli install updates config without starting an MCP session", async () => {
-    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-home-"));
+test("runCli install is hard-deprecated to satori-cli (F2 SSOT)", async () => {
     const io = captureIo();
-
-    try {
-        const exitCode = await runCli(["install", "--client", "codex"], {
-            writeStdout: io.writeStdout,
-            writeStderr: io.writeStderr,
-            env: { ...process.env, HOME: homeDir },
-            installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
-            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
-            serverCommand: process.execPath,
-            serverArgs: ["/path/that/does/not/exist.mjs"],
-            startupTimeoutMs: 100,
-            callTimeoutMs: 100,
-        });
-
-        const { stdout } = io.read();
-        assert.equal(exitCode, 0);
-        const parsed = JSON.parse(stdout);
-        assert.equal(parsed.action, "install");
-        assert.equal(parsed.client, "codex");
-        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
-    } finally {
-        fs.rmSync(homeDir, { recursive: true, force: true });
-    }
+    const exitCode = await runCli(["install", "--client", "codex"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        connectSession: async () => {
+            throw new Error("install must not open an MCP session");
+        },
+    });
+    const { stdout, stderr } = io.read();
+    assert.equal(exitCode, 2);
+    assert.equal(stdout.trim(), "");
+    assert.match(stderr, /Install is owned by @zokizuan\/satori-cli/);
 });
 
-test("runCli install fails preflight with explicit package guidance before writing config", async () => {
-    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-preflight-home-"));
+test("runCli uninstall is hard-deprecated to satori-cli (F2 SSOT)", async () => {
     const io = captureIo();
-
-    try {
-        const exitCode = await runCli(["install", "--client", "codex"], {
-            writeStdout: io.writeStdout,
-            writeStderr: io.writeStderr,
-            env: { ...process.env, HOME: homeDir },
-            installabilityVerifier: () => {
-                throw new Error("Cannot install @zokizuan/satori-mcp@4.4.1 because required dependency @zokizuan/satori-core@1.1.1 is not published on npm.");
-            },
-            startupTimeoutMs: 100,
-            callTimeoutMs: 100,
-        });
-
-        const { stdout, stderr } = io.read();
-        assert.equal(exitCode, 3);
-        assert.equal(stdout.trim(), "");
-        assert.equal(stderr.includes("@zokizuan/satori-core@1.1.1 is not published on npm"), true);
-        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
-    } finally {
-        fs.rmSync(homeDir, { recursive: true, force: true });
-    }
-});
-
-test("runCli uninstall supports dry-run without writing files", async () => {
-    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-uninstall-home-"));
-    const io = captureIo();
-
-    try {
-        const exitCode = await runCli(["uninstall", "--client", "claude", "--dry-run"], {
-            writeStdout: io.writeStdout,
-            writeStderr: io.writeStderr,
-            env: { ...process.env, HOME: homeDir },
-            serverCommand: process.execPath,
-            serverArgs: ["/path/that/does/not/exist.mjs"],
-            startupTimeoutMs: 100,
-            callTimeoutMs: 100,
-        });
-
-        const { stdout } = io.read();
-        assert.equal(exitCode, 0);
-        const parsed = JSON.parse(stdout);
-        assert.equal(parsed.action, "uninstall");
-        assert.equal(parsed.client, "claude");
-        assert.equal(parsed.dryRun, true);
-        assert.equal(fs.existsSync(path.join(homeDir, ".claude.json")), false);
-    } finally {
-        fs.rmSync(homeDir, { recursive: true, force: true });
-    }
+    const exitCode = await runCli(["uninstall", "--client", "claude", "--dry-run"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        connectSession: async () => {
+            throw new Error("uninstall must not open an MCP session");
+        },
+    });
+    const { stdout, stderr } = io.read();
+    assert.equal(exitCode, 2);
+    assert.equal(stdout.trim(), "");
+    assert.match(stderr, /Uninstall is owned by @zokizuan\/satori-cli/);
 });
 
 test("runCli returns the initial manage_index create kickoff response without polling status", async () => {

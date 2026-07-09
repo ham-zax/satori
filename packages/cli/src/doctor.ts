@@ -164,9 +164,14 @@ export function resolveInstalledPackageVersions(): DoctorPackageVersion[] {
             preferredRead: () => {
                 try {
                     const pkg = readManagedPackageJson();
-                    const source = resolvePackageJsonPath(pkg.name, "mcp")?.source
+                    const name = typeof pkg.name === "string" ? pkg.name : null;
+                    const version = typeof pkg.version === "string" ? pkg.version : null;
+                    if (!name || !version) {
+                        return null;
+                    }
+                    const source = resolvePackageJsonPath(name, "mcp")?.source
                         || "managed-package";
-                    return { name: pkg.name, version: pkg.version, source };
+                    return { name, version, source };
                 } catch {
                     return null;
                 }

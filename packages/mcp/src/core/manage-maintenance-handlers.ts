@@ -19,6 +19,10 @@ import {
     type VectorBackendDiagnostic,
 } from "./backend-diagnostics.js";
 import { requireAbsoluteFilesystemPath } from "../utils.js";
+import {
+    formatRuntimeOwnersStatusLine,
+    type RuntimeOwnersSummary,
+} from "./runtime-owner.js";
 
 type ToolArgs = Record<string, unknown>;
 
@@ -94,6 +98,8 @@ type ManageMaintenanceHandlersHost = {
         diagnostic: VectorBackendDiagnostic,
         humanText?: string,
     ): ToolTextResponse;
+    /** Optional live MCP runtime owner summary for status diagnostics. */
+    getLiveOwnersSummary?(): Promise<RuntimeOwnersSummary | null> | RuntimeOwnersSummary | null;
 };
 
 function collectErrorFragments(
@@ -504,11 +510,27 @@ export class ManageMaintenanceHandlers {
                 };
             }
 
+            let runtimeOwnersLine = "";
+            if (typeof this.host.getLiveOwnersSummary === "function") {
+                try {
+                    const ownersSummary = await this.host.getLiveOwnersSummary();
+                    if (ownersSummary) {
+                        runtimeOwnersLine = `\n👥 ${formatRuntimeOwnersStatusLine(ownersSummary)}`;
+                        envelopeHints = {
+                            ...(envelopeHints || {}),
+                            runtimeOwners: ownersSummary,
+                        };
+                    }
+                } catch {
+                    // Diagnostic only; never fail status on owner registry issues.
+                }
+            }
+
             return this.host.manageResponse(
                 "status",
                 envelopePath,
                 envelopeStatus,
-                statusMessage + compatibilityStatus + pathInfo + snapshotWarningText,
+                statusMessage + compatibilityStatus + pathInfo + snapshotWarningText + runtimeOwnersLine,
                 {
                     reason: envelopeReason,
                     hints: envelopeHints,

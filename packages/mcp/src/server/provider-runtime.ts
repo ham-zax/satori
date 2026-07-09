@@ -272,6 +272,7 @@ export class ProviderRuntime {
             runtimeFingerprint: this.runtimeFingerprint,
             toolHandlers,
             readFileMaxLines: this.readFileMaxLines,
+            runtimeOwnerGate: this.runtimeOwnerGate,
             providerRuntime: this,
         };
         this.activeContexts.push(toolContext);

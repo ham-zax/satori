@@ -58,9 +58,16 @@ function createMarker(path: string, overrides?: Record<string, unknown>) {
 async function runListCodebases(
     entries: Array<{ path: string; info: Record<string, unknown> }>,
     markers: MarkerMap = {},
-    options?: { throwOnProbe?: boolean }
+    options?: {
+        throwOnProbe?: boolean;
+        runtimeOwnerGate?: ToolContext["runtimeOwnerGate"];
+    }
 ) {
-    return listCodebasesTool.execute({}, buildContext(entries, markers, options));
+    const ctx = buildContext(entries, markers, options);
+    if (options?.runtimeOwnerGate !== undefined) {
+        (ctx as ToolContext).runtimeOwnerGate = options.runtimeOwnerGate;
+    }
+    return listCodebasesTool.execute({}, ctx);
 }
 
 function parseHeadings(text: string): string[] {
@@ -390,4 +397,45 @@ test('list_codebases still maps true missing marker to stale_local when provider
     const text = response.content[0]?.text || '';
     assert.match(text, /stale_local:missing_marker_doc/);
     assert.doesNotMatch(text, /provider_incomplete/);
+});
+
+test('list_codebases appends Runtime owners line from runtimeOwnerGate summary', async () => {
+    const response = await runListCodebases(
+        [{ path: '/repo/a', info: { status: 'indexed' } }],
+        { '/repo/a': createMarker('/repo/a') },
+        {
+            runtimeOwnerGate: {
+                checkMutation: async () => ({ blocked: false }),
+                getLiveOwnersSummary: () => ({
+                    liveCount: 2,
+                    versions: ['4.11.13', '4.11.15'],
+                    multiVersion: true,
+                    registryPath: '/tmp/owners.json',
+                    owners: [
+                        { pid: 1, satoriVersion: '4.11.13', lastSeenAt: 't', configSource: 'env' },
+                        { pid: 2, satoriVersion: '4.11.15', lastSeenAt: 't', configSource: 'env' },
+                    ],
+                }),
+            },
+        },
+    );
+    const text = response.content[0]?.text || '';
+    assert.match(text, /Runtime owners: 2 live, multi-version/);
+    assert.match(text, /runtime_owner_conflict/);
+});
+
+test('list_codebases omits Runtime owners line when summary is unavailable (null)', async () => {
+    const response = await runListCodebases(
+        [{ path: '/repo/a', info: { status: 'indexed' } }],
+        { '/repo/a': createMarker('/repo/a') },
+        {
+            runtimeOwnerGate: {
+                checkMutation: async () => ({ blocked: false }),
+                getLiveOwnersSummary: () => null,
+            },
+        },
+    );
+    const text = response.content[0]?.text || '';
+    assert.doesNotMatch(text, /Runtime owners:/);
+    assert.doesNotMatch(text, /none live/);
 });

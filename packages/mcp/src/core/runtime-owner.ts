@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { compareContractStrings } from "@zokizuan/satori-core";
 import type { ContextMcpConfig, IndexFingerprint } from "../config.js";
 
 export type RuntimeOwnerMutationAction = "create" | "reindex" | "sync" | "clear";
@@ -73,11 +74,31 @@ export interface RuntimeOwnerMutationGateResult {
     conflictingOwners?: RuntimeOwnerConflictSummary[];
 }
 
+export interface RuntimeOwnerLiveSummaryEntry {
+    pid: number;
+    satoriVersion: string;
+    lastSeenAt: string;
+    configSource: string;
+}
+
+export interface RuntimeOwnersSummary {
+    liveCount: number;
+    versions: string[];
+    owners: RuntimeOwnerLiveSummaryEntry[];
+    multiVersion: boolean;
+    registryPath: string;
+}
+
 export interface RuntimeOwnerMutationGate {
     checkMutation(
         action: RuntimeOwnerMutationAction,
         codebasePath: string
     ): RuntimeOwnerMutationGateResult | Promise<RuntimeOwnerMutationGateResult>;
+    /**
+     * Optional diagnostic summary for status/list_codebases (not a mutation gate).
+     * Returns null when the owner registry cannot be read (do not invent "none live").
+     */
+    getLiveOwnersSummary?(): RuntimeOwnersSummary | null | Promise<RuntimeOwnersSummary | null>;
 }
 
 interface RuntimeOwnerFile {
@@ -258,6 +279,48 @@ export function formatRuntimeOwnerConflictNextStep(conflictingOwners: RuntimeOwn
         "After only one runtime identity remains, retry the same manage_index action.",
         `If a PID is an orphaned node server, terminate only that process, then re-check ${path.join(defaultRuntimeStateDir(), OWNER_FILE_NAME)}.`,
     ].join(" ");
+}
+
+/** Compact operator line for manage_index status / list_codebases (diagnostic only). */
+export function formatRuntimeOwnersStatusLine(summary: RuntimeOwnersSummary): string {
+    if (summary.liveCount === 0) {
+        return `Runtime owners: none live (registry ${summary.registryPath}).`;
+    }
+    const ownerBits = summary.owners
+        .map((owner) => `pid=${owner.pid} satori@${owner.satoriVersion}`)
+        .join(", ");
+    if (summary.multiVersion) {
+        return [
+            `Runtime owners: ${summary.liveCount} live, multi-version (${ownerBits}).`,
+            "manage_index create/reindex/sync/clear may return runtime_owner_conflict until a single package version remains.",
+        ].join(" ");
+    }
+    if (summary.liveCount === 1) {
+        return `Runtime owners: 1 live (${ownerBits}).`;
+    }
+    return `Runtime owners: ${summary.liveCount} live, same version (${ownerBits}).`;
+}
+
+export function buildRuntimeOwnersSummaryFromRecords(
+    liveOwners: RuntimeOwnerRecord[],
+    registryPath: string,
+): RuntimeOwnersSummary {
+    const owners = [...liveOwners]
+        .map((owner) => ({
+            pid: owner.pid,
+            satoriVersion: owner.satoriVersion,
+            lastSeenAt: owner.lastSeenAt,
+            configSource: owner.configSource,
+        }))
+        .sort((a, b) => a.pid - b.pid || compareContractStrings(a.satoriVersion, b.satoriVersion));
+    const versions = [...new Set(owners.map((owner) => owner.satoriVersion))].sort(compareContractStrings);
+    return {
+        liveCount: owners.length,
+        versions,
+        owners,
+        multiVersion: versions.length > 1,
+        registryPath,
+    };
 }
 
 function defaultRuntimeStateDir(): string {
@@ -455,6 +518,29 @@ export class RuntimeOwnerRegistry implements RuntimeOwnerMutationGate {
         return this.readOwnersFile("throw");
     }
 
+    /**
+     * Diagnostic live-owner view for status/list_codebases.
+     * Does not block mutations. On read/lock failure returns null (never invents "none live").
+     * When pruneDead is true (default), dead PIDs are dropped from the summary and written back
+     * as best-effort registry maintenance — not a silent no-op read.
+     */
+    public getLiveOwnersSummary(options?: { pruneDead?: boolean }): RuntimeOwnersSummary | null {
+        const registryPath = this.ownersFilePath();
+        const pruneDead = options?.pruneDead !== false;
+        try {
+            return this.withOwnersLock(() => {
+                const owners = this.readOwnersFile("quarantine");
+                const liveOwners = this.pruneDeadOwners(owners);
+                if (pruneDead && liveOwners.length !== owners.length) {
+                    this.writeOwnersFile(liveOwners);
+                }
+                return buildRuntimeOwnersSummaryFromRecords(liveOwners, registryPath);
+            });
+        } catch {
+            return null;
+        }
+    }
+
     private buildCurrentOwnerRecord(): RuntimeOwnerRecord {
         const nowIso = new Date(this.now()).toISOString();
         return {
@@ -599,7 +685,7 @@ export class RuntimeOwnerRegistry implements RuntimeOwnerMutationGate {
         const payload: RuntimeOwnerFile = {
             formatVersion: "v1",
             updatedAt: new Date(this.now()).toISOString(),
-            owners: owners.sort((a, b) => a.ownerId.localeCompare(b.ownerId)),
+            owners: owners.sort((a, b) => compareContractStrings(a.ownerId, b.ownerId)),
         };
         const targetPath = this.ownersFilePath();
         const tempPath = `${targetPath}.${process.pid}.${crypto.randomUUID()}.tmp`;

@@ -3,6 +3,7 @@ import { formatSymbolQualityMarker, resolveSymbolQualitySummary } from "@zokizua
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { classifyVectorBackendError, isMissingProviderConfigIssue } from "./setup-errors.js";
 import { getCompletionMarkerReader, validateCompletionProof } from "../core/completion-proof.js";
+import { formatRuntimeOwnersStatusLine } from "../core/runtime-owner.js";
 
 const listCodebasesInputSchema = z.object({}).strict();
 const comparePathAsc = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -211,6 +212,18 @@ export const listCodebasesTool: McpTool = {
         }
 
         lines.push(`Total tracked: ${all.length}`);
+
+        if (ctx.runtimeOwnerGate && typeof ctx.runtimeOwnerGate.getLiveOwnersSummary === "function") {
+            try {
+                const ownersSummary = await ctx.runtimeOwnerGate.getLiveOwnersSummary();
+                if (ownersSummary) {
+                    lines.push('');
+                    lines.push(formatRuntimeOwnersStatusLine(ownersSummary));
+                }
+            } catch {
+                // Diagnostic only.
+            }
+        }
 
         return {
             content: [{

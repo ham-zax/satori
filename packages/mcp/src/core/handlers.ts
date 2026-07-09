@@ -607,6 +607,12 @@ export class ToolHandlers {
             touchWatchedCodebase: this.touchWatchedCodebase.bind(this),
             manageVectorBackendResponse: this.toolResponseBuilders.manageVectorBackendResponse.bind(this.toolResponseBuilders),
             canSyncStaleLocal: this.canSyncStaleLocal.bind(this),
+            getLiveOwnersSummary: async () => {
+                if (!this.runtimeOwnerGate || typeof this.runtimeOwnerGate.getLiveOwnersSummary !== "function") {
+                    return null;
+                }
+                return this.runtimeOwnerGate.getLiveOwnersSummary();
+            },
         };
         this.manageMaintenanceHandlers = new ManageMaintenanceHandlers(manageMaintenanceHandlersHost);
 

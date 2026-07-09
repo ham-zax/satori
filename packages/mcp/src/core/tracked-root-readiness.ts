@@ -1,3 +1,4 @@
+import { compareContractStrings } from "@zokizuan/satori-core";
 import type { CodebaseInfo } from "../config.js";
 import type { CallGraphDirection, CallGraphSymbolRef } from "./call-graph.js";
 import type {
@@ -131,7 +132,7 @@ export class TrackedRootReadiness {
 
         const matches = Array.from(mergedByPath.values())
             .filter((entry) => statusSet.has(entry.info.status) && this.host.isPathWithinCodebase(absolutePath, entry.path))
-            .sort((a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path));
+            .sort((a, b) => b.path.length - a.path.length || compareContractStrings(a.path, b.path));
         if (matches.length === 0) {
             return null;
         }

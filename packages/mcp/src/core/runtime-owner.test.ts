@@ -7,8 +7,10 @@ import type { IndexFingerprint } from '../config.js';
 import {
     RuntimeOwnerRegistry,
     buildRuntimeOwnerIdentity,
+    buildRuntimeOwnersSummaryFromRecords,
     formatRuntimeOwnerConflictMessage,
     formatRuntimeOwnerConflictNextStep,
+    formatRuntimeOwnersStatusLine,
     type ProcessInspector,
     type ProcessSnapshot,
     type RuntimeOwnerRecord,
@@ -254,6 +256,113 @@ test('different runtime fingerprint blocks create reindex sync and clear', async
             assert.match(result.message || '', /pid=101/);
             assert.match(result.message || '', /MCP tools do not kill processes/);
         }
+    });
+});
+
+test('getLiveOwnersSummary prunes dead and reports multi-version', async () => {
+    await withTempState((stateDir) => {
+        const liveA = snapshot(101);
+        const liveB = snapshot(202);
+        const dead = ownerRecord(303);
+        const identityA = buildRuntimeOwnerIdentity({
+            satoriVersion: '4.11.15',
+            runtimeFingerprint: FINGERPRINT,
+            configSource: 'env',
+            configSummary: {
+                embeddingProvider: 'VoyageAI',
+                embeddingModel: 'voyage-4-large',
+                embeddingDimension: 1024,
+                vectorStoreProvider: 'Milvus',
+                schemaVersion: 'hybrid_v3',
+                milvusEndpoint: 'http://milvus.local',
+                rankerModel: 'rerank-2.5',
+            },
+        });
+        const identityB = buildRuntimeOwnerIdentity({
+            satoriVersion: '4.11.13',
+            runtimeFingerprint: FINGERPRINT,
+            configSource: 'env',
+            configSummary: {
+                embeddingProvider: 'VoyageAI',
+                embeddingModel: 'voyage-4-large',
+                embeddingDimension: 1024,
+                vectorStoreProvider: 'Milvus',
+                schemaVersion: 'hybrid_v3',
+                milvusEndpoint: 'http://milvus.local',
+                rankerModel: 'rerank-2.5',
+            },
+        });
+        writeOwners(stateDir, [
+            ownerRecord(101, identityA, liveA),
+            ownerRecord(202, identityB, liveB),
+            dead,
+        ]);
+
+        const registry = new RuntimeOwnerRegistry({
+            stateDir,
+            identity: identityA,
+            processInspector: inspector(new Map([[101, liveA], [202, liveB]])),
+            currentProcess: liveA,
+            now: () => 2_000,
+        });
+        const summary = registry.getLiveOwnersSummary();
+        assert.equal(summary.liveCount, 2);
+        assert.equal(summary.multiVersion, true);
+        assert.deepEqual(summary.versions, ['4.11.13', '4.11.15']);
+        assert.deepEqual(summary.owners.map((o) => o.pid), [101, 202]);
+        assert.match(formatRuntimeOwnersStatusLine(summary), /multi-version/);
+        assert.match(formatRuntimeOwnersStatusLine(summary), /runtime_owner_conflict/);
+    });
+});
+
+test('formatRuntimeOwnersStatusLine formats single and empty owners', () => {
+    assert.match(
+        formatRuntimeOwnersStatusLine(buildRuntimeOwnersSummaryFromRecords([], '/tmp/owners.json')),
+        /none live/,
+    );
+    const single = buildRuntimeOwnersSummaryFromRecords([{
+        ownerId: 'o1',
+        pid: 9,
+        startedAt: 't0',
+        lastSeenAt: 't1',
+        satoriVersion: '4.11.15',
+        runtimeFingerprint: FINGERPRINT,
+        runtimeOwnerIdentityHash: 'h',
+        configSource: 'env',
+    }], '/tmp/owners.json');
+    assert.equal(formatRuntimeOwnersStatusLine(single), 'Runtime owners: 1 live (pid=9 satori@4.11.15).');
+});
+
+test('getLiveOwnersSummary returns null when owners registry cannot be locked', async () => {
+    await withTempState((stateDir) => {
+        const current = snapshot(101);
+        const identity = buildRuntimeOwnerIdentity({
+            satoriVersion: CURRENT_SATORI_VERSION,
+            runtimeFingerprint: FINGERPRINT,
+            configSource: 'env',
+            configSummary: {
+                embeddingProvider: 'VoyageAI',
+                embeddingModel: 'voyage-4-large',
+                embeddingDimension: 1024,
+                vectorStoreProvider: 'Milvus',
+                schemaVersion: 'hybrid_v3',
+                milvusEndpoint: 'http://milvus.local',
+                rankerModel: 'rerank-2.5',
+            },
+        });
+        // Hold the owners lock so summary lock acquisition times out.
+        fs.writeFileSync(path.join(stateDir, 'owners.lock'), JSON.stringify({ pid: 1, acquiredAt: new Date().toISOString() }));
+        const registry = new RuntimeOwnerRegistry({
+            stateDir,
+            identity,
+            processInspector: inspector(new Map([[101, current]])),
+            currentProcess: current,
+            now: () => 2_000,
+            lockWaitMs: 0,
+            lockRetryMs: 0,
+        });
+        const summary = registry.getLiveOwnersSummary();
+        assert.equal(summary, null, 'must not invent "none live" on lock/read failure');
     });
 });
 

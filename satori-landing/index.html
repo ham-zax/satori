@@ -407,6 +407,77 @@
       margin-top: 2rem;
     }
 
+    .hero-social {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .hero-social a {
+      line-height: 0;
+      opacity: 0.95;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+    }
+
+    .hero-social a:hover {
+      opacity: 1;
+      transform: translateY(-1px);
+    }
+
+    .hero-social img {
+      display: block;
+      width: 250px;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .ph-card {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.25rem;
+      background: var(--panel);
+      max-width: 32rem;
+    }
+
+    .ph-card-top {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    .ph-card-top img {
+      width: 64px;
+      height: 64px;
+      border-radius: 8px;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+
+    .ph-card-top h4 {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--fg);
+      line-height: 1.3;
+    }
+
+    .ph-card-top p {
+      margin: 0.25rem 0 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .ph-card .btn {
+      align-self: flex-start;
+    }
+
     .hero-terminal {
       width: min(100%, 760px);
       margin-top: 2rem;
@@ -1372,6 +1443,22 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
         <a class="btn primary" href="#quickstart">Install Satori</a>
         <a class="btn secondary" href="docs/index.html">Read setup docs</a>
       </div>
+      <div class="hero-social" aria-label="Community">
+        <a
+          href="https://www.producthunt.com/products/satori-4?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-satori-2213e406-e07a-4ea3-aada-ba680df5dfd8"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <img
+            alt="Satori - Semantic and Symbol-aware repo context for AI coding agent | Product Hunt"
+            width="250"
+            height="54"
+            src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1189461&amp;theme=dark&amp;t=1783595885741"
+            loading="lazy"
+            decoding="async"
+          />
+        </a>
+      </div>
       <div class="trust-chips" role="list" aria-label="Satori trust signals">
         <span class="trust-chip" role="listitem">MIT open source</span>
         <span class="trust-chip" role="listitem">Six MCP tools</span>
@@ -1696,6 +1783,34 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
             <a class="btn secondary" href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer">Open GitHub</a>
           </div>
         </article>
+        <article class="card">
+          <h4>Product Hunt</h4>
+          <p>
+            Follow the launch, leave feedback, and share Satori with other agent builders.
+          </p>
+          <div class="ph-card" style="margin-top:1rem;max-width:100%;">
+            <div class="ph-card-top">
+              <img
+                alt="Satori"
+                src="https://ph-files.imgix.net/e595f1c4-3cad-46fc-97bc-8e01d98d7f45.png?auto=compress,format&amp;codec=mozjpeg&amp;cs=strip&amp;fit=crop&amp;h=80&amp;w=80"
+                width="64"
+                height="64"
+                loading="lazy"
+                decoding="async"
+              />
+              <div>
+                <h4>Satori</h4>
+                <p>Semantic and Symbol-aware repo context for AI coding agent</p>
+              </div>
+            </div>
+            <a
+              class="btn primary"
+              href="https://www.producthunt.com/products/satori-4?embed=true&amp;utm_source=embed&amp;utm_medium=post_embed"
+              target="_blank"
+              rel="noopener noreferrer"
+            >Check it out on Product Hunt →</a>
+          </div>
+        </article>
       </div>
     </section>
 
@@ -1745,6 +1860,7 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
         <a href="architecture.html">Architecture</a>
         <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
         <a href="https://www.npmjs.com/package/@zokizuan/satori-cli" target="_blank" rel="noopener noreferrer">npm Package</a>
+        <a href="https://www.producthunt.com/products/satori-4?utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-satori-2213e406-e07a-4ea3-aada-ba680df5dfd8" target="_blank" rel="noopener noreferrer">Product Hunt</a>
       </div>
       <div class="footer-col">
         <h5>Contact</h5>

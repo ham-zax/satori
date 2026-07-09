@@ -42,13 +42,14 @@ Only these public tools exist:
 | `manage_index` | JSON envelope serialized in MCP text content for lifecycle actions `create\|reindex\|sync\|status\|clear\|repair`. `path` must be an absolute filesystem path (relative paths rejected). `clear` is destructive and requires explicit user request. `repair` rebuilds local readiness only when vector payload and trusted fingerprint proof match; otherwise use create/reindex. |
 | `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. `path` must be an absolute filesystem path (relative paths rejected; not CWD-resolved). |
 | `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. `path` is absolute codebase root; `file` is repo-relative under that root only. |
-| `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. `path` absolute; `symbolRef.file` repo-relative under that root. |
+| `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. `path` absolute; `symbolRef.file` repo-relative under that root. CALLS v0 is name-based/heuristic with confidence notes — not sole authority for blast radius or edit scope; verify with `rg`, tests, or direct references. |
 | `read_file` | Reads files only under tracked searchable codebase roots (`indexed` / `sync_completed`); not a general host filesystem reader. Plain text by default; annotated mode returns JSON. `open_symbol` resolves exactly and must not guess on ambiguity. Paths must be absolute; symlink/`..` escapes outside the root are denied. |
 
 Do not invent tools, parameters, write capabilities, rerank knobs, or output shapes.
 
 ## Tool Runtime Rules
 - Default feature-navigation path: `search_codebase` -> `file_outline` -> `call_graph` when supported -> `read_file(open_symbol)`.
+- `call_graph` is advisory context only: do not treat inbound/outbound edges as sole blast-radius authority; confirm impact with scoped search, tests, or direct references before editing.
 - If a grouped search result has `callGraphHint.supported=false`, treat `navigationFallback` as authoritative and call tools from its args. Do not reconstruct spans from prose.
 - Prefer `recommendedNextAction` when present; inspect `warnings[].action`, `capabilities`, and result `fallbacks` before deciding the next proof step.
 - If any tool returns `requires_reindex` or `hints.reindex`, stop and run `manage_index(action="reindex", path=<hinted path or indexed root>)`; do not substitute `sync`.
@@ -68,7 +69,7 @@ Do not invent tools, parameters, write capabilities, rerank knobs, or output sha
 - Public tool behavior, output schemas, warnings, hints, status enums, config formats, docs, and tests are contracts.
 
 ## Edit Safety
-- Read the relevant implementation and call sites before editing. For behavior changes, enumerate callers with `call_graph` when available or scoped search when not.
+- Read the relevant implementation and call sites before editing. For behavior changes, use `call_graph` as a starting hint when available, then confirm callers with scoped search or direct references (graph edges are heuristic, not proof).
 - Before changing public contracts, state what changes, what does not change, and which docs/tests prove it.
 - Do not smuggle policy into adapters or docs-only changes.
 - Do not use generated artifacts, stale indexes, or cached sidecars as proof without checking freshness gates.

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AstCodeSplitter } from './ast-splitter';
+import { AstCodeSplitter, resetAstSplitterFallbackLogCountsForTests } from './ast-splitter';
 
 function hasUnpairedSurrogate(text: string): boolean {
     for (let index = 0; index < text.length; index++) {
@@ -279,5 +279,44 @@ test('AstCodeSplitter legacy production parser languages have no-crash fixtures'
         const chunks = await splitter.split(fixture.code, fixture.language, fixture.filePath);
         assert.ok(chunks.length > 0, fixture.language);
         assert.ok(chunks.every((chunk) => chunk.metadata.language === fixture.language), fixture.language);
+    }
+});
+
+test('AstCodeSplitter returns empty chunks for empty code without throwing', async () => {
+    const splitter = new AstCodeSplitter();
+    assert.deepEqual(await splitter.split('', 'typescript', 'src/empty.ts'), []);
+});
+
+test('AstCodeSplitter rate-limits repeated fallback log lines', async () => {
+    resetAstSplitterFallbackLogCountsForTests();
+    const splitter = new AstCodeSplitter();
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+        warns.push(args.map(String).join(' '));
+    };
+    try {
+        const parser = (splitter as unknown as { parser: { setLanguage: (lang: unknown) => void; parse: (code: string) => unknown } }).parser;
+        const originalSetLanguage = parser.setLanguage.bind(parser);
+        const originalParse = parser.parse.bind(parser);
+        parser.setLanguage = () => {
+            throw new Error('Invalid argument');
+        };
+        try {
+            for (let i = 0; i < 3; i++) {
+                const chunks = await splitter.split('export function run() { return 1; }\n', 'typescript', `src/fail-${i}.ts`);
+                assert.ok(chunks.length >= 0);
+            }
+        } finally {
+            parser.setLanguage = originalSetLanguage;
+            parser.parse = originalParse;
+        }
+        const fallbackWarns = warns.filter((line) => line.includes('[ASTSplitter]'));
+        // setLanguage + textSymbol (or recursive) keys each log once; repeats suppressed.
+        assert.ok(fallbackWarns.length >= 1 && fallbackWarns.length <= 2, String(fallbackWarns.length));
+        assert.ok(fallbackWarns.every((line) => /occurrence=1/.test(line)));
+    } finally {
+        console.warn = originalWarn;
+        resetAstSplitterFallbackLogCountsForTests();
     }
 });

@@ -35,6 +35,23 @@ const SPLITTABLE_NODE_TYPES = {
 const MAX_BREADCRUMB_DEPTH = 2;
 const MAX_BREADCRUMB_LENGTH = 120;
 
+/** Rate-limit identical AST fallback log lines so index runs do not flood stderr. */
+const AST_FALLBACK_LOG_COUNTS = new Map<string, number>();
+const AST_FALLBACK_LOG_EVERY = 50;
+
+function logAstSplitterFallback(key: string, message: string): void {
+    const next = (AST_FALLBACK_LOG_COUNTS.get(key) || 0) + 1;
+    AST_FALLBACK_LOG_COUNTS.set(key, next);
+    if (next === 1 || next % AST_FALLBACK_LOG_EVERY === 0) {
+        console.warn(`${message} (occurrence=${next})`);
+    }
+}
+
+/** Test hook: reset rate-limit counters between unit tests. */
+export function resetAstSplitterFallbackLogCountsForTests(): void {
+    AST_FALLBACK_LOG_COUNTS.clear();
+}
+
 type TextSymbolCandidate = {
     startLine: number;
     endLine: number;
@@ -73,6 +90,11 @@ export class AstCodeSplitter implements Splitter {
 
     async split(code: string, language: string, filePath?: string): Promise<CodeChunk[]> {
         const normalizedLanguage = normalizeLanguageId(language);
+        // Empty / non-string input: fail closed to empty chunks (avoid tree-sitter Invalid argument).
+        if (typeof code !== "string" || code.length === 0) {
+            return [];
+        }
+
         // Check if language is supported by AST splitter
         const langConfig = this.getLanguageConfig(normalizedLanguage);
         if (!langConfig) {
@@ -83,11 +105,24 @@ export class AstCodeSplitter implements Splitter {
         try {
             console.log(`🌳 Using AST splitter for ${normalizedLanguage} file: ${filePath || 'unknown'}`);
 
-            this.parser.setLanguage(langConfig.parser);
+            try {
+                this.parser.setLanguage(langConfig.parser);
+            } catch (languageError) {
+                // Language binding failures (often reported as Invalid argument) must not abort indexing.
+                logAstSplitterFallback(
+                    `setLanguage:${normalizedLanguage}`,
+                    `[ASTSplitter] setLanguage failed for ${normalizedLanguage}, using text-symbol/recursive fallback: ${languageError}`,
+                );
+                throw languageError;
+            }
+
             const tree = this.parser.parse(code);
 
-            if (!tree.rootNode) {
-                console.warn(`[ASTSplitter] ⚠️  Failed to parse AST for ${normalizedLanguage}, falling back to recursive splitter: ${filePath || 'unknown'}`);
+            if (!tree || !tree.rootNode) {
+                logAstSplitterFallback(
+                    `emptyRoot:${normalizedLanguage}`,
+                    `[ASTSplitter] Failed to parse AST for ${normalizedLanguage}, falling back to recursive splitter: ${filePath || 'unknown'}`,
+                );
                 return await this.langchainFallback.split(code, language, filePath);
             }
 
@@ -101,11 +136,17 @@ export class AstCodeSplitter implements Splitter {
         } catch (error) {
             const textSymbolChunks = this.extractTextSymbolChunks(code, normalizedLanguage, filePath);
             if (textSymbolChunks.length > 0) {
-                console.warn(`[ASTSplitter] ⚠️  AST splitter failed for ${normalizedLanguage}, using text-symbol fallback: ${error}`);
+                logAstSplitterFallback(
+                    `textSymbol:${normalizedLanguage}:${String(error)}`,
+                    `[ASTSplitter] AST splitter failed for ${normalizedLanguage}, using text-symbol fallback: ${error}`,
+                );
                 return await this.refineChunks(textSymbolChunks, code);
             }
 
-            console.warn(`[ASTSplitter] ⚠️  AST splitter failed for ${normalizedLanguage}, falling back to recursive splitter: ${error}`);
+            logAstSplitterFallback(
+                `recursive:${normalizedLanguage}:${String(error)}`,
+                `[ASTSplitter] AST splitter failed for ${normalizedLanguage}, falling back to recursive splitter: ${error}`,
+            );
             return await this.langchainFallback.split(code, language, filePath);
         }
     }

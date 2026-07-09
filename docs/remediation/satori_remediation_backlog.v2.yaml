@@ -503,15 +503,18 @@ findings:
   risk_class: operability
   moving_resource: language parser capability and fallback splitter state
   boundary: operators/agents should know when index is symbol-rich vs fallback-only
-  current_status: patched_awaiting_final_proof
-  evidence_grade: E3
-  patch_readiness: P4
+  current_status: closed
+  evidence_grade: E4
+  patch_readiness: P5
+  closure_type: fixed_proven
+  closure_decision: fixed_proven
   batch: B
   notes:
   - 'Design accepted: Phase 1 exposes observed symbol quality from registry; do not claim parser fallback cause without index-time counters.'
   - 'Patch Phase 1: packages/core/src/symbols/symbol-quality.ts; manage_index status symbolQuality; list_codebases symbolQuality= marker; AGENTS/E2E wording.'
+  - 'Final proof: symbol-quality.test 9/9; list_codebases+manage_index+lifecycle green; tsc clean core/mcp.'
   - 'No doctor native probe, no search warnings, no splitter/extractor changes in Phase 1.'
-  - Do not mark closed until final proof suite green.
+  - 'list_codebases reads full registry sidecars when present (cost note); missing registry → unknown.'
   evidence_required:
     source_locations:
     - tree-sitter imports

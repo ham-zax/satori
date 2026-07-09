@@ -1307,8 +1307,8 @@
             <div class="tool-list">
               <div class="tool-card">
                 <h3><code>manage_index</code></h3>
-                <p>Creates, syncs, reindexes, checks status, clears, and handles force-reindex recovery paths.</p>
-                <p class="refusal">Refuses destructive ambiguity: clear is explicit, backend timeouts preserve local state, and mixed live runtime owners block mutation.</p>
+                <p>Creates, syncs, reindexes, checks status, repairs local readiness when proof matches, clears, and handles force-reindex recovery paths.</p>
+                <p class="refusal">Refuses destructive ambiguity: clear is explicit, repair does not invent proof, backend timeouts preserve local state, and mixed live runtime owners block mutation.</p>
               </div>
             </div>
           </article>
@@ -1562,9 +1562,10 @@
           <article class="card">
             <h3>Scope Filtering</h3>
             <p>
-              Runtime scope keeps implementation discovery first. Docs and tests
-              remain searchable, but they do not dominate runtime-code discovery
-              unless the query asks for them.
+              Runtime scope keeps implementation discovery first and still includes
+              test evidence (demoted unless test intent is explicit). Documentation
+              stays out of runtime by default; use <code>scope=docs</code> for
+              documentation-only results, or <code>mixed</code> for everything.
             </p>
           </article>
           <article class="card">

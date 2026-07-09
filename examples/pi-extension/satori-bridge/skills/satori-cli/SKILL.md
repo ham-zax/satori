@@ -44,7 +44,7 @@ Use exactly these 6 tools:
 - Use operators only when needed:
   - `lang:` `path:` `-path:` `must:` `exclude:`
 - Scope policy:
-  - `runtime` excludes docs/tests (default)
+  - `runtime` includes source/runtime and test evidence; docs/generated/artifacts/landing/fixtures are excluded (default). Tests are demoted unless test intent is explicit.
   - `docs` for documentation paths only (not tests)
   - `mixed` for everything
 - Keep grouped symbol mode for architecture tracing; use raw mode only for chunk-level deep inspection.

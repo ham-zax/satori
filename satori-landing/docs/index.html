@@ -877,7 +877,7 @@ profile = "minimal"</code></pre>
           <div class="panel">
             <h3>Cloud Start</h3>
             <pre><code>EMBEDDING_PROVIDER=VoyageAI
-EMBEDDING_MODEL=voyage-4-large
+EMBEDDING_MODEL=voyage-code-3
 EMBEDDING_OUTPUT_DIMENSION=1024
 VOYAGEAI_API_KEY=your-api-key
 VOYAGEAI_RERANKER_MODEL=rerank-2.5
@@ -913,8 +913,9 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
         <h2>Index the First Repo</h2>
         <p class="lede">
           Satori only returns repo context after a codebase has been indexed.
-          Start with one absolute repository path, confirm it appears in the
-          codebase list, then search with runtime-first defaults.
+          Start with one absolute repository path (relative paths are rejected),
+          confirm it appears in the codebase list, then search with runtime-first
+          defaults.
         </p>
         <div class="workflow">
           <div class="step">
@@ -1094,17 +1095,21 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
           <div class="panel">
             <h3>manage_index</h3>
             <p>
-              Creates, syncs, checks status, reindexes, or clears indexes.
+              Creates, syncs, checks status, reindexes, repairs local readiness
+              when vector payload and fingerprint proof match, or clears indexes.
               Status includes health diagnostics when available.
             </p>
           </div>
           <div class="panel">
             <h3>search_codebase</h3>
             <p>
-              Semantic search with runtime/docs/mixed scopes, path operators,
-              must/exclude filters, grouped output, and debug metadata.
-              Search is the freshness-aware read path and returns structured
-              warnings, recommended actions, and navigation fallbacks.
+              Semantic search with <code>runtime</code>/<code>docs</code>/<code>mixed</code>
+              scopes, path operators, must/exclude filters, grouped output, and
+              debug metadata. Runtime includes source and test evidence (tests
+              demoted unless test intent is explicit); docs is documentation-only;
+              mixed includes all. Search is the freshness-aware read path and
+              returns structured warnings, recommended actions, and navigation
+              fallbacks.
             </p>
           </div>
           <div class="panel">
@@ -1187,6 +1192,15 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               <li>Sidecar readiness and stale-state signals.</li>
               <li>Watcher state and indexed file/chunk counts.</li>
             </ul>
+          </div>
+          <div class="panel">
+            <h3>Repair</h3>
+            <p>
+              <code>manage_index action="repair"</code> rebuilds local readiness
+              only when the existing vector payload and a trusted runtime
+              fingerprint proof still match. If they do not, use create or
+              reindex instead of repair.
+            </p>
           </div>
         </div>
       </section>

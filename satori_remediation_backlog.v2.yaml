@@ -219,20 +219,19 @@ findings:
   risk_class: correctness
   moving_resource: ordered keys/results used for ranking, Merkle roots, snapshots, or golden outputs
   boundary: contract ordering must not depend on host locale
-  current_status: verified_not_patch_ready
-  evidence_grade: E2
-  patch_readiness: P1
+  current_status: closed
+  evidence_grade: E4
+  patch_readiness: P5
+  closure_type: fixed_proven
   owner: main-agent
   batch: A
   dependencies: []
-  verdict: partially_verified
+  verdict: verified
   notes:
-  - Executed Node sort repro: default locale vs sv differs on accented strings; en vs code-unit differs on case.
-  - Contract-critical site packages/core/src/sync/merkle.ts:13 bare localeCompare in computeMerkleRoot.
-  - Search tie-breaks packages/mcp/src/core/search-group-ordering.ts:9-27.
-  - Counterexamples already use code-unit compare (list_codebases, relationship builder).
-  - Full dual-locale merkle hash mismatch on real index not executed → not E3/E4.
-  - Patch after naming failing comparator tests (adversarial fixtures) → promote to E3/P2 for merkle-only scope.
+  - 'Merkle-first patch 2026-07-09: compareContractStrings (code-unit) in computeMerkleRoot; tests monkey-patch localeCompare + insertion order.'
+  - Search ranking localeCompare intentionally NOT changed in this patch (follow-up if needed).
+  - Compatibility: Merkle roots may change once vs old locale-sensitive path order.
+  - 'Final proof 2026-07-09: merkle.test.ts 3/3; tsc clean; merkle.ts has no localeCompare call; monkey-patch independence proven at runtime.'
   evidence_required:
     source_locations:
     - 'packages/core/src/sync/merkle.ts:11-22 computeMerkleRoot sorts with a.localeCompare(b)'

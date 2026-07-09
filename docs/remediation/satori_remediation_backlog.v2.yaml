@@ -43,8 +43,8 @@ batch_A_evidence_status:
   - docs/remediation/satori_remediation_backlog.v2.yaml
   scale_note: 'Evidence E0–E3 investigation; E4–E5 only after patch+proof. Patch readiness P0=not patchable … P2=patch-ready … P5=closed.'
   ranking_rule: Only E2+ scored; patch only if P2+
-  recommended_next_patch: F9_design
-  recommended_next_patch_reason: 'Closed fixed_proven: F1 F2 F4 F5 F7 F8 F10 F11; accepted_risk F6. Next: F9 parser fallback visibility design. F3 parked.'
+  recommended_next_patch: release_discipline
+  recommended_next_patch_reason: 'Original review set complete except parked F3. Next: full CI, commit stack review, changelog, PR.'
   scores_desc:
   - 'F4 score=9 E4/P5 closed fixed_proven'
   - 'F11 score=8 E4/P5 closed fixed_proven'
@@ -54,7 +54,7 @@ batch_A_evidence_status:
   - 'F10 score=E4/P5 closed fixed_proven (hygiene: delete noise; process docs → docs/remediation/)'
   - 'F8 score=E4/P5 closed fixed_proven (doctor packageVersions table)'
   - 'F2 score=6 E4/P5 closed fixed_proven (installer SSOT)'
-  - 'F9 E2/P1 open (surface design; not patched)'
+  - 'F9 score=E4/P5 closed fixed_proven (symbolQuality Phase 1 observed registry gauge)'
 findings:
 - id: F1
   claim: read_file could read arbitrary host files outside indexed roots
@@ -503,13 +503,15 @@ findings:
   risk_class: operability
   moving_resource: language parser capability and fallback splitter state
   boundary: operators/agents should know when index is symbol-rich vs fallback-only
-  current_status: verified_not_patched
-  evidence_grade: E2
-  patch_readiness: P1
+  current_status: patched_awaiting_final_proof
+  evidence_grade: E3
+  patch_readiness: P4
   batch: B
   notes:
-  - 'Coordinator investigation elevated E2/P1: fallback can degrade symbol quality; surface decision still open (doctor vs list_codebases vs status vs search warnings).'
-  - Not patched. Design surface ownership before implementation; no console-only warning.
+  - 'Design accepted: Phase 1 exposes observed symbol quality from registry; do not claim parser fallback cause without index-time counters.'
+  - 'Patch Phase 1: packages/core/src/symbols/symbol-quality.ts; manage_index status symbolQuality; list_codebases symbolQuality= marker; AGENTS/E2E wording.'
+  - 'No doctor native probe, no search warnings, no splitter/extractor changes in Phase 1.'
+  - Do not mark closed until final proof suite green.
   evidence_required:
     source_locations:
     - tree-sitter imports

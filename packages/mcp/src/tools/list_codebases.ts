@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { formatSymbolQualityMarker, resolveSymbolQualitySummary } from "@zokizuan/satori-core";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { classifyVectorBackendError, isMissingProviderConfigIssue } from "./setup-errors.js";
 import { getCompletionMarkerReader, validateCompletionProof } from "../core/completion-proof.js";
@@ -141,11 +142,21 @@ export const listCodebasesTool: McpTool = {
 
         if (byStatus.indexed.length > 0) {
             lines.push('### Ready');
+            // F9: compact observed quality marker per ready root (same summary as manage status).
+            // Cost: reads symbol registry sidecars when present; missing registry → symbolQuality=unknown.
+            const qualityByPath = new Map<string, string>();
+            await Promise.all(byStatus.indexed.map(async (item) => {
+                const summary = await resolveSymbolQualitySummary({
+                    normalizedRootPath: item.path,
+                });
+                qualityByPath.set(item.path, formatSymbolQualityMarker(summary));
+            }));
             for (const item of byStatus.indexed) {
-                const suffix = item.probeFailed
+                const quality = qualityByPath.get(item.path) || "symbolQuality=unknown";
+                const probeSuffix = item.probeFailed
                     ? " (completion proof probe failed; verify with manage_index action='status')"
                     : "";
-                lines.push(`- \`${item.path}\`${suffix}`);
+                lines.push(`- \`${item.path}\` ${quality}${probeSuffix}`);
             }
             lines.push('');
         }

@@ -109,6 +109,35 @@ export type SearchExecutionRankingProvenance = {
     registryRepairGroupCount: number;
 };
 
+/**
+ * Skip expensive Voyage rerank when the top candidate is already a deterministic exact pin.
+ * Safe when exact lexical match owns rank-1 under pinning or must: filters.
+ */
+export function shouldSkipRerankForExactPin(input: {
+    scored: ReadonlyArray<Pick<SearchCandidate, "exactLexicalMatch" | "passesMatchedMust">>;
+    exactMatchPinningEnabled: boolean;
+    mustTokenCount: number;
+}): boolean {
+    if (input.scored.length === 0) {
+        return false;
+    }
+    const top = input.scored[0];
+    if (!top.exactLexicalMatch) {
+        return false;
+    }
+    if (input.exactMatchPinningEnabled) {
+        return true;
+    }
+    if (input.mustTokenCount > 0 && top.passesMatchedMust) {
+        return true;
+    }
+    // Sole exact lexical hit — rerank cannot improve ordering among alternatives.
+    if (input.scored.length === 1) {
+        return true;
+    }
+    return false;
+}
+
 export type SearchExecutionOutcome =
     | {
         kind: "ok";
@@ -133,6 +162,7 @@ export type SearchExecutionOutcome =
         rankingProvenance: SearchExecutionRankingProvenance;
         rerankerAttempted: boolean;
         rerankerApplied: boolean;
+        skippedByExactPin: boolean;
         rerankerFailurePhase?: "api_call" | "parse_results";
         rerankerCandidatesIn: number;
         rerankerCandidatesReranked: number;
@@ -521,8 +551,20 @@ export async function runSearchExecution(
     let rerankerFailurePhase: "api_call" | "parse_results" | undefined;
     let rerankerCandidatesIn = scored.length;
     let rerankerCandidatesReranked = 0;
+    // Cost policy: only claim exact-pin skip when rerank would otherwise run (enabled + reranker present).
+    // This skips reranking the entire candidate tail for latency; top exact pin is already owned.
+    const skippedByExactPin = Boolean(
+        rerankDecision.enabled
+        && host.reranker
+        && scored.length > 0
+        && shouldSkipRerankForExactPin({
+            scored,
+            exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
+            mustTokenCount: input.parsedOperators.must.length,
+        }),
+    );
 
-    if (rerankDecision.enabled && scored.length > 0 && host.reranker) {
+    if (rerankDecision.enabled && scored.length > 0 && host.reranker && !skippedByExactPin) {
         rerankerAttempted = true;
         try {
             const rerankCount = Math.min(SEARCH_RERANK_TOP_K, scored.length);
@@ -625,6 +667,7 @@ export async function runSearchExecution(
         rankingProvenance,
         rerankerAttempted,
         rerankerApplied,
+        skippedByExactPin,
         rerankerFailurePhase,
         rerankerCandidatesIn,
         rerankerCandidatesReranked,

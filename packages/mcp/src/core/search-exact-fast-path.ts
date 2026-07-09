@@ -269,6 +269,8 @@ export async function runExactRegistryFastPath(
                 enabledByPolicy: rerankDecision.enabledByPolicy,
                 skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
                 skippedByIdentifierIntent: rerankDecision.skippedByIdentifierIntent,
+                // Exact-registry path never enables rerank; do not misreport as exact-pin skip.
+                skippedByExactPin: false,
                 capabilityPresent: rerankDecision.capabilityPresent,
                 rerankerPresent: rerankDecision.rerankerPresent,
                 enabled: false,

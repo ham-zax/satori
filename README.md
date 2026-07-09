@@ -222,7 +222,7 @@ Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish ac
 | `search_codebase` | Runtime-first plain-English semantic discovery with exact operators, grouping, freshness, structured warnings, recommended actions, and navigation hints |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing |
 | `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` when relationship-backed navigation is ready |
-| `read_file` | Read bounded files, ranges, annotations, or exact symbol spans |
+| `read_file` | Read bounded files under indexed/searchable codebase roots only (absolute paths; not a general host FS reader), with ranges, annotations, or exact symbol spans |
 
 ## What Satori Is Not
 

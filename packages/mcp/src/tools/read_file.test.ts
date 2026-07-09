@@ -78,6 +78,19 @@ async function withTempStateRoot<T>(fn: () => Promise<T>): Promise<T> {
     }
 }
 
+function indexedSnapshot(
+    repoPath: string,
+    status: 'indexed' | 'sync_completed' | 'indexing' | 'requires_reindex' = 'indexed',
+    extra: Record<string, unknown> = {}
+): SnapshotManagerLike {
+    return {
+        getAllCodebases: () => [{
+            path: repoPath,
+            info: { status, ...extra }
+        }]
+    } as unknown as SnapshotManagerLike;
+}
+
 function buildContext(readFileMaxLines: number, overrides: Partial<ToolContext> = {}): ToolContext {
     return {
         readFileMaxLines,
@@ -107,6 +120,18 @@ async function runReadFile(args: unknown, readFileMaxLines = 1000, overrides: Pa
     return readFileTool.execute(args, buildContext(readFileMaxLines, overrides));
 }
 
+function assertOutsideIndexedRoot(response: { isError?: boolean; content: Array<{ text: string }> }, secret?: string) {
+    assert.equal(response.isError, true);
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.status, 'outside_indexed_root');
+    assert.equal(payload.reason, 'outside_indexed_root');
+    assert.deepEqual(payload.hints?.nextSteps, [{ tool: 'list_codebases', args: {} }]);
+    if (secret !== undefined) {
+        assert.equal(response.content[0].text.includes(secret), false);
+        assert.equal(payload.content, undefined);
+    }
+}
+
 test('read_file schema rejects invalid line parameters', async () => {
     const fractional = await runReadFile({
         path: '/tmp/test.txt',
@@ -131,7 +156,9 @@ test('read_file returns full content for small files when range is omitted', asy
         const filePath = path.join(dir, 'small.ts');
         fs.writeFileSync(filePath, 'a\nb\nc\n', 'utf8');
 
-        const response = await runReadFile({ path: filePath }, 1000);
+        const response = await runReadFile({ path: filePath }, 1000, {
+            snapshotManager: indexedSnapshot(dir)
+        });
         assert.equal(response.isError, undefined);
         assert.equal(response.content[0].text, 'a\nb\nc');
     });
@@ -198,10 +225,10 @@ test('read_file refreshes snapshot state before resolving indexed roots', async 
     });
 });
 
-test('read_file does not touch watcher state when no indexed codebase root resolves', async () => {
+test('read_file does not touch watcher and denies path when no searchable codebase root resolves', async () => {
     await withTempDir(async (dir) => {
         const filePath = path.join(dir, 'orphan.ts');
-        fs.writeFileSync(filePath, 'a\n', 'utf8');
+        fs.writeFileSync(filePath, 'SECRET_ORPHAN\n', 'utf8');
 
         const touched: string[] = [];
         const response = await runReadFile(
@@ -216,9 +243,124 @@ test('read_file does not touch watcher state when no indexed codebase root resol
             }
         );
 
-        assert.equal(response.isError, undefined);
+        assertOutsideIndexedRoot(response, 'SECRET_ORPHAN');
         assert.deepEqual(touched, []);
     });
+});
+
+test('read_file denies path outside all indexed roots', async () => {
+    await withTempDir(async (dir) => {
+        const outside = path.join(dir, 'outside.txt');
+        fs.writeFileSync(outside, 'OUTSIDE_SECRET\n', 'utf8');
+        const response = await runReadFile({ path: outside }, 1000, {
+            snapshotManager: { getAllCodebases: () => [] } as unknown as SnapshotManagerLike
+        });
+        assertOutsideIndexedRoot(response, 'OUTSIDE_SECRET');
+    });
+});
+
+test('read_file denies sibling repo path while another root is indexed', async () => {
+    await withTempDir(async (dir) => {
+        const indexedRoot = path.join(dir, 'indexed');
+        const siblingRoot = path.join(dir, 'sibling');
+        fs.mkdirSync(indexedRoot, { recursive: true });
+        fs.mkdirSync(siblingRoot, { recursive: true });
+        const siblingFile = path.join(siblingRoot, 'app.ts');
+        fs.writeFileSync(siblingFile, 'SIBLING_SECRET\n', 'utf8');
+
+        const response = await runReadFile({ path: siblingFile }, 1000, {
+            snapshotManager: indexedSnapshot(indexedRoot)
+        });
+        assertOutsideIndexedRoot(response, 'SIBLING_SECRET');
+    });
+});
+
+test('read_file denies symlink inside root pointing outside root', async () => {
+    await withTempDir(async (dir) => {
+        const indexedRoot = path.join(dir, 'indexed');
+        const outsideDir = path.join(dir, 'outside');
+        fs.mkdirSync(path.join(indexedRoot, 'src'), { recursive: true });
+        fs.mkdirSync(outsideDir, { recursive: true });
+        const outsideFile = path.join(outsideDir, 'secret.txt');
+        fs.writeFileSync(outsideFile, 'SYMLINK_SECRET\n', 'utf8');
+        const symlinkPath = path.join(indexedRoot, 'src', 'leak');
+        fs.symlinkSync(outsideFile, symlinkPath);
+
+        const response = await runReadFile({ path: symlinkPath }, 1000, {
+            snapshotManager: indexedSnapshot(indexedRoot)
+        });
+        assertOutsideIndexedRoot(response, 'SYMLINK_SECRET');
+    });
+});
+
+test('read_file denies absolute path with .. escaping root', async () => {
+    await withTempDir(async (dir) => {
+        const indexedRoot = path.join(dir, 'indexed');
+        const outsideDir = path.join(dir, 'outside');
+        fs.mkdirSync(indexedRoot, { recursive: true });
+        fs.mkdirSync(outsideDir, { recursive: true });
+        const outsideFile = path.join(outsideDir, 'secret.txt');
+        fs.writeFileSync(outsideFile, 'DOTDOT_SECRET\n', 'utf8');
+
+        const escapePath = path.join(indexedRoot, '..', 'outside', 'secret.txt');
+        const response = await runReadFile({ path: escapePath }, 1000, {
+            snapshotManager: indexedSnapshot(indexedRoot)
+        });
+        assertOutsideIndexedRoot(response, 'DOTDOT_SECRET');
+    });
+});
+
+test('read_file allows a normal file inside an indexed root', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const filePath = path.join(repoPath, 'src', 'ok.ts');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'export const ok = 1;\n', 'utf8');
+
+        const response = await runReadFile({ path: filePath }, 1000, {
+            snapshotManager: indexedSnapshot(repoPath, 'indexed')
+        });
+        assert.equal(response.isError, undefined);
+        assert.equal(response.content[0].text, 'export const ok = 1;');
+    });
+});
+
+test('read_file allows a normal file inside a sync_completed root', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const filePath = path.join(repoPath, 'src', 'ok.ts');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'export const synced = 1;\n', 'utf8');
+
+        const response = await runReadFile({ path: filePath }, 1000, {
+            snapshotManager: indexedSnapshot(repoPath, 'sync_completed')
+        });
+        assert.equal(response.isError, undefined);
+        assert.equal(response.content[0].text, 'export const synced = 1;');
+    });
+});
+
+test('read_file annotated mode must not return file content when denied outside root', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'secret.ts');
+        fs.writeFileSync(filePath, 'ANNOTATED_SECRET_BODY\n', 'utf8');
+
+        const response = await runReadFile({ path: filePath, mode: 'annotated' }, 1000, {
+            snapshotManager: { getAllCodebases: () => [] } as unknown as SnapshotManagerLike
+        });
+        assertOutsideIndexedRoot(response, 'ANNOTATED_SECRET_BODY');
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.mode, undefined);
+        assert.equal(payload.content, undefined);
+    });
+});
+
+test('read_file rejects relative paths without reading', async () => {
+    const response = await runReadFile({ path: 'relative/path.ts' }, 1000);
+    assert.equal(response.isError, true);
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.status, 'outside_indexed_root');
+    assert.equal(payload.reason, 'relative_path_not_allowed');
 });
 
 test('read_file auto-truncates large files and returns dynamic continuation hint', async () => {
@@ -226,11 +368,13 @@ test('read_file auto-truncates large files and returns dynamic continuation hint
         const filePath = path.join(dir, 'large.ts');
         fs.writeFileSync(filePath, 'L1\nL2\nL3\nL4\nL5\n', 'utf8');
 
-        const response = await runReadFile({ path: filePath }, 3);
+        const response = await runReadFile({ path: filePath }, 3, {
+            snapshotManager: indexedSnapshot(dir)
+        });
         assert.equal(response.isError, undefined);
         assert.equal(
             response.content[0].text,
-            `L1\nL2\nL3\n\n(File truncated at line 3. To read more, call read_file with path="${filePath}" and start_line=4.)`
+            `L1\nL2\nL3\n\n(File truncated at line 3. To read more, call read_file with path="${path.resolve(filePath)}" and start_line=4.)`
         );
     });
 });
@@ -240,11 +384,13 @@ test('read_file start_line-only requests use a capped window and continuation hi
         const filePath = path.join(dir, 'window.ts');
         fs.writeFileSync(filePath, 'L1\nL2\nL3\nL4\nL5\n', 'utf8');
 
-        const response = await runReadFile({ path: filePath, start_line: 2 }, 3);
+        const response = await runReadFile({ path: filePath, start_line: 2 }, 3, {
+            snapshotManager: indexedSnapshot(dir)
+        });
         assert.equal(response.isError, undefined);
         assert.equal(
             response.content[0].text,
-            `L2\nL3\nL4\n\n(File truncated at line 4. To read more, call read_file with path="${filePath}" and start_line=5.)`
+            `L2\nL3\nL4\n\n(File truncated at line 4. To read more, call read_file with path="${path.resolve(filePath)}" and start_line=5.)`
         );
     });
 });
@@ -254,7 +400,9 @@ test('read_file start_line + end_line returns exact inclusive range', async () =
         const filePath = path.join(dir, 'range.ts');
         fs.writeFileSync(filePath, 'L1\nL2\nL3\nL4\n', 'utf8');
 
-        const response = await runReadFile({ path: filePath, start_line: 2, end_line: 3 }, 3);
+        const response = await runReadFile({ path: filePath, start_line: 2, end_line: 3 }, 3, {
+            snapshotManager: indexedSnapshot(dir)
+        });
         assert.equal(response.isError, undefined);
         assert.equal(response.content[0].text, 'L2\nL3');
     });
@@ -264,12 +412,13 @@ test('read_file clamps out-of-range inputs safely', async () => {
     await withTempDir(async (dir) => {
         const filePath = path.join(dir, 'clamp.ts');
         fs.writeFileSync(filePath, 'L1\nL2\nL3\nL4\nL5\n', 'utf8');
+        const snapshot = { snapshotManager: indexedSnapshot(dir) };
 
-        const highClamp = await runReadFile({ path: filePath, start_line: 999, end_line: 1000 }, 3);
+        const highClamp = await runReadFile({ path: filePath, start_line: 999, end_line: 1000 }, 3, snapshot);
         assert.equal(highClamp.isError, undefined);
         assert.equal(highClamp.content[0].text, 'L5');
 
-        const endOnly = await runReadFile({ path: filePath, end_line: 2 }, 3);
+        const endOnly = await runReadFile({ path: filePath, end_line: 2 }, 3, snapshot);
         assert.equal(endOnly.isError, undefined);
         assert.equal(endOnly.content[0].text, 'L1\nL2');
     });
@@ -278,15 +427,17 @@ test('read_file clamps out-of-range inputs safely', async () => {
 test('read_file preserves missing-file and non-file errors', async () => {
     await withTempDir(async (dir) => {
         const missingPath = path.join(dir, 'missing.ts');
-        const missing = await runReadFile({ path: missingPath }, 1000);
+        const snapshot = { snapshotManager: indexedSnapshot(dir) };
+
+        const missing = await runReadFile({ path: missingPath }, 1000, snapshot);
         assert.equal(missing.isError, true);
         assert.match(missing.content[0].text, /not found/);
 
-        const annotatedMissing = await runReadFile({ path: missingPath, mode: 'annotated' }, 1000);
+        const annotatedMissing = await runReadFile({ path: missingPath, mode: 'annotated' }, 1000, snapshot);
         assert.equal(annotatedMissing.isError, true);
         assert.equal(JSON.parse(annotatedMissing.content[0].text).status, 'not_found');
 
-        const nonFile = await runReadFile({ path: dir }, 1000);
+        const nonFile = await runReadFile({ path: dir }, 1000, snapshot);
         assert.equal(nonFile.isError, true);
         assert.match(nonFile.content[0].text, /is not a file/);
     });
@@ -391,9 +542,7 @@ test('read_file annotated mode degrades gracefully when outline is unavailable',
             path: filePath,
             mode: 'annotated'
         }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => []
-            } as unknown as SnapshotManagerLike
+            snapshotManager: indexedSnapshot(dir)
         });
 
         const payload = JSON.parse(response.content[0].text);
@@ -401,9 +550,6 @@ test('read_file annotated mode degrades gracefully when outline is unavailable',
         assert.match(payload.content, /const value = 1;/);
         assert.equal(payload.outlineStatus, 'requires_reindex');
         assert.equal(payload.outline, null);
-        assert.deepEqual(payload.hints?.nextSteps, [
-            { tool: 'list_codebases', args: {} }
-        ]);
     });
 });
 
@@ -416,9 +562,7 @@ test('read_file annotated mode treats JavaScript files as outline-capable', asyn
             path: filePath,
             mode: 'annotated'
         }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => []
-            } as unknown as SnapshotManagerLike
+            snapshotManager: indexedSnapshot(dir)
         });
 
         const payload = JSON.parse(response.content[0].text);
@@ -440,9 +584,7 @@ test('read_file annotated mode treats Go and Rust files as outline-capable', asy
                 path: filePath,
                 mode: 'annotated'
             }, 1000, {
-                snapshotManager: {
-                    getAllCodebases: () => []
-                } as unknown as SnapshotManagerLike
+                snapshotManager: indexedSnapshot(dir)
             });
 
             const payload = JSON.parse(response.content[0].text);
@@ -855,6 +997,8 @@ test('read_file open_symbol returns json envelope for unsupported outline file',
             open_symbol: {
                 symbolId: 'sym_notes'
             }
+        }, 1000, {
+            snapshotManager: indexedSnapshot(dir)
         });
 
         assert.equal(response.isError, true);
@@ -1165,6 +1309,8 @@ test('read_file open_symbol still supports direct span opens when no symbol iden
                 start_line: 3,
                 end_line: 4,
             }
+        }, 1000, {
+            snapshotManager: indexedSnapshot(dir)
         });
 
         assert.equal(response.isError, undefined);
@@ -1216,10 +1362,10 @@ test('read_file open_symbol returns explicit error on ambiguous symbol resolutio
     });
 });
 
-test('read_file open_symbol unresolved root returns structured runnable nextSteps without placeholders', async () => {
+test('read_file open_symbol unresolved root returns structured outside_indexed_root without file content', async () => {
     await withTempDir(async (dir) => {
         const filePath = path.join(dir, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\n', 'utf8');
+        fs.writeFileSync(filePath, 'OPEN_SYMBOL_SECRET\nline2\n', 'utf8');
 
         const response = await runReadFile({
             path: filePath,
@@ -1232,22 +1378,17 @@ test('read_file open_symbol unresolved root returns structured runnable nextStep
             } as unknown as SnapshotManagerLike
         });
 
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'requires_reindex');
-        assert.deepEqual(payload.hints?.nextSteps, [
-            { tool: 'list_codebases', args: {} }
-        ]);
+        assertOutsideIndexedRoot(response, 'OPEN_SYMBOL_SECRET');
     });
 });
 
-test('read_file annotated mode ignores non-searchable candidate roots in nextSteps', async () => {
+test('read_file annotated mode denies content when only non-searchable requires_reindex roots match', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
         const srcPath = path.join(repoPath, 'src');
         fs.mkdirSync(srcPath, { recursive: true });
         const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'const value = 1;\n', 'utf8');
+        fs.writeFileSync(filePath, 'REQUIRES_REINDEX_SECRET\n', 'utf8');
 
         const response = await runReadFile({
             path: filePath,
@@ -1260,11 +1401,7 @@ test('read_file annotated mode ignores non-searchable candidate roots in nextSte
             } as unknown as SnapshotManagerLike
         });
 
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.outlineStatus, 'requires_reindex');
-        assert.deepEqual(payload.hints?.nextSteps, [
-            { tool: 'list_codebases', args: {} }
-        ]);
+        assertOutsideIndexedRoot(response, 'REQUIRES_REINDEX_SECRET');
     });
 });
 

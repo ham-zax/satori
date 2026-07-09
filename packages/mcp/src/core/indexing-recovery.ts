@@ -8,7 +8,8 @@ export type InterruptedIndexingRecoveryDecision =
         stats: {
             indexedFiles: number;
             totalChunks: number;
-            status: 'completed';
+            /** Preserved from marker.indexStatus; legacy markers without the field are completed. */
+            status: 'completed' | 'limit_reached';
         };
         indexFingerprint: IndexFingerprint;
     }
@@ -17,6 +18,12 @@ export type InterruptedIndexingRecoveryDecision =
         reason: 'missing_marker' | 'invalid_marker_payload';
         message: string;
     };
+
+function resolveMarkerIndexStatus(
+    marker: IndexCompletionMarkerDocument,
+): 'completed' | 'limit_reached' {
+    return marker.indexStatus === 'limit_reached' ? 'limit_reached' : 'completed';
+}
 
 function fingerprintsMatch(a: IndexCompletionMarkerDocument['fingerprint'], b: IndexFingerprint): boolean {
     return a.embeddingProvider === b.embeddingProvider
@@ -72,6 +79,8 @@ export function decideInterruptedIndexingRecovery(
         };
     }
 
+    const indexStatus = resolveMarkerIndexStatus(marker);
+
     if (!fingerprintsMatch(marker.fingerprint, runtimeFingerprint)) {
         return {
             action: 'promote_indexed',
@@ -80,7 +89,7 @@ export function decideInterruptedIndexingRecovery(
             stats: {
                 indexedFiles: Number(marker.indexedFiles),
                 totalChunks: Number(marker.totalChunks),
-                status: 'completed'
+                status: indexStatus,
             }
         };
     }
@@ -92,7 +101,7 @@ export function decideInterruptedIndexingRecovery(
         stats: {
             indexedFiles: Number(marker.indexedFiles),
             totalChunks: Number(marker.totalChunks),
-            status: 'completed'
+            status: indexStatus,
         }
     };
 }

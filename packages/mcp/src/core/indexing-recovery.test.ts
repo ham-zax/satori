@@ -67,3 +67,31 @@ test('decideInterruptedIndexingRecovery promotes indexed state when marker finge
     });
     assert.deepEqual(decision.indexFingerprint, mismatchedFingerprint);
 });
+
+// FLC-08 follow-up: partial marker must not be promoted as fully completed.
+test('decideInterruptedIndexingRecovery preserves limit_reached from marker indexStatus', () => {
+    const decision = decideInterruptedIndexingRecovery(
+        buildMarker({
+            indexStatus: 'limit_reached',
+            indexedFiles: 12,
+            totalChunks: 450000,
+        }),
+        RUNTIME_FINGERPRINT,
+    );
+
+    assert.equal(decision.action, 'promote_indexed');
+    assert.equal(decision.reason, 'valid_marker');
+    assert.deepEqual(decision.stats, {
+        indexedFiles: 12,
+        totalChunks: 450000,
+        status: 'limit_reached',
+    });
+});
+
+test('decideInterruptedIndexingRecovery treats legacy markers without indexStatus as completed', () => {
+    const decision = decideInterruptedIndexingRecovery(buildMarker(), RUNTIME_FINGERPRINT);
+    assert.equal(decision.action, 'promote_indexed');
+    if (decision.action === 'promote_indexed') {
+        assert.equal(decision.stats.status, 'completed');
+    }
+});

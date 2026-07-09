@@ -1320,6 +1320,52 @@ test('Context.reindexByChange removes renamed-file navigation and publishes new 
     }
 });
 
+// FLC-08: full index stop at limit_reached still seals partial vector proof (marker) without complete navigation.
+test('Context.indexCodebase limit_reached writes completion marker without symbol registry', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-index-limit-reached-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const auth = true;\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        await context.recreateSynchronizerForCodebase(codebasePath);
+
+        const contextWithProcessFileList = context as ContextWithProcessFileList;
+        const originalProcessFileList = contextWithProcessFileList.processFileList.bind(contextWithProcessFileList);
+        contextWithProcessFileList.processFileList = async (...args: unknown[]) => {
+            const result = await originalProcessFileList(...args);
+            return {
+                ...result,
+                status: 'limit_reached',
+            };
+        };
+
+        const stats = await context.indexCodebase(codebasePath);
+        const collectionName = context.resolveCollectionName(codebasePath);
+        const registry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+
+        assert.equal(stats.status, 'limit_reached');
+        assert.equal(vectorDatabase.collections.get(collectionName)?.has(INDEX_COMPLETION_MARKER_DOC_ID), true);
+        assert.equal(registry.status, 'missing');
+        const marker = await context.getIndexCompletionMarker(codebasePath);
+        assert.ok(marker);
+        assert.equal(marker?.kind, 'satori_index_completion_v1');
+        assert.equal(marker?.indexStatus, 'limit_reached');
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context.reindexByChange clears navigation sidecars when changed-file indexing stops early', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-limit-reached-'));
     const stateRoot = path.join(tempRoot, 'state');

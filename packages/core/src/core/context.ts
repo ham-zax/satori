@@ -441,6 +441,10 @@ export class Context {
             return null;
         }
 
+        const indexStatus = parsed.indexStatus === 'limit_reached' || parsed.indexStatus === 'completed'
+            ? parsed.indexStatus
+            : undefined;
+
         return {
             kind: 'satori_index_completion_v1',
             codebasePath: parsedCodebasePath,
@@ -449,6 +453,7 @@ export class Context {
             totalChunks,
             completedAt: parsed.completedAt,
             runId: parsed.runId,
+            ...(indexStatus ? { indexStatus } : {}),
         };
     }
 
@@ -524,7 +529,8 @@ export class Context {
         codebasePath: string,
         indexedFiles: number,
         totalChunks: number,
-        collectionName?: string
+        collectionName?: string,
+        indexStatus: 'completed' | 'limit_reached' = 'completed',
     ): Promise<void> {
         await this.writeIndexCompletionMarker(codebasePath, {
             kind: 'satori_index_completion_v1',
@@ -534,6 +540,7 @@ export class Context {
             totalChunks,
             completedAt: new Date().toISOString(),
             runId: crypto.randomUUID(),
+            indexStatus,
         }, collectionName);
     }
 
@@ -723,9 +730,14 @@ export class Context {
 
         if (result.status === 'completed') {
             await this.writeSymbolRegistryForCompletedIndex(codebasePath, result.symbolRecords, result.symbolManifestFiles);
-            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks);
+            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed');
         } else {
+            // limit_reached: do not publish complete navigation sidecars, but seal partial vector
+            // proof so MCP readiness can allow warned partial search (not "missing marker" stale_local).
+            // indexStatus must stay on the marker so interrupted-index recovery does not promote as fully completed.
             console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
+            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'limit_reached');
+            console.warn('[Context] ⚠️  Wrote completion marker for limit_reached partial index (navigation remains unpublished).');
         }
 
         progressCallback?.({

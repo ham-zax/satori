@@ -98,6 +98,12 @@ export interface IndexCompletionMarkerDocument extends VectorDocumentMetadata {
     totalChunks: number;
     completedAt: string;
     runId: string;
+    /**
+     * Full-index outcome sealed into the marker.
+     * Absent / omitted on legacy markers is treated as `completed`.
+     * `limit_reached` means partial vector proof only (no complete navigation seal).
+     */
+    indexStatus?: 'completed' | 'limit_reached';
 }
 
 export const INDEX_COMPLETION_MARKER_DOC_ID = '__satori_index_completion_marker_v1__';

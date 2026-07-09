@@ -1,10 +1,33 @@
 import * as fs from "fs";
 import * as path from "path";
 import {
+    compareContractStrings,
     getSupportedExtensionsForCapability,
     type NavigationStore,
     type SymbolRecord,
 } from "@zokizuan/satori-core";
+
+const OUTLINE_DUPLICATE_SYMBOL_KEY_RE = /^Duplicate symbolKey '([^']+)' has \d+ candidates$/;
+
+/**
+ * Non-blocking outline warning: count + optional sample keys + agent action.
+ * Does not dump every registry diagnostic string into the outline payload.
+ */
+export function formatOutlineSymbolRegistryWarnings(registryWarnings: readonly string[]): string | undefined {
+    if (registryWarnings.length === 0) {
+        return undefined;
+    }
+    const samples: string[] = [];
+    for (const warning of registryWarnings) {
+        const match = OUTLINE_DUPLICATE_SYMBOL_KEY_RE.exec(warning);
+        if (match) {
+            samples.push(match[1]);
+        }
+    }
+    samples.sort(compareContractStrings);
+    const sample = samples.slice(0, 3).join(",");
+    return `OUTLINE_SYMBOL_REGISTRY_WARNINGS:${registryWarnings.length} action=treat_outline_as_degraded_identity${sample ? ` sample=${sample}` : ""}`;
+}
 import {
     repairSourceBackedPythonSpan,
     type PythonSourceBackedSpanRepair,
@@ -157,6 +180,7 @@ type NavigationHandlersHost = {
             nodeCount: number;
             edgeCount: number;
         };
+        hints?: Record<string, unknown>;
     } | null>;
 };
 
@@ -466,9 +490,11 @@ export class NavigationHandlers {
                         codebaseRoot: effectiveRoot,
                         registryManifestHash: registryState.manifestHash,
                     });
-                    const outlineWarnings = registryState.warnings.length > 0
-                        ? [`OUTLINE_SYMBOL_REGISTRY_WARNINGS:${registryState.warnings.length}`]
-                        : [];
+                    const outlineWarnings: string[] = [];
+                    const registryWarning = formatOutlineSymbolRegistryWarnings(registryState.warnings);
+                    if (registryWarning) {
+                        outlineWarnings.push(registryWarning);
+                    }
                     if (relationshipGraph.warning) {
                         outlineWarnings.push(`OUTLINE_${relationshipGraph.warning}`);
                     }

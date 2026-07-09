@@ -43,8 +43,8 @@ batch_A_evidence_status:
   - docs/remediation/satori_remediation_backlog.v2.yaml
   scale_note: 'Evidence E0–E3 investigation; E4–E5 only after patch+proof. Patch readiness P0=not patchable … P2=patch-ready … P5=closed.'
   ranking_rule: Only E2+ scored; patch only if P2+
-  recommended_next_patch: F8
-  recommended_next_patch_reason: 'Closed fixed_proven: F1 F4 F5 F7 F10 F11; closed accepted_risk: F6. Next gauge: F8 doctor/version visibility. Then F2 SSOT decision, F9 design. F3 parked.'
+  recommended_next_patch: F2_SSOT_decision
+  recommended_next_patch_reason: 'Closed fixed_proven: F1 F4 F5 F7 F8 F10 F11; closed accepted_risk: F6. Next: F2 installer SSOT decision (design only), then F9 surface design. F3 parked.'
   scores_desc:
   - 'F4 score=9 E4/P5 closed fixed_proven'
   - 'F11 score=8 E4/P5 closed fixed_proven'
@@ -52,8 +52,9 @@ batch_A_evidence_status:
   - 'F6 score=8 E3/P5 closed accepted_risk (AGENTS+skill trust calibration)'
   - 'F7 score=E4/P5 closed fixed_proven (lifecycle.public-tools.test.ts)'
   - 'F10 score=E4/P5 closed fixed_proven (hygiene: delete noise; process docs → docs/remediation/)'
+  - 'F8 score=E4/P5 closed fixed_proven (doctor packageVersions table)'
   - 'F2 score=6 E2/P1 need SSOT decision + drift guard'
-  - 'F8/F9 E2/P1 open (not patched)'
+  - 'F9 E2/P1 open (surface design; not patched)'
 findings:
 - id: F1
   claim: read_file could read arbitrary host files outside indexed roots
@@ -466,13 +467,16 @@ findings:
   risk_class: operability
   moving_resource: package version/compatibility information
   boundary: operators should know what compatible package set they are running
-  current_status: verified_not_patched
-  evidence_grade: E2
-  patch_readiness: P1
+  current_status: closed
+  evidence_grade: E4
+  patch_readiness: P5
+  closure_type: fixed_proven
+  closure_decision: fixed_proven
   batch: B
   notes:
-  - 'Coordinator investigation elevated E2/P1: package versions are independent; doctor/version surface needs explicit package set visibility.'
-  - Not patched yet. Next after F10: doctor evidence card then narrow patch if P2.
+  - 'Evidence: doctor previously checked node/env/npm access only; package versions independent (cli/mcp/core/root differ); versions:check is doc freshness not operator UX.'
+  - 'Patch: doctor.packageVersions + packageVersionNote + per-package checks; independent-version policy note; doctor tests; README one-liner.'
+  - No release strategy change; no semver lockstep.
   evidence_required:
     source_locations:
     - root package.json

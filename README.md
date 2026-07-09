@@ -105,7 +105,7 @@ If `manage_index` returns `reason="runtime_owner_conflict"`, restart all Satori 
 
 Satori needs an embedding provider and a Milvus-compatible vector store before indexing. MCP startup, `tools list`, and `doctor` do not require provider credentials; provider-backed tool calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 
-Run `npx -y @zokizuan/satori-cli@latest doctor` after setting env values to check the local setup before indexing.
+Run `npx -y @zokizuan/satori-cli@latest doctor` after setting env values to check the local setup before indexing. Doctor also prints the installed Satori package set (`satori-cli`, `satori-mcp`, `satori-core`); those packages use independent versions by design.
 
 Installer config and runtime config are intentionally separate:
 

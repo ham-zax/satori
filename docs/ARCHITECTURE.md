@@ -1,5 +1,7 @@
 # Satori Architecture
 
+> **Canonical architecture reference:** [../ARCHITECTURE.md](../ARCHITECTURE.md). Prefer the root document for current package boundaries and runtime flow. This file is a secondary overview (not merged in the F10 hygiene pass).
+
 This document explains how Satori handles indexing, search, and sync in production MCP workflows.
 
 ---

@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DoctorOptions, DoctorPackageVersion, runDoctor } from "./doctor.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createRequire } from "node:module";
+import {
+    DoctorOptions,
+    DoctorPackageVersion,
+    resolveCorePackageVersionViaMcp,
+    runDoctor,
+} from "./doctor.js";
 
 const successfulExecFileSync = (() => "0.0.0") as NonNullable<DoctorOptions["execFileSyncImpl"]>;
 
@@ -110,4 +119,50 @@ test("runDoctor warns when a package version cannot be resolved", () => {
 
     assert.equal(result.status, "warning");
     assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.status, "warning");
+});
+
+// Doctor finding: core nested under mcp must still resolve (createRequire from MCP package.json).
+test("resolveCorePackageVersionViaMcp resolves core nested under mcp package root", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-nested-"));
+    try {
+        const mcpDir = path.join(tempRoot, "node_modules", "@zokizuan", "satori-mcp");
+        const coreDir = path.join(mcpDir, "node_modules", "@zokizuan", "satori-core");
+        const mcpPackageJson = path.join(mcpDir, "package.json");
+        fs.mkdirSync(coreDir, { recursive: true });
+        fs.writeFileSync(
+            mcpPackageJson,
+            JSON.stringify({ name: "@zokizuan/satori-mcp", version: "9.9.9" }),
+            "utf8",
+        );
+        fs.writeFileSync(
+            path.join(coreDir, "package.json"),
+            JSON.stringify({ name: "@zokizuan/satori-core", version: "8.8.8" }),
+            "utf8",
+        );
+
+        // CLI-rooted require must not see nested core (repro of false warning layout).
+        const requireFromCliRoot = createRequire(path.join(tempRoot, "cli-entry.js"));
+        let cliSawCore = true;
+        try {
+            requireFromCliRoot.resolve("@zokizuan/satori-core/package.json");
+        } catch {
+            cliSawCore = false;
+        }
+        assert.equal(cliSawCore, false, "CLI root must not resolve nested core in this layout");
+
+        const viaMcp = resolveCorePackageVersionViaMcp({ mcpPackageJsonPath: mcpPackageJson });
+        assert.ok(viaMcp, "MCP-rooted core resolution should succeed for nested layout");
+        assert.equal(viaMcp?.name, "@zokizuan/satori-core");
+        assert.equal(viaMcp?.version, "8.8.8");
+        assert.match(viaMcp?.source || "", /satori-core[/\\]package\.json$/);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test("resolveCorePackageVersionViaMcp resolves core in the live workspace", () => {
+    const viaMcp = resolveCorePackageVersionViaMcp();
+    assert.ok(viaMcp, "MCP-rooted core resolution should succeed in this workspace");
+    assert.equal(viaMcp?.name, "@zokizuan/satori-core");
+    assert.ok(viaMcp?.version);
 });

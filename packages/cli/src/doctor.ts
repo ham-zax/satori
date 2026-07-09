@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { readManagedPackageJson, resolveManagedPackageSpecifier } from "./managed-package.js";
+import {
+    readManagedPackageJson,
+    resolveManagedPackageJsonPath,
+    resolveManagedPackageSpecifier,
+} from "./managed-package.js";
 
 type CheckStatus = "ok" | "warning" | "error";
 
@@ -140,6 +144,28 @@ function resolvePackageJsonPath(packageName: string, monorepoSegment: string): {
 }
 
 /**
+ * Resolve @zokizuan/satori-core via the installed MCP package.
+ * Production installs often nest core under mcp/node_modules; CLI cannot see it via its own require.
+ */
+export function resolveCorePackageVersionViaMcp(options?: {
+    /** Test override: absolute path to MCP package.json used as createRequire root. */
+    mcpPackageJsonPath?: string;
+}): DoctorPackageVersion | null {
+    try {
+        const mcpPackageJsonPath = options?.mcpPackageJsonPath ?? resolveManagedPackageJsonPath();
+        const requireFromMcp = createRequire(mcpPackageJsonPath);
+        const corePackageJsonPath = requireFromMcp.resolve("@zokizuan/satori-core/package.json");
+        const info = readJsonVersion(corePackageJsonPath);
+        if (!info) {
+            return null;
+        }
+        return { name: info.name, version: info.version, source: corePackageJsonPath };
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Resolve the installed Satori package version set for operator support.
  * Independent package versions are expected; this is not a lockstep matrix.
  */
@@ -180,6 +206,8 @@ export function resolveInstalledPackageVersions(): DoctorPackageVersion[] {
         {
             packageName: "@zokizuan/satori-core",
             monorepoSegment: "core",
+            // Prefer MCP-rooted resolution so nested production installs do not false-warn.
+            preferredRead: () => resolveCorePackageVersionViaMcp(),
         },
     ];
 

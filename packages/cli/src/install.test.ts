@@ -199,6 +199,24 @@ test("install writes the actual installed runtime bin path into the stable launc
     });
 });
 
+// F-OP-02: install result must surface the managed package specifier used.
+test("install result includes packageSpecifier used for managed runtime", () => {
+    withTempHome((homeDir) => {
+        const result = executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: true,
+        }, {
+            homeDir,
+            packageSpecifier: EXPECTED_PACKAGE_SPECIFIER,
+        });
+
+        assert.equal(result.action, "install");
+        assert.equal(result.packageSpecifier, EXPECTED_PACKAGE_SPECIFIER);
+        assert.match(String(result.packageSpecifier), /@zokizuan\/satori-mcp@/);
+    });
+});
+
 test("managed MCP package exposes a single satori bin for npx package execution", () => {
     assert.deepEqual(PACKAGE_JSON.bin, {
         satori: "dist/index.js",

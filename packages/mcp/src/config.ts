@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { envManager } from "@zokizuan/satori-core";
 
 export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama';
@@ -5,6 +8,21 @@ export type VectorStoreProvider = 'Milvus';
 export type FingerprintSource = 'verified' | 'assumed_v2';
 export const DEFAULT_WATCH_DEBOUNCE_MS = 5000;
 export const DEFAULT_MANAGE_RETRY_AFTER_MS = 2000;
+
+/** Package version from packages/mcp/package.json (not the stale historical default 1.0.0). */
+export function resolveMcpPackageVersion(): string {
+    try {
+        const packageJsonPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+        const raw = fs.readFileSync(packageJsonPath, "utf8");
+        const parsed = JSON.parse(raw) as { version?: unknown };
+        if (typeof parsed.version === "string" && parsed.version.trim().length > 0) {
+            return parsed.version.trim();
+        }
+    } catch {
+        // fall through
+    }
+    return "0.0.0";
+}
 
 export interface IndexFingerprint {
     embeddingProvider: EmbeddingProvider;
@@ -253,7 +271,7 @@ export function createMcpConfig(): ContextMcpConfig {
 
     const config: ContextMcpConfig = {
         name: envManager.get('MCP_SERVER_NAME') || "Satori MCP Server",
-        version: envManager.get('MCP_SERVER_VERSION') || "1.0.0",
+        version: envManager.get('MCP_SERVER_VERSION') || resolveMcpPackageVersion(),
         // Embedding provider configuration
         encoderProvider: defaultProvider,
         encoderModel: getEmbeddingModelForProvider(defaultProvider),

@@ -159,6 +159,8 @@ export interface InstallCommandResult {
     action: "install" | "uninstall";
     client: InstallClient;
     dryRun: boolean;
+    /** Managed MCP package specifier used for runtime install (install only). */
+    packageSpecifier?: string;
     profile?: InstallProfile;
     profileConfigPath?: string;
     profileConfigChanged?: boolean;
@@ -1124,6 +1126,7 @@ export function executeInstallCommand(
         action: command.kind,
         client: command.client,
         dryRun: command.dryRun,
+        packageSpecifier: command.kind === "install" ? packageSpecifier : undefined,
         profile: command.kind === "install" ? command.profile : undefined,
         profileConfigPath: command.kind === "install" ? profileMutation.filePath : undefined,
         profileConfigChanged: command.kind === "install" ? profileMutation.changed : undefined,

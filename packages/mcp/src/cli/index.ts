@@ -8,8 +8,6 @@ import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession, type CallToolResult, type ListToolsResult } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, parseStructuredEnvelope } from "./format.js";
-import { executeInstallCommand, type ManagedRuntimeCommand } from "./install.js";
-import { verifyManagedPackageInstallability } from "./package-installability.js";
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
 
 interface RunCliOptions {
@@ -23,8 +21,6 @@ interface RunCliOptions {
     startupTimeoutMs?: number;
     callTimeoutMs?: number;
     cwd?: string;
-    installabilityVerifier?: () => string | Promise<string>;
-    installRuntimeCommand?: ManagedRuntimeCommand;
     connectSession?: (options: {
         command: string;
         args: string[];
@@ -93,15 +89,14 @@ function resolveDefaultServerArgs(): string[] {
 
 function buildHelpPayload() {
     return {
-        usage: "satori-cli <command>",
+        usage: "satori <command> (tool shell; install via satori-cli)",
         commands: [
-            "install [--client all|codex|claude|opencode] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook]",
-            "uninstall [--client all|codex|claude|opencode] [--dry-run]",
             "tools list",
             "tool call <toolName> --args-json '<json>'",
             "tool call <toolName> --args-file <path>",
             "<toolName> [schema-driven flags]"
         ],
+        install: "npx -y @zokizuan/satori-cli@latest install --client all",
         globalFlags: [
             "--startup-timeout-ms <n>",
             "--call-timeout-ms <n>",
@@ -228,23 +223,6 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             });
             if (parsed.globals.format === "text") {
                 writers.writeStderr("satori-cli version shown.\n");
-            }
-            return 0;
-        }
-
-        if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
-            let packageSpecifier: string | undefined;
-            if (parsed.command.kind === "install") {
-                packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
-            }
-            const result = executeInstallCommand(parsed.command, {
-                homeDir: effectiveEnv.HOME,
-                packageSpecifier,
-                runtimeCommand: options.installRuntimeCommand,
-            });
-            emitJson(writers, result);
-            if (parsed.globals.format === "text") {
-                writers.writeStderr(`satori-cli ${parsed.command.kind} completed for ${parsed.command.client}.\n`);
             }
             return 0;
         }

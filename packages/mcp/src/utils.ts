@@ -90,11 +90,12 @@ export function requireRepoRelativeFilePath(
     }
 
     const normalized = inputPath.replace(/\\/g, "/").replace(/^\.\/+/, "").trim();
-    if (normalized.length === 0) {
+    // Bare "." (cwd-of-root) is not a file path; strip of "./" can yield empty or leave ".".
+    if (normalized.length === 0 || normalized === ".") {
         return {
             ok: false,
             path: inputPath,
-            message: `Error: '${fieldName}' must be a non-empty repo-relative path inside the codebase root.`,
+            message: `Error: '${fieldName}' must be a non-empty repo-relative file path inside the codebase root (not '.' or empty).`,
         };
     }
 

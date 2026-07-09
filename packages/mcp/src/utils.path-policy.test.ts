@@ -40,6 +40,17 @@ test("requireRepoRelativeFilePath rejects absolute and .. escapes", () => {
     }
 });
 
+test("requireRepoRelativeFilePath rejects bare '.' as a file path", () => {
+    for (const bad of [".", "./", ".//"]) {
+        const result = requireRepoRelativeFilePath(bad, "file");
+        assert.equal(result.ok, false, `expected reject for ${JSON.stringify(bad)}`);
+    }
+    const schema = repoRelativeFilePathSchema("repo-relative file");
+    for (const bad of [".", "./", ".//"]) {
+        assert.equal(schema.safeParse(bad).success, false, `expected schema reject for ${JSON.stringify(bad)}`);
+    }
+});
+
 test("requireRepoRelativeFilePath rejects Windows drive-relative C:foo", () => {
     for (const driveRelative of ["C:foo", "C:secret.ts", "C:/secret.ts", "C:\\secret.ts", "d:bar"]) {
         const result = requireRepoRelativeFilePath(driveRelative, "file");

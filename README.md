@@ -17,10 +17,11 @@ Satori indexes a repo and gives MCP-compatible agents a fixed investigation path
 - Keep search focused on runtime code before pulling in docs or tests.
 - Group search around owner symbols; chunks are supporting evidence, not the final unit of navigation.
 - Open exact files, line ranges, and symbols instead of dumping broad context.
-- Check nearby callers/callees when graph support is available.
+- Check nearby callers/callees when graph support is available (advisory only — not blast-radius proof).
 - Build derived symbol registry and relationship sidecars during completed full indexes.
-- Get clear recovery steps when context is stale, partial, or not ready.
-- Compare Satori against another code-intelligence MCP on the same deterministic task suite.
+- See observed `symbolQuality` on ready roots and `manage_index status` before treating outline/graph as rich.
+- Recover weak inbound graph context with executable `inboundRecovery` (`must:` lexical search) on grouped hits.
+- Get clear recovery steps when context is stale, partial, not ready, or multi-runtime owners conflict.
 - Install the MCP server and first-party workflow skill with one command.
 - Avoid resident MCP startup through `npx`; clients launch an installer-owned Node launcher.
 
@@ -78,7 +79,7 @@ Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/sa
 
 For Codex, the installer also writes a marked Satori guidance block to `~/.codex/AGENTS.md` by default. That block positions Satori as semantic-first code exploration: start with `search_codebase` for behavior/ownership context, prefer `recommendedNextAction` when present, then narrow with `file_outline`, `call_graph`, and `read_file` for proof.
 
-Restart every Satori MCP client after changing runtime config. In particular, after changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, stop old clients before running `manage_index create`, `reindex`, `sync`, or `clear`. Satori records live runtime owners under `~/.satori/runtime/owners.json` and blocks index mutations with `status="blocked"` / `reason="runtime_owner_conflict"` when multiple live Satori runtimes with different fingerprints/configs are active.
+Restart every Satori MCP client after changing runtime config. In particular, after changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, stop old clients before running `manage_index create`, `reindex`, `sync`, `clear`, or `repair`. Satori records live runtime owners under `~/.satori/runtime/owners.json` and blocks those mutations with `status="blocked"` / `reason="runtime_owner_conflict"` when multiple live Satori runtimes with different fingerprints, package versions, or configs are active. `manage_index status` and `list_codebases` show a compact **Runtime owners** line when the registry is readable; `satori-cli doctor` errors on multi-version live owners.
 
 For Codex, `satori-cli install --client codex --install-guidance-hook` also installs a marked `SessionStart` reminder that prints the Satori tool workflow. The hook is guidance-only, suppresses duplicate startup prints for the same working directory, and does not run indexing, search, or provider-backed work.
 
@@ -99,7 +100,7 @@ read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
 
 If any tool returns `requires_reindex`, run the hinted `manage_index action="reindex"` call first, then retry the original tool call. Use `manage_index action="sync"` for ordinary file or ignore-rule convergence.
 
-If `manage_index` returns `reason="runtime_owner_conflict"`, restart all Satori MCP clients so only one runtime identity is active, then retry the mutation. MCP tools never kill processes or ask interactive cleanup questions.
+If `manage_index` returns `reason="runtime_owner_conflict"`, follow the envelope’s listed pids/versions and `hints.nextStep`: leave a single package version/config running, then retry. MCP tools never kill processes or ask interactive cleanup questions.
 
 ## Runtime Setup
 
@@ -205,7 +206,7 @@ Completed full indexes write navigation sidecars:
 - Compatibility manifests so stale, missing, or incompatible sidecars degrade explicitly instead of being silently trusted.
 - Canonical JSON navigation state plus an additive `navigation.sqlite` cache. JSON remains the source that runtime navigation serves by default; SQLite is optional for validation or explicit experimental reads and may serve only after proving parity with the canonical JSON registry and relationship sidecars.
 
-Current relationship limits are intentional. `CALLS v0` is heuristic/name-based: unique same-file targets can be high confidence, unique cross-file name-only targets are low confidence, and ambiguous same-name targets are skipped. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
+Current relationship limits are intentional. `CALLS v0` is heuristic/name-based (not a compiler-grade call graph): unique same-file targets can be high confidence; cross-file edges stay low unless `IMPORTS`/`EXPORTS` evidence upgrades them, or an imported module has a unique same-name target (for example class methods without a top-level `EXPORTS` record). Generic names like `push`/`get` stay suppressed without `EXPORTS`. Ambiguous same-name targets are skipped. Empty or short edge lists are not proof of “no callers.” Prefer `inboundRecovery` / `must:` search, tests, and direct references before blast-radius edits. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
 
 Language capability is explicit. TypeScript, JavaScript, and Python are the only production-ready `call_graph` languages. Go and Rust are `symbol_only`: `file_outline` can return compatible sidecar symbols, but `call_graph` returns `unsupported_language`. Broader catalog/parser support does not imply graph-ready navigation.
 
@@ -217,12 +218,12 @@ Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish ac
 
 | Tool | Use it for |
 |---|---|
-| `list_codebases` | See indexed roots and their lifecycle buckets |
-| `manage_index` | JSON-envelope lifecycle: create, reindex, sync, status, clear, repair (clear is destructive; repair only when fingerprint/payload proof allows) |
-| `search_codebase` | Runtime-first plain-English semantic discovery with exact operators, grouping, freshness, structured warnings, recommended actions, and navigation hints |
-| `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing |
-| `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` when relationship-backed navigation is ready |
-| `read_file` | Read bounded files under indexed/searchable codebase roots only (absolute paths; not a general host FS reader), with ranges, annotations, or exact symbol spans |
+| `list_codebases` | See indexed roots and lifecycle buckets; ready roots include compact `symbolQuality=…` and optional Runtime owners summary |
+| `manage_index` | JSON-envelope lifecycle: create, reindex, sync, status, clear, repair (clear is destructive; repair only when vector payload + trusted fingerprint proof allow). `status` may include structured `symbolQuality` and Runtime owners |
+| `search_codebase` | Runtime-first plain-English discovery with exact operators, symbol groups, freshness, warnings, `recommendedNextAction`, and optional `inboundRecovery` when graph callers are advisory |
+| `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing (`ok` / `ambiguous` / `not_found`) |
+| `call_graph` | Bounded advisory caller/callee context from a search `symbolRef` when relationship-backed navigation is ready (TS/JS/Python; not sole blast-radius authority) |
+| `read_file` | Bounded reads under indexed/searchable roots only (absolute paths; not a general host FS reader), with ranges, annotations, or exact `open_symbol` spans |
 
 ## What Satori Is Not
 
@@ -291,7 +292,7 @@ Current release versions:
 
 - `@zokizuan/satori-core@1.6.11`
 - `@zokizuan/satori-mcp@4.11.16`
-- `@zokizuan/satori-cli@latest`
+- `@zokizuan/satori-cli@0.4.14` (install examples may use `@latest`)
 
 Preflight before publishing:
 
@@ -307,11 +308,11 @@ pnpm run release:smoke:mcp
 pnpm run release:smoke:cli
 ```
 
-Recommended public release path:
+Recommended public release path (tag matches the monorepo version in root `package.json`):
 
 ```bash
-git tag v0.5.1
-git push origin v0.5.1
+git tag v0.5.14
+git push origin v0.5.14
 ```
 
 The GitHub Actions release uses npm provenance and requires the `NPM_TOKEN` secret. Use the manual fallback only when you intentionally want to publish from a local authenticated shell without CI provenance:

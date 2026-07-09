@@ -1,6 +1,8 @@
 # @zokizuan/satori-cli
 
-Installer and shell client for Satori MCP. Use this package to configure supported MCP clients, check provider setup, and call Satori tools from a terminal without starting a resident MCP client.
+Installer, doctor, and shell client for Satori MCP. Use this package to configure supported MCP clients, verify provider and runtime health, and call the six public Satori tools from a terminal without a resident MCP client session.
+
+This package does **not** implement the MCP tools itself; it installs and drives `@zokizuan/satori-mcp`. Full tool contracts live in the [MCP package README](https://github.com/ham-zax/satori/blob/master/packages/mcp/README.md) and the monorepo root README.
 
 ## Quick Start
 
@@ -19,7 +21,7 @@ The installer only manages Satori-owned config and the first-party workflow skil
 
 - `satori`
 
-After a repo is indexed, Satori keeps the public MCP surface fixed while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer wires clients; it does not run indexing or provider-backed work during setup.
+After a repo is indexed, Satori keeps the public MCP surface fixed (six tools) while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer wires clients; it does not run indexing or provider-backed work during setup.
 
 ## Commands
 
@@ -33,7 +35,7 @@ npx -y @zokizuan/satori-cli@latest install --client all --dry-run
 npx -y @zokizuan/satori-cli@latest uninstall --client codex
 ```
 
-`doctor` checks Node, package visibility, provider env, and Milvus env without starting an MCP client.
+`doctor` checks Node, package visibility, provider env, and Milvus env without starting an MCP client. It also reports the installed Satori package set (`satori-cli` / `satori-mcp` / `satori-core`; versions are independent by design) and errors when multiple live Satori MCP package versions appear in `~/.satori/runtime/owners.json` (the same multi-runtime skew that blocks `manage_index` mutations with `runtime_owner_conflict`).
 
 `--profile default|minimal|all-text` writes or updates repo-local `satori.toml` for the current working directory. It is repo index policy only; it is not MCP client config and must not contain provider credentials.
 
@@ -89,6 +91,8 @@ MILVUS_TOKEN = "your-zilliz-token"
 
 ## Direct Tool Calls
 
+Public tool paths must be **absolute**. Relative paths are rejected by the MCP server (not resolved against the CLI process CWD).
+
 ```bash
 satori-cli tools list
 satori-cli tool call search_codebase --args-json '{"path":"/abs/repo","query":"auth flow"}'
@@ -98,6 +102,8 @@ satori-cli search_codebase --path /abs/repo --query "auth flow"
 ```
 
 Global flags such as `--startup-timeout-ms`, `--call-timeout-ms`, `--format`, and `--debug` must appear before the command token.
+
+After changing embedding/vector runtime config or the installed Satori package version, restart every Satori MCP client before `manage_index` mutations (`create` / `reindex` / `sync` / `clear` / `repair`). On `runtime_owner_conflict`, follow the manage envelope’s pids/versions and `hints.nextStep`; CLI and MCP tools never kill other processes.
 
 ## Runtime Requirements
 

@@ -63,18 +63,21 @@ read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
 
 Important defaults:
 
-- `search_codebase` starts with runtime code, grouped by symbol.
-- `search_codebase` runs freshness checks before returning results.
+- Public paths for tools are **absolute filesystem paths**. Relative paths are rejected (not CWD-resolved).
+- `search_codebase` starts with `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`.
+- `search_codebase` is the sync-on-read freshness tool; other tools may gate compatibility but do not replace it.
 - Grouped search is symbol-owned: chunks are supporting evidence for an owner symbol, not the final navigation unit.
 - Exact symbol navigation uses `symbolInstanceId`. `symbolKey` is stable-ish candidate lookup only, not exact identity.
+- Ready/`indexed` means searchable-readable, not automatically symbol-rich. Check `manage_index status` `symbolQuality` or Ready-line `symbolQuality=…` before treating outline/graph as rich navigation evidence (`symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown` — observed registry evidence, not a parser diagnosis).
 - Index profiles still honor `.satoriignore`, `.gitignore`, `satori.toml`, and the hard denylist for secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, and database dumps.
-- `read_file` is bounded and can return continuation hints.
-- `requires_reindex` means reindex first, then retry the original call.
-- `manage_index action="clear"` is destructive and should be explicit.
-- After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, restart **all** Satori MCP clients before running `manage_index create`, `reindex`, `sync`, or `clear`.
+- `read_file` only reads under tracked searchable roots (`indexed` / `sync_completed`); it is not a general host filesystem reader. Relative paths and root escapes are denied.
+- Prefer `recommendedNextAction` when present; if `callGraphHint.supported=false`, follow `navigationFallback` args rather than inventing spans.
+- `requires_reindex` means reindex first, then retry the original call (do not substitute `sync`).
+- `manage_index action="clear"` is destructive and should be explicit. `repair` only rebuilds local readiness when vector payload and trusted fingerprint proof match; otherwise use create/reindex.
+- After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, restart **all** Satori MCP clients before running `manage_index create`, `reindex`, `sync`, `clear`, or `repair`.
 - Satori records live runtime owners in `~/.satori/runtime/owners.json` and blocks those index mutations with `status="blocked"` / `reason="runtime_owner_conflict"` if another live Satori MCP runtime has a different fingerprint, package version, or config identity.
 - On `runtime_owner_conflict`, the manage envelope lists conflicting **pids**, **versions**, and conflict reasons, plus a concrete `hints.nextStep`. MCP tools never kill other processes. Stop the listed host clients (or only orphaned Satori MCP node PIDs), leave a single package version/config running, then retry. `manage_index status` and `list_codebases` also show a compact **Runtime owners** line (live pids/versions); multi-version means mutations may block. `satori-cli doctor` reports multi-version live owners.
-- Grouped `search_codebase` results with supported call graph attach **`inboundRecovery`**: a ready-to-run `must:` search to verify callers before blast-radius edits (`callGraphCallers` stays advisory/low).
+- Grouped `search_codebase` results with supported call graph attach **`inboundRecovery`**: a ready-to-run `must:` search to verify callers before blast-radius edits (`call_graph` inbound stays advisory/low).
 
 ## Navigation Sidecars
 
@@ -162,7 +165,7 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 
 ### `call_graph`
 
-Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph): unique same-file name matches are high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them. Traversal is bounded (depth/limit) and incomplete by design—empty or short edge lists are not proof of “no callers.” Output is advisory navigation context, not authoritative blast-radius proof; confirm impact with search_codebase, read_file, tests, and references before editing. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report counts returned in that response, not whole-sidecar totals.
+Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph): unique same-file name matches are high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them, or an imported module has a unique same-name target (e.g. class methods without a top-level EXPORTS record; generic names like push/get stay suppressed). Traversal is bounded (depth/limit) and incomplete by design—empty or short edge lists are not proof of “no callers.” Output is advisory navigation context, not authoritative blast-radius proof; confirm impact with search_codebase, read_file, tests, and references before editing. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report counts returned in that response, not whole-sidecar totals.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -193,7 +196,7 @@ Read file content under an indexed/searchable Satori codebase root only (not a g
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `path` | string | yes |  | ABSOLUTE path to the file. |
+| `path` | string | yes |  | ABSOLUTE path to the file under an indexed/searchable codebase root (relative paths are rejected). |
 | `start_line` | integer | no |  | Optional start line (1-based, inclusive). |
 | `end_line` | integer | no |  | Optional end line (1-based, inclusive). |
 | `mode` | enum("plain", "annotated") | no | `"plain"` | Output mode. plain returns text only; annotated returns content plus sidecar-backed outline metadata. |

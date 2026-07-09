@@ -1,7 +1,7 @@
 {
   "name": "@zokizuan/satori-mcp",
   "version": "4.11.16",
-  "description": "Repo-aware MCP tools for AI coding agents: intent search, symbol navigation, exact reads, related paths, and freshness warnings.",
+  "description": "Repo-aware MCP tools for AI coding agents: intent search, symbol navigation, advisory call graphs, exact reads, and freshness-aware recovery.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

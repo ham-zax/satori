@@ -2,20 +2,20 @@
 
 Core indexing and retrieval engine used by Satori.
 
-Use this package when you want the lower-level engine directly. Most agent workflows should install `@zokizuan/satori-mcp` or `@zokizuan/satori-cli` instead.
+Use this package when you want the lower-level engine directly. Most agent workflows should install `@zokizuan/satori-cli` (installer) and `@zokizuan/satori-mcp` (six MCP tools) instead of calling core APIs from agents.
 
 ## What It Owns
 
-- File discovery and ignore filtering.
+- File discovery and ignore filtering (`.satoriignore`, `.gitignore`, hard denylist).
 - AST-aware chunking with an in-package recursive fallback splitter. The legacy `LangChainCodeSplitter` class name remains for API compatibility, but `langchain` is no longer a runtime dependency.
 - OpenAI, VoyageAI, Gemini, and Ollama embeddings.
 - Milvus/Zilliz vector persistence and search.
 - Dense/BM25 hybrid retrieval and optional reranking.
 - Incremental sync with stat-first, hash-on-change file tracking.
-- Repo-local `satori.toml` index profiles: `default`, `minimal`, and `all-text`.
+- Repo-local `satori.toml` index profiles: `default`, `minimal`, and `all-text` (index policy only — not provider credentials).
 - Derived symbol registry and relationship sidecars for symbol-owned navigation.
 
-Files remain the source of truth. The symbol registry is a deterministic navigation view for a compatible indexed snapshot; grouped search can use owner symbols while chunks remain supporting evidence. Exact navigation uses `symbolInstanceId`, while `symbolKey` stays stable-ish candidate lookup only. Relationship sidecars store conservative `CALLS v0` plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges that now back symbol-owned `call_graph` traversal.
+Files remain the source of truth. The symbol registry is a deterministic navigation view for a compatible indexed snapshot; grouped search can use owner symbols while chunks remain supporting evidence. Exact navigation uses `symbolInstanceId`, while `symbolKey` stays stable-ish candidate lookup only. Relationship sidecars store conservative `CALLS v0` plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges that back symbol-owned `call_graph` traversal. `CALLS v0` is heuristic/name-based: unique same-file targets can be high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them, or an imported module has a unique same-name target. They are navigation hints, not proof of runtime call coverage.
 
 Completed full indexes write canonical JSON navigation sidecars and then import an additive `navigation.sqlite` cache. JSON remains the canonical navigation source; SQLite is optional for parity checks or explicit experimental reads.
 

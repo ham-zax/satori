@@ -29,7 +29,7 @@ const callGraphInputSchema = z.object({
 
 export const callGraphTool: McpTool = {
     name: 'call_graph',
-    description: () => 'Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. On symbol-owned indexes, call_graph uses compatible relationship sidecars for conservative CALLS v0 traversal and upgrades low-confidence cross-file calls only when current IMPORTS/EXPORTS evidence deterministically supports the target symbol. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report the counts returned in that response, not whole-sidecar totals for the indexed codebase.',
+    description: () => 'Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph): unique same-file name matches are high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them. Traversal is bounded (depth/limit) and incomplete by design—empty or short edge lists are not proof of “no callers.” Output is advisory navigation context, not authoritative blast-radius proof; confirm impact with search_codebase, read_file, tests, and references before editing. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report counts returned in that response, not whole-sidecar totals.',
     inputSchemaZod: () => callGraphInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const normalizedArgs = (args && typeof args === 'object')

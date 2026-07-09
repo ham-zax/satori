@@ -27,6 +27,7 @@ import {
 } from "./search-ranking-policy.js";
 import {
     buildDisplaySymbolLabel,
+    buildInboundRecoveryAction,
     buildSearchGroupFallbacks,
     buildSearchGroupPreview,
     buildSearchGroupRecommendedAction,
@@ -237,6 +238,21 @@ export function buildExactRegistryGroupResult(input: {
     };
 
     result.recommendedNextAction = buildSearchGroupRecommendedAction(result);
+    if (
+        result.callGraphHint.supported
+        && result.capabilities.callGraphCallers === "low"
+    ) {
+        const inboundRecovery = buildInboundRecoveryAction({
+            codebaseRoot: input.codebaseRoot,
+            symbolLabel: result.symbolLabel,
+            groupId: result.groupId,
+            scope: input.scope,
+            groupBy: input.groupBy,
+        });
+        if (inboundRecovery) {
+            result.inboundRecovery = inboundRecovery;
+        }
+    }
     const fallbacks = buildSearchGroupFallbacks({
         codebaseRoot: input.codebaseRoot,
         query: input.query,
@@ -394,6 +410,21 @@ export function buildGroupedSymbolSearchResult(input: {
     };
 
     result.recommendedNextAction = buildSearchGroupRecommendedAction(result);
+    if (
+        result.callGraphHint.supported
+        && result.capabilities.callGraphCallers === "low"
+    ) {
+        const inboundRecovery = buildInboundRecoveryAction({
+            codebaseRoot: input.codebaseRoot,
+            symbolLabel: result.symbolLabel,
+            groupId: result.groupId,
+            scope: input.scope,
+            groupBy: input.groupBy,
+        });
+        if (inboundRecovery) {
+            result.inboundRecovery = inboundRecovery;
+        }
+    }
     const fallbacks = buildSearchGroupFallbacks({
         codebaseRoot: input.codebaseRoot,
         query: input.query,

@@ -10,6 +10,7 @@ import type {
     SearchDebugHint,
     SearchFreshnessSummary,
     SearchGroupResult,
+    SearchInboundRecovery,
     SearchRecommendedNextAction,
     SearchResponseEnvelope,
     SearchResultCapabilities,
@@ -199,13 +200,15 @@ export function buildSearchDebugSummary(
                 : debugHint.rankingProvenance.semanticPassesUsed.join("+") || debugHint.retrieval.mode;
     const rerank = debugHint.rerank?.applied
         ? "applied"
-        : debugHint.rerank?.skippedByIdentifierIntent
-            ? "skipped_identifier_intent"
-            : debugHint.rerank?.skippedByScopeDocs
-                ? "skipped_docs_scope"
-                : debugHint.rerank?.enabled === false
-                    ? "skipped"
-                    : "not_attempted";
+        : debugHint.rerank?.skippedByExactPin
+            ? "skipped_exact_pin"
+            : debugHint.rerank?.skippedByIdentifierIntent
+                ? "skipped_identifier_intent"
+                : debugHint.rerank?.skippedByScopeDocs
+                    ? "skipped_docs_scope"
+                    : debugHint.rerank?.enabled === false
+                        ? "skipped"
+                        : "not_attempted";
 
     return {
         retrieval,
@@ -357,6 +360,39 @@ export function buildTopRecommendedRawSearchAction(
     };
 }
 
+/**
+ * Structured inbound recovery for weak call_graph callers.
+ * Query shape is intentional: `must:<id> <id>` (hard filter + free-text copy for ranking).
+ * Never path-pins the callee defining file — that would miss cross-file callers.
+ */
+export function buildInboundRecoveryAction(input: {
+    codebaseRoot: string;
+    symbolLabel?: string;
+    groupId?: string;
+    scope: SearchScope;
+    groupBy: SearchGroupBy;
+}): SearchInboundRecovery | undefined {
+    const constructed = buildInboundNotesOnlySearchQuery({
+        symbolLabel: input.symbolLabel,
+        symbolId: input.groupId,
+    });
+    if (!constructed.query) {
+        return undefined;
+    }
+    return {
+        tool: "search_codebase",
+        args: {
+            path: input.codebaseRoot,
+            query: constructed.query,
+            scope: input.scope,
+            resultMode: "grouped",
+            groupBy: input.groupBy,
+            limit: 5,
+        },
+        reason: "call_graph inbound is advisory/low confidence; verify callers with must: before blast-radius edits",
+    };
+}
+
 export function buildSearchGroupFallbacks(input: {
     codebaseRoot: string;
     query: string;
@@ -366,18 +402,27 @@ export function buildSearchGroupFallbacks(input: {
 }): SearchGroupResult["fallbacks"] | undefined {
     const fallbacks: NonNullable<SearchGroupResult["fallbacks"]> = [];
     if (input.result.callGraphHint.supported) {
+        const inbound = buildInboundRecoveryAction({
+            codebaseRoot: input.codebaseRoot,
+            symbolLabel: input.result.symbolLabel,
+            groupId: input.result.groupId,
+            scope: input.scope,
+            groupBy: input.groupBy,
+        });
+        const query = inbound?.args.query || buildExactSymbolFallbackQuery(input.result, input.query);
         fallbacks.push({
-            when: "call_graph returns no edges or relationship confidence is lower than the edit needs",
+            when: "before treating call_graph inbound edges as empty or complete for blast radius",
             tool: "search_codebase",
             args: {
                 path: input.codebaseRoot,
-                query: buildExactSymbolFallbackQuery(input.result, input.query),
+                query,
                 scope: input.scope,
                 resultMode: "grouped",
                 groupBy: input.groupBy,
                 limit: 5,
             },
-            reason: "Inbound graph coverage can be incomplete; exact lexical search verifies references before impact analysis.",
+            reason: inbound?.reason
+                || "Inbound graph coverage can be incomplete; exact lexical search verifies references before impact analysis.",
         });
     } else if (input.result.navigationFallback?.readSpan) {
         fallbacks.push({

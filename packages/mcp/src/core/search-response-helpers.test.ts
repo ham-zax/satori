@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
     OVERSIZED_SYMBOL_LINE_THRESHOLD,
     buildInboundNotesOnlySearchQuery,
+    buildInboundRecoveryAction,
     buildSearchGroupRecommendedAction,
     buildSearchWarningDetails,
 } from "./search-response-helpers.js";
@@ -119,6 +120,21 @@ test("buildInboundNotesOnlySearchQuery extracts identifier from multi-token labe
     });
     assert.equal(built.query, "must:buildOperatorSummary buildOperatorSummary path:src/search-query-planning.ts");
     assert.equal(built.pathFilterIncluded, true);
+});
+
+test("buildInboundRecoveryAction uses must: without callee path for inbound", () => {
+    const action = buildInboundRecoveryAction({
+        codebaseRoot: "/repo",
+        symbolLabel: "method checkMutation(_action: RuntimeOwnerMutationAction)",
+        scope: "runtime",
+        groupBy: "symbol",
+    });
+    assert.ok(action);
+    assert.equal(action?.tool, "search_codebase");
+    assert.equal(action?.args.path, "/repo");
+    assert.match(action?.args.query || "", /^must:checkMutation checkMutation$/);
+    assert.ok(!action?.args.query.includes("path:"));
+    assert.match(action?.reason || "", /advisory|low confidence|must:/i);
 });
 
 test("buildInboundNotesOnlySearchQuery omits unsafe path and empty identifier", () => {

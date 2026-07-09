@@ -105,6 +105,20 @@ export interface SearchResultFallback {
     reason: string;
 }
 
+/** Executable recovery when call_graph inbound is advisory/low (not blast-radius authority). */
+export interface SearchInboundRecovery {
+    tool: "search_codebase";
+    args: {
+        path: string;
+        query: string;
+        scope: SearchScope;
+        resultMode: "grouped";
+        groupBy: SearchGroupBy;
+        limit: number;
+    };
+    reason: string;
+}
+
 export type SearchCapabilityConfidence = "high" | "medium" | "low" | "unavailable";
 
 export interface SearchResultCapabilities {
@@ -183,6 +197,8 @@ export interface SearchGroupResult {
     navigationFallback?: SearchNavigationFallback;
     nextActions?: SearchNextActions;
     recommendedNextAction?: SearchRecommendedNextAction;
+    /** Prefer this must: search to verify callers when capabilities.callGraphCallers is low. */
+    inboundRecovery?: SearchInboundRecovery;
     fallbacks?: SearchResultFallback[];
     capabilities: SearchResultCapabilities;
     preview: string;
@@ -408,6 +424,8 @@ export interface SearchDebugHint {
         enabledByPolicy: boolean;
         skippedByScopeDocs: boolean;
         skippedByIdentifierIntent: boolean;
+        /** True when top scored hit is already an exact lexical pin / must-satisfied exact match. */
+        skippedByExactPin?: boolean;
         capabilityPresent: boolean;
         rerankerPresent: boolean;
         enabled: boolean;

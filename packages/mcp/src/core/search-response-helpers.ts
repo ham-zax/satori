@@ -1,4 +1,5 @@
 import * as path from "path";
+import { compareContractStrings } from "@zokizuan/satori-core";
 import { truncateContent } from "../utils.js";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 import type { SearchGroupBy, SearchScope } from "./search-constants.js";
@@ -30,7 +31,7 @@ export function buildSearchWarningDetails(warnings: string[]): SearchWarningDeta
         const detail = buildSearchWarningDetail(warning);
         byCode.set(detail.code, detail);
     }
-    return Array.from(byCode.values()).sort((a, b) => a.code.localeCompare(b.code));
+    return Array.from(byCode.values()).sort((a, b) => compareContractStrings(a.code, b.code));
 }
 
 function buildSearchWarningDetail(warning: string): SearchWarningDetail {
@@ -243,10 +244,62 @@ export function buildSearchResultCapabilities(input: {
     };
 }
 
+/** Prefer plain preview reads when full symbol span would open a wall of code (L11/B2). */
+export const OVERSIZED_SYMBOL_LINE_THRESHOLD = 200;
+
+function symbolSpanLineCount(span: SearchSpan | undefined): number | null {
+    if (!span || !Number.isFinite(span.startLine) || !Number.isFinite(span.endLine)) {
+        return null;
+    }
+    return Math.max(0, Number(span.endLine) - Number(span.startLine) + 1);
+}
+
+function isOversizedSymbolSpan(span: SearchSpan | undefined): boolean {
+    const lines = symbolSpanLineCount(span);
+    return lines !== null && lines >= OVERSIZED_SYMBOL_LINE_THRESHOLD;
+}
+
+function resolveAbsoluteReadPath(result: SearchGroupResult): string | undefined {
+    const openPath = result.nextActions?.openSymbol?.args?.path;
+    if (typeof openPath === "string" && openPath.length > 0) {
+        return openPath;
+    }
+    const fallbackPath = result.navigationFallback?.readSpan?.args?.path;
+    if (typeof fallbackPath === "string" && fallbackPath.length > 0) {
+        return fallbackPath;
+    }
+    return undefined;
+}
+
 export function buildSearchGroupRecommendedAction(
     result: SearchGroupResult,
     resultIndex?: number,
 ): SearchRecommendedNextAction | undefined {
+    // Oversized symbols: recommend plain preview read first. Do not smuggle preview into
+    // open_symbol (exact open always expands to full resolved span) or shrink primary span.
+    if (isOversizedSymbolSpan(result.symbolSpan) && result.previewSpan) {
+        const absolutePath = resolveAbsoluteReadPath(result);
+        const previewStart = Number(result.previewSpan.startLine);
+        const previewEnd = Number(result.previewSpan.endLine);
+        if (
+            absolutePath
+            && Number.isFinite(previewStart)
+            && Number.isFinite(previewEnd)
+            && previewEnd >= previewStart
+        ) {
+            return {
+                ...(resultIndex !== undefined ? { resultIndex } : {}),
+                tool: "read_file",
+                args: {
+                    path: absolutePath,
+                    start_line: Math.max(1, previewStart),
+                    end_line: Math.max(1, previewEnd),
+                },
+                reason: "Symbol span is oversized; read the hit preview first before exact open_symbol.",
+            };
+        }
+    }
+
     if (result.nextActions?.openSymbol) {
         return {
             ...(resultIndex !== undefined ? { resultIndex } : {}),
@@ -341,6 +394,35 @@ export function buildSearchGroupFallbacks(input: {
 function buildExactSymbolFallbackQuery(result: SearchGroupResult, originalQuery: string): string {
     const identifier = extractIdentifierFromSymbolLabel(result.symbolLabel) || extractIdentifierFromSymbolLabel(result.groupId);
     return identifier ? `must:${identifier} ${identifier}` : originalQuery;
+}
+
+/**
+ * Build a must: identifier query for notes-only inbound graph recovery (M7/C1).
+ * Never feeds raw multi-token labels into must: (operator tokenizer is whitespace-based).
+ */
+export function buildInboundNotesOnlySearchQuery(input: {
+    symbolLabel?: string;
+    symbolId?: string;
+    file?: string;
+}): { query: string; pathFilterIncluded: boolean } {
+    const identifier =
+        extractIdentifierFromSymbolLabel(input.symbolLabel)
+        || extractIdentifierFromSymbolLabel(input.symbolId);
+    if (!identifier) {
+        return { query: "", pathFilterIncluded: false };
+    }
+    const base = `must:${identifier} ${identifier}`;
+    const file = input.file?.trim() ?? "";
+    const isSafeRepoRelativePath =
+        file.length > 0
+        && !file.startsWith("/")
+        && !file.includes("://")
+        && !file.includes("..")
+        && !/\s/.test(file);
+    if (isSafeRepoRelativePath) {
+        return { query: `${base} path:${file}`, pathFilterIncluded: true };
+    }
+    return { query: base, pathFilterIncluded: false };
 }
 
 export function extractIdentifierFromSymbolLabel(label: string | null | undefined): string | undefined {

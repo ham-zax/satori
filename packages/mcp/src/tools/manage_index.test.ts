@@ -1,9 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { manageIndexTool } from "./manage_index.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { manageIndexTool, MANAGE_INDEX_ACTIONS } from "./manage_index.js";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { ContextMcpConfig } from "../config.js";
 import { ToolContext } from "./types.js";
+
+const TOOLS_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(TOOLS_DIR, "../../../..");
 
 function buildConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig {
     return {
@@ -19,6 +25,100 @@ function buildConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfi
         ...overrides,
     };
 }
+
+test("manage_index public action enum includes repair and full lifecycle set", () => {
+    assert.deepEqual([...MANAGE_INDEX_ACTIONS], [
+        "create",
+        "reindex",
+        "sync",
+        "status",
+        "clear",
+        "repair",
+    ]);
+    assert.equal(MANAGE_INDEX_ACTIONS.includes("repair"), true);
+
+    const schema = manageIndexTool.inputSchemaZod({} as ToolContext);
+    const parsed = schema.safeParse({ action: "repair", path: "/repo" });
+    assert.equal(parsed.success, true);
+
+    const rejected = schema.safeParse({ action: "not_an_action", path: "/repo" });
+    assert.equal(rejected.success, false);
+});
+
+test("manage_index tool description lists every public action including repair", () => {
+    const description = manageIndexTool.description({} as ToolContext);
+    for (const action of MANAGE_INDEX_ACTIONS) {
+        assert.match(description, new RegExp(action));
+    }
+    assert.match(description, /create\/reindex\/sync\/status\/clear\/repair/);
+});
+
+test("manage_index response shape is a JSON envelope in MCP text content", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const ctx = {
+        capabilities,
+        providerRuntime: {
+            requireToolContext: async () => {
+                throw new Error("Connection closed");
+            }
+        },
+        toolHandlers: {
+            handleSyncCodebase: async () => {
+                throw new Error("should not run");
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({
+        action: "sync",
+        path: "/repo",
+    }, ctx);
+
+    const raw = response.content[0].text;
+    assert.equal(typeof raw, "string");
+    const payload = JSON.parse(raw);
+    assert.equal(payload.tool, "manage_index");
+    assert.equal(payload.version, 1);
+    assert.equal(typeof payload.action, "string");
+    assert.equal(typeof payload.path, "string");
+    assert.equal(typeof payload.status, "string");
+    assert.ok(
+        typeof payload.message === "string" || typeof payload.humanText === "string",
+        "envelope must expose message and/or humanText",
+    );
+});
+
+test("public docs and skills list manage_index repair and do not claim text-only responses", () => {
+    const agents = fs.readFileSync(path.join(REPO_ROOT, "AGENTS.md"), "utf8");
+    assert.doesNotMatch(agents, /Text responses for lifecycle actions/);
+    assert.match(agents, /JSON envelope/);
+    assert.match(agents, /repair/);
+    for (const action of MANAGE_INDEX_ACTIONS) {
+        assert.match(agents, new RegExp(action));
+    }
+
+    const e2e = fs.readFileSync(
+        path.join(REPO_ROOT, "docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md"),
+        "utf8",
+    );
+    assert.match(e2e, /create\|reindex\|sync\|status\|clear\|repair/);
+    assert.match(e2e, /JSON envelope \(serialized in `content\[0\]\.text`\)/);
+    assert.doesNotMatch(
+        e2e,
+        /manage_index` action router supports `create\|reindex\|sync\|status\|clear`;/,
+    );
+
+    for (const skillRel of [
+        "packages/cli/assets/skills/satori/SKILL.md",
+        "packages/mcp/assets/skills/satori/SKILL.md",
+    ]) {
+        const skill = fs.readFileSync(path.join(REPO_ROOT, skillRel), "utf8");
+        assert.match(skill, /JSON envelopes/);
+        for (const action of MANAGE_INDEX_ACTIONS) {
+            assert.match(skill, new RegExp(`\`${action}\``));
+        }
+    }
+});
 
 test("manage_index returns structured backend diagnostics when provider runtime fails", async () => {
     const capabilities = new CapabilityResolver(buildConfig());

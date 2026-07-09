@@ -15,7 +15,7 @@ import {
     type VectorBackendDiagnostic,
 } from "./backend-diagnostics.js";
 import type { IndexFingerprint } from "../config.js";
-import { ensureAbsolutePath, trackCodebasePath } from "../utils.js";
+import { absolutePathOrRaw, requireAbsoluteFilesystemPath, trackCodebasePath } from "../utils.js";
 import type { ReindexPreflightResult } from "./working-tree-state.js";
 
 type ToolTextResponse = {
@@ -262,7 +262,17 @@ export class ManageIndexingHandlers {
         let dropSummaryLine = "";
 
         try {
-            const absolutePath = ensureAbsolutePath(codebasePath);
+            const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
+            if (!absolutePathResult.ok) {
+                return this.host.manageResponse(
+                    manageAction,
+                    codebasePath,
+                    "error",
+                    absolutePathResult.message,
+                    preflightOptions,
+                );
+            }
+            const absolutePath = absolutePathResult.absolutePath;
 
             if (!fs.existsSync(absolutePath)) {
                 return this.host.manageResponse(
@@ -551,11 +561,11 @@ export class ManageIndexingHandlers {
                 const humanText = preservesLocalState
                     ? `${vectorBackendDiagnostic.message} ${errorMessage}`
                     : vectorBackendDiagnostic.message;
-                return this.host.manageVectorBackendResponse(manageAction, ensureAbsolutePath(codebasePath), vectorBackendDiagnostic, humanText);
+                return this.host.manageVectorBackendResponse(manageAction, absolutePathOrRaw(codebasePath), vectorBackendDiagnostic, humanText);
             }
             return this.host.manageResponse(
                 manageAction,
-                ensureAbsolutePath(codebasePath),
+                absolutePathOrRaw(codebasePath),
                 "error",
                 `Error starting indexing: ${formatUnknownError(error)}`,
                 preflightOptions,
@@ -565,7 +575,11 @@ export class ManageIndexingHandlers {
 
     public async handleReindexCodebase(args: ReindexCodebaseArgs): Promise<ToolTextResponse> {
         const { path: codebasePath, customExtensions, ignorePatterns, zillizDropCollection, allowUnnecessaryReindex } = args;
-        const absolutePath = ensureAbsolutePath(codebasePath);
+        const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
+        if (!absolutePathResult.ok) {
+            return this.host.manageResponse("reindex", codebasePath, "error", absolutePathResult.message);
+        }
+        const absolutePath = absolutePathResult.absolutePath;
         const runtimeOwnerConflict = await this.host.buildRuntimeOwnerConflictResponseIfBlocked("reindex", absolutePath);
         if (runtimeOwnerConflict) {
             return runtimeOwnerConflict;
@@ -622,7 +636,11 @@ export class ManageIndexingHandlers {
 
         let absolutePath = codebasePath;
         try {
-            absolutePath = ensureAbsolutePath(codebasePath);
+            const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
+            if (!absolutePathResult.ok) {
+                return this.host.manageResponse("repair", codebasePath, "error", absolutePathResult.message);
+            }
+            absolutePath = absolutePathResult.absolutePath;
 
             if (!fs.existsSync(absolutePath)) {
                 return this.host.manageResponse(

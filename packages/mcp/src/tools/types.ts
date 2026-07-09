@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 import { Context, VoyageAIReranker } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "../core/capabilities.js";
@@ -56,4 +57,33 @@ export function formatZodError(toolName: string, error: z.ZodError): string {
     });
 
     return `Error: Invalid arguments for '${toolName}'. ${issues.join('; ')}`;
+}
+
+/** Zod string for public ABSOLUTE filesystem path fields (rejects relative / CWD-dependent inputs). */
+export function absoluteFilesystemPathSchema(description: string) {
+    return z.string().min(1).describe(description).refine(
+        (value) => path.isAbsolute(value),
+        {
+            message: "must be an absolute filesystem path (relative paths are rejected; not resolved against process CWD)",
+        },
+    );
+}
+
+/** Zod string for repo-relative file paths (not absolute; resolved only against a validated root by handlers). */
+export function repoRelativeFilePathSchema(description: string) {
+    return z.string().min(1).describe(description).refine(
+        (value) => {
+            const normalized = value.replace(/\\/g, "/").trim();
+            if (!normalized || path.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
+                return false;
+            }
+            if (normalized.startsWith("../") || normalized === ".." || normalized.includes("/../") || normalized.endsWith("/..")) {
+                return false;
+            }
+            return true;
+        },
+        {
+            message: "must be a repo-relative path inside the codebase root (not absolute; no .. escape segments)",
+        },
+    );
 }

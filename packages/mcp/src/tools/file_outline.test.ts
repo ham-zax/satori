@@ -32,6 +32,36 @@ test('file_outline validates required fields', async () => {
     assert.match(response.content[0]?.text || '', /file/);
 });
 
+test('file_outline rejects relative codebase path', async () => {
+    const response = await fileOutlineTool.execute({
+        path: 'relative/repo',
+        file: 'src/runtime.ts',
+    }, buildContext());
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /absolute filesystem path|Invalid arguments for 'file_outline'/i);
+});
+
+test('file_outline rejects absolute repo-relative file field', async () => {
+    const response = await fileOutlineTool.execute({
+        path: '/repo',
+        file: '/etc/passwd',
+    }, buildContext());
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /repo-relative|Invalid arguments for 'file_outline'/i);
+});
+
+test('file_outline rejects file path escape segments', async () => {
+    const response = await fileOutlineTool.execute({
+        path: '/repo',
+        file: '../secret.ts',
+    }, buildContext());
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /escape|repo-relative|Invalid arguments for 'file_outline'/i);
+});
+
 test('file_outline validates resolveMode=exact requirements', async () => {
     const response = await fileOutlineTool.execute({
         path: '/repo',

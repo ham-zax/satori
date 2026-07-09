@@ -39,10 +39,10 @@ Only these public tools exist:
 | Tool | Contract |
 |------|----------|
 | `list_codebases` | Plain-text readiness buckets; deterministic ordering. |
-| `manage_index` | JSON envelope serialized in MCP text content for lifecycle actions `create\|reindex\|sync\|status\|clear\|repair`. `clear` is destructive and requires explicit user request. `repair` rebuilds local readiness only when vector payload and trusted fingerprint proof match; otherwise use create/reindex. |
-| `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. |
-| `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. |
-| `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. |
+| `manage_index` | JSON envelope serialized in MCP text content for lifecycle actions `create\|reindex\|sync\|status\|clear\|repair`. `path` must be an absolute filesystem path (relative paths rejected). `clear` is destructive and requires explicit user request. `repair` rebuilds local readiness only when vector payload and trusted fingerprint proof match; otherwise use create/reindex. |
+| `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. `path` must be an absolute filesystem path (relative paths rejected; not CWD-resolved). |
+| `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. `path` is absolute codebase root; `file` is repo-relative under that root only. |
+| `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. `path` absolute; `symbolRef.file` repo-relative under that root. |
 | `read_file` | Reads files only under tracked searchable codebase roots (`indexed` / `sync_completed`); not a general host filesystem reader. Plain text by default; annotated mode returns JSON. `open_symbol` resolves exactly and must not guess on ambiguity. Paths must be absolute; symlink/`..` escapes outside the root are denied. |
 
 Do not invent tools, parameters, write capabilities, rerank knobs, or output shapes.

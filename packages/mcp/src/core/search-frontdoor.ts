@@ -1,5 +1,5 @@
 import * as fs from "fs";
-import { ensureAbsolutePath, trackCodebasePath } from "../utils.js";
+import { requireAbsoluteFilesystemPath, trackCodebasePath } from "../utils.js";
 import type { CompletionProofReason } from "./completion-proof.js";
 import type {
     SearchRecommendedNextAction,
@@ -194,7 +194,21 @@ export async function runSearchFrontDoor(
     input: SearchFrontDoorContext,
     host: SearchFrontDoorHost,
 ): Promise<SearchFrontDoorOutcome> {
-    const absolutePath = ensureAbsolutePath(input.path);
+    const absolutePathResult = requireAbsoluteFilesystemPath(input.path, "path");
+    if (!absolutePathResult.ok) {
+        const searchContext = buildSearchContext(input, absolutePathResult.path);
+        return {
+            kind: "blocked",
+            payload: host.buildInvalidSearchRequestPayload(
+                searchContext,
+                absolutePathResult.message,
+                "not_indexed",
+                "not_indexed",
+            ),
+            isError: true,
+        };
+    }
+    const absolutePath = absolutePathResult.absolutePath;
     const searchContext = buildSearchContext(input, absolutePath);
 
     if (!fs.existsSync(absolutePath)) {

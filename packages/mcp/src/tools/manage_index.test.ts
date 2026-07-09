@@ -26,6 +26,27 @@ function buildConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfi
     };
 }
 
+test("manage_index rejects relative path without CWD resolve", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const ctx = {
+        capabilities,
+        toolHandlers: {
+            handleGetIndexingStatus: async () => {
+                throw new Error("handler must not run for relative path");
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({
+        action: "status",
+        path: "relative/repo",
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0].text, /absolute filesystem path|Invalid arguments for 'manage_index'/i);
+    assert.doesNotMatch(response.content[0].text, /handler must not run/);
+});
+
 test("manage_index public action enum includes repair and full lifecycle set", () => {
     assert.deepEqual([...MANAGE_INDEX_ACTIONS], [
         "create",

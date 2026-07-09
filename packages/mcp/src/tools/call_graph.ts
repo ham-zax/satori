@@ -1,9 +1,16 @@
 import { z } from 'zod';
-import { McpTool, ToolContext, formatZodError } from './types.js';
+import { requireAbsoluteFilesystemPath } from '../utils.js';
+import {
+    McpTool,
+    ToolContext,
+    absoluteFilesystemPathSchema,
+    formatZodError,
+    repoRelativeFilePathSchema,
+} from './types.js';
 import { resolveVectorBackedToolContext } from './provider-context.js';
 
 const symbolRefSchema = z.object({
-    file: z.string().min(1).describe('Relative file path from the codebase root.'),
+    file: repoRelativeFilePathSchema('Repo-relative file path from the codebase root (not absolute; resolved only against that root).'),
     symbolId: z.string().min(1).describe('Symbol identifier from search_codebase.callGraphHint. On symbol-owned flows, this should carry the symbolInstanceId.'),
     symbolLabel: z.string().optional().describe('Optional symbol display label.'),
     span: z.object({
@@ -13,7 +20,7 @@ const symbolRefSchema = z.object({
 });
 
 const callGraphInputSchema = z.object({
-    path: z.string().min(1).describe('ABSOLUTE path to the indexed codebase root (or subdirectory).'),
+    path: absoluteFilesystemPathSchema('ABSOLUTE filesystem path to the indexed codebase root or subdirectory (relative paths are rejected).'),
     symbolRef: symbolRefSchema.describe('Symbol reference from a grouped search result callGraphHint.'),
     direction: z.enum(['callers', 'callees', 'both']).default('both').optional().describe('Traversal direction from the starting symbol.'),
     depth: z.number().int().min(1).max(3).default(1).optional().describe('Traversal depth (max 3).'),
@@ -47,15 +54,28 @@ export const callGraphTool: McpTool = {
             };
         }
 
+        const absolutePathResult = requireAbsoluteFilesystemPath(parsed.data.path, 'path');
+        if (!absolutePathResult.ok) {
+            return {
+                content: [{ type: 'text', text: absolutePathResult.message }],
+                isError: true,
+            };
+        }
+
+        const input = {
+            ...parsed.data,
+            path: absolutePathResult.absolutePath,
+        };
+
         const executionContext = await resolveVectorBackedToolContext(ctx, {
             tool: 'call_graph',
-            path: parsed.data.path,
-            symbolRef: parsed.data.symbolRef,
+            path: input.path,
+            symbolRef: input.symbolRef,
         });
         if (!executionContext.ok) {
             return executionContext.response;
         }
 
-        return executionContext.context.toolHandlers.handleCallGraph(parsed.data);
+        return executionContext.context.toolHandlers.handleCallGraph(input);
     }
 };

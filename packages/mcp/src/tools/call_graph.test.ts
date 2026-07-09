@@ -3,6 +3,48 @@ import assert from 'node:assert/strict';
 import { callGraphTool } from './call_graph.js';
 import { ToolContext } from './types.js';
 
+test('call_graph rejects relative path', async () => {
+    const ctx = {
+        toolHandlers: {
+            handleCallGraph: async () => {
+                throw new Error('handler must not run');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: 'relative/repo',
+        symbolRef: {
+            file: 'src/runtime.ts',
+            symbolId: 'sym_runtime_run'
+        },
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /absolute filesystem path|Invalid arguments for 'call_graph'/i);
+});
+
+test('call_graph rejects absolute symbolRef.file', async () => {
+    const ctx = {
+        toolHandlers: {
+            handleCallGraph: async () => {
+                throw new Error('handler must not run');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: '/repo',
+        symbolRef: {
+            file: '/abs/runtime.ts',
+            symbolId: 'sym_runtime_run'
+        },
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /repo-relative|Invalid arguments for 'call_graph'/i);
+});
+
 test('call_graph normalizes direction bidirectional to both before validation/dispatch', async () => {
     let receivedArgs: Record<string, unknown> | undefined;
     const ctx = {

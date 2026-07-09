@@ -43,8 +43,8 @@ batch_A_evidence_status:
   - docs/remediation/satori_remediation_backlog.v2.yaml
   scale_note: 'Evidence E0–E3 investigation; E4–E5 only after patch+proof. Patch readiness P0=not patchable … P2=patch-ready … P5=closed.'
   ranking_rule: Only E2+ scored; patch only if P2+
-  recommended_next_patch: F2_final_proof_then_F9_design
-  recommended_next_patch_reason: 'F2 patched_awaiting_final_proof (cli SSOT; mcp install hard-deprecated). After close: F9 parser fallback surface design. F3 parked.'
+  recommended_next_patch: F9_design
+  recommended_next_patch_reason: 'Closed fixed_proven: F1 F2 F4 F5 F7 F8 F10 F11; accepted_risk F6. Next: F9 parser fallback visibility design. F3 parked.'
   scores_desc:
   - 'F4 score=9 E4/P5 closed fixed_proven'
   - 'F11 score=8 E4/P5 closed fixed_proven'
@@ -53,7 +53,7 @@ batch_A_evidence_status:
   - 'F7 score=E4/P5 closed fixed_proven (lifecycle.public-tools.test.ts)'
   - 'F10 score=E4/P5 closed fixed_proven (hygiene: delete noise; process docs → docs/remediation/)'
   - 'F8 score=E4/P5 closed fixed_proven (doctor packageVersions table)'
-  - 'F2 score=6 E3/P4 patched_awaiting_final_proof (installer SSOT)'
+  - 'F2 score=6 E4/P5 closed fixed_proven (installer SSOT)'
   - 'F9 E2/P1 open (surface design; not patched)'
 findings:
 - id: F1
@@ -217,7 +217,7 @@ findings:
     regression_risk: 3
     patch_size_penalty: 2
     total_priority_score: 6
-  closure_decision: open — patched_awaiting_final_proof; close fixed_proven after final proof
+  closure_decision: fixed_proven
 - id: F5
   claim: Bare localeCompare may break deterministic ordering across locales/OSes
   risk_class: correctness

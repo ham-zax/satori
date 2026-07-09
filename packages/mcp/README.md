@@ -187,7 +187,7 @@ Return a sidecar-backed symbol outline for one file, including call_graph jump h
 
 ### `read_file`
 
-Read file content from the local filesystem, with optional 1-based inclusive line ranges and safe truncation.
+Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). The path must be absolute and its canonical real path must lie inside a tracked root with status `indexed` or `sync_completed`. Optional 1-based inclusive line ranges and safe truncation are supported.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|

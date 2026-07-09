@@ -43,7 +43,7 @@ Only these public tools exist:
 | `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. |
 | `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. |
 | `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. |
-| `read_file` | Plain text by default; annotated mode returns JSON. `open_symbol` resolves exactly and must not guess on ambiguity. |
+| `read_file` | Reads files only under tracked searchable codebase roots (`indexed` / `sync_completed`); not a general host filesystem reader. Plain text by default; annotated mode returns JSON. `open_symbol` resolves exactly and must not guess on ambiguity. Paths must be absolute; symlink/`..` escapes outside the root are denied. |
 
 Do not invent tools, parameters, write capabilities, rerank knobs, or output shapes.
 

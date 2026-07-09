@@ -68,8 +68,15 @@ type ReadFileIndexingBlock = {
     lastUpdated: string | null;
 };
 
+type ToolTextResponse = {
+    content: Array<{ type: "text"; text: string }>;
+    isError?: boolean;
+};
+
 const READ_FILE_DISCOVERY_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed', 'indexing']);
 const READ_FILE_RESOLVE_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed']);
+/** Statuses that may serve file content via read_file. */
+const READ_FILE_CONTENT_ALLOW_STATUSES = new Set<ReadFileSearchableStatus>(['indexed', 'sync_completed']);
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -80,6 +87,46 @@ function readFileErrorResponse(payload: ReadFileOpenSymbolResponseEnvelope) {
         content: [{
             type: "text" as const,
             text: JSON.stringify(payload, null, 2)
+        }],
+        isError: true
+    };
+}
+
+function outsideIndexedRootResponse(requestedPath: string): ToolTextResponse {
+    return {
+        content: [{
+            type: "text",
+            text: JSON.stringify({
+                status: "outside_indexed_root",
+                reason: "outside_indexed_root",
+                path: requestedPath,
+                message: `Error: path '${requestedPath}' is not under an indexed/searchable codebase root. Use list_codebases to find tracked roots, or manage_index action=create to index this repository first, then retry with an absolute path under that root.`,
+                hints: {
+                    nextSteps: [
+                        { tool: "list_codebases", args: {} }
+                    ]
+                }
+            }, null, 2)
+        }],
+        isError: true
+    };
+}
+
+function relativePathRejectedResponse(requestedPath: string): ToolTextResponse {
+    return {
+        content: [{
+            type: "text",
+            text: JSON.stringify({
+                status: "outside_indexed_root",
+                reason: "relative_path_not_allowed",
+                path: requestedPath,
+                message: `Error: path '${requestedPath}' must be an absolute path under an indexed/searchable codebase root.`,
+                hints: {
+                    nextSteps: [
+                        { tool: "list_codebases", args: {} }
+                    ]
+                }
+            }, null, 2)
         }],
         isError: true
     };
@@ -101,6 +148,24 @@ function refreshSnapshotState(ctx: ToolContext): void {
     }
 }
 
+/**
+ * Resolve to an absolute path and, when the target exists, its real path
+ * (follows symlinks). Non-existent paths keep path.resolve output so `..`
+ * segments are still collapsed.
+ */
+function canonicalizeFilesystemPath(inputPath: string): string {
+    const resolved = path.resolve(inputPath);
+    try {
+        return fs.realpathSync.native(resolved);
+    } catch {
+        return resolved;
+    }
+}
+
+function isPathInsideRoot(targetPath: string, rootPath: string): boolean {
+    return targetPath === rootPath || targetPath.startsWith(`${rootPath}${path.sep}`);
+}
+
 function collectCodebaseCandidatesForFile(
     absolutePath: string,
     ctx: ToolContext,
@@ -114,13 +179,14 @@ function collectCodebaseCandidatesForFile(
         return [];
     }
 
+    const canonicalTarget = canonicalizeFilesystemPath(absolutePath);
     const candidates: ReadFileCodebaseCandidate[] = [];
     for (const item of allCodebases) {
         if (!item || typeof item.path !== "string") {
             continue;
         }
-        const candidatePath = ensureAbsolutePath(item.path);
-        if (!(absolutePath === candidatePath || absolutePath.startsWith(`${candidatePath}${path.sep}`))) {
+        const candidatePath = canonicalizeFilesystemPath(ensureAbsolutePath(item.path));
+        if (!isPathInsideRoot(canonicalTarget, candidatePath)) {
             continue;
         }
         const status = toReadFileSearchableStatus(item.info?.status);
@@ -132,6 +198,15 @@ function collectCodebaseCandidatesForFile(
 
     candidates.sort((a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path));
     return candidates;
+}
+
+/**
+ * Returns the longest searchable root that contains the canonical path, or undefined.
+ * Only `indexed` and `sync_completed` roots may serve content.
+ */
+function resolveContentAllowedRoot(canonicalPath: string, ctx: ToolContext): string | undefined {
+    const candidates = collectCodebaseCandidatesForFile(canonicalPath, ctx, READ_FILE_CONTENT_ALLOW_STATUSES);
+    return candidates[0]?.path;
 }
 
 function buildRootDiscoveryNextSteps(absolutePath: string, ctx: ToolContext): Array<{ tool: string; args: Record<string, unknown> }> {
@@ -193,6 +268,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
         return undefined;
     }
 
+    const canonicalTarget = canonicalizeFilesystemPath(absolutePath);
     const candidates: Array<{
         codebaseRoot: string;
         info: { indexingPercentage: number; lastUpdated: string };
@@ -203,11 +279,11 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
         if (!item || typeof item.path !== "string" || !item.info || item.info.status !== "indexing") {
             continue;
         }
-        const codebaseRoot = ensureAbsolutePath(item.path);
+        const codebaseRoot = canonicalizeFilesystemPath(ensureAbsolutePath(item.path));
         candidates.push({
             codebaseRoot,
             info: item.info,
-            matches: absolutePath === codebaseRoot || absolutePath.startsWith(`${codebaseRoot}${path.sep}`)
+            matches: isPathInsideRoot(canonicalTarget, codebaseRoot)
         });
     }
 
@@ -231,7 +307,8 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
 
 export const readFileTool: McpTool = {
     name: "read_file",
-    description: () => "Read file content from the local filesystem, with optional 1-based inclusive line ranges and safe truncation.",
+    description: () =>
+        "Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). Requires an absolute path whose canonical real path is inside a tracked root with status indexed or sync_completed. Supports optional 1-based inclusive line ranges and safe truncation.",
     inputSchemaZod: () => readFileInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});
@@ -249,36 +326,17 @@ export const readFileTool: McpTool = {
         const mode = input.mode || "plain";
 
         try {
-            const absolutePath = ensureAbsolutePath(input.path);
+            if (!path.isAbsolute(input.path)) {
+                return relativePathRejectedResponse(input.path);
+            }
+
+            // Collapse . / .. segments; realpath when the path (or a prefix) exists.
+            const resolvedPath = path.resolve(input.path);
+            const absolutePath = canonicalizeFilesystemPath(resolvedPath);
             const wantsStructuredError = mode === "annotated" || Boolean(input.open_symbol);
 
-            if (!fs.existsSync(absolutePath)) {
-                if (wantsStructuredError) {
-                    return readFileErrorResponse({
-                        status: "not_found",
-                        message: `Error: File '${absolutePath}' not found.`,
-                    });
-                }
-                return {
-                    content: [{ type: "text", text: `Error: File '${absolutePath}' not found.` }],
-                    isError: true
-                };
-            }
-
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isFile()) {
-                if (wantsStructuredError) {
-                    return readFileErrorResponse({
-                        status: "not_found",
-                        message: `Error: '${absolutePath}' is not a file.`,
-                    });
-                }
-                return {
-                    content: [{ type: "text", text: `Error: '${absolutePath}' is not a file.` }],
-                    isError: true
-                };
-            }
-
+            // Fail closed: deny content access outside searchable roots before any content read.
+            // Indexing roots are handled next with not_ready (still no content).
             const indexingBlock = resolveIndexingBlockForFile(absolutePath, ctx);
             if (indexingBlock) {
                 return {
@@ -309,6 +367,38 @@ export const readFileTool: McpTool = {
                             }
                         }, null, 2)
                     }]
+                };
+            }
+
+            const allowedRoot = resolveContentAllowedRoot(absolutePath, ctx);
+            if (!allowedRoot) {
+                return outsideIndexedRootResponse(absolutePath);
+            }
+
+            if (!fs.existsSync(absolutePath)) {
+                if (wantsStructuredError) {
+                    return readFileErrorResponse({
+                        status: "not_found",
+                        message: `Error: File '${absolutePath}' not found.`,
+                    });
+                }
+                return {
+                    content: [{ type: "text", text: `Error: File '${absolutePath}' not found.` }],
+                    isError: true
+                };
+            }
+
+            const stat = fs.statSync(absolutePath);
+            if (!stat.isFile()) {
+                if (wantsStructuredError) {
+                    return readFileErrorResponse({
+                        status: "not_found",
+                        message: `Error: '${absolutePath}' is not a file.`,
+                    });
+                }
+                return {
+                    content: [{ type: "text", text: `Error: '${absolutePath}' is not a file.` }],
+                    isError: true
                 };
             }
 

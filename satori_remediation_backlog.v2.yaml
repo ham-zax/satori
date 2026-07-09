@@ -43,13 +43,14 @@ batch_A_evidence_status:
   - satori_remediation_backlog.v2.yaml
   scale_note: 'Evidence E0–E3 investigation; E4–E5 only after patch+proof. Patch readiness P0=not patchable … P2=patch-ready … P5=closed.'
   ranking_rule: Only E2+ scored; patch only if P2+
-  recommended_next_patch: rank_remainder_after_F4
-  recommended_next_patch_reason: F4 closed fixed_proven E4/P5; re-rank remaining P1 findings (F11/F6/F5/F2) for next single patch.
+  recommended_next_patch: batch_B_remainder
+  recommended_next_patch_reason: 'F1/F4/F11/F5 fixed_proven; F7 lifecycle harness added; F6 AGENTS trust calibration closed accepted_risk. Next: F8/F9/F10 operability or F2 SSOT decision; F3 parked.'
   scores_desc:
   - 'F4 score=9 E4/P5 closed fixed_proven'
-  - 'F11 score=8 E2/P1 path policy needs product choice'
-  - 'F6 score=8 E2/P1 docs/accepted_risk candidate not algorithm'
-  - 'F5 score=7 E2/P1 need adversarial tests then merkle-first'
+  - 'F11 score=8 E4/P5 closed fixed_proven'
+  - 'F5 score=7 E4/P5 closed fixed_proven'
+  - 'F6 score=8 E3/P5 closed accepted_risk (AGENTS+skill trust calibration)'
+  - 'F7 score= lifecycle harness E4/P5 closed fixed_proven'
   - 'F2 score=6 E2/P1 need SSOT decision + drift guard'
 findings:
 - id: F1
@@ -286,19 +287,20 @@ findings:
   risk_class: contract
   moving_resource: relationship edges and confidence signals
   boundary: agent-visible graph context must communicate uncertainty and limits
-  current_status: verified_partial_mitigations
-  evidence_grade: E2
-  patch_readiness: P1
+  current_status: closed
+  evidence_grade: E3
+  patch_readiness: P5
   owner: main-agent
   batch: A
   dependencies: []
-  verdict: partially_verified
+  closure_type: accepted_risk
+  verdict: accepted_risk_with_docs
   notes:
   - CALLS v0 is intentionally name-based (documented in E2E + tool description).
   - Default getGraphNeighbors allows high only; low skipped with RELATIONSHIP_LOW_CONFIDENCE_SKIPPED; import-backed promote to medium.
   - Skills already say do not treat call_graph as sole blast-radius authority.
   - Residual risk: high same-file false edges; agents ignoring notes — not missing filter.
-  - Candidate closure path accepted_risk if AGENTS explicitly states heuristic + skill already sufficient; else small docs/warning patch only.
+  - 'Closed 2026-07-09: AGENTS.md tool table + runtime + edit-safety lines state call_graph is heuristic/advisory; skill already had blast-radius caveat. No algorithm rewrite.'
   - Do not open graph algorithm rewrite in this batch.
   evidence_required:
     source_locations:
@@ -426,10 +428,14 @@ findings:
   risk_class: correctness
   moving_resource: MCP server lifecycle and tool envelope behavior
   boundary: unit-tested handlers must also work through realistic lifecycle path
-  current_status: evidence_needed
-  evidence_grade: E0
-  patch_readiness: P0
+  current_status: closed
+  evidence_grade: E4
+  patch_readiness: P5
   batch: B
+  closure_type: fixed_proven
+  notes:
+  - 'Closed 2026-07-09: packages/mcp/src/tools/lifecycle.public-tools.test.ts — fake embed + in-memory VDB; index → manage status → list_codebases → search_codebase (auth content) → file_outline → read_file → manage clear via public tool execute.'
+  - InMemory VDB must honor id== filter so completion-marker clear does not wipe chunks (mirrors core test harness).
   evidence_required:
     source_locations:
     - tests/integration/**

@@ -4,6 +4,11 @@ node_modules/
 .pnp.js
 
 temp*.md
+# Local scratch / operator notes (do not re-commit)
+command_local.txt
+*.backup.*
+AGENTS.md.backup*
+*_local.txt
 
 # Production builds
 dist/

@@ -1,1 +1,0 @@
-Set-Location "E:\MyDocuments\satori\packages\core"; pnpm run build; Set-Location "E:\MyDocuments\satori\packages\mcp"; pnpm run build; npm link

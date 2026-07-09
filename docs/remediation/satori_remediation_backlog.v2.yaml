@@ -39,20 +39,21 @@ recommended_batches:
 batch_A_evidence_status:
   investigated_at: '2026-07-09'
   control_docs:
-  - Satori_Evidence_Gated_Remediation_System_v2.md
-  - satori_remediation_backlog.v2.yaml
+  - docs/remediation/Satori_Evidence_Gated_Remediation_System_v2.md
+  - docs/remediation/satori_remediation_backlog.v2.yaml
   scale_note: 'Evidence E0–E3 investigation; E4–E5 only after patch+proof. Patch readiness P0=not patchable … P2=patch-ready … P5=closed.'
   ranking_rule: Only E2+ scored; patch only if P2+
-  recommended_next_patch: F10
-  recommended_next_patch_reason: 'Closed fixed_proven: F1 F4 F5 F7 F11; closed accepted_risk: F6. Open gauges/ownership: F10 (next hygiene) → F8 doctor versions → F2 SSOT decision → F9 design. F3 parked. Ledger cleaned 2026-07-09.'
+  recommended_next_patch: F8
+  recommended_next_patch_reason: 'Closed fixed_proven: F1 F4 F5 F7 F10 F11; closed accepted_risk: F6. Next gauge: F8 doctor/version visibility. Then F2 SSOT decision, F9 design. F3 parked.'
   scores_desc:
   - 'F4 score=9 E4/P5 closed fixed_proven'
   - 'F11 score=8 E4/P5 closed fixed_proven'
   - 'F5 score=7 E4/P5 closed fixed_proven (merkle-only; search ranking deferred)'
   - 'F6 score=8 E3/P5 closed accepted_risk (AGENTS+skill trust calibration)'
   - 'F7 score=E4/P5 closed fixed_proven (lifecycle.public-tools.test.ts)'
+  - 'F10 score=E4/P5 closed fixed_proven (hygiene: delete noise; process docs → docs/remediation/)'
   - 'F2 score=6 E2/P1 need SSOT decision + drift guard'
-  - 'F8/F9/F10 E2/P1 open (coordinator evidence; not patched)'
+  - 'F8/F9 E2/P1 open (not patched)'
 findings:
 - id: F1
   claim: read_file could read arbitrary host files outside indexed roots
@@ -531,13 +532,16 @@ findings:
   risk_class: hygiene
   moving_resource: repository top-level documentation signal
   boundary: authoritative docs should be clear; temporary notes should not compete
-  current_status: verified_not_patched
-  evidence_grade: E2
-  patch_readiness: P1
+  current_status: closed
+  evidence_grade: E4
+  patch_readiness: P5
+  closure_type: fixed_proven
+  closure_decision: fixed_proven
   batch: B
   notes:
   - 'Coordinator investigation elevated E2/P1: temp/backup/process files at repo root compete with authoritative orientation docs.'
-  - Not patched yet. Recommended next hygiene-only patch (delete/move/gitignore; no runtime/docs rewrite).
+  - 'Patch 2026-07-09: deleted command_local.txt + AGENTS.md.backup.withGITNEXUS; moved process control docs to docs/remediation/; root ARCHITECTURE.md remains canonical with pointer from docs/ARCHITECTURE.md; gitignore future temp/backup/local notes.'
+  - 'temp.md/tempV2.md were already untracked via temp*.md ignore.'
   evidence_required:
     source_locations:
     - root tree listing

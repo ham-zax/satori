@@ -74,6 +74,66 @@ test("manage_index tool description lists every public action including repair",
     assert.match(description, /create\/reindex\/sync\/status\/clear\/repair/);
 });
 
+test("manage_index status envelope includes symbolQuality observed registry field", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const statusHandlers = {
+        handleGetIndexingStatus: async () => ({
+            content: [{
+                type: "text",
+                text: JSON.stringify({
+                    tool: "manage_index",
+                    version: 1,
+                    action: "status",
+                    path: "/repo",
+                    status: "ok",
+                    message: "indexed",
+                    humanText: "indexed",
+                    symbolQuality: {
+                        status: "symbol_sparse",
+                        basis: "symbol_registry",
+                        eligibleFiles: 2,
+                        filesWithNonFileSymbols: 0,
+                        fileOwnerOnlyFiles: 2,
+                        nonFileSymbolCount: 0,
+                        languages: [],
+                        message: "Index is searchable but eligible files mostly lack non-file symbols.",
+                    },
+                }),
+            }],
+        }),
+    };
+    const ctx = {
+        capabilities,
+        providerRuntime: {
+            requireToolContext: async () => ({
+                capabilities,
+                runtimeFingerprint: {
+                    embeddingProvider: "VoyageAI",
+                    embeddingModel: "voyage-4-large",
+                    embeddingDimension: 1024,
+                    vectorStoreProvider: "Milvus",
+                    schemaVersion: "hybrid_v3",
+                },
+                toolHandlers: statusHandlers,
+                context: {},
+            }),
+        },
+        toolHandlers: statusHandlers,
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({
+        action: "status",
+        path: "/repo",
+    }, ctx);
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.tool, "manage_index");
+    assert.equal(payload.action, "status");
+    assert.ok(payload.symbolQuality);
+    assert.equal(payload.symbolQuality.basis, "symbol_registry");
+    assert.equal(payload.symbolQuality.status, "symbol_sparse");
+    assert.equal(typeof payload.symbolQuality.message, "string");
+});
+
 test("manage_index response shape is a JSON envelope in MCP text content", async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const ctx = {

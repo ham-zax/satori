@@ -38,8 +38,8 @@ Only these public tools exist:
 
 | Tool | Contract |
 |------|----------|
-| `list_codebases` | Plain-text readiness buckets; deterministic ordering. |
-| `manage_index` | JSON envelope serialized in MCP text content for lifecycle actions `create\|reindex\|sync\|status\|clear\|repair`. `path` must be an absolute filesystem path (relative paths rejected). `clear` is destructive and requires explicit user request. `repair` rebuilds local readiness only when vector payload and trusted fingerprint proof match; otherwise use create/reindex. |
+| `list_codebases` | Plain-text readiness buckets; deterministic ordering. Ready roots include compact `symbolQuality=<status>` (observed registry evidence). |
+| `manage_index` | JSON envelope serialized in MCP text content for lifecycle actions `create\|reindex\|sync\|status\|clear\|repair`. `path` must be an absolute filesystem path (relative paths rejected). `clear` is destructive and requires explicit user request. `repair` rebuilds local readiness only when vector payload and trusted fingerprint proof match; otherwise use create/reindex. `status` may include structured `symbolQuality` (observed symbol richness from the registry — not parser-cause diagnosis). |
 | `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. `path` must be an absolute filesystem path (relative paths rejected; not CWD-resolved). |
 | `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. `path` is absolute codebase root; `file` is repo-relative under that root only. |
 | `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. `path` absolute; `symbolRef.file` repo-relative under that root. CALLS v0 is name-based/heuristic with confidence notes — not sole authority for blast radius or edit scope; verify with `rg`, tests, or direct references. |
@@ -49,6 +49,7 @@ Do not invent tools, parameters, write capabilities, rerank knobs, or output sha
 
 ## Tool Runtime Rules
 - Default feature-navigation path: `search_codebase` -> `file_outline` -> `call_graph` when supported -> `read_file(open_symbol)`.
+- `indexed` / ready lifecycle means searchable-readable, not automatically symbol-rich. Check `manage_index status` `symbolQuality` (or list_codebases `symbolQuality=…`) before treating outline/call_graph as rich navigation evidence. Values are observed registry evidence (`symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown`), not a diagnosis of tree-sitter fallback cause.
 - `call_graph` is advisory context only: do not treat inbound/outbound edges as sole blast-radius authority; confirm impact with scoped search, tests, or direct references before editing.
 - If a grouped search result has `callGraphHint.supported=false`, treat `navigationFallback` as authoritative and call tools from its args. Do not reconstruct spans from prose.
 - Prefer `recommendedNextAction` when present; inspect `warnings[].action`, `capabilities`, and result `fallbacks` before deciding the next proof step.

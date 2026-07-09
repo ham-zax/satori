@@ -2,7 +2,10 @@ import * as fs from "fs";
 import {
     COLLECTION_LIMIT_MESSAGE,
     RemoteCollectionDeletePendingError,
+    formatSymbolQualityMarker,
+    resolveSymbolQualitySummary,
     type Context,
+    type SymbolQualitySummary,
 } from "@zokizuan/satori-core";
 import type { SnapshotCorruptionWarning, SnapshotManager } from "./snapshot.js";
 import type { SyncManager } from "./sync.js";
@@ -464,6 +467,18 @@ export class ManageMaintenanceHandlers {
                 warnings.push(WARNING_CODES.IGNORE_POLICY_PROBE_FAILED);
             }
 
+            // F9: observed symbol quality from registry (not parser-cause diagnosis).
+            let symbolQuality: SymbolQualitySummary | undefined;
+            // Attach observed quality for lifecycle statuses that refer to a real root path.
+            if (envelopeStatus === "ok" || envelopeStatus === "not_ready" || envelopeStatus === "not_indexed") {
+                symbolQuality = await resolveSymbolQualitySummary({
+                    normalizedRootPath: envelopePath,
+                });
+                if (envelopeStatus === "ok") {
+                    statusMessage += `\n🧭 ${formatSymbolQualityMarker(symbolQuality)}: ${symbolQuality.message}`;
+                }
+            }
+
             const pathInfo = codebasePath !== envelopePath
                 ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${envelopePath}'`
                 : "";
@@ -490,6 +505,7 @@ export class ManageMaintenanceHandlers {
                     reason: envelopeReason,
                     hints: envelopeHints,
                     warnings,
+                    ...(symbolQuality ? { symbolQuality } : {}),
                 },
             );
         } catch (error: unknown) {

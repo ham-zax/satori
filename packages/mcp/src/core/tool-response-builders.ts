@@ -91,6 +91,7 @@ export class ToolResponseBuilders {
             hints?: Record<string, unknown>;
             preflight?: ReindexPreflightResult;
             message?: string;
+            symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
         } = {},
     ): ManageIndexResponseEnvelope {
         const envelope: ManageIndexResponseEnvelope = {
@@ -121,6 +122,9 @@ export class ToolResponseBuilders {
                 probeFailed: options.preflight.probeFailed === true,
             };
         }
+        if (options.symbolQuality) {
+            envelope.symbolQuality = options.symbolQuality;
+        }
         return envelope;
     }
 
@@ -147,6 +151,7 @@ export class ToolResponseBuilders {
             hints?: Record<string, unknown>;
             preflight?: ReindexPreflightResult;
             message?: string;
+            symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
         } = {},
     ): { content: Array<{ type: "text"; text: string }> } {
         return this.manageResponseFromEnvelope(

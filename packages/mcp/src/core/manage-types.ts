@@ -1,3 +1,4 @@
+import type { SymbolQualitySummary } from "@zokizuan/satori-core";
 import { WarningCode } from "./warnings.js";
 
 /** Public manage_index action set (SSOT for schema, docs, and contract tests). */
@@ -68,4 +69,6 @@ export interface ManageIndexResponseEnvelope {
         confidence: "high" | "low";
         probeFailed?: boolean;
     };
+    /** Observed symbol quality from registry (F9); not parser-cause diagnosis. */
+    symbolQuality?: SymbolQualitySummary;
 }

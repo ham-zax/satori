@@ -220,6 +220,25 @@ test('list_codebases keeps ready membership stable when marker probe fails', asy
     assert.deepEqual(extractPaths(sections.get('Failed') || []), []);
 });
 
+test('list_codebases renders compact symbolQuality marker on ready roots', async () => {
+    const entries = [
+        { path: '/repo/ready-a', info: { status: 'indexed' } },
+        { path: '/repo/ready-b', info: { status: 'sync_completed' } },
+    ];
+    const response = await runListCodebases(entries, {
+        '/repo/ready-a': createMarker('/repo/ready-a'),
+        '/repo/ready-b': createMarker('/repo/ready-b'),
+    });
+    const text = response.content[0]?.text || '';
+    assert.match(text, /`\/repo\/ready-a` symbolQuality=unknown/);
+    assert.match(text, /`\/repo\/ready-b` symbolQuality=unknown/);
+    // Ready bucket still sorted by path
+    const readySection = (text.split('### Ready')[1] || '').split('###')[0] || '';
+    const aIdx = readySection.indexOf('/repo/ready-a');
+    const bIdx = readySection.indexOf('/repo/ready-b');
+    assert.ok(aIdx >= 0 && bIdx > aIdx);
+});
+
 test('list_codebases annotates ready entries when completion proof probe fails', async () => {
     const entries = [
         { path: '/repo/a', info: { status: 'indexed' } }

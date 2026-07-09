@@ -39,7 +39,7 @@ Only these public tools exist:
 | Tool | Contract |
 |------|----------|
 | `list_codebases` | Plain-text readiness buckets; deterministic ordering. |
-| `manage_index` | Text responses for lifecycle actions. `clear` is destructive and requires explicit user request. |
+| `manage_index` | JSON envelope serialized in MCP text content for lifecycle actions `create\|reindex\|sync\|status\|clear\|repair`. `clear` is destructive and requires explicit user request. `repair` rebuilds local readiness only when vector payload and trusted fingerprint proof match; otherwise use create/reindex. |
 | `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. |
 | `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. |
 | `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. |

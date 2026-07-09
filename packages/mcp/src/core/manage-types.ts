@@ -1,6 +1,16 @@
 import { WarningCode } from "./warnings.js";
 
-export type ManageIndexAction = "create" | "reindex" | "sync" | "status" | "clear" | "repair";
+/** Public manage_index action set (SSOT for schema, docs, and contract tests). */
+export const MANAGE_INDEX_ACTIONS = [
+    "create",
+    "reindex",
+    "sync",
+    "status",
+    "clear",
+    "repair",
+] as const;
+
+export type ManageIndexAction = (typeof MANAGE_INDEX_ACTIONS)[number];
 
 export type ManageIndexStatus =
     | "ok"

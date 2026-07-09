@@ -218,7 +218,7 @@ Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish ac
 | Tool | Use it for |
 |---|---|
 | `list_codebases` | See indexed roots and their lifecycle buckets |
-| `manage_index` | Create, sync, reindex, inspect status, or explicitly clear indexes |
+| `manage_index` | JSON-envelope lifecycle: create, reindex, sync, status, clear, repair (clear is destructive; repair only when fingerprint/payload proof allows) |
 | `search_codebase` | Runtime-first plain-English semantic discovery with exact operators, grouping, freshness, structured warnings, recommended actions, and navigation hints |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing |
 | `call_graph` | Traverse bounded caller/callee context from a search-provided `symbolRef` when relationship-backed navigation is ready |

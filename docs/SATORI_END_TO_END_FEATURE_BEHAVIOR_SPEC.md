@@ -15,7 +15,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Language capability routing is explicit: `search` means text retrieval eligibility, `symbols`/legacy `symbolMetadata` means extracted symbol metadata, `owner` means extracted source-symbol ownership beyond synthesized file fallback, and `call_graph` uses relationship-backed navigation as the canonical path. Legacy `callGraphBuild`/`callGraphQuery` are no longer part of steady-state runtime navigation behavior.
 - Symbol-owned retrieval contracts now distinguish stable-ish `symbolKey` from exact snapshot `symbolInstanceId`; core writes compatible symbol registry sidecars for completed full indexes, assigns `ownerSymbolKey`/`ownerSymbolInstanceId` to indexed chunks, and after incremental changes reuses changed-file symbol output plus the previous compatible registry to rewrite canonical navigation sidecars and SQLite without re-splitting unchanged files. If changed-file indexing stops early, navigation state is cleared instead of publishing a mixed generation.
 - Completed full indexes also import an additive `navigation.sqlite` cache under the same navigation root as the JSON sidecars; JSON remains canonical, runtime navigation still serves JSON by default, the default shared runtime store can enable once-per-root SQLite parity warnings in live runtime with `SATORI_NAVIGATION_DUAL_READ=1`, and that same shared runtime store can exercise SQLite-backed reads with `SATORI_NAVIGATION_BACKEND=sqlite` only after proving parity with the canonical JSON symbol registry and relationship sidecars. If canonical JSON is missing or incompatible, SQLite is not allowed to become truth; if SQLite is missing, stale, incompatible, or parity-mismatched while JSON is compatible, runtime falls back to JSON with a warning.
-- `manage_index` action router supports `create|reindex|sync|status|clear`; behavior is action-specific in handlers and responses are structured JSON envelopes.
+- `manage_index` action router supports `create|reindex|sync|status|clear|repair`; behavior is action-specific in handlers and responses are structured JSON envelopes serialized in MCP `content[0].text`.
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
 - `path:` and `-path:` operators use gitignore-style pattern matching via `ignore` against normalized repo-relative paths.
@@ -132,21 +132,23 @@ Behavior:
 - Performance: O(number of tracked codebases); no sync, no search.
 
 ### 2) `manage_index`
-Purpose: lifecycle operations (`create`, `reindex`, `sync`, `status`, `clear`).
+Purpose: lifecycle operations (`create`, `reindex`, `sync`, `status`, `clear`, `repair`).
 
 Inputs/defaults:
 - Required: `action`, `path`.
 - Optional: `force`, `allowUnnecessaryReindex`, `customExtensions`, `ignorePatterns`, `zillizDropCollection`.
 - No per-action schema branching in zod; handler enforces behavior.
+- Public action set SSOT: `MANAGE_INDEX_ACTIONS` in `packages/mcp/src/core/manage-types.ts` / tool schema enum (must include `repair`).
 
 Outputs:
-- JSON envelope (serialized in `content[0].text`) for each action:
+- JSON envelope (serialized in `content[0].text`) for each action — not free-form text-only responses:
   - `tool`, `version`, `action`, `path`
   - `status` (`ok|not_ready|not_indexed|requires_reindex|blocked|error`)
   - `reason` (when applicable)
   - `message`, `humanText`
   - optional `warnings`, `hints`, `preflight`
 - `humanText` remains deterministic operator-facing guidance; structured fields are authoritative for client branching.
+- `repair` rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match; otherwise the envelope refuses and points to create/reindex.
 
 Warnings/hints:
 - Reindex guidance text when blocked by fingerprint mismatch.
@@ -168,15 +170,17 @@ Determinism:
 
 Common recipes:
 1. First-time index: `manage_index {action:"create", path}`.
-2. Recovery: `manage_index {action:"reindex", path}` when blocked.
+2. Recovery: `manage_index {action:"reindex", path}` when blocked by fingerprint/requires_reindex.
 3. Immediate ignore convergence: `manage_index {action:"sync", path}`.
+4. Local readiness repair without full rebuild: `manage_index {action:"repair", path}` when payload+fingerprint proof allow; otherwise follow create/reindex hints.
+5. Status observation: `manage_index {action:"status", path}` (create/reindex kick off asynchronously).
 
 Behavior:
 - Trigger: action call.
 - Effect: runs mapped handler with validations/gates.
 - Observability: structured manage envelope with stable statuses/reasons/warnings + human guidance text.
 - Determinism: fixed action routing and gate checks.
-- Performance: `create/reindex` background indexing; `sync` incremental; `status` read-mostly (but can mutate on fingerprint gate).
+- Performance: `create/reindex` background indexing; `sync` incremental; `status`/`repair` read/repair paths; `clear` destructive.
 
 Operational rule:
 - After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or Satori runtime version, restart all Satori MCP clients before index mutation. MCP tools do not terminate processes; cleanup is operator-owned outside the MCP tool surface.
@@ -532,9 +536,9 @@ Recent vs legacy:
 ## E) Indexing + Freshness + Ignore Semantics
 
 1) `manage_index` action semantics
-- Trigger: action dispatch.
-- Effect: create/reindex start background indexing, sync runs incremental `reindexByChange`, status reports current state, clear removes index+snapshot state.
-- Observability: action-specific textual responses and logs; indexing-blocked responses include `retryAfterMs=2000`, independent of watcher debounce.
+- Trigger: action dispatch for `create|reindex|sync|status|clear|repair`.
+- Effect: create/reindex start background indexing, sync runs incremental `reindexByChange`, status reports current state, clear removes index+snapshot state, repair rebuilds local readiness only under trusted fingerprint/payload proof.
+- Observability: JSON envelopes in `content[0].text` (plus logs); indexing-blocked responses include `retryAfterMs=2000`, independent of watcher debounce.
 - Determinism: absolute-path enforcement and status/fingerprint gates.
 - Performance: create/reindex heavy background operation, sync incremental.
 - Partial index behavior: when full indexing returns `limit_reached`, search may expose the partial vector state, but complete navigation sidecars are not published. `file_outline` and `call_graph` must fail closed with `requires_reindex` and reason `partial_index_navigation_unavailable` rather than treating the missing registry as an ordinary sidecar miss.

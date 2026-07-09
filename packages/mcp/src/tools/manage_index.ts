@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MANAGE_INDEX_ACTIONS } from "../core/manage-types.js";
 import { McpTool, MissingProviderConfigIssue, ToolContext, ToolResponse, formatZodError } from "./types.js";
 import {
     classifyVectorBackendError,
@@ -7,7 +8,10 @@ import {
     isMissingProviderConfigIssue
 } from "./setup-errors.js";
 
-const actionEnum = z.enum(["create", "reindex", "sync", "status", "clear", "repair"]);
+/** Re-export for contract tests and docs generators. */
+export { MANAGE_INDEX_ACTIONS };
+
+const actionEnum = z.enum(MANAGE_INDEX_ACTIONS);
 
 const manageIndexInputSchema = z.object({
     action: actionEnum.describe("Required operation to run."),
@@ -91,7 +95,7 @@ export const manageIndexTool: McpTool = {
                     return {
                         content: [{
                             type: 'text',
-                            text: `Error: Unsupported action '${input.action}'. Use one of: create, reindex, sync, status, clear.`
+                            text: `Error: Unsupported action '${String(input.action)}'. Use one of: ${MANAGE_INDEX_ACTIONS.join(", ")}.`
                         }],
                         isError: true
                     };

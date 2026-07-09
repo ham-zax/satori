@@ -70,7 +70,7 @@ findings:
   - Use F1 as the evidence standard for future findings.
   proof_contract:
     old_bad_behavior: outside/sibling/.env/symlink/.. paths returned content
-    fixed_behavior: outside cases return outside_indexed_root without content; inside indexed root still works
+    valid_behavior: outside cases return outside_indexed_root without content; inside indexed root still works
     required_artifacts_seen:
     - source line ranges
     - test names
@@ -96,7 +96,7 @@ findings:
   - Ranked Batch A #1 (priority score 9); recommended first patch.
   proof_contract:
     old_bad_behavior: AGENTS said Text responses; public action lists omitted repair
-    fixed_behavior: JSON envelope + create|reindex|sync|status|clear|repair aligned across live schema, AGENTS, E2E, skills
+    valid_behavior: JSON envelope + create|reindex|sync|status|clear|repair aligned across live schema, AGENTS, E2E, skills
     required_artifacts_seen:
     - source line ranges
     - test names

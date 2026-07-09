@@ -74,7 +74,11 @@ export function repoRelativeFilePathSchema(description: string) {
     return z.string().min(1).describe(description).refine(
         (value) => {
             const normalized = value.replace(/\\/g, "/").trim();
-            if (!normalized || path.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
+            if (!normalized) {
+                return false;
+            }
+            // Reject absolute and Windows drive-relative forms (C:foo, C:/x, C:\x) — CWD-dependent.
+            if (path.isAbsolute(normalized) || path.win32.isAbsolute(normalized) || /^[A-Za-z]:/.test(normalized)) {
                 return false;
             }
             if (normalized.startsWith("../") || normalized === ".." || normalized.includes("/../") || normalized.endsWith("/..")) {
@@ -83,7 +87,7 @@ export function repoRelativeFilePathSchema(description: string) {
             return true;
         },
         {
-            message: "must be a repo-relative path inside the codebase root (not absolute; no .. escape segments)",
+            message: "must be a repo-relative path inside the codebase root (not absolute or drive-relative; no .. escape segments)",
         },
     );
 }

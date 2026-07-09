@@ -45,6 +45,27 @@ test('call_graph rejects absolute symbolRef.file', async () => {
     assert.match(response.content[0]?.text || '', /repo-relative|Invalid arguments for 'call_graph'/i);
 });
 
+test('call_graph rejects Windows drive-relative symbolRef.file C:secret.ts', async () => {
+    const ctx = {
+        toolHandlers: {
+            handleCallGraph: async () => {
+                throw new Error('handler must not run');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: '/repo',
+        symbolRef: {
+            file: 'C:secret.ts',
+            symbolId: 'sym_runtime_run'
+        },
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /repo-relative|drive-relative|Invalid arguments for 'call_graph'/i);
+});
+
 test('call_graph normalizes direction bidirectional to both before validation/dispatch', async () => {
     let receivedArgs: Record<string, unknown> | undefined;
     const ctx = {

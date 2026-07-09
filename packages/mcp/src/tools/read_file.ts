@@ -4,7 +4,7 @@ import { z } from "zod";
 import { isLanguageCapabilitySupportedForExtension } from "@zokizuan/satori-core";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { resolveVectorBackedToolContext } from "./provider-context.js";
-import { absolutePathOrRaw } from "../utils.js";
+import { requireAbsoluteFilesystemPath } from "../utils.js";
 import type {
     ReadFileAnnotatedOutlineStatus,
     ReadFileAnnotatedResponseEnvelope,
@@ -185,7 +185,12 @@ function collectCodebaseCandidatesForFile(
         if (!item || typeof item.path !== "string") {
             continue;
         }
-        const candidatePath = canonicalizeFilesystemPath(absolutePathOrRaw(item.path));
+        // Snapshot roots must already be absolute. Never CWD-resolve relative/legacy roots.
+        const rootResult = requireAbsoluteFilesystemPath(item.path, "codebase.path");
+        if (!rootResult.ok) {
+            continue;
+        }
+        const candidatePath = canonicalizeFilesystemPath(rootResult.absolutePath);
         if (!isPathInsideRoot(canonicalTarget, candidatePath)) {
             continue;
         }
@@ -279,7 +284,12 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
         if (!item || typeof item.path !== "string" || !item.info || item.info.status !== "indexing") {
             continue;
         }
-        const codebaseRoot = canonicalizeFilesystemPath(absolutePathOrRaw(item.path));
+        // Snapshot roots must already be absolute. Never CWD-resolve relative/legacy roots.
+        const rootResult = requireAbsoluteFilesystemPath(item.path, "codebase.path");
+        if (!rootResult.ok) {
+            continue;
+        }
+        const codebaseRoot = canonicalizeFilesystemPath(rootResult.absolutePath);
         candidates.push({
             codebaseRoot,
             info: item.info,

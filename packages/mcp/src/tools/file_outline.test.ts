@@ -62,6 +62,16 @@ test('file_outline rejects file path escape segments', async () => {
     assert.match(response.content[0]?.text || '', /escape|repo-relative|Invalid arguments for 'file_outline'/i);
 });
 
+test('file_outline rejects Windows drive-relative file C:secret.ts', async () => {
+    const response = await fileOutlineTool.execute({
+        path: '/repo',
+        file: 'C:secret.ts',
+    }, buildContext());
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /repo-relative|drive-relative|Invalid arguments for 'file_outline'/i);
+});
+
 test('file_outline validates resolveMode=exact requirements', async () => {
     const response = await fileOutlineTool.execute({
         path: '/repo',

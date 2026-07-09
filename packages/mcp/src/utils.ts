@@ -98,11 +98,16 @@ export function requireRepoRelativeFilePath(
         };
     }
 
-    if (path.isAbsolute(normalized) || path.win32.isAbsolute(normalized) || /^[A-Za-z]:\//.test(normalized)) {
+    // Reject POSIX/Windows absolute forms and Windows drive-relative forms (C:foo), which are CWD-dependent.
+    if (
+        path.isAbsolute(normalized)
+        || path.win32.isAbsolute(normalized)
+        || /^[A-Za-z]:/.test(normalized)
+    ) {
         return {
             ok: false,
             path: normalized,
-            message: `Error: '${fieldName}' must be a repo-relative path inside the codebase root, not an absolute path.`,
+            message: `Error: '${fieldName}' must be a repo-relative path inside the codebase root, not an absolute or drive-relative path.`,
         };
     }
 

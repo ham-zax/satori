@@ -85,7 +85,7 @@ Search responses are action-oriented JSON envelopes. Grouped results can include
 Supported scopes:
 
 - `runtime`: includes source/runtime code, top-level `scripts/**`, and test evidence; tests are demoted unless test intent is explicit.
-- `docs`: includes docs/tests only.
+- `docs`: includes documentation paths only (not tests).
 - `mixed`: includes everything.
 
 Index profiles are separate from search scopes. `default` indexes a safe-broad set of source, docs/text, config, scripts, infra/query files, and known extensionless files. `minimal` indexes source plus docs/text. `all-text` adds unknown UTF-8 text files under the size limit. Search still starts at `scope=runtime`, so indexing docs/config does not make docs beat implementation results by default.

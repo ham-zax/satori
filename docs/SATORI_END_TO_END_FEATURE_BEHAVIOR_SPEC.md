@@ -19,7 +19,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - `search_codebase` defaults are runtime-first and grouped (`scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`).
 - Search operator parsing is deterministic and prefix-block based with escape and quote handling.
 - `path:` and `-path:` operators use gitignore-style pattern matching via `ignore` against normalized repo-relative paths.
-- Scope filtering is strict: runtime includes source/runtime/script code and test evidence while excluding docs/generated/artifacts/landing/fixtures, docs includes docs/tests only, mixed includes all. Runtime ranking demotes tests unless the query explicitly asks for test/spec/coverage evidence.
+- Scope filtering is strict: runtime includes source/runtime/script code and test evidence while excluding docs/generated/artifacts/landing/fixtures, docs includes documentation paths only (not tests), mixed includes all. Runtime ranking demotes tests unless the query explicitly asks for test/spec/coverage evidence.
 - Search filtering precedence is deterministic: scope -> lang -> path include -> path exclude -> must -> exclude.
 - Must-retry is bounded and deterministic; warning is emitted only when must constraints remain unsatisfied after retries.
 - Group diversity is default-on and deterministic with fixed caps and one deterministic relaxed pass.
@@ -294,6 +294,8 @@ Warnings/hints:
 - Missing sidecar: reindex hint.
 - Missing symbol: advisory hint.
 - Validated Python source-backed recovery keeps the suppressed low-confidence note and adds `SOURCE_BACKED_DYNAMIC_CALLEES:<n>` or `SOURCE_BACKED_DYNAMIC_CALLERS:<n>` only for exact target-validated recovery.
+- Registry `Duplicate symbolKey` diagnostics collapse to `DUPLICATE_SYMBOL_KEY:N sample=…` at presentation time.
+- When inbound direction is notes-only (no inbound edges, suppressed low-confidence caller notes present), attach `hints.nextSteps` with executable `search_codebase` using `must:<identifier> <identifier>` (identifier extracted from the symbol label). Optional query `path:` is the unique suppressed **caller site** file when exactly one exists; omit `path:` when sites are multi-file or missing (never constrain to the callee defining file alone).
 
 Determinism:
 - node/edge/note sorting deterministic.
@@ -356,7 +358,7 @@ Behavior:
 
 1) Scope semantics (`runtime|mixed|docs`)
 - Trigger: `scope` input.
-- Effect: `runtime` includes source/runtime/script code and test evidence while excluding docs/generated/artifacts/landing/fixtures, `docs` includes docs/tests only, `mixed` includes all.
+- Effect: `runtime` includes source/runtime/script code and test evidence while excluding docs/generated/artifacts/landing/fixtures, `docs` includes documentation paths only (not tests), `mixed` includes all.
 - Observability: returned files and `hints.debugSearch.filterSummary.removedByScope`.
 - Determinism: strict category gate from `shouldIncludeCategoryInScope`.
 - Performance: early scope filtering reduces downstream scoring/grouping volume.
@@ -365,6 +367,7 @@ Behavior:
 - Trigger: `resultMode` and `groupBy`.
 - Effect: `raw` returns chunks; `grouped` returns collapsed groups by symbol/file. For `groupBy=symbol`, grouping prefers `ownerSymbolKey` plus `ownerSymbolInstanceId` when present, repairs missing owner identity from a compatible symbol registry by file/span containment, then falls back to deterministic file/proximity grouping.
 - Observability: `resultMode`, `results.kind`, legacy `span`, additive `previewSpan`, optional authoritative `symbolSpan`, additive `symbolKey`, `symbolInstanceId`, `symbolKind`, `confidence`, `collapsedChunkCount`, `callGraphHint`, compact readiness-gated `nextActions`, `recommendedNextAction`, `capabilities`, `fallbacks`, symbol-bounded capped `preview`, and `debug.symbolAggregation.ownerSource` (`owner_metadata|registry_repair|fallback`) when `debug:true`.
+- Oversized symbols: when `symbolSpan` line count is large (≥200), top `recommendedNextAction` prefers a plain `read_file` using `previewSpan` line range first. Primary `span` / `symbolSpan` / `nextActions.openSymbol` / `callGraphHint.symbolRef.span` stay exact full-symbol identity (exact `open_symbol` always expands to the resolved span).
 - Determinism: group key construction, saturated support boost, and sorted representative selection.
 - Performance: grouped mode reduces result payload/noise with capped previews and shared call-graph action args; raw mode preserves chunk detail.
 
@@ -516,15 +519,15 @@ Recent vs legacy:
 
 4) `read_file open_symbol`
 - Trigger: `open_symbol` in read request.
-- Effect: direct span open when `start_line` provided; else exact symbol resolve via `file_outline`; ambiguous/not_found become explicit error payload.
-- Observability: error JSON with `status`, `message`, optional `matches`/`warnings`/`hints`.
+- Effect: direct span open when `start_line` provided; else exact symbol resolve via `file_outline`; ambiguous/not_found become explicit error payload. Exact identity always clamps content to the **resolved symbol span** (request `start_line`/`end_line` cannot widen it).
+- Observability: error JSON with `status`, `message`, optional `matches`/`warnings`/`hints`. Annotated exact open reuses the resolved symbol only (no windowed re-outline that reintroduces overlapping siblings).
 - Determinism: does not guess symbol on ambiguity.
-- Performance: single extra resolver call only when needed.
+- Performance: single exact resolver call for exact open; annotated exact open avoids a second windowed outline query.
 
 5) Annotated read mode
 - Trigger: `mode="annotated"`.
 - Effect: returns content plus outline metadata (`outlineStatus`, `outline`, `hasMore`, optional hints/warnings).
-- Observability: JSON annotated envelope.
+- Observability: JSON annotated envelope. Outline registry diagnostics collapse to `OUTLINE_SYMBOL_REGISTRY_WARNINGS:N action=… sample=…` when present.
 - Determinism: stable status coercion (`ok|requires_reindex|unsupported|ambiguous`).
 - Performance: optional outline lookup; plain mode remains cheaper.
 

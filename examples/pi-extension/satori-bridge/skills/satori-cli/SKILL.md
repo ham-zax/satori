@@ -45,7 +45,7 @@ Use exactly these 6 tools:
   - `lang:` `path:` `-path:` `must:` `exclude:`
 - Scope policy:
   - `runtime` excludes docs/tests (default)
-  - `docs` for docs/tests only
+  - `docs` for documentation paths only (not tests)
   - `mixed` for everything
 - Keep grouped symbol mode for architecture tracing; use raw mode only for chunk-level deep inspection.
 - Use `debug=true` only when diagnosing ranking, filter, freshness, exact-registry, tracked-lexical, reranker, or latency behavior. Inspect `debugSearch.exactRegistry`, `phaseTimingsMs`, `trackedLexical`, and `passesUsed`.

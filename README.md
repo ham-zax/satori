@@ -187,7 +187,7 @@ Provider, model, dimension, vector store, and schema are part of the index finge
 
 Default search behavior is developer-oriented:
 
-- `scope="runtime"` so docs/tests do not dominate first results.
+- `scope="runtime"` so documentation does not dominate first results (tests stay demoted unless test intent is explicit; use `scope="docs"` for docs-only).
 - `resultMode="grouped"` and `groupBy="symbol"` to reduce duplicate chunks.
 - `rankingMode="auto_changed_first"` to prefer active work when safe.
 - `debug=false` unless you are inspecting ranking/filter behavior.

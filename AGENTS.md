@@ -106,6 +106,124 @@ Do not invent tools, parameters, write capabilities, rerank knobs, or output sha
 - Research handoffs must distinguish observation, hypothesis, validated finding, superseded finding, and recommendation.
 - Code-edit handoffs must identify owner/boundary, invariant preserved, tests run, remaining risk, and next action.
 
+### Grok Delegation For Small Implementation Slices
+
+The lead may delegate a small, isolated implementation or refactor slice to the locally installed Grok CLI (`/home/hamza/.local/bin/grok`). Grok is an execution worker, not an architecture or merge owner.
+
+Delegate only when all of the following are true:
+
+- The architectural decision and smallest safe change point are already fixed by the lead.
+- The slice has one coherent responsibility and a deterministic proof command.
+- Allowed files can be listed explicitly.
+- The slice does not change a public contract, dependency direction, security boundary, permission model, cache/message schema, lifecycle invariant, package dependency, or release/version policy.
+- The lead and Grok will not edit the same files concurrently.
+
+Suitable slices include a localized pure-function refactor, mechanical deduplication, a focused bug fix with a predefined failing test, fixture/grader additions, test hardening, and documentation synchronization. Do not delegate ambiguous extraction policy, finalizer ownership, cross-context protocol changes, security-sensitive recovery work, dependency changes, migrations, or broad cleanup.
+
+#### Required Brief
+
+Create a fresh task brief for every invocation. Do not reuse conversational memory as the task contract. The brief must contain:
+
+```text
+GOAL
+One concrete outcome.
+
+ARCHITECTURAL VECTOR
+The already-approved change point, dependency direction, and invariants.
+
+ALLOWED FILES
+Exact repository-relative paths. No wildcard expansion unless the slice is fixture-only.
+
+FORBIDDEN CHANGES
+Explicit non-goals, public surfaces, dependencies, and unrelated files.
+
+READ FIRST
+Exact implementation, callers, contracts, and tests to inspect before editing.
+
+FAILING PROOF
+The deterministic test that must fail before the change, or the exact pre-change assertion being added.
+
+IMPLEMENTATION
+The smallest required behavior; no speculative cleanup or new knobs.
+
+VERIFY
+Exact targeted commands. No network or time randomness without fakes.
+
+DELIVERABLE
+Changed-file list, behavior summary, test results, risks, and unresolved issues. Do not stage or commit unless the
+brief invokes the explicit user-authorized commit-delegation exception below.
+
+STOP CONDITIONS
+Stop without editing if scope must expand, a contract is unclear, a required file is dirty in an overlapping way, or the requested proof cannot be made deterministic.
+```
+
+#### Canonical Invocation
+
+Keep the auditable brief in a file, load it as one quoted shell variable, and pass it as the initial positional prompt. The installed CLI treats `--prompt-file` as a non-agentic single-turn request, so it is not valid for implementation delegation. Run this command in a PTY:
+
+```bash
+brief=/tmp/satori-grok-brief.md
+IFS= read -r -d '' grok_prompt < "$brief" || true
+/home/hamza/.local/bin/grok \
+  --cwd /home/hamza/repo/satori \
+  --permission-mode acceptEdits \
+  --no-subagents \
+  --no-memory \
+  --disable-web-search \
+  --max-turns 12 \
+  "$grok_prompt"
+unset grok_prompt
+```
+
+Parameter policy:
+
+- `/home/hamza/.local/bin/grok`: use the verified local binary explicitly; re-run its `-h` output before changing this invocation contract.
+- `--cwd`: always the absolute repository root.
+- Quoted positional prompt: starts the interactive agent/tool loop. Load it from one fresh bounded brief as shown; never interpolate brief contents into shell syntax.
+- `--permission-mode acceptEdits`: permits the assigned edit while retaining tool boundaries.
+- `--no-subagents`: Grok may not redelegate or widen the task tree.
+- `--no-memory`: prevents unrelated prior sessions from silently influencing the slice.
+- `--disable-web-search`: small repository slices must rely on local contracts; the lead owns any required documentation research.
+- `--max-turns 12`: default ceiling for a small slice. If this is insufficient, reassess whether the task is actually small before increasing it.
+- Omit `--model` by default so the locally configured model is used. If a model must be pinned, first verify the installed model ID with `grok models`, then pass `--model <verified-id>` in the invocation record.
+- Interactive approvals: the local UI may preselect `Always allow on all sessions`. Explicitly select `Allow once` for each required action; never accept the preselected persistent approval.
+
+Do not use `--always-approve`, `--best-of-n`, `--continue`, `--resume`, `--restore-code`, or an unreviewed `--worktree` flow for the implementation lane. Do not let Grok amend, reset, restore, rebase, or discard repository state. Do not add `--check` while `--no-subagents` is present: the installed CLI rejects that combination. The lead-owned verification commands in the brief remain mandatory. The interactive CLI does not exit after a completed turn; after recording the handoff, exit it normally (`Ctrl+Q` twice) before reviewing the diff.
+
+#### Explicit User-Authorized Commit Delegation
+
+Grok may stage and create new commits only when the user explicitly requests Grok commit delegation for the current
+worktree. This is a packaging task, not an implementation task: Grok must not edit source, tests, documentation, or
+configuration while grouping commits.
+
+- Record the initial staged, unstaged, and untracked state before changing the index.
+- Inspect complete staged and unstaged diffs and read every untracked file before classifying changes.
+- Group by one coherent subsystem or contract and use exact repository-relative paths. Use `git commit --only --
+  <paths...>` when pre-existing staged changes must remain untouched.
+- Before every commit, inspect the exact candidate diff and run the smallest proportional deterministic proof.
+- Never use blanket adds, `git add -A`, `git add .`, path wildcards, amend, reset, restore, checkout, rebase, stash,
+  clean, force, or history rewriting.
+- Stop before committing if a file mixes concerns that cannot be separated without editing or unsafe hunk selection,
+  if ownership is unclear, or if a proportional proof fails.
+- Report commit hashes, messages, exact included paths, proof commands and results, and all remaining staged,
+  unstaged, or untracked changes.
+
+The user authorization applies only to the named commit-grouping run. It does not grant persistent approval for later
+Grok sessions or permit implementation changes.
+
+#### Lead Acceptance Procedure
+
+1. Record `git status --short` before invocation and preserve all pre-existing user changes.
+2. Run Grok synchronously; no concurrent edits in its allowed files.
+3. Inspect `git status --short` and the complete diff immediately afterward.
+4. Reject or revert only Grok-owned out-of-scope changes; never reset unrelated user work.
+5. Re-read all changed call sites and contract tests.
+6. Re-run the targeted failing test and proportional regression gates independently.
+7. The lead alone decides whether to keep or revise an implementation patch. Grok may stage and create new commits
+   only under the explicit user-authorized commit-delegation exception above.
+
+If Grok stops on a valid scope conflict, the lead resolves the architecture or scope; do not widen permissions. At most one corrected follow-up brief should be attempted before the lead takes the slice back.
+
 ## Communication
 - Write directly and cite concrete files, symbols, config keys, commands, tests, or tool payloads.
 - For reviews and reports, use: finding -> evidence -> impact -> action.

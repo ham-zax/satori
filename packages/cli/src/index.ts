@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCliArgs, parseWrapperArgumentsFromSchema, resolveRawArguments } from "./args.js";
@@ -9,6 +10,11 @@ import { connectCliMcpSession, type CallToolResult, type ListToolsResult } from 
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, parseStructuredEnvelope } from "./format.js";
 import { executeInstallCommand, type ManagedRuntimeCommand } from "./install.js";
+import {
+    runInstallPostflight,
+    type InstallPostflightOptions,
+    type InstallPostflightResult,
+} from "./install-postflight.js";
 import { verifyManagedPackageInstallability } from "./package-installability.js";
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
 import { runDoctor } from "./doctor.js";
@@ -28,6 +34,7 @@ interface RunCliOptions {
     installabilityVerifier?: () => string | Promise<string>;
     installRuntimeCommand?: ManagedRuntimeCommand;
     doctorRunner?: (options: { env: NodeJS.ProcessEnv }) => DoctorResult;
+    installPostflightRunner?: (options: InstallPostflightOptions) => Promise<InstallPostflightResult>;
     connectSession?: (options: {
         command: string;
         args: string[];
@@ -49,6 +56,8 @@ interface CliSession {
     listTools(): Promise<ListToolsResult>;
     callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult>;
     close(): Promise<void>;
+    readonly launcherPid?: number | null;
+    readonly serverVersion?: { name?: string; version?: string };
 }
 
 interface TextContentEntry {
@@ -251,15 +260,32 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
+            const homeDir = effectiveEnv.HOME || os.homedir();
             let packageSpecifier: string | undefined;
             if (parsed.command.kind === "install") {
                 packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
             }
             const result = executeInstallCommand(parsed.command, {
-                homeDir: effectiveEnv.HOME,
+                homeDir,
                 packageSpecifier,
                 runtimeCommand: options.installRuntimeCommand,
             });
+            if (parsed.command.kind === "install" && !parsed.command.dryRun) {
+                const postflight = await (options.installPostflightRunner || runInstallPostflight)({
+                    installResult: result,
+                    homeDir,
+                    env: effectiveEnv,
+                    startupTimeoutMs,
+                    callTimeoutMs,
+                    writeStderr: writers.writeStderr,
+                    connectSession: options.connectSession,
+                });
+                emitJson(writers, { ...result, postflight });
+                if (parsed.globals.format === "text") {
+                    writers.writeStderr(`satori-cli install postflight status=${postflight.status}.\n`);
+                }
+                return postflight.status === "error" ? 1 : 0;
+            }
             emitJson(writers, result);
             if (parsed.globals.format === "text") {
                 writers.writeStderr(`satori-cli ${parsed.command.kind} completed for ${parsed.command.client}.\n`);

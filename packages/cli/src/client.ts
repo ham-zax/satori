@@ -13,6 +13,7 @@ interface SessionOptions {
     startupTimeoutMs: number;
     callTimeoutMs: number;
     writeStderr: (text: string) => void;
+    onLauncherStarted?: (pid: number) => void;
 }
 
 function sanitizeEnv(env: Record<string, string | undefined>): Record<string, string> {
@@ -73,6 +74,14 @@ export class CliMcpSession {
         );
     }
 
+    get launcherPid(): number | null {
+        return this.transport.pid;
+    }
+
+    get serverVersion(): { name?: string; version?: string } | undefined {
+        return this.client.getServerVersion();
+    }
+
     async close(): Promise<void> {
         const stderr = this.transport.stderr;
         try {
@@ -121,16 +130,27 @@ export async function connectCliMcpSession(options: SessionOptions): Promise<Cli
     });
     const session = new CliMcpSession(client, transport, options.callTimeoutMs, options.writeStderr);
     session.wireStderr();
+    let notifiedLauncherPid: number | null = null;
+    const notifyLauncherStarted = () => {
+        if (transport.pid !== null && transport.pid !== notifiedLauncherPid) {
+            notifiedLauncherPid = transport.pid;
+            options.onLauncherStarted?.(transport.pid);
+        }
+    };
 
     try {
+        const connectPromise = client.connect(transport);
+        notifyLauncherStarted();
         await createTimeout(
-            client.connect(transport),
+            connectPromise,
             options.startupTimeoutMs,
             "E_STARTUP_TIMEOUT",
             `Timed out after ${options.startupTimeoutMs}ms while starting MCP server.`
         );
+        notifyLauncherStarted();
         return session;
     } catch (error) {
+        notifyLauncherStarted();
         await session.close();
         if (error instanceof CliError) {
             throw error;

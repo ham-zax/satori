@@ -27,6 +27,36 @@ function baseDoctorOptions(overrides: DoctorOptions = {}): DoctorOptions {
         execFileSyncImpl: successfulExecFileSync,
         resolvePackageVersions: fixedPackageVersions,
         runtimeOwnersPath: noRuntimeOwnersPath,
+        mutationLeasesPath: null,
+        managedLauncherPath: null,
+        inspectManagedClients: () => [{
+            client: "codex",
+            configPath: "/tmp/config.toml",
+            status: "ok",
+            message: "codex config is current",
+        }],
+        ...overrides,
+    };
+}
+
+function healthyEnv(): NodeJS.ProcessEnv {
+    return {
+        VOYAGEAI_API_KEY: "pa-test",
+        MILVUS_ADDRESS: "localhost:19530",
+    };
+}
+
+function runtimeOwner(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+        ownerId: "owner",
+        pid: 111,
+        satoriVersion: "4.11.16",
+        runtimeFingerprint: { schemaVersion: "hybrid_v3" },
+        runtimeOwnerIdentityHash: "same-hash",
+        configSource: "env",
+        startedAt: "2026-07-10T00:00:00.000Z",
+        lastSeenAt: "2026-07-10T00:00:00.000Z",
+        processStartTime: "start-111",
         ...overrides,
     };
 }
@@ -223,6 +253,245 @@ test("runDoctor errors when multiple live Satori MCP package versions are regist
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
+});
+
+test("runDoctor errors when a live runtime version differs from the installed MCP version", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-stale-owner-"));
+    const ownersPath = path.join(tempDir, "owners.json");
+    try {
+        fs.writeFileSync(ownersPath, JSON.stringify({
+            formatVersion: "v1",
+            owners: [runtimeOwner({ satoriVersion: "4.11.15" })],
+        }));
+
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            runtimeOwnersPath: ownersPath,
+            inspectProcess: (pid) => ({ pid, processStartTime: "start-111" }),
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "runtime_owners");
+        assert.equal(check?.status, "error");
+        assert.match(check?.message || "", /installed MCP version 4\.11\.16/);
+        assert.match(check?.message || "", /pid=111.*4\.11\.15/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor errors on same-version runtime identity conflicts", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-identity-owner-"));
+    const ownersPath = path.join(tempDir, "owners.json");
+    try {
+        fs.writeFileSync(ownersPath, JSON.stringify({
+            formatVersion: "v1",
+            owners: [
+                runtimeOwner({ ownerId: "a", pid: 111, processStartTime: "start-111" }),
+                runtimeOwner({
+                    ownerId: "b",
+                    pid: 222,
+                    processStartTime: "start-222",
+                    runtimeOwnerIdentityHash: "different-hash",
+                    runtimeFingerprint: { schemaVersion: "dense_v2" },
+                }),
+            ],
+        }));
+
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            runtimeOwnersPath: ownersPath,
+            inspectProcess: (pid) => ({ pid, processStartTime: `start-${pid}` }),
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "runtime_owners");
+        assert.equal(check?.status, "error");
+        assert.match(check?.message || "", /runtime fingerprint/);
+        assert.match(check?.message || "", /config identity hash/);
+        assert.match(check?.message || "", /runtime_owner_conflict/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor rejects reused owner pids when process-start evidence differs", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-owner-start-"));
+    const ownersPath = path.join(tempDir, "owners.json");
+    try {
+        fs.writeFileSync(ownersPath, JSON.stringify({
+            formatVersion: "v1",
+            owners: [runtimeOwner({ processStartTime: "old-start" })],
+        }));
+
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            runtimeOwnersPath: ownersPath,
+            inspectProcess: (pid) => ({ pid, processStartTime: "new-start" }),
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "runtime_owners");
+        assert.equal(check?.status, "warning");
+        assert.match(check?.message || "", /stale \(dead or replaced\)/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor reports active and abandoned mutation leases without age expiry", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-leases-"));
+    try {
+        const lease = (root: string, pid: number, processStartTime: string) => ({
+            formatVersion: "v1",
+            canonicalRoot: root,
+            generation: 4,
+            lease: {
+                canonicalRoot: root,
+                generation: 4,
+                operationId: `operation-${pid}`,
+                action: "sync",
+                ownerId: `owner-${pid}`,
+                pid,
+                processStartTime,
+                acquiredAt: "2000-01-01T00:00:00.000Z",
+                lastHeartbeatAt: "2000-01-01T00:00:00.000Z",
+            },
+        });
+        fs.writeFileSync(path.join(tempDir, "a.json"), JSON.stringify(lease("/repo/active", 111, "start-111")));
+        fs.writeFileSync(path.join(tempDir, "b.json"), JSON.stringify(lease("/repo/abandoned", 222, "start-222")));
+
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            mutationLeasesPath: tempDir,
+            inspectProcess: (pid) => pid === 111 ? { pid, processStartTime: "start-111" } : null,
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "mutation_leases");
+        assert.equal(check?.status, "warning");
+        assert.match(check?.message || "", /active=1/);
+        assert.match(check?.message || "", /abandoned=1/);
+        assert.match(check?.message || "", /operation-111/);
+        assert.match(check?.message || "", /operation-222/);
+        assert.equal(result.nextSteps.some((step) => /expiry|expired/i.test(step)), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor fails closed on malformed mutation lease state", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-corrupt-lease-"));
+    try {
+        fs.writeFileSync(path.join(tempDir, "broken.json"), "{not-json");
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            mutationLeasesPath: tempDir,
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "mutation_leases");
+        assert.equal(check?.status, "error");
+        assert.match(check?.message || "", /broken\.json/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor diagnoses a managed launcher whose runtime target is missing", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-launcher-missing-"));
+    const launcherPath = path.join(tempDir, "satori-mcp.js");
+    try {
+        fs.writeFileSync(launcherPath, [
+            "#!/usr/bin/env node",
+            `const command = ${JSON.stringify(process.execPath)};`,
+            `const baseArgs = ${JSON.stringify([path.join(tempDir, "missing", "dist", "index.js")])};`,
+        ].join("\n"));
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            managedLauncherPath: launcherPath,
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "managed_launcher");
+        assert.equal(check?.status, "error");
+        assert.match(check?.message || "", /target does not exist/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor diagnoses a managed launcher targeting a stale MCP package version", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-launcher-version-"));
+    const packageRoot = path.join(tempDir, "node_modules", "@zokizuan", "satori-mcp");
+    const target = path.join(packageRoot, "dist", "index.js");
+    const launcherPath = path.join(tempDir, "satori-mcp.js");
+    try {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, "// runtime");
+        fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+            name: "@zokizuan/satori-mcp",
+            version: "4.11.15",
+        }));
+        fs.writeFileSync(launcherPath, [
+            "#!/usr/bin/env node",
+            `const command = ${JSON.stringify(process.execPath)};`,
+            `const baseArgs = ${JSON.stringify([target])};`,
+        ].join("\n"));
+
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            managedLauncherPath: launcherPath,
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "managed_launcher");
+        assert.equal(check?.status, "error");
+        assert.match(check?.message || "", /4\.11\.15/);
+        assert.match(check?.message || "", /installed MCP version 4\.11\.16/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor accepts a managed launcher targeting the installed MCP package", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-launcher-current-"));
+    const packageRoot = path.join(tempDir, "node_modules", "@zokizuan", "satori-mcp");
+    const target = path.join(packageRoot, "dist", "index.js");
+    const launcherPath = path.join(tempDir, "satori-mcp.js");
+    try {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, "// runtime");
+        fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+            name: "@zokizuan/satori-mcp",
+            version: "4.11.16",
+        }));
+        fs.writeFileSync(launcherPath, [
+            "#!/usr/bin/env node",
+            `const command = ${JSON.stringify(process.execPath)};`,
+            `const baseArgs = ${JSON.stringify([target])};`,
+        ].join("\n"));
+
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            managedLauncherPath: launcherPath,
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "managed_launcher");
+        assert.equal(check?.status, "ok");
+        assert.match(check?.message || "", /satori-mcp@4\.11\.16/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor errors when a configured MCP client does not point to the managed launcher", () => {
+    const result = runDoctor(baseDoctorOptions({
+        env: healthyEnv(),
+        inspectManagedClients: () => [{
+            client: "claude",
+            configPath: "/tmp/.claude.json",
+            status: "error",
+            message: "claude config does not point exactly to the managed launcher.",
+        }],
+    }));
+
+    const check = result.checks.find((entry) => entry.name === "managed_client_configuration");
+    assert.equal(check?.status, "error");
+    assert.match(check?.message || "", /claude config/);
 });
 
 // Doctor finding: core nested under mcp must still resolve (createRequire from MCP package.json).

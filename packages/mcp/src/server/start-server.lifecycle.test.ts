@@ -50,6 +50,19 @@ test("runPostConnectStartupLifecycle runs one-shot recovery but skips loops in c
     assert.deepEqual(counts.events, ["verify"]);
 });
 
+test("runPostConnectStartupLifecycle performs no recovery or loops in postflight mode", async () => {
+    const { deps, getCounts } = createLifecycleDeps();
+
+    await runPostConnectStartupLifecycle("postflight", deps);
+
+    assert.deepEqual(getCounts(), {
+        verifyCalls: 0,
+        bgCalls: 0,
+        watcherCalls: 0,
+        events: [],
+    });
+});
+
 test("runPostConnectStartupLifecycle starts reconciliation and loops in mcp mode", async () => {
     const { deps, getCounts } = createLifecycleDeps();
 

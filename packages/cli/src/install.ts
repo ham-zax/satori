@@ -196,6 +196,13 @@ interface FileMutation {
     apply: () => void;
 }
 
+export interface ManagedClientConfigProof {
+    client: ClientName;
+    configPath: string;
+    status: "ok" | "error";
+    message: string;
+}
+
 function resolveDefaultSkillAssetRoot(): string {
     const currentFile = fileURLToPath(import.meta.url);
     return path.resolve(path.dirname(currentFile), "..", "assets", "skills");
@@ -434,7 +441,7 @@ function resolveRuntimeEntryPath(packageRoot: string, packageJson?: { bin?: unkn
     return path.resolve(packageRoot, relativeEntry);
 }
 
-function resolveLauncherPath(homeDir: string): string {
+export function resolveLauncherPath(homeDir: string): string {
     return path.join(homeDir, ".satori", MANAGED_BIN_DIR, MANAGED_LAUNCHER_FILE);
 }
 
@@ -445,7 +452,7 @@ function plannedManagedRuntimeCommand(homeDir: string, packageSpecifier: string)
     };
 }
 
-function managedClientCommand(homeDir: string): ManagedRuntimeCommand {
+export function resolveManagedClientCommand(homeDir: string): ManagedRuntimeCommand {
     return {
         command: process.execPath,
         args: [resolveLauncherPath(homeDir)],
@@ -1097,6 +1104,77 @@ function prepareMutation(
     };
 }
 
+function commandMatchesExpected(command: unknown, args: unknown, expected: ManagedRuntimeCommand): boolean {
+    return command === expected.command
+        && Array.isArray(args)
+        && args.length === expected.args.length
+        && args.every((entry, index) => entry === expected.args[index]);
+}
+
+function verifyManagedClientTarget(target: Pick<ClientTarget, "client" | "configPath">, expected: ManagedRuntimeCommand): ManagedClientConfigProof {
+    let matches = false;
+    try {
+        if (target.client === "codex") {
+            const content = readTextIfExists(target.configPath) ?? "";
+            matches = content.includes(buildCodexManagedBlock(expected));
+        } else if (target.client === "claude") {
+            const config = parseJsonObject(target.configPath);
+            const entry = objectValue(objectValue(config.mcpServers)?.satori);
+            matches = commandMatchesExpected(entry?.command, entry?.args, expected);
+        } else {
+            const content = readTextIfExists(target.configPath) ?? "";
+            const config = parseJsoncObject(target.configPath, content);
+            const entry = objectValue(objectValue(config.mcp)?.satori);
+            matches = Array.isArray(entry?.command)
+                && commandMatchesExpected(entry.command[0], entry.command.slice(1), expected);
+        }
+    } catch {
+        matches = false;
+    }
+
+    return {
+        client: target.client,
+        configPath: target.configPath,
+        status: matches ? "ok" : "error",
+        message: matches
+            ? `${target.client} config points to ${expected.args[0]}.`
+            : `${target.client} config does not point exactly to ${expected.command} ${expected.args[0]}.`,
+    };
+}
+
+function hasSatoriClientEntry(target: ClientTarget): boolean {
+    const content = readTextIfExists(target.configPath);
+    if (content === null) {
+        return false;
+    }
+    try {
+        if (target.client === "codex") {
+            return content.includes(MANAGED_BLOCK_START) || /\[mcp_servers\.satori(?:\.|\])/.test(content);
+        }
+        if (target.client === "claude") {
+            return objectValue(objectValue(parseJsonObject(target.configPath).mcpServers)?.satori) !== undefined;
+        }
+        return objectValue(objectValue(parseJsoncObject(target.configPath, content).mcp)?.satori) !== undefined;
+    } catch {
+        return content.includes("satori");
+    }
+}
+
+export function inspectManagedClientConfigurations(homeDir: string): ManagedClientConfigProof[] {
+    const expected = resolveManagedClientCommand(homeDir);
+    return resolveClientTargets(homeDir)
+        .filter(hasSatoriClientEntry)
+        .map((target) => verifyManagedClientTarget(target, expected));
+}
+
+export function verifyManagedClientConfigurations(
+    installResult: InstallCommandResult,
+    homeDir: string,
+): ManagedClientConfigProof[] {
+    const expected = resolveManagedClientCommand(homeDir);
+    return installResult.results.map((result) => verifyManagedClientTarget(result, expected));
+}
+
 export function executeInstallCommand(
     command: InstallCommandInput,
     options: InstallCommandOptions = {}
@@ -1106,7 +1184,7 @@ export function executeInstallCommand(
     const packageSpecifier = options.packageSpecifier ?? resolveDefaultPackageSpecifier();
     const skillAssetRoot = options.skillAssetRoot ?? resolveDefaultSkillAssetRoot();
     const plannedRuntimeCommand = options.runtimeCommand ?? plannedManagedRuntimeCommand(homeDir, packageSpecifier);
-    const clientCommand = managedClientCommand(homeDir);
+    const clientCommand = resolveManagedClientCommand(homeDir);
     let launcherMutation = command.kind === "install"
         ? prepareLauncherInstall(homeDir, plannedRuntimeCommand)
         : { changed: false, apply: () => {} };

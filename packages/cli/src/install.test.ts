@@ -6,9 +6,15 @@ import path from "node:path";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { executeInstallCommand } from "./install.js";
+import { connectCliMcpSession } from "./client.js";
+import { executeInstallCommand, inspectManagedClientConfigurations } from "./install.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const POSTFLIGHT_MCP_RUNTIME_FIXTURE = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "test-fixtures",
+    "postflight-mcp-runtime.mjs",
+);
 const PACKAGE_JSON = JSON.parse(
     fs.readFileSync(path.resolve(PACKAGE_ROOT, "..", "mcp", "package.json"), "utf8")
 ) as { name: string; version: string; bin?: Record<string, string> };
@@ -82,6 +88,17 @@ function isProcessLive(pid: number): boolean {
     }
 }
 
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (!isProcessLive(pid)) {
+            return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return !isProcessLive(pid);
+}
+
 function readChildPid(child: ChildProcess): Promise<number> {
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error("Timed out waiting for managed runtime child PID.")), 5_000);
@@ -134,7 +151,7 @@ async function assertLauncherReapsChild(
     }
 
     const launcher = spawn(process.execPath, [launcherPath(homeDir)], {
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
     });
     let childPid: number | undefined;
     try {
@@ -303,6 +320,167 @@ test("managed launcher force-kills a child that ignores SIGTERM after grace", {
             shutdownGraceMs: 200,
         });
     } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("default managed launcher preserves time for cooperative shutdown", {
+    skip: process.platform === "win32" ? "POSIX signal forwarding is not observable on Windows" : false,
+    timeout: 15_000,
+}, async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-launcher-slow-shutdown-"));
+    const markerPath = path.join(homeDir, "shutdown-complete");
+    const runtimeCode = [
+        'const fs = require("node:fs");',
+        'console.log(`SATORI_TEST_CHILD_PID=${process.pid}`);',
+        `process.on("SIGTERM", () => setTimeout(() => { fs.writeFileSync(${JSON.stringify(markerPath)}, "ok"); process.exit(0); }, 1_500));`,
+        "setInterval(() => {}, 1_000);",
+    ].join("");
+
+    try {
+        const { buildLauncherScript } = await import("./managed-launcher-script.mjs");
+        fs.mkdirSync(path.dirname(launcherPath(homeDir)), { recursive: true });
+        fs.writeFileSync(launcherPath(homeDir), buildLauncherScript({
+            command: process.execPath,
+            args: ["-e", runtimeCode],
+        }), "utf8");
+        fs.chmodSync(launcherPath(homeDir), 0o755);
+
+        const launcher = spawn(process.execPath, [launcherPath(homeDir)], {
+            stdio: ["pipe", "pipe", "pipe"],
+        });
+        const childPid = await readChildPid(launcher);
+        launcher.kill("SIGTERM");
+        const [, exitSignal] = await once(launcher, "exit") as [number | null, NodeJS.Signals | null];
+        assert.equal(exitSignal, "SIGTERM");
+        assert.equal(fs.readFileSync(markerPath, "utf8"), "ok");
+        assert.equal(isProcessLive(childPid), false);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("default managed launcher reaps non-cooperative runtime through CliMcpSession.close()", {
+    skip: process.platform === "win32" ? "POSIX signal reaping is not observable on Windows" : false,
+    // SDK close path is ~4s (EOF wait + SIGTERM wait) before SIGKILL; stay above that full path.
+    timeout: 30_000,
+}, async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-session-close-reap-"));
+    const pidFile = path.join(homeDir, "runtime.pid");
+    let runtimePid: number | undefined;
+    let session: Awaited<ReturnType<typeof connectCliMcpSession>> | undefined;
+
+    try {
+        const { buildLauncherScript } = await import("./managed-launcher-script.mjs");
+        fs.mkdirSync(path.dirname(launcherPath(homeDir)), { recursive: true });
+        // Exercise the production default rather than the short unit-test override.
+        fs.writeFileSync(launcherPath(homeDir), buildLauncherScript({
+            command: process.execPath,
+            args: [POSTFLIGHT_MCP_RUNTIME_FIXTURE],
+        }), "utf8");
+        fs.chmodSync(launcherPath(homeDir), 0o755);
+
+        session = await connectCliMcpSession({
+            command: process.execPath,
+            args: [launcherPath(homeDir)],
+            env: {
+                SATORI_TEST_PID_FILE: pidFile,
+            },
+            startupTimeoutMs: 10_000,
+            callTimeoutMs: 5_000,
+            writeStderr: () => {},
+        });
+
+        const listed = await session.listTools();
+        assert.equal(
+            Array.isArray(listed.tools) && listed.tools.some((tool) => tool.name === "list_codebases"),
+            true,
+            "expected tools/list to succeed against the fixture runtime",
+        );
+
+        const pidText = fs.readFileSync(pidFile, "utf8").trim();
+        runtimePid = Number(pidText);
+        assert.equal(Number.isInteger(runtimePid) && runtimePid > 0, true, `invalid runtime pid from fixture: ${pidText}`);
+        assert.equal(isProcessLive(runtimePid), true, `runtime child ${runtimePid} should be live before session close`);
+
+        await session.close();
+        session = undefined;
+
+        // Bounded poll after real SDK close ordering; child must not survive session close.
+        const reaped = await waitForProcessExit(runtimePid, 6_000);
+        assert.equal(reaped, true, `runtime child ${runtimePid} survived CliMcpSession.close()`);
+    } finally {
+        if (session) {
+            try {
+                await session.close();
+            } catch {
+                // Best-effort cleanup.
+            }
+        }
+        if (runtimePid !== undefined && isProcessLive(runtimePid)) {
+            try {
+                process.kill(runtimePid, "SIGKILL");
+            } catch {
+                // Ignore races where the child exits before forced kill.
+            }
+        }
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("managed launcher closes the real postflight runtime on stdin EOF and unregisters its owner", {
+    timeout: 30_000,
+}, async (t) => {
+    const runtimeEntry = path.resolve(PACKAGE_ROOT, "..", "mcp", "dist", "index.js");
+    if (!fs.existsSync(runtimeEntry)) {
+        t.skip("built MCP runtime is required");
+        return;
+    }
+
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-real-postflight-close-"));
+    const ownersPath = path.join(homeDir, ".satori", "runtime", "owners.json");
+    let runtimePid: number | undefined;
+    let session: Awaited<ReturnType<typeof connectCliMcpSession>> | undefined;
+    try {
+        const { buildLauncherScript } = await import("./managed-launcher-script.mjs");
+        fs.mkdirSync(path.dirname(launcherPath(homeDir)), { recursive: true });
+        fs.writeFileSync(launcherPath(homeDir), buildLauncherScript({
+            command: process.execPath,
+            args: [runtimeEntry],
+        }), "utf8");
+        fs.chmodSync(launcherPath(homeDir), 0o755);
+
+        session = await connectCliMcpSession({
+            command: process.execPath,
+            args: [launcherPath(homeDir)],
+            env: {
+                HOME: homeDir,
+                SATORI_RUN_MODE: "postflight",
+            },
+            startupTimeoutMs: 10_000,
+            callTimeoutMs: 5_000,
+            writeStderr: () => {},
+        });
+        const owners = JSON.parse(fs.readFileSync(ownersPath, "utf8")) as {
+            owners: Array<{ pid: number }>;
+        };
+        assert.equal(owners.owners.length, 1);
+        runtimePid = owners.owners[0].pid;
+        assert.equal(isProcessLive(runtimePid), true);
+
+        await session.close();
+        session = undefined;
+
+        assert.equal(await waitForProcessExit(runtimePid, 3_000), true);
+        const remaining = JSON.parse(fs.readFileSync(ownersPath, "utf8")) as { owners: unknown[] };
+        assert.deepEqual(remaining.owners, []);
+    } finally {
+        if (session) {
+            await session.close();
+        }
+        if (runtimePid !== undefined && isProcessLive(runtimePid)) {
+            process.kill(runtimePid, "SIGKILL");
+        }
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
 });
@@ -978,6 +1156,31 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(opencodeInstructions.includes("search_codebase"), true);
         assert.equal(opencodeInstructions.includes("recommendedNextAction"), true);
         assert.equal(opencodeInstructions.includes("warnings[].action"), true);
+    });
+});
+
+test("managed client inspection reuses installer parsers and reports stale wiring", () => {
+    withTempHome((homeDir) => {
+        executeInstallCommand({
+            kind: "install",
+            client: "all",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        const healthy = inspectManagedClientConfigurations(homeDir);
+        assert.deepEqual(healthy.map((proof) => proof.client), ["codex", "claude", "opencode"]);
+        assert.equal(healthy.every((proof) => proof.status === "ok"), true);
+
+        const claudePath = path.join(homeDir, ".claude.json");
+        const claude = JSON.parse(fs.readFileSync(claudePath, "utf8")) as {
+            mcpServers: { satori: { command: string } };
+        };
+        claude.mcpServers.satori.command = "/stale/node";
+        fs.writeFileSync(claudePath, JSON.stringify(claude), "utf8");
+
+        const stale = inspectManagedClientConfigurations(homeDir);
+        assert.equal(stale.find((proof) => proof.client === "claude")?.status, "error");
+        assert.equal(stale.filter((proof) => proof.status === "ok").length, 2);
     });
 });
 

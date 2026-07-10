@@ -14,8 +14,14 @@ const bootstrapKeepAlive = setInterval(() => {
     // The server owns steady-state lifetime after startMcpServerFromEnv resolves.
 }, 60 * 60 * 1000);
 
-function resolveRunMode(): "mcp" | "cli" {
-    return process.env.SATORI_RUN_MODE === "cli" ? "cli" : "mcp";
+function resolveRunMode(): "mcp" | "cli" | "postflight" {
+    if (process.env.SATORI_RUN_MODE === "cli") {
+        return "cli";
+    }
+    if (process.env.SATORI_RUN_MODE === "postflight") {
+        return "postflight";
+    }
+    return "mcp";
 }
 
 function resolveGuardMode(): "drop" | "redirect" | "off" {
@@ -43,13 +49,13 @@ function createProtocolStdout(originalWrite: typeof process.stdout.write): Writa
     });
 }
 
-async function handleShutdownSignal(signal: "SIGINT" | "SIGTERM"): Promise<void> {
+async function handleShutdown(reason: "SIGINT" | "SIGTERM" | "STDIN_EOF"): Promise<void> {
     if (shuttingDown) {
         return;
     }
     shuttingDown = true;
 
-    console.error(`Received ${signal}, shutting down gracefully...`);
+    console.error(`Received ${reason}, shutting down gracefully...`);
     try {
         if (activeServer) {
             await activeServer.shutdown();
@@ -87,11 +93,15 @@ async function main(): Promise<void> {
 }
 
 process.on("SIGINT", () => {
-    void handleShutdownSignal("SIGINT");
+    void handleShutdown("SIGINT");
 });
 
 process.on("SIGTERM", () => {
-    void handleShutdownSignal("SIGTERM");
+    void handleShutdown("SIGTERM");
+});
+
+process.stdin.once("end", () => {
+    void handleShutdown("STDIN_EOF");
 });
 
 main().then(() => {

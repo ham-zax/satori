@@ -9,6 +9,8 @@ import {
     resolveManagedPackageJsonPath,
     resolveManagedPackageSpecifier,
 } from "./managed-package.js";
+import { inspectManagedClientConfigurations } from "./install.js";
+import { evaluateStaticRuntimeConfig } from "./runtime-config.js";
 
 type CheckStatus = "ok" | "warning" | "error";
 
@@ -35,6 +37,11 @@ export interface DoctorResult {
     nextSteps: string[];
 }
 
+export interface DoctorProcessSnapshot {
+    pid: number;
+    processStartTime?: string;
+}
+
 export interface DoctorOptions {
     env?: NodeJS.ProcessEnv;
     nodeVersion?: string;
@@ -45,65 +52,38 @@ export interface DoctorOptions {
     runtimeOwnersPath?: string;
     /** Override process liveness check (default: process.kill(pid, 0)). */
     isProcessLive?: (pid: number) => boolean;
+    /** Stronger process identity evidence used when available. */
+    inspectProcess?: (pid: number) => DoctorProcessSnapshot | null;
+    /** Override lease state directory; null disables the check (tests/embedded use). */
+    mutationLeasesPath?: string | null;
+    /** Override stable managed launcher path; null disables the check. */
+    managedLauncherPath?: string | null;
+    /** Override installed-client wiring inspection. */
+    inspectManagedClients?: (homeDir: string) => ReturnType<typeof inspectManagedClientConfigurations>;
 }
 
 const PACKAGE_VERSION_NOTE =
     "Satori ships independent package versions (cli, mcp, core). Doctor reports the installed set for support and debugging; versions need not match each other.";
-const SUPPORTED_EMBEDDING_PROVIDERS = new Set(["OpenAI", "VoyageAI", "Gemini", "Ollama"]);
-
 const requireFromHere = createRequire(import.meta.url);
+const MAX_DIAGNOSTIC_DETAILS = 10;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stableStringify(value: unknown): string {
+    if (Array.isArray(value)) {
+        return `[${value.map(stableStringify).join(",")}]`;
+    }
+    if (isRecord(value)) {
+        return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value) ?? String(value);
+}
 
 function parseNodeMajor(version: string): number {
     const match = version.match(/^v?(\d+)/);
     return match ? Number(match[1]) : 0;
-}
-
-function selectedProvider(env: NodeJS.ProcessEnv): string {
-    return env.EMBEDDING_PROVIDER || "VoyageAI";
-}
-
-function defaultModelForProvider(provider: string): string {
-    switch (provider) {
-        case "OpenAI":
-            return "text-embedding-3-small";
-        case "VoyageAI":
-            return "voyage-code-3";
-        case "Gemini":
-            return "gemini-embedding-001";
-        case "Ollama":
-            return "nomic-embed-text";
-        default:
-            return "voyage-code-3";
-    }
-}
-
-function selectedModel(env: NodeJS.ProcessEnv, provider: string): string {
-    if (provider === "Ollama") {
-        return env.OLLAMA_MODEL || env.EMBEDDING_MODEL || defaultModelForProvider(provider);
-    }
-    return env.EMBEDDING_MODEL || defaultModelForProvider(provider);
-}
-
-function selectedDimension(env: NodeJS.ProcessEnv, provider: string): string {
-    if (env.EMBEDDING_OUTPUT_DIMENSION) {
-        return env.EMBEDDING_OUTPUT_DIMENSION;
-    }
-    return provider === "VoyageAI" ? "1024" : "provider default";
-}
-
-function requiredEmbeddingEnv(provider: string): string | null {
-    switch (provider) {
-        case "OpenAI":
-            return "OPENAI_API_KEY";
-        case "VoyageAI":
-            return "VOYAGEAI_API_KEY";
-        case "Gemini":
-            return "GEMINI_API_KEY";
-        case "Ollama":
-            return null;
-        default:
-            return "VOYAGEAI_API_KEY";
-    }
 }
 
 function addCheck(checks: DoctorCheck[], name: string, status: CheckStatus, message: string): void {
@@ -118,6 +98,50 @@ function overallStatus(checks: DoctorCheck[]): CheckStatus {
         return "warning";
     }
     return "ok";
+}
+
+function defaultInspectProcess(pid: number): DoctorProcessSnapshot | null {
+    try {
+        process.kill(pid, 0);
+    } catch {
+        return null;
+    }
+    if (process.platform !== "linux") {
+        return { pid };
+    }
+    try {
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+        const closeParen = stat.lastIndexOf(")");
+        const fields = closeParen >= 0 ? stat.slice(closeParen + 2).trim().split(/\s+/) : [];
+        return fields[19] ? { pid, processStartTime: fields[19] } : { pid };
+    } catch {
+        return { pid };
+    }
+}
+
+function resolveProcessInspector(options: DoctorOptions): (pid: number) => DoctorProcessSnapshot | null {
+    if (options.inspectProcess) {
+        return options.inspectProcess;
+    }
+    if (options.isProcessLive) {
+        return (pid) => options.isProcessLive?.(pid) ? { pid } : null;
+    }
+    return defaultInspectProcess;
+}
+
+function isSameProcess(
+    storedStartTime: unknown,
+    current: DoctorProcessSnapshot | null,
+): current is DoctorProcessSnapshot {
+    if (!current) {
+        return false;
+    }
+    return !(
+        typeof storedStartTime === "string"
+        && storedStartTime.length > 0
+        && current.processStartTime
+        && storedStartTime !== current.processStartTime
+    );
 }
 
 function readJsonVersion(packageJsonPath: string): { name: string; version: string } | null {
@@ -238,6 +262,7 @@ export function resolveInstalledPackageVersions(): DoctorPackageVersion[] {
 
 export function runDoctor(options: DoctorOptions = {}): DoctorResult {
     const env = options.env || process.env;
+    const homeDir = env.HOME || os.homedir();
     const nodeVersion = options.nodeVersion || process.version;
     const execImpl = options.execFileSyncImpl || execFileSync;
     const checks: DoctorCheck[] = [];
@@ -287,83 +312,42 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
         nextSteps.push("Verify npm can access @zokizuan/satori-mcp from this machine.");
     }
 
-    const provider = selectedProvider(env);
-    const providerSupported = SUPPORTED_EMBEDDING_PROVIDERS.has(provider);
-    if (providerSupported) {
-        addCheck(checks, "embedding_provider", "ok", `Embedding provider: ${provider}.`);
-        addCheck(checks, "embedding_model", "ok", `Embedding model: ${selectedModel(env, provider)}.`);
-        addCheck(checks, "embedding_dimension", "ok", `Embedding output dimension: ${selectedDimension(env, provider)}.`);
-
-        const requiredKey = requiredEmbeddingEnv(provider);
-        const requiredKeyValue = requiredKey ? env[requiredKey]?.trim() : undefined;
-        if (requiredKey && !requiredKeyValue) {
-            const blankButPresent = requiredKey in env;
-            addCheck(
-                checks,
-                "embedding_provider_env",
-                "error",
-                blankButPresent
-                    ? `${provider} requires a non-empty ${requiredKey} (empty string is incomplete).`
-                    : `${provider} requires ${requiredKey}.`,
-            );
-            if (provider === "VoyageAI") {
-                nextSteps.push("Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.");
-            } else {
-                nextSteps.push(`Set ${requiredKey}.`);
-            }
-        } else {
-            addCheck(
-                checks,
-                "embedding_provider_env",
-                "ok",
-                requiredKey ? `${requiredKey} is present.` : `${provider} does not require an API key.`,
-            );
+    for (const check of evaluateStaticRuntimeConfig(env)) {
+        addCheck(checks, check.name, check.status, check.message);
+        if (check.nextStep) {
+            nextSteps.push(check.nextStep);
         }
-    } else {
-        // Model/dimension/key checks are meaningless once the provider is invalid;
-        // skip them so doctor does not emit contradictory "ok" guidance (e.g. VoyageAI keys).
-        addCheck(
-            checks,
-            "embedding_provider",
-            "error",
-            `Unsupported embedding provider: ${provider}. Use OpenAI, VoyageAI, Gemini, or Ollama.`,
-        );
-        nextSteps.push("Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, or Ollama.");
-    }
-
-    const milvusAddress = env.MILVUS_ADDRESS?.trim();
-    if (!milvusAddress) {
-        const blankButPresent = "MILVUS_ADDRESS" in env;
-        addCheck(
-            checks,
-            "milvus_address",
-            "error",
-            blankButPresent
-                ? "MILVUS_ADDRESS is required and must be non-empty (empty string is incomplete)."
-                : "MILVUS_ADDRESS is required for index/search/clear operations.",
-        );
-        nextSteps.push("Set MILVUS_ADDRESS to a Zilliz Cloud public endpoint or local Milvus address such as localhost:19530.");
-    } else {
-        addCheck(checks, "milvus_address", "ok", "MILVUS_ADDRESS is present.");
-    }
-
-    if (env.MILVUS_TOKEN) {
-        addCheck(checks, "milvus_token", "ok", "MILVUS_TOKEN is present.");
-    } else {
-        addCheck(checks, "milvus_token", "ok", "MILVUS_TOKEN is not set; local/unauthenticated Milvus endpoints are supported.");
     }
 
     const runtimeOwnersPath = options.runtimeOwnersPath
-        || path.join(os.homedir(), ".satori", "runtime", "owners.json");
-    const isProcessLive = options.isProcessLive || ((pid: number) => {
-        try {
-            process.kill(pid, 0);
-            return true;
-        } catch {
-            return false;
-        }
-    });
-    appendRuntimeOwnerChecks(checks, nextSteps, runtimeOwnersPath, isProcessLive);
+        || path.join(homeDir, ".satori", "runtime", "owners.json");
+    const inspectProcess = resolveProcessInspector(options);
+    const installedMcpVersion = packageVersions.find((entry) => entry.name === "@zokizuan/satori-mcp")?.version ?? null;
+    appendRuntimeOwnerChecks(checks, nextSteps, runtimeOwnersPath, inspectProcess, installedMcpVersion);
+
+    if (options.mutationLeasesPath !== null) {
+        appendMutationLeaseChecks(
+            checks,
+            nextSteps,
+            options.mutationLeasesPath || path.join(homeDir, ".satori", "runtime", "mutation-leases"),
+            inspectProcess,
+        );
+    }
+
+    if (options.managedLauncherPath !== null) {
+        appendManagedLauncherCheck(
+            checks,
+            nextSteps,
+            options.managedLauncherPath || path.join(homeDir, ".satori", "bin", "satori-mcp.js"),
+            installedMcpVersion,
+        );
+    }
+
+    appendManagedClientChecks(
+        checks,
+        nextSteps,
+        (options.inspectManagedClients || inspectManagedClientConfigurations)(homeDir),
+    );
 
     if (nextSteps.length > 0) {
         nextSteps.push("Restart your MCP client after changing Satori environment variables.");
@@ -378,11 +362,36 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
     };
 }
 
+function appendManagedClientChecks(
+    checks: DoctorCheck[],
+    nextSteps: string[],
+    proofs: ReturnType<typeof inspectManagedClientConfigurations>,
+): void {
+    if (proofs.length === 0) {
+        addCheck(checks, "managed_client_configuration", "warning", "No supported MCP client has a Satori configuration entry.");
+        nextSteps.push("Run satori-cli install for the intended MCP client.");
+        return;
+    }
+    const failures = proofs.filter((proof) => proof.status === "error");
+    addCheck(
+        checks,
+        "managed_client_configuration",
+        failures.length > 0 ? "error" : "ok",
+        failures.length > 0
+            ? failures.map((proof) => proof.message).join(" ")
+            : `${proofs.length} configured MCP client${proofs.length === 1 ? "" : "s"} point exactly to the managed launcher.`,
+    );
+    if (failures.length > 0) {
+        nextSteps.push("Rerun satori-cli install for each stale configured MCP client, then restart it.");
+    }
+}
+
 function appendRuntimeOwnerChecks(
     checks: DoctorCheck[],
     nextSteps: string[],
     runtimeOwnersPath: string,
-    isProcessLive: (pid: number) => boolean,
+    inspectProcess: (pid: number) => DoctorProcessSnapshot | null,
+    installedMcpVersion: string | null,
 ): void {
     if (!fs.existsSync(runtimeOwnersPath)) {
         addCheck(checks, "runtime_owners", "ok", "No runtime owner registry yet (no concurrent MCP owners recorded).");
@@ -406,7 +415,10 @@ function appendRuntimeOwnerChecks(
     }
 
     const owners = (parsed as { owners: Array<Record<string, unknown>> }).owners;
-    const live = owners.filter((owner) => typeof owner.pid === "number" && isProcessLive(owner.pid));
+    const live = owners.filter((owner) => (
+        typeof owner.pid === "number"
+        && isSameProcess(owner.processStartTime, inspectProcess(owner.pid))
+    )).sort((a, b) => Number(a.pid) - Number(b.pid));
     const dead = owners.length - live.length;
     if (live.length === 0) {
         addCheck(
@@ -414,7 +426,7 @@ function appendRuntimeOwnerChecks(
             "runtime_owners",
             dead > 0 ? "warning" : "ok",
             dead > 0
-                ? `Runtime owner registry has ${dead} stale (dead) entr${dead === 1 ? "y" : "ies"} and no live MCP owners at ${runtimeOwnersPath}.`
+                ? `Runtime owner registry has ${dead} stale (dead or replaced) entr${dead === 1 ? "y" : "ies"} and no live MCP owners at ${runtimeOwnersPath}.`
                 : `Runtime owner registry is empty at ${runtimeOwnersPath}.`,
         );
         if (dead > 0) {
@@ -423,18 +435,39 @@ function appendRuntimeOwnerChecks(
         return;
     }
 
-    const versions = [...new Set(live.map((owner) => String(owner.satoriVersion || "unknown")))];
+    const versions = [...new Set(live.map((owner) => String(owner.satoriVersion || "unknown")))].sort();
     const pids = live.map((owner) => String(owner.pid)).join(", ");
-    if (versions.length > 1) {
+    const fingerprints = new Set(live.map((owner) => stableStringify(owner.runtimeFingerprint)));
+    const identityHashes = new Set(live.map((owner) => String(owner.runtimeOwnerIdentityHash || "unknown")));
+    const conflictReasons: string[] = [];
+    if (versions.length > 1) conflictReasons.push("Satori package version");
+    if (fingerprints.size > 1) conflictReasons.push("runtime fingerprint");
+    if (identityHashes.size > 1) conflictReasons.push("config identity hash");
+    if (conflictReasons.length > 0) {
         addCheck(
             checks,
             "runtime_owners",
             "error",
-            `Multiple live Satori MCP versions are registered (pids ${pids}; versions ${versions.join(", ")}). manage_index create/reindex/sync/clear will return runtime_owner_conflict.`,
+            `Live Satori MCP runtime identities conflict (pids ${pids}; versions ${versions.join(", ")}; evidence: ${conflictReasons.join(", ")}). manage_index mutations will return runtime_owner_conflict.`,
         );
         nextSteps.push(
-            `Stop extra Satori MCP clients so only one version remains (live pids: ${pids}). Do not leave mixed package versions (e.g. 4.11.13 and 4.11.14) attached to the same ~/.satori state.`,
+            `Stop extra Satori MCP clients so one runtime identity remains (live pids: ${pids}), then restart the intended client.`,
         );
+        return;
+    }
+
+    const installedMismatches = installedMcpVersion
+        ? live.filter((owner) => String(owner.satoriVersion || "unknown") !== installedMcpVersion)
+        : [];
+    if (installedMismatches.length > 0) {
+        const details = installedMismatches.map((owner) => `pid=${owner.pid} version=${String(owner.satoriVersion || "unknown")}`).join(", ");
+        addCheck(
+            checks,
+            "runtime_owners",
+            "error",
+            `Live Satori MCP runtime does not match installed MCP version ${installedMcpVersion}: ${details}. This is a stale resident runtime.`,
+        );
+        nextSteps.push(`Stop stale Satori MCP runtime pids ${installedMismatches.map((owner) => owner.pid).join(", ")} and restart the intended MCP client.`);
         return;
     }
 
@@ -454,4 +487,188 @@ function appendRuntimeOwnerChecks(
         "ok",
         `One live Satori MCP owner: pid=${pids} satori@${versions[0]}.`,
     );
+}
+
+interface LeaseDiagnostic {
+    state: "idle" | "active" | "abandoned" | "corrupt";
+    detail: string;
+}
+
+function inspectLeaseFile(
+    filePath: string,
+    inspectProcess: (pid: number) => DoctorProcessSnapshot | null,
+): LeaseDiagnostic {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch {
+        return { state: "corrupt", detail: path.basename(filePath) };
+    }
+    if (
+        !isRecord(parsed)
+        || parsed.formatVersion !== "v1"
+        || typeof parsed.canonicalRoot !== "string"
+        || !Number.isSafeInteger(parsed.generation)
+        || Number(parsed.generation) < 0
+    ) {
+        return { state: "corrupt", detail: path.basename(filePath) };
+    }
+    if (parsed.lease === undefined) {
+        return { state: "idle", detail: parsed.canonicalRoot };
+    }
+    const lease = parsed.lease;
+    if (
+        !isRecord(lease)
+        || lease.canonicalRoot !== parsed.canonicalRoot
+        || lease.generation !== parsed.generation
+        || !Number.isSafeInteger(lease.generation)
+        || Number(lease.generation) <= 0
+        || typeof lease.operationId !== "string"
+        || lease.operationId.length === 0
+        || typeof lease.action !== "string"
+        || !["create", "reindex", "sync", "repair", "clear"].includes(lease.action)
+        || typeof lease.pid !== "number"
+        || !Number.isSafeInteger(lease.pid)
+        || lease.pid <= 0
+        || typeof lease.ownerId !== "string"
+        || lease.ownerId.length === 0
+        || (lease.processStartTime !== undefined && typeof lease.processStartTime !== "string")
+        || typeof lease.acquiredAt !== "string"
+        || typeof lease.lastHeartbeatAt !== "string"
+    ) {
+        return { state: "corrupt", detail: path.basename(filePath) };
+    }
+    const detail = `root=${lease.canonicalRoot} action=${lease.action} operation=${lease.operationId} generation=${lease.generation} pid=${lease.pid}`;
+    return {
+        state: isSameProcess(lease.processStartTime, inspectProcess(lease.pid)) ? "active" : "abandoned",
+        detail,
+    };
+}
+
+function formatDiagnosticDetails(entries: LeaseDiagnostic[], state: LeaseDiagnostic["state"]): string {
+    const details = entries.filter((entry) => entry.state === state).map((entry) => entry.detail).sort();
+    if (details.length === 0) {
+        return "";
+    }
+    const visible = details.slice(0, MAX_DIAGNOSTIC_DETAILS);
+    const omitted = details.length - visible.length;
+    return `; ${state}=[${visible.join(" | ")}${omitted > 0 ? ` | +${omitted} more` : ""}]`;
+}
+
+function appendMutationLeaseChecks(
+    checks: DoctorCheck[],
+    nextSteps: string[],
+    leaseDir: string,
+    inspectProcess: (pid: number) => DoctorProcessSnapshot | null,
+): void {
+    if (!fs.existsSync(leaseDir)) {
+        addCheck(checks, "mutation_leases", "ok", `No mutation lease state directory at ${leaseDir}.`);
+        return;
+    }
+    let fileNames: string[];
+    try {
+        fileNames = fs.readdirSync(leaseDir).filter((name) => name.endsWith(".json")).sort();
+    } catch (error) {
+        addCheck(checks, "mutation_leases", "error", `Could not read mutation lease directory ${leaseDir}: ${error instanceof Error ? error.message : String(error)}`);
+        nextSteps.push(`Restore read access to ${leaseDir}; doctor never removes mutation leases.`);
+        return;
+    }
+    const diagnostics = fileNames.map((name) => inspectLeaseFile(path.join(leaseDir, name), inspectProcess));
+    const count = (state: LeaseDiagnostic["state"]) => diagnostics.filter((entry) => entry.state === state).length;
+    const active = count("active");
+    const abandoned = count("abandoned");
+    const corrupt = count("corrupt");
+    const message = `Mutation lease states: active=${active}, abandoned=${abandoned}, corrupt=${corrupt}`
+        + formatDiagnosticDetails(diagnostics, "active")
+        + formatDiagnosticDetails(diagnostics, "abandoned")
+        + formatDiagnosticDetails(diagnostics, "corrupt")
+        + ".";
+    addCheck(checks, "mutation_leases", corrupt > 0 ? "error" : active > 0 || abandoned > 0 ? "warning" : "ok", message);
+    if (corrupt > 0) {
+        nextSteps.push(`Inspect malformed mutation lease files under ${leaseDir}; doctor will not delete or rewrite them.`);
+    }
+    if (active > 0) {
+        nextSteps.push("Use manage_index status for each active root and let the live writer finish; leases do not expire by age.");
+    }
+    if (abandoned > 0) {
+        nextSteps.push("Retry the intended manage_index action; the mutation coordinator can fence a lease only after process-death or process-start mismatch proof.");
+    }
+}
+
+function parseManagedLauncherTarget(content: string): string | null {
+    const match = content.match(/^const baseArgs = (.+);$/m);
+    if (!match) {
+        return null;
+    }
+    try {
+        const args: unknown = JSON.parse(match[1]);
+        return Array.isArray(args) && typeof args[0] === "string" ? args[0] : null;
+    } catch {
+        return null;
+    }
+}
+
+function isRegularFile(filePath: string): boolean {
+    try {
+        return fs.statSync(filePath).isFile();
+    } catch {
+        return false;
+    }
+}
+
+function findMcpPackageMetadata(runtimeTarget: string): { version: string; packageJsonPath: string } | null {
+    let current = path.dirname(runtimeTarget);
+    while (true) {
+        const packageJsonPath = path.join(current, "package.json");
+        const info = readJsonVersion(packageJsonPath);
+        if (info?.name === "@zokizuan/satori-mcp") {
+            return { version: info.version, packageJsonPath };
+        }
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return null;
+        }
+        current = parent;
+    }
+}
+
+function appendManagedLauncherCheck(
+    checks: DoctorCheck[],
+    nextSteps: string[],
+    launcherPath: string,
+    installedMcpVersion: string | null,
+): void {
+    if (!fs.existsSync(launcherPath)) {
+        addCheck(checks, "managed_launcher", "warning", `Managed Satori launcher is missing at ${launcherPath}.`);
+        nextSteps.push("Run satori-cli install for the intended MCP client to create the stable managed launcher.");
+        return;
+    }
+    let target: string | null = null;
+    try {
+        target = parseManagedLauncherTarget(fs.readFileSync(launcherPath, "utf8"));
+    } catch {
+        // Report the same bounded remediation for unreadable and unrecognized launchers.
+    }
+    if (!target) {
+        addCheck(checks, "managed_launcher", "error", `Managed Satori launcher at ${launcherPath} is unreadable or not recognized.`);
+        nextSteps.push("Rerun satori-cli install to replace the managed launcher with the current generated form.");
+        return;
+    }
+    if (!path.isAbsolute(target) || !isRegularFile(target)) {
+        addCheck(checks, "managed_launcher", "error", `Managed Satori launcher target does not exist: ${target}.`);
+        nextSteps.push("Rerun satori-cli install to install the resident MCP runtime and refresh its launcher target.");
+        return;
+    }
+    const metadata = findMcpPackageMetadata(target);
+    if (!metadata) {
+        addCheck(checks, "managed_launcher", "warning", `Managed Satori launcher target exists but MCP package metadata could not be found for ${target}.`);
+        nextSteps.push("Inspect the managed launcher target, then rerun satori-cli install if it is not an intentional local runtime.");
+        return;
+    }
+    if (installedMcpVersion && metadata.version !== installedMcpVersion) {
+        addCheck(checks, "managed_launcher", "error", `Managed Satori launcher targets MCP ${metadata.version}, but installed MCP version ${installedMcpVersion} is expected (${metadata.packageJsonPath}).`);
+        nextSteps.push("Rerun satori-cli install and restart every MCP client to replace the stale resident launcher target.");
+        return;
+    }
+    addCheck(checks, "managed_launcher", "ok", `Managed Satori launcher targets @zokizuan/satori-mcp@${metadata.version}: ${target}.`);
 }

@@ -1,6 +1,6 @@
 import { installCliStdoutRedirect, installConsoleToStderrPatch, StdoutGuardMode, WritableStdoutLike } from "./stdio-safety.js";
 
-type BootstrapRunMode = "mcp" | "cli";
+type BootstrapRunMode = "mcp" | "cli" | "postflight";
 
 interface BootstrapStdioSafetyOptions {
     runMode: BootstrapRunMode;

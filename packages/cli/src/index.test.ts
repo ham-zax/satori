@@ -172,7 +172,7 @@ test("runCli treats structured non-ok envelope as tool error even when isError=f
     assert.doesNotMatch(compactEnvelope, /\n\s+"/);
 });
 
-test("runCli install updates config without starting an MCP session", async () => {
+test("runCli install updates config and emits the bounded postflight receipt", async () => {
     const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-home-"));
     const io = captureIo();
 
@@ -183,6 +183,13 @@ test("runCli install updates config without starting an MCP session", async () =
             env: { ...process.env, HOME: homeDir },
             installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPostflightRunner: async ({ homeDir: verifiedHome }) => {
+                assert.equal(verifiedHome, homeDir);
+                return {
+                    status: "ok",
+                    checks: [{ name: "launcher", status: "ok", message: "verified" }],
+                };
+            },
             serverCommand: process.execPath,
             serverArgs: ["/path/that/does/not/exist.mjs"],
             startupTimeoutMs: 100,
@@ -194,6 +201,7 @@ test("runCli install updates config without starting an MCP session", async () =
         const parsed = JSON.parse(stdout);
         assert.equal(parsed.action, "install");
         assert.equal(parsed.client, "codex");
+        assert.equal(parsed.postflight.status, "ok");
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });

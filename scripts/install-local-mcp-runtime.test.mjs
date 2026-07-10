@@ -74,7 +74,7 @@ test('local launcher forwards SIGTERM and reaps its runtime child', {
     args: ['-e', runtimeCode],
   }), 'utf8');
 
-  const launcher = spawn(process.execPath, [launcherPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const launcher = spawn(process.execPath, [launcherPath], { stdio: ['pipe', 'pipe', 'pipe'] });
   let childPid;
   try {
     childPid = await readChildPid(launcher);
@@ -109,7 +109,7 @@ test('local launcher force-kills a child that ignores SIGTERM after grace', {
     shutdownGraceMs: 200,
   }), 'utf8');
 
-  const launcher = spawn(process.execPath, [launcherPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const launcher = spawn(process.execPath, [launcherPath], { stdio: ['pipe', 'pipe', 'pipe'] });
   let childPid;
   try {
     childPid = await readChildPid(launcher);

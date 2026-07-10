@@ -15,13 +15,15 @@ Supported clients are `codex`, `claude`, `opencode`, and `all`.
 
 The installer performs package resolution once, stores the MCP server under `~/.satori/mcp-runtime/`, writes a stable launcher at `~/.satori/bin/satori-mcp.js`, and writes client-specific config that starts the launcher directly with Node. Resident MCP startup should not run `npx` or require a custom long startup timeout.
 
+After a non-dry-run install, the CLI runs a bounded postflight against that exact launcher. It verifies managed client wiring, MCP initialization and installed server version, the fixed six-tool list in canonical order, runtime-owner registration, and complete child shutdown. Provider and vector settings are validated statically only: incomplete settings produce a warning and a successful install exit, while launcher, protocol, tool-list, owner, or shutdown failures produce a non-zero exit without removing the installed artifacts. The postflight uses a dedicated non-mutating runtime mode and never calls `manage_index`, search, or another provider-backed tool.
+
 Treat `~/.satori/` as installer-owned state. The public setup path is the installer command above, not manual copying of runtime cache paths into each harness.
 
 The installer only manages Satori-owned config and the first-party workflow skill:
 
 - `satori`
 
-After a repo is indexed, Satori keeps the public MCP surface fixed (six tools) while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer wires clients; it does not run indexing or provider-backed work during setup.
+After a repo is indexed, Satori keeps the public MCP surface fixed (six tools) while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer verifies wiring but does not run indexing or provider-backed work during setup.
 
 ## Commands
 
@@ -35,7 +37,7 @@ npx -y @zokizuan/satori-cli@latest install --client all --dry-run
 npx -y @zokizuan/satori-cli@latest uninstall --client codex
 ```
 
-`doctor` checks Node, package visibility, provider env, and Milvus env without starting an MCP client. It also reports the installed Satori package set (`satori-cli` / `satori-mcp` / `satori-core`; versions are independent by design) and errors when multiple live Satori MCP package versions appear in `~/.satori/runtime/owners.json` (the same multi-runtime skew that blocks `manage_index` mutations with `runtime_owner_conflict`).
+`doctor` is read-only. It checks Node, package visibility, supported provider/model/dimension settings, required provider keys, Milvus configuration, the installed Satori package set, the stable managed launcher target, and every configured Codex/Claude/OpenCode Satori entry. It reads runtime owners with process-start evidence when the platform provides it, errors on stale installed versions or conflicting fingerprints/config identities, and reports active, abandoned, or corrupt mutation leases without expiring or rewriting them by age.
 
 `--profile default|minimal|all-text` writes or updates repo-local `satori.toml` for the current working directory. It is repo index policy only; it is not MCP client config and must not contain provider credentials.
 

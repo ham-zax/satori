@@ -98,20 +98,40 @@ function readChildPid(child: ChildProcess): Promise<number> {
     });
 }
 
-async function assertLauncherReapsChild(homeDir: string, signal: "SIGINT" | "SIGTERM"): Promise<void> {
+async function assertLauncherReapsChild(
+    homeDir: string,
+    signal: "SIGINT" | "SIGTERM",
+    options: { ignoreSignal?: boolean; shutdownGraceMs?: number } = {},
+): Promise<void> {
+    const ignoreSignal = options.ignoreSignal === true;
     const runtimeCode = [
         'console.log(`SATORI_TEST_CHILD_PID=${process.pid}`);',
-        `process.on(${JSON.stringify(signal)}, () => process.exit(0));`,
+        ignoreSignal
+            ? `process.on(${JSON.stringify(signal)}, () => {});`
+            : `process.on(${JSON.stringify(signal)}, () => process.exit(0));`,
         "setInterval(() => {}, 1_000);",
     ].join("");
-    executeInstallCommand({
-        kind: "install",
-        client: "codex",
-        dryRun: false,
-    }, {
-        homeDir,
-        runtimeCommand: { command: process.execPath, args: ["-e", runtimeCode] },
-    });
+
+    if (options.shutdownGraceMs !== undefined) {
+        // Bypass install so tests can inject a short grace without changing production defaults.
+        const { buildLauncherScript } = await import("./managed-launcher-script.mjs");
+        fs.mkdirSync(path.dirname(launcherPath(homeDir)), { recursive: true });
+        fs.writeFileSync(launcherPath(homeDir), buildLauncherScript({
+            command: process.execPath,
+            args: ["-e", runtimeCode],
+            shutdownGraceMs: options.shutdownGraceMs,
+        }), "utf8");
+        fs.chmodSync(launcherPath(homeDir), 0o755);
+    } else {
+        executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+        }, {
+            homeDir,
+            runtimeCommand: { command: process.execPath, args: ["-e", runtimeCode] },
+        });
+    }
 
     const launcher = spawn(process.execPath, [launcherPath(homeDir)], {
         stdio: ["ignore", "pipe", "pipe"],
@@ -271,6 +291,34 @@ test("managed launcher forwards termination signals and reaps its runtime child"
             fs.rmSync(homeDir, { recursive: true, force: true });
         }
     }
+});
+
+test("managed launcher force-kills a child that ignores SIGTERM after grace", {
+    skip: process.platform === "win32" ? "POSIX signal forwarding is not observable on Windows" : false,
+}, async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-launcher-force-"));
+    try {
+        await assertLauncherReapsChild(homeDir, "SIGTERM", {
+            ignoreSignal: true,
+            shutdownGraceMs: 200,
+        });
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("install launcher embeds shared SIGKILL grace path", () => {
+    withTempHome((homeDir) => {
+        executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+        }, installOptions(homeDir));
+        const launcher = readFile(launcherPath(homeDir));
+        assert.equal(launcher.includes("SIGKILL"), true);
+        assert.equal(launcher.includes("shutdownGraceMs"), true);
+        assert.equal(launcher.includes("forwardShutdown"), true);
+    });
 });
 
 // F-OP-02: install result must surface the managed package specifier used.

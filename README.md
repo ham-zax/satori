@@ -35,6 +35,8 @@ Satori indexes a repo and gives MCP-compatible agents a fixed investigation path
 
 ## Quick Start
 
+Filesystem indexing binds opens to the canonical codebase root (realpath containment, optional `O_NOFOLLOW`, and post-open identity checks). On Linux it prefers `/proc/self/fd` for the opened descriptor path.
+
 Install managed MCP config for every supported local client:
 
 ```bash

@@ -4,6 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  buildLauncherScript,
+  DEFAULT_LAUNCHER_SHUTDOWN_GRACE_MS,
+} from '../packages/cli/src/managed-launcher-script.mjs';
+
+export { buildLauncherScript, DEFAULT_LAUNCHER_SHUTDOWN_GRACE_MS };
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
@@ -66,50 +72,6 @@ export function parseArgs(argv) {
   }
 
   return options;
-}
-
-export function buildLauncherScript({ command, args }) {
-  return [
-    '#!/usr/bin/env node',
-    '',
-    'const { spawn } = require("node:child_process");',
-    '',
-    `const command = ${JSON.stringify(command)};`,
-    `const baseArgs = ${JSON.stringify(args)};`,
-    'const child = spawn(command, [...baseArgs, ...process.argv.slice(2)], {',
-    '  stdio: "inherit",',
-    '  env: process.env,',
-    '});',
-    '',
-    'let shutdownSignal = null;',
-    'for (const signal of ["SIGINT", "SIGTERM"]) {',
-    '  process.on(signal, () => {',
-    '    shutdownSignal ??= signal;',
-    '    if (child.exitCode === null && child.signalCode === null) {',
-    '      child.kill(signal);',
-    '    }',
-    '  });',
-    '}',
-    '',
-    'child.on("error", (error) => {',
-    '  console.error(`Failed to start Satori MCP runtime: ${error.message}`);',
-    '  process.exit(1);',
-    '});',
-    '',
-    'child.on("exit", (code, signal) => {',
-    '  if (shutdownSignal) {',
-    '    process.removeAllListeners(shutdownSignal);',
-    '    process.kill(process.pid, shutdownSignal);',
-    '    return;',
-    '  }',
-    '  if (signal) {',
-    '    console.error(`Satori MCP runtime exited from signal ${signal}`);',
-    '    process.exit(1);',
-    '  }',
-    '  process.exit(code ?? 0);',
-    '});',
-    '',
-  ].join('\n');
 }
 
 function writeTextFileAtomic(filePath, content, mode) {

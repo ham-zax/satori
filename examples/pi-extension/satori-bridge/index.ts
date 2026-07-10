@@ -25,7 +25,6 @@ import {
 const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-cli@0.4.14";
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_CALL_TIMEOUT_MS = 600_000;
-const MANAGE_INDEX_POLL_MIN_TIMEOUT_MS = 180_000;
 const HEALTHCHECK_TIMEOUT_MS = 15_000;
 
 const COLLAPSED_PREVIEW_LINES = 14;
@@ -325,26 +324,12 @@ function resolveCliInvocationConfig(cwd: string): CliInvocationConfig {
 	};
 }
 
-function resolveEffectiveCallTimeoutMs(
-	invocationConfig: CliInvocationConfig,
-	request: CliExecutionRequest,
-): number {
-	if (request.commandType !== "tool-call" || request.toolName !== "manage_index") {
-		return invocationConfig.callTimeoutMs;
-	}
-	const action = request.toolParams?.action;
-	if (action !== "create" && action !== "reindex") {
-		return invocationConfig.callTimeoutMs;
-	}
-	return Math.max(invocationConfig.callTimeoutMs, MANAGE_INDEX_POLL_MIN_TIMEOUT_MS);
-}
-
 function runCliCommand(
 	invocationConfig: CliInvocationConfig,
 	request: CliExecutionRequest,
 	signal?: AbortSignal,
 ): Promise<CliExecResult> {
-	const effectiveCallTimeoutMs = resolveEffectiveCallTimeoutMs(invocationConfig, request);
+	// create/reindex return a kickoff response; use the configured call timeout only.
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			invocationConfig.command,
@@ -355,7 +340,7 @@ function runCliCommand(
 				"--startup-timeout-ms",
 				String(invocationConfig.startupTimeoutMs),
 				"--call-timeout-ms",
-				String(effectiveCallTimeoutMs),
+				String(invocationConfig.callTimeoutMs),
 				...(invocationConfig.debug ? ["--debug"] : []),
 				...request.commandArgs,
 			],
@@ -1059,7 +1044,6 @@ export const __testInternals = {
 	loadBridgeConfig,
 	resolveCliInvocationConfig,
 	parseEnvFile,
-	resolveEffectiveCallTimeoutMs,
 	parseCliJson,
 	normalizeContent,
 	isStructuredEnvelopeText,

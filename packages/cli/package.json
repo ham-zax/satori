@@ -9,7 +9,7 @@
     "satori-cli": "dist/index.js"
   },
   "scripts": {
-    "build": "pnpm clean && tsc --build --force && pnpm fix:bin-perms",
+    "build": "pnpm clean && tsc --build --force && pnpm fix:bin-perms && node -e \"require('fs').copyFileSync('src/managed-launcher-script.mjs','dist/managed-launcher-script.mjs')\"",
     "dev": "tsx --watch src/index.ts",
     "clean": "rimraf dist",
     "lint": "eslint src --ext .ts",
@@ -33,6 +33,7 @@
   },
   "files": [
     "dist/**/*.js",
+    "dist/**/*.mjs",
     "dist/**/*.d.ts",
     "assets/skills/**/*.md",
     "README.md"

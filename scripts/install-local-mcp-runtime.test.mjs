@@ -93,6 +93,53 @@ test('local launcher forwards SIGTERM and reaps its runtime child', {
   }
 });
 
+test('local launcher force-kills a child that ignores SIGTERM after grace', {
+  skip: process.platform === 'win32' ? 'POSIX signal forwarding is not observable on Windows' : false,
+}, async () => {
+  const tempDir = makeTempDir();
+  const launcherPath = path.join(tempDir, 'launcher.cjs');
+  const runtimeCode = [
+    'console.log(`SATORI_TEST_CHILD_PID=${process.pid}`);',
+    'process.on("SIGTERM", () => {});',
+    'setInterval(() => {}, 1_000);',
+  ].join('');
+  fs.writeFileSync(launcherPath, buildLauncherScript({
+    command: process.execPath,
+    args: ['-e', runtimeCode],
+    shutdownGraceMs: 200,
+  }), 'utf8');
+
+  const launcher = spawn(process.execPath, [launcherPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let childPid;
+  try {
+    childPid = await readChildPid(launcher);
+    launcher.kill('SIGTERM');
+    const [, signal] = await once(launcher, 'exit');
+    assert.equal(signal, 'SIGTERM');
+    assert.equal(isProcessLive(childPid), false, `runtime child ${childPid} survived launcher SIGTERM`);
+  } finally {
+    if (childPid && isProcessLive(childPid)) {
+      process.kill(childPid, 'SIGKILL');
+    }
+    if (launcher.exitCode === null && launcher.signalCode === null) {
+      launcher.kill('SIGKILL');
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('buildLauncherScript embeds SIGKILL grace path', () => {
+  const script = buildLauncherScript({
+    command: '/usr/bin/node',
+    args: ['/repo/packages/mcp/dist/index.js'],
+    shutdownGraceMs: 1234,
+  });
+
+  assert.match(script, /const shutdownGraceMs = 1234/);
+  assert.match(script, /child\.kill\("SIGKILL"\)/);
+  assert.match(script, /forwardShutdown/);
+});
+
 test('installLocalMcpRuntime writes launcher pointing at repo dist entry', () => {
   const repoRoot = makeTempDir();
   const homeDir = makeTempDir();

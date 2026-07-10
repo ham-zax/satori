@@ -44,6 +44,8 @@ npm install @zokizuan/satori-core
 
 Runtime requirements depend on the embedding/vector-store implementation you choose. The MCP distribution defaults to embeddings plus a Milvus-compatible backend; direct users can wire the same components explicitly.
 
+Filesystem indexing binds traversal and file opens to the canonical codebase root via realpath containment and post-open descriptor identity checks (with `/proc/self/fd` preferred on Linux). Paths that resolve outside the root are refused.
+
 ## Minimal Use
 
 ```ts

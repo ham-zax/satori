@@ -102,6 +102,15 @@ test("runDoctor rejects unsupported embedding providers", () => {
     const providerCheck = result.checks.find((check) => check.name === "embedding_provider");
     assert.equal(providerCheck?.status, "error");
     assert.match(providerCheck?.message || "", /OpenAI, VoyageAI, Gemini, or Ollama/);
+    // Model/dimension/key checks are skipped so doctor does not emit contradictory "ok" or VoyageAI key guidance.
+    assert.equal(result.checks.find((check) => check.name === "embedding_model"), undefined);
+    assert.equal(result.checks.find((check) => check.name === "embedding_dimension"), undefined);
+    assert.equal(result.checks.find((check) => check.name === "embedding_provider_env"), undefined);
+    assert.equal(result.nextSteps.some((step) => step.includes("VOYAGEAI_API_KEY")), false);
+    assert.equal(
+        result.nextSteps.some((step) => step.includes("Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, or Ollama.")),
+        true,
+    );
 });
 
 test("runDoctor flags unsupported Node versions", () => {

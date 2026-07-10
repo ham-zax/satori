@@ -1,6 +1,5 @@
 import * as fsp from 'fs/promises';
 import * as fsSync from 'fs';
-import { createReadStream } from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
@@ -12,6 +11,11 @@ import {
     isIndexableFileByPolicy,
     normalizeSupportedExtensions,
 } from '../config/index-policy';
+import {
+    openDirectoryInsideRoot,
+    openRegularFileInsideRoot,
+    resolveInsideRoot,
+} from './root-bound-fs';
 
 interface FileStatSignature {
     size: number;
@@ -271,121 +275,165 @@ export class FileSynchronizer {
     }
 
     private async hashFileBytes(filePath: string): Promise<string> {
-        const stat = await fsp.stat(filePath);
-        if (!stat.isFile()) {
-            throw new Error(`Attempted to hash non-file path: ${filePath}`);
-        }
-
-        return new Promise<string>((resolve, reject) => {
+        const handle = await openRegularFileInsideRoot(filePath, this.rootDir);
+        try {
             const hasher = crypto.createHash('sha256');
-            const stream = createReadStream(filePath);
-
-            stream.on('data', (chunk) => {
-                hasher.update(chunk);
-            });
-            stream.on('error', reject);
-            stream.on('end', () => {
-                resolve(hasher.digest('hex'));
-            });
-        });
+            const stream = handle.createReadStream();
+            for await (const chunk of stream) {
+                hasher.update(chunk as Buffer);
+            }
+            return hasher.digest('hex');
+        } finally {
+            await handle.close().catch(() => undefined);
+        }
     }
 
     private isSignatureEqual(a: FileStatSignature | undefined, b: FileStatSignature): boolean {
         return !!a && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
     }
 
+    private markUnscannedDir(relativeDir: string, result: ScanResult): void {
+        if (relativeDir) {
+            result.unscannedDirPrefixes.add(relativeDir);
+        }
+    }
+
     private async scanDirectory(
         directoryPath: string,
+        relativeDirectoryPath: string,
         previousHashes: Map<string, string>,
         previousStats: Map<string, FileStatSignature>,
         forceFullHash: boolean,
         result: ScanResult
     ): Promise<void> {
-        let entries: fsSync.Dirent[];
+        let openedDirectory;
         try {
-            entries = await fsp.readdir(directoryPath, { withFileTypes: true });
+            openedDirectory = await openDirectoryInsideRoot(directoryPath, this.rootDir);
         } catch (error: unknown) {
-            if (directoryPath === this.rootDir) {
+            if (!relativeDirectoryPath) {
                 throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`);
             }
-
-            const relativeDir = this.normalizeRelPath(path.relative(this.rootDir, directoryPath));
-            if (relativeDir) {
-                result.unscannedDirPrefixes.add(relativeDir);
-            }
-            console.warn(`[Synchronizer] Cannot read directory ${directoryPath}: ${errorMessage(error)}`);
+            this.markUnscannedDir(relativeDirectoryPath, result);
+            console.warn(`[Synchronizer] Cannot open directory ${directoryPath}: ${errorMessage(error)}`);
             return;
         }
 
-        entries.sort((a, b) => compareContractStrings(a.name, b.name));
-
-        for (const entry of entries) {
-            if (entry.isSymbolicLink()) {
-                continue;
+        try {
+            const expectedDirectoryPath = relativeDirectoryPath
+                ? path.join(this.rootDir, relativeDirectoryPath)
+                : this.rootDir;
+            if (openedDirectory.realPath !== expectedDirectoryPath) {
+                if (!relativeDirectoryPath) {
+                    throw new Error(`[Synchronizer] Root directory moved during scan: ${directoryPath}`);
+                }
+                this.markUnscannedDir(relativeDirectoryPath, result);
+                return;
             }
 
-            const absolutePath = path.join(directoryPath, entry.name);
-            const relativePath = this.normalizeRelPath(path.relative(this.rootDir, absolutePath));
-            if (!relativePath) {
-                continue;
-            }
-
-            if (this.shouldIgnore(relativePath, entry.isDirectory())) {
-                continue;
-            }
-
-            let stat: fsSync.Stats;
+            let entries: fsSync.Dirent[];
             try {
-                stat = await fsp.stat(absolutePath);
+                entries = await fsp.readdir(openedDirectory.descriptorPath, { withFileTypes: true });
             } catch (error: unknown) {
-                if (entry.isDirectory()) {
-                    result.unscannedDirPrefixes.add(relativePath);
-                } else {
+                if (!relativeDirectoryPath) {
+                    throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`);
+                }
+                this.markUnscannedDir(relativeDirectoryPath, result);
+                console.warn(`[Synchronizer] Cannot read directory ${directoryPath}: ${errorMessage(error)}`);
+                return;
+            }
+
+            entries.sort((a, b) => compareContractStrings(a.name, b.name));
+
+            for (const entry of entries) {
+                // Dirent symlink bit is best-effort; lstat below is authoritative.
+                if (entry.isSymbolicLink()) {
+                    continue;
+                }
+
+                const absolutePath = path.join(openedDirectory.descriptorPath, entry.name);
+                const relativePath = this.normalizeRelPath(
+                    relativeDirectoryPath ? `${relativeDirectoryPath}/${entry.name}` : entry.name
+                );
+                if (!relativePath) {
+                    continue;
+                }
+
+                if (this.shouldIgnore(relativePath, entry.isDirectory())) {
+                    continue;
+                }
+
+                let stat: fsSync.Stats;
+                try {
+                    stat = await fsp.lstat(absolutePath);
+                } catch (error: unknown) {
+                    if (entry.isDirectory()) {
+                        result.unscannedDirPrefixes.add(relativePath);
+                    } else {
+                        result.unreadableFiles.add(relativePath);
+                    }
+                    console.warn(`[Synchronizer] Cannot lstat ${relativePath}: ${errorMessage(error)}`);
+                    continue;
+                }
+
+                if (stat.isSymbolicLink()) {
+                    continue;
+                }
+
+                if (stat.isDirectory()) {
+                    if (!this.shouldIgnore(relativePath, true)) {
+                        await this.scanDirectory(
+                            absolutePath,
+                            relativePath,
+                            previousHashes,
+                            previousStats,
+                            forceFullHash,
+                            result
+                        );
+                    }
+                    continue;
+                }
+
+                if (!stat.isFile()) {
+                    continue;
+                }
+
+                if (this.shouldIgnore(relativePath, false)) {
+                    continue;
+                }
+
+                const fileReal = await resolveInsideRoot(absolutePath, this.rootDir);
+                if (!fileReal || fileReal !== path.join(this.rootDir, relativePath)) {
                     result.unreadableFiles.add(relativePath);
+                    continue;
                 }
-                console.warn(`[Synchronizer] Cannot stat ${absolutePath}: ${errorMessage(error)}`);
-                continue;
-            }
 
-            if (stat.isDirectory()) {
-                if (!this.shouldIgnore(relativePath, true)) {
-                    await this.scanDirectory(absolutePath, previousHashes, previousStats, forceFullHash, result);
+                if (!await this.isSupportedFile(relativePath, fileReal, stat.size)) {
+                    continue;
                 }
-                continue;
+
+                const signature: FileStatSignature = {
+                    size: stat.size,
+                    mtimeMs: Number(stat.mtimeMs),
+                    ctimeMs: Number(stat.ctimeMs)
+                };
+
+                result.scannedStats.set(relativePath, signature);
+
+                const previousSignature = previousStats.get(relativePath);
+                const previousHash = previousHashes.get(relativePath);
+                const canReuseHash = !forceFullHash
+                    && this.isSignatureEqual(previousSignature, signature)
+                    && typeof previousHash === 'string';
+
+                if (canReuseHash) {
+                    result.scannedHashes.set(relativePath, previousHash!);
+                    continue;
+                }
+
+                result.hashCandidates.push({ relativePath, absolutePath: fileReal, signature });
             }
-
-            if (!stat.isFile()) {
-                continue;
-            }
-
-            if (this.shouldIgnore(relativePath, false)) {
-                continue;
-            }
-
-            if (!await this.isSupportedFile(relativePath, absolutePath, stat.size)) {
-                continue;
-            }
-
-            const signature: FileStatSignature = {
-                size: stat.size,
-                mtimeMs: Number(stat.mtimeMs),
-                ctimeMs: Number(stat.ctimeMs)
-            };
-
-            result.scannedStats.set(relativePath, signature);
-
-            const previousSignature = previousStats.get(relativePath);
-            const previousHash = previousHashes.get(relativePath);
-            const canReuseHash = !forceFullHash
-                && this.isSignatureEqual(previousSignature, signature)
-                && typeof previousHash === 'string';
-
-            if (canReuseHash) {
-                result.scannedHashes.set(relativePath, previousHash!);
-                continue;
-            }
-
-            result.hashCandidates.push({ relativePath, absolutePath, signature });
+        } finally {
+            await openedDirectory.handle.close().catch(() => undefined);
         }
     }
 
@@ -649,7 +697,7 @@ export class FileSynchronizer {
             unscannedDirPrefixes: new Set()
         };
 
-        await this.scanDirectory(this.rootDir, previousHashes, previousStats, forceFullHash, scanResult);
+        await this.scanDirectory(this.rootDir, '', previousHashes, previousStats, forceFullHash, scanResult);
         const hashedCount = await this.hashCandidatesWithConcurrency(scanResult);
         const effective = this.buildEffectiveState(previousHashes, previousStats, scanResult);
 

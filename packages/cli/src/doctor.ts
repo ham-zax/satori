@@ -288,9 +288,40 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
     }
 
     const provider = selectedProvider(env);
-    if (SUPPORTED_EMBEDDING_PROVIDERS.has(provider)) {
+    const providerSupported = SUPPORTED_EMBEDDING_PROVIDERS.has(provider);
+    if (providerSupported) {
         addCheck(checks, "embedding_provider", "ok", `Embedding provider: ${provider}.`);
+        addCheck(checks, "embedding_model", "ok", `Embedding model: ${selectedModel(env, provider)}.`);
+        addCheck(checks, "embedding_dimension", "ok", `Embedding output dimension: ${selectedDimension(env, provider)}.`);
+
+        const requiredKey = requiredEmbeddingEnv(provider);
+        const requiredKeyValue = requiredKey ? env[requiredKey]?.trim() : undefined;
+        if (requiredKey && !requiredKeyValue) {
+            const blankButPresent = requiredKey in env;
+            addCheck(
+                checks,
+                "embedding_provider_env",
+                "error",
+                blankButPresent
+                    ? `${provider} requires a non-empty ${requiredKey} (empty string is incomplete).`
+                    : `${provider} requires ${requiredKey}.`,
+            );
+            if (provider === "VoyageAI") {
+                nextSteps.push("Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.");
+            } else {
+                nextSteps.push(`Set ${requiredKey}.`);
+            }
+        } else {
+            addCheck(
+                checks,
+                "embedding_provider_env",
+                "ok",
+                requiredKey ? `${requiredKey} is present.` : `${provider} does not require an API key.`,
+            );
+        }
     } else {
+        // Model/dimension/key checks are meaningless once the provider is invalid;
+        // skip them so doctor does not emit contradictory "ok" guidance (e.g. VoyageAI keys).
         addCheck(
             checks,
             "embedding_provider",
@@ -298,29 +329,6 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
             `Unsupported embedding provider: ${provider}. Use OpenAI, VoyageAI, Gemini, or Ollama.`,
         );
         nextSteps.push("Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, or Ollama.");
-    }
-    addCheck(checks, "embedding_model", "ok", `Embedding model: ${selectedModel(env, provider)}.`);
-    addCheck(checks, "embedding_dimension", "ok", `Embedding output dimension: ${selectedDimension(env, provider)}.`);
-
-    const requiredKey = requiredEmbeddingEnv(provider);
-    const requiredKeyValue = requiredKey ? env[requiredKey]?.trim() : undefined;
-    if (requiredKey && !requiredKeyValue) {
-        const blankButPresent = requiredKey in env;
-        addCheck(
-            checks,
-            "embedding_provider_env",
-            "error",
-            blankButPresent
-                ? `${provider} requires a non-empty ${requiredKey} (empty string is incomplete).`
-                : `${provider} requires ${requiredKey}.`,
-        );
-        if (provider === "VoyageAI") {
-            nextSteps.push("Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.");
-        } else {
-            nextSteps.push(`Set ${requiredKey}.`);
-        }
-    } else {
-        addCheck(checks, "embedding_provider_env", "ok", requiredKey ? `${requiredKey} is present.` : `${provider} does not require an API key.`);
     }
 
     const milvusAddress = env.MILVUS_ADDRESS?.trim();

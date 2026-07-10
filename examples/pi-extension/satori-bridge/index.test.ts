@@ -120,66 +120,10 @@ test("resolveCliInvocationConfig does not throw when envFile is missing", () => 
 	});
 });
 
-test("resolveEffectiveCallTimeoutMs enforces minimum for manage_index create/reindex", () => {
-	const baseConfig = {
-		command: "node",
-		args: [],
-		cwd: "/tmp",
-		env: {},
-		label: "test",
-		startupTimeoutMs: 60_000,
-		callTimeoutMs: 30_000,
-		debug: false,
-		guardMode: "drop" as const,
-		guardRecovery: "auto" as const,
-	};
-
-	const createTimeout = __testInternals.resolveEffectiveCallTimeoutMs(baseConfig, {
-		commandType: "tool-call",
-		toolName: "manage_index",
-		toolParams: { action: "create" },
-		commandArgs: [],
-	});
-	const reindexTimeout = __testInternals.resolveEffectiveCallTimeoutMs(baseConfig, {
-		commandType: "tool-call",
-		toolName: "manage_index",
-		toolParams: { action: "reindex" },
-		commandArgs: [],
-	});
-
-	assert.equal(createTimeout, 180_000);
-	assert.equal(reindexTimeout, 180_000);
-});
-
-test("resolveEffectiveCallTimeoutMs keeps configured timeout for non-long-running requests", () => {
-	const baseConfig = {
-		command: "node",
-		args: [],
-		cwd: "/tmp",
-		env: {},
-		label: "test",
-		startupTimeoutMs: 60_000,
-		callTimeoutMs: 45_000,
-		debug: false,
-		guardMode: "drop" as const,
-		guardRecovery: "auto" as const,
-	};
-
-	const manageStatusTimeout = __testInternals.resolveEffectiveCallTimeoutMs(baseConfig, {
-		commandType: "tool-call",
-		toolName: "manage_index",
-		toolParams: { action: "status" },
-		commandArgs: [],
-	});
-	const searchTimeout = __testInternals.resolveEffectiveCallTimeoutMs(baseConfig, {
-		commandType: "tool-call",
-		toolName: "search_codebase",
-		toolParams: { query: "x" },
-		commandArgs: [],
-	});
-
-	assert.equal(manageStatusTimeout, 45_000);
-	assert.equal(searchTimeout, 45_000);
+test("bridge no longer applies a manage_index create/reindex poll timeout floor", () => {
+	// Kickoff responses return immediately; the special 180s floor was removed with the poll contract.
+	assert.equal("resolveEffectiveCallTimeoutMs" in __testInternals, false);
+	assert.equal(fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8").includes("MANAGE_INDEX_POLL"), false);
 });
 
 test("parseCliJson parses a strict JSON stdout blob", () => {

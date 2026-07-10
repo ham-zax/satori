@@ -7,6 +7,7 @@ import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-
 import { CliError } from "./errors.js";
 import type { InstallClient, InstallProfile } from "./args.js";
 import { resolveManagedPackageSpecifier } from "./managed-package.js";
+import { buildLauncherScript } from "./managed-launcher-script.mjs";
 
 const MANAGED_BLOCK_START = "# >>> satori-cli managed satori start >>>";
 const MANAGED_BLOCK_END = "# <<< satori-cli managed satori end <<<";
@@ -451,50 +452,6 @@ function managedClientCommand(homeDir: string): ManagedRuntimeCommand {
     };
 }
 
-function buildLauncherScript(runtimeCommand: ManagedRuntimeCommand): string {
-    return [
-        "#!/usr/bin/env node",
-        "",
-        "const { spawn } = require(\"node:child_process\");",
-        "",
-        `const command = ${JSON.stringify(runtimeCommand.command)};`,
-        `const baseArgs = ${JSON.stringify(runtimeCommand.args)};`,
-        "const child = spawn(command, [...baseArgs, ...process.argv.slice(2)], {",
-        "  stdio: \"inherit\",",
-        "  env: process.env,",
-        "});",
-        "",
-        "let shutdownSignal = null;",
-        'for (const signal of ["SIGINT", "SIGTERM"]) {',
-        "  process.on(signal, () => {",
-        "    shutdownSignal ??= signal;",
-        "    if (child.exitCode === null && child.signalCode === null) {",
-        "      child.kill(signal);",
-        "    }",
-        "  });",
-        "}",
-        "",
-        "child.on(\"error\", (error) => {",
-        "  console.error(`Failed to start Satori MCP runtime: ${error.message}`);",
-        "  process.exit(1);",
-        "});",
-        "",
-        "child.on(\"exit\", (code, signal) => {",
-        "  if (shutdownSignal) {",
-        "    process.removeAllListeners(shutdownSignal);",
-        "    process.kill(process.pid, shutdownSignal);",
-        "    return;",
-        "  }",
-        "  if (signal) {",
-        "    console.error(`Satori MCP runtime exited from signal ${signal}`);",
-        "    process.exit(1);",
-        "  }",
-        "  process.exit(code ?? 0);",
-        "});",
-        "",
-    ].join("\n");
-}
-
 function writeTextFileAtomic(filePath: string, content: string, mode?: number): void {
     ensureParentDir(filePath);
     const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
@@ -508,7 +465,10 @@ function writeTextFileAtomic(filePath: string, content: string, mode?: number): 
 function prepareLauncherInstall(homeDir: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
     const launcherPath = resolveLauncherPath(homeDir);
     const current = readTextIfExists(launcherPath);
-    const next = buildLauncherScript(runtimeCommand);
+    const next = buildLauncherScript({
+        command: runtimeCommand.command,
+        args: runtimeCommand.args,
+    });
     return {
         changed: current !== next,
         apply: () => {

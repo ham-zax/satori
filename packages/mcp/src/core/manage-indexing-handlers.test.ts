@@ -172,6 +172,7 @@ test("handleRepairIndex saves the manifest paths verified by repair", async () =
             getSnapshotCodebaseInfo: () => ({
                 status: "indexed",
                 lastUpdated: new Date(0).toISOString(),
+                collectionName: "snapshot-selected-collection",
                 indexFingerprint: RUNTIME_FINGERPRINT,
                 fingerprintSource: "verified",
             }),
@@ -215,6 +216,9 @@ test("handleRepairIndex saves the manifest paths verified by repair", async () =
 
         assert.equal(payload.status, "ok");
         assert.deepEqual(manifestPaths, ["src/repaired.ts"]);
-        assert.deepEqual(repairOptions, { trustedFingerprint: RUNTIME_FINGERPRINT });
+        assert.deepEqual(repairOptions, {
+            trustedFingerprint: RUNTIME_FINGERPRINT,
+            preferredCollectionName: "snapshot-selected-collection",
+        });
     });
 });

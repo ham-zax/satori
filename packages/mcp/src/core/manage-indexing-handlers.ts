@@ -687,11 +687,15 @@ export class ManageIndexingHandlers {
                 );
             }
 
-            const trustedFingerprint = isMatchingVerifiedFingerprint(
-                this.host.getSnapshotCodebaseInfo(absolutePath),
-                this.host.runtimeFingerprint,
-            );
-            const result = await this.host.context.repairIndex(absolutePath, { trustedFingerprint });
+            const snapshotInfo = this.host.getSnapshotCodebaseInfo(absolutePath);
+            const trustedFingerprint = isMatchingVerifiedFingerprint(snapshotInfo, this.host.runtimeFingerprint);
+            const preferredCollectionName = typeof snapshotInfo?.collectionName === "string"
+                ? snapshotInfo.collectionName.trim()
+                : "";
+            const result = await this.host.context.repairIndex(absolutePath, {
+                trustedFingerprint,
+                ...(preferredCollectionName ? { preferredCollectionName } : {}),
+            });
 
             if (result.status === "ok") {
                 await this.host.rebuildCallGraphForIndex(absolutePath);

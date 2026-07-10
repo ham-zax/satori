@@ -8,7 +8,8 @@ import { Context } from './context';
 import { resolveNavigationSqlitePath, SQLiteNavigationStore, validateNavigationStoreParity } from '../navigation';
 import { clearSymbolRegistrySidecar, readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols';
 import type { SymbolRecord, SymbolRegistryManifestFile } from '../symbols';
-import type { Embedding, EmbeddingVector } from '../embedding';
+import { Embedding } from '../embedding';
+import type { EmbeddingVector } from '../embedding';
 import { AstCodeSplitter } from '../splitter';
 import type { Splitter } from '../splitter';
 import type {
@@ -27,7 +28,7 @@ import {
     INDEX_COMPLETION_MARKER_FILE_EXTENSION as COMPLETION_MARKER_EXTENSION,
 } from '../vectordb';
 
-class TestEmbedding implements Embedding {
+class TestEmbedding extends Embedding {
     protected maxTokens = 8192;
 
     async detectDimension(): Promise<number> {
@@ -106,12 +107,22 @@ type ProcessFileListResult = {
     symbolManifestFiles: SymbolRegistryManifestFile[];
 };
 
-type ContextWithProcessFileList = Context & {
+type ContextWithProcessFileList = {
     processFileList: (...args: unknown[]) => Promise<ProcessFileListResult>;
+};
+
+type ContextWithDeleteFileChunks = {
+    deleteFileChunks: (collectionName: string, relativePath: string) => Promise<void>;
+};
+
+type ContextWithExpectedChunks = {
+    getExpectedChunksAndSymbols: (...args: unknown[]) => Promise<unknown>;
 };
 
 class InMemoryVectorDatabase implements VectorDatabase {
     readonly collections = new Map<string, Map<string, VectorDocument>>();
+    readonly queryCalls: Array<{ collectionName: string; filter: string; outputFields: string[] }> = [];
+    readonly mutationCalls: Array<'insert' | 'delete'> = [];
 
     private listDocuments(collectionName: string, filterExpr?: string): VectorDocument[] {
         const collection = this.collections.get(collectionName);
@@ -166,6 +177,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 
     async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
+        this.mutationCalls.push('insert');
         const collection = this.collections.get(collectionName);
         if (!collection) {
             throw new Error(`Collection not found: ${collectionName}`);
@@ -192,6 +204,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 
     async delete(collectionName: string, ids: string[]): Promise<void> {
+        this.mutationCalls.push('delete');
         const collection = this.collections.get(collectionName);
         for (const id of ids) {
             collection?.delete(id);
@@ -199,6 +212,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 
     async query(collectionName: string, _filter: string, outputFields: string[], limit: number = 1000): Promise<Record<string, unknown>[]> {
+        this.queryCalls.push({ collectionName, filter: _filter, outputFields });
         return this.listDocuments(collectionName, _filter).slice(0, limit).map((document) => {
             const row: Record<string, unknown> = {};
             for (const field of outputFields) {
@@ -212,6 +226,22 @@ class InMemoryVectorDatabase implements VectorDatabase {
         return true;
     }
 }
+
+test('Context.deleteFileChunks escapes relative paths as Milvus string literals', async () => {
+    const vectorDatabase = new InMemoryVectorDatabase();
+    const context = new Context({
+        embedding: new TestEmbedding(),
+        vectorDatabase,
+    }) as unknown as ContextWithDeleteFileChunks;
+
+    await context.deleteFileChunks('chunks', 'src/quote"and\\slash.ts');
+
+    assert.deepEqual(vectorDatabase.queryCalls, [{
+        collectionName: 'chunks',
+        filter: 'relativePath == "src/quote\\"and\\\\slash.ts"',
+        outputFields: ['id'],
+    }]);
+});
 
 async function readTrustedFingerprint(context: Context, codebasePath: string): Promise<IndexCompletionFingerprint> {
     const marker = await context.getIndexCompletionMarker(codebasePath);
@@ -554,7 +584,7 @@ test('Context.processFileList returns symbol records, manifest files, and comple
         });
         await vectorDatabase.createHybridCollection(context.resolveCollectionName(codebasePath));
 
-        const processFileListContext = context as ContextWithProcessFileList;
+        const processFileListContext = context as unknown as ContextWithProcessFileList;
         const result = await processFileListContext.processFileList([sourcePath], codebasePath);
 
         assert.equal(result.status, 'completed');
@@ -958,9 +988,7 @@ test('Context.reindexByChange normal no-change sync with existing marker does no
         await context.indexCodebase(codebasePath);
         assert.ok(await context.getIndexCompletionMarker(codebasePath));
 
-        const proofContext = context as Context & {
-            getExpectedChunksAndSymbols: Context['getExpectedChunksAndSymbols'];
-        };
+        const proofContext = context as unknown as ContextWithExpectedChunks;
         proofContext.getExpectedChunksAndSymbols = async () => {
             throw new Error('exact payload proof should not run');
         };
@@ -1340,7 +1368,7 @@ test('Context.indexCodebase limit_reached writes completion marker without symbo
 
         await context.recreateSynchronizerForCodebase(codebasePath);
 
-        const contextWithProcessFileList = context as ContextWithProcessFileList;
+        const contextWithProcessFileList = context as unknown as ContextWithProcessFileList;
         const originalProcessFileList = contextWithProcessFileList.processFileList.bind(contextWithProcessFileList);
         contextWithProcessFileList.processFileList = async (...args: unknown[]) => {
             const result = await originalProcessFileList(...args);
@@ -1387,7 +1415,7 @@ test('Context.reindexByChange clears navigation sidecars when changed-file index
         await context.indexCodebase(codebasePath);
         assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath })).status, 'ok');
 
-        const contextWithProcessFileList = context as ContextWithProcessFileList;
+        const contextWithProcessFileList = context as unknown as ContextWithProcessFileList;
         const originalProcessFileList = contextWithProcessFileList.processFileList.bind(contextWithProcessFileList);
         contextWithProcessFileList.processFileList = async (...args: unknown[]) => {
             const result = await originalProcessFileList(...args);
@@ -1431,7 +1459,7 @@ test('Context.reindexByChange marker-maintaining partial sync clears old marker 
         const collectionName = context.resolveCollectionName(codebasePath);
         assert.equal(vectorDatabase.collections.get(collectionName)?.has(INDEX_COMPLETION_MARKER_DOC_ID), true);
 
-        const contextWithProcessFileList = context as ContextWithProcessFileList;
+        const contextWithProcessFileList = context as unknown as ContextWithProcessFileList;
         const originalProcessFileList = contextWithProcessFileList.processFileList.bind(contextWithProcessFileList);
         contextWithProcessFileList.processFileList = async (...args: unknown[]) => {
             const result = await originalProcessFileList(...args);
@@ -1481,7 +1509,7 @@ test('Context.reindexByChange removes stale registry entries for modified paths 
         assert.ok(initialRegistry.registry.symbolsByFile.get('src/auth.ts'));
         assert.ok(initialRegistry.registry.symbolsByFile.get('src/caller.ts'));
 
-        const contextWithProcessFileList = context as ContextWithProcessFileList;
+        const contextWithProcessFileList = context as unknown as ContextWithProcessFileList;
         contextWithProcessFileList.processFileList = async () => ({
             processedFiles: 0,
             totalChunks: 0,
@@ -1600,7 +1628,7 @@ test('Context.reindexByChange marker-maintaining sync does not rewrite marker wh
     }
 });
 
-test('Context.reindexByChange clears navigation sidecars when incremental sync throws after reading the previous registry', async () => {
+test('Context.reindexByChange retains the filesystem delta for retry when incremental sync throws', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-exception-clears-sidecars-'));
     const stateRoot = path.join(tempRoot, 'state');
     const codebasePath = path.join(tempRoot, 'repo');
@@ -1621,9 +1649,8 @@ test('Context.reindexByChange clears navigation sidecars when incremental sync t
         assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath })).status, 'ok');
         assert.ok(await context.getIndexCompletionMarker(codebasePath));
 
-        const failingContext = context as Context & {
-            deleteFileChunks: (collectionName: string, relativePath: string) => Promise<void>;
-        };
+        const failingContext = context as unknown as ContextWithDeleteFileChunks;
+        const deleteFileChunks = failingContext.deleteFileChunks.bind(context);
         failingContext.deleteFileChunks = async () => {
             throw new Error('synthetic incremental sync failure');
         };
@@ -1633,10 +1660,103 @@ test('Context.reindexByChange clears navigation sidecars when incremental sync t
             () => context.reindexByChange(codebasePath),
             /synthetic incremental sync failure/,
         );
+        assert.equal((context as unknown as { reindexByChangeQueues: Map<string, Promise<void>> }).reindexByChangeQueues.size, 0);
 
         const registry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
         assert.equal(registry.status, 'missing');
         assert.equal(await context.getIndexCompletionMarker(codebasePath), null);
+
+        failingContext.deleteFileChunks = deleteFileChunks;
+        const retry = await context.reindexByChange(codebasePath);
+        assert.equal(retry.modified, 1);
+        assert.deepEqual(retry.changedFiles, ['src/auth.ts']);
+
+        const settled = await context.reindexByChange(codebasePath);
+        assert.equal(settled.modified, 0);
+        assert.deepEqual(settled.changedFiles, []);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange serializes concurrent syncs with an existing synchronizer', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-serialized-existing-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const auth = true;\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        vectorDatabase.mutationCalls.length = 0;
+
+        fs.writeFileSync(sourcePath, 'export const auth = false;\n', 'utf8');
+        const [first, second] = await Promise.all([
+            context.reindexByChange(codebasePath),
+            context.reindexByChange(`${codebasePath}${path.sep}`),
+        ]);
+
+        assert.equal(first.modified, 1);
+        assert.equal(second.modified, 0);
+        assert.deepEqual(first.changedFiles, ['src/auth.ts']);
+        assert.deepEqual(second.changedFiles, []);
+        assert.deepEqual(vectorDatabase.mutationCalls, ['delete', 'insert']);
+        assert.equal((context as unknown as { reindexByChangeQueues: Map<string, Promise<void>> }).reindexByChangeQueues.size, 0);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange serializes first-use synchronizer creation', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-serialized-first-use-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const auth = true;\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const baselineContext = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await baselineContext.recreateSynchronizerForCodebase(codebasePath);
+        await baselineContext.indexCodebase(codebasePath);
+
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+        assert.equal(context.hasSynchronizerForCodebase(codebasePath), false);
+        vectorDatabase.mutationCalls.length = 0;
+
+        fs.writeFileSync(sourcePath, 'export const auth = false;\n', 'utf8');
+        const [first, second] = await Promise.all([
+            context.reindexByChange(codebasePath),
+            context.reindexByChange(`${codebasePath}${path.sep}`),
+        ]);
+
+        assert.equal(first.modified, 1);
+        assert.equal(second.modified, 0);
+        assert.deepEqual(first.changedFiles, ['src/auth.ts']);
+        assert.deepEqual(second.changedFiles, []);
+        assert.deepEqual(vectorDatabase.mutationCalls, ['delete', 'insert']);
+        assert.equal(context.getActiveSynchronizers().size, 1);
+        assert.equal((context as unknown as { reindexByChangeQueues: Map<string, Promise<void>> }).reindexByChangeQueues.size, 0);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -1878,6 +1998,60 @@ test('Context.repairIndex writes the completion marker to the staged collection 
         assert.equal(vectorDatabase.collections.has(stableCollection), false);
         assert.equal(vectorDatabase.collections.get(stagedCollection)?.has(INDEX_COMPLETION_MARKER_DOC_ID), true);
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), stagedCollection);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex uses the snapshot-selected staged collection when multiple generations exist', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-preferred-stage-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function auth() { return true; }\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        const trustedFingerprint = await readTrustedFingerprint(context, codebasePath);
+        const stableCollection = context.resolveCollectionName(codebasePath);
+        const stableDocs = vectorDatabase.collections.get(stableCollection);
+        assert.ok(stableDocs);
+
+        const selectedCollection = context.resolveStagedCollectionName(codebasePath, 'selected');
+        const staleCollection = context.resolveStagedCollectionName(codebasePath, 'stale');
+        vectorDatabase.collections.set(selectedCollection, new Map(stableDocs));
+        vectorDatabase.collections.set(staleCollection, new Map(stableDocs));
+        vectorDatabase.collections.get(staleCollection)?.set('stale-extra', {
+            id: 'stale-extra',
+            vector: [],
+            content: 'stale',
+            relativePath: 'deleted.ts',
+            startLine: 1,
+            endLine: 1,
+            fileExtension: '.ts',
+            metadata: {},
+        });
+        vectorDatabase.collections.delete(stableCollection);
+
+        const repairResult = await context.repairIndex(codebasePath, {
+            trustedFingerprint,
+            preferredCollectionName: selectedCollection,
+        });
+
+        assert.equal(repairResult.status, 'ok');
+        assert.equal(repairResult.collectionName, selectedCollection);
+        assert.equal(vectorDatabase.collections.get(selectedCollection)?.has(INDEX_COMPLETION_MARKER_DOC_ID), true);
+        assert.equal(vectorDatabase.collections.get(staleCollection)?.has('stale-extra'), true);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

@@ -1,10 +1,24 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import { FileSynchronizer } from './synchronizer';
+
+function createDirectorySymlinkOrSkip(t: TestContext, target: string, linkPath: string): boolean {
+    try {
+        fs.symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+        return true;
+    } catch (error: unknown) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+            t.skip(`Directory symlinks are unavailable on this platform: ${code}`);
+            return false;
+        }
+        throw error;
+    }
+}
 
 // F-D2: snapshot JSON array order must use compareContractStrings, not localeCompare.
 test('FileSynchronizer snapshot JSON key order is independent of String.prototype.localeCompare', async () => {
@@ -61,6 +75,110 @@ test('FileSynchronizer snapshot JSON key order is independent of String.prototyp
         } finally {
             String.prototype.localeCompare = original;
         }
+    } finally {
+        if (prevHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = prevHome;
+        }
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
+test('FileSynchronizer does not track files through an external directory symlink', async (t) => {
+    const prevHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-link-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-link-repo-'));
+    const tempOutside = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-link-outside-'));
+
+    try {
+        process.env.HOME = tempHome;
+        fs.writeFileSync(path.join(tempRepo, 'local.ts'), 'export const local = true;\n', 'utf8');
+        fs.writeFileSync(path.join(tempOutside, 'secret.ts'), 'export const secret = true;\n', 'utf8');
+        if (!createDirectorySymlinkOrSkip(t, tempOutside, path.join(tempRepo, 'linked'))) {
+            return;
+        }
+
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize();
+
+        assert.deepEqual(synchronizer.getTrackedRelativePaths(), ['local.ts']);
+    } finally {
+        if (prevHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = prevHome;
+        }
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempOutside, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
+test('FileSynchronizer does not recurse through a directory symlink cycle', async (t) => {
+    const prevHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-cycle-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-cycle-repo-'));
+
+    try {
+        process.env.HOME = tempHome;
+        const nestedDir = path.join(tempRepo, 'nested');
+        fs.mkdirSync(nestedDir);
+        fs.writeFileSync(path.join(tempRepo, 'root.ts'), 'export const root = true;\n', 'utf8');
+        fs.writeFileSync(path.join(nestedDir, 'child.ts'), 'export const child = true;\n', 'utf8');
+        if (!createDirectorySymlinkOrSkip(t, tempRepo, path.join(nestedDir, 'loop'))) {
+            return;
+        }
+
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize();
+
+        assert.deepEqual(synchronizer.getTrackedRelativePaths(), ['nested/child.ts', 'root.ts']);
+    } finally {
+        if (prevHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = prevHome;
+        }
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
+test('FileSynchronizer serializes prepared commits and rejects a stale change set', async () => {
+    const prevHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-commit-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-commit-repo-'));
+
+    try {
+        process.env.HOME = tempHome;
+        const sourcePath = path.join(tempRepo, 'source.ts');
+        fs.writeFileSync(sourcePath, 'export const value = 1;\n', 'utf8');
+
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize();
+        const committedHash = synchronizer.getFileHash('source.ts');
+        assert.ok(committedHash);
+        fs.writeFileSync(sourcePath, 'export const value = 2;\n', 'utf8');
+
+        const first = await synchronizer.prepareChanges();
+        const stale = await synchronizer.prepareChanges();
+        assert.equal(synchronizer.getFileHash('source.ts'), committedHash);
+        const commits = await Promise.allSettled([first.commit(), stale.commit()]);
+
+        assert.equal(commits[0].status, 'fulfilled');
+        assert.equal(commits[1].status, 'rejected');
+        if (commits[1].status === 'rejected') {
+            assert.match(String(commits[1].reason), /Cannot commit stale prepared changes/);
+        }
+        assert.notEqual(synchronizer.getFileHash('source.ts'), committedHash);
+
+        fs.writeFileSync(sourcePath, 'export const value = 3;\n', 'utf8');
+        const duplicate = await synchronizer.prepareChanges();
+        const duplicateCommit = duplicate.commit();
+        assert.equal(duplicate.commit(), duplicateCommit);
+        await duplicateCommit;
     } finally {
         if (prevHome === undefined) {
             delete process.env.HOME;

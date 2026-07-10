@@ -197,6 +197,7 @@ class ContextMcpServer {
             runtimeFingerprint: this.runtimeFingerprint,
             toolHandlers: this.toolHandlers,
             readFileMaxLines: this.readFileMaxLines,
+            runtimeOwnerGate: this.runtimeOwnerRegistry,
             providerRuntime: this.providerRuntime,
         };
 
@@ -297,6 +298,14 @@ class ContextMcpServer {
         }, 60 * 60 * 1000);
 
         console.log("MCP server started and listening on stdio.");
+        await runPostConnectStartupLifecycle(this.runMode, {
+            watchSyncEnabled: this.watchSyncEnabled,
+            verifyCloudState: () => this.verifyCloudState(this.getToolContext()),
+            onVerifyCloudStateError: (error) => {
+                console.error("[STARTUP] Error verifying cloud state:", errorMessage(error));
+            },
+            syncManager: this.syncManager,
+        });
     }
 
     async shutdown(): Promise<void> {

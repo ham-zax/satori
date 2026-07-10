@@ -50,6 +50,11 @@ interface EffectiveState {
     partialScan: boolean;
 }
 
+interface SynchronizerCheckpointState extends EffectiveState {
+    merkleRoot: string;
+    fullHashCounter: number;
+}
+
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
@@ -71,6 +76,11 @@ export interface FileChangeResult {
     fullHashRun: boolean;
 }
 
+export interface PreparedFileChangeSet {
+    readonly changes: FileChangeResult;
+    commit(): Promise<void>;
+}
+
 const SNAPSHOT_VERSION = 2;
 const DEFAULT_HASH_CONCURRENCY = 16;
 
@@ -86,6 +96,8 @@ export class FileSynchronizer {
     private unscannedDirPrefixes: string[];
     private fullHashCounter: number;
     private supportedExtensions: Set<string>;
+    private checkpointVersion: number;
+    private commitQueue: Promise<void>;
 
     constructor(
         rootDir: string,
@@ -106,6 +118,8 @@ export class FileSynchronizer {
         this.partialScan = false;
         this.unscannedDirPrefixes = [];
         this.fullHashCounter = 0;
+        this.checkpointVersion = 0;
+        this.commitQueue = Promise.resolve();
     }
 
     public static canonicalizeSnapshotIdentityPath(codebasePath: string): string {
@@ -306,6 +320,10 @@ export class FileSynchronizer {
         entries.sort((a, b) => compareContractStrings(a.name, b.name));
 
         for (const entry of entries) {
+            if (entry.isSymbolicLink()) {
+                continue;
+            }
+
             const absolutePath = path.join(directoryPath, entry.name);
             const relativePath = this.normalizeRelPath(path.relative(this.rootDir, absolutePath));
             if (!relativePath) {
@@ -509,21 +527,29 @@ export class FileSynchronizer {
         return true;
     }
 
-    private async saveSnapshot(): Promise<void> {
+    private async saveSnapshot(state?: SynchronizerCheckpointState): Promise<void> {
         const merkleDir = path.dirname(this.snapshotPath);
         await fsp.mkdir(merkleDir, { recursive: true });
 
-        const fileHashes = Array.from(this.fileHashes.entries()).sort(([a], [b]) => compareContractStrings(a, b));
-        const fileStats = Array.from(this.fileStats.entries()).sort(([a], [b]) => compareContractStrings(a, b));
+        const checkpoint = state ?? {
+            fileHashes: this.fileHashes,
+            fileStats: this.fileStats,
+            partialScan: this.partialScan,
+            unscannedDirPrefixes: this.unscannedDirPrefixes,
+            merkleRoot: this.merkleRoot,
+            fullHashCounter: this.fullHashCounter,
+        };
+        const fileHashes = Array.from(checkpoint.fileHashes.entries()).sort(([a], [b]) => compareContractStrings(a, b));
+        const fileStats = Array.from(checkpoint.fileStats.entries()).sort(([a], [b]) => compareContractStrings(a, b));
 
         const payload: SnapshotV2 = {
             snapshotVersion: SNAPSHOT_VERSION,
             fileHashes,
             fileStats,
-            merkleRoot: this.merkleRoot,
-            partialScan: this.partialScan,
-            unscannedDirPrefixes: [...this.unscannedDirPrefixes],
-            fullHashCounter: this.fullHashCounter
+            merkleRoot: checkpoint.merkleRoot,
+            partialScan: checkpoint.partialScan,
+            unscannedDirPrefixes: [...checkpoint.unscannedDirPrefixes],
+            fullHashCounter: checkpoint.fullHashCounter
         };
 
         const tempSnapshotPath = `${this.snapshotPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -630,6 +656,34 @@ export class FileSynchronizer {
         return { effective, hashedCount };
     }
 
+    private applyCheckpointState(state: SynchronizerCheckpointState): void {
+        this.fileHashes = state.fileHashes;
+        this.fileStats = state.fileStats;
+        this.partialScan = state.partialScan;
+        this.unscannedDirPrefixes = state.unscannedDirPrefixes;
+        this.merkleRoot = state.merkleRoot;
+        this.fullHashCounter = state.fullHashCounter;
+    }
+
+    private commitPreparedState(
+        baseVersion: number,
+        nextState: SynchronizerCheckpointState,
+        shouldPersist: boolean
+    ): Promise<void> {
+        const commit = this.commitQueue.then(async () => {
+            if (this.checkpointVersion !== baseVersion) {
+                throw new Error('[Synchronizer] Cannot commit stale prepared changes. Prepare the filesystem delta again.');
+            }
+            if (shouldPersist) {
+                await this.saveSnapshot(nextState);
+            }
+            this.applyCheckpointState(nextState);
+            this.checkpointVersion += 1;
+        });
+        this.commitQueue = commit.catch(() => undefined);
+        return commit;
+    }
+
     public async initialize(): Promise<void> {
         console.log(`Initializing file synchronizer for ${this.rootDir}`);
         const { migrated } = await this.loadSnapshot();
@@ -648,12 +702,15 @@ export class FileSynchronizer {
             this.merkleRoot = computeMerkleRoot(this.fileHashes);
         }
 
+        this.checkpointVersion += 1;
+
         console.log(`[Synchronizer] File synchronizer initialized. Loaded ${this.fileHashes.size} tracked files.`);
     }
 
-    public async checkForChanges(): Promise<FileChangeResult> {
+    public async prepareChanges(): Promise<PreparedFileChangeSet> {
         console.log('[Synchronizer] Checking for file changes...');
 
+        const baseVersion = this.checkpointVersion;
         const previousHashes = new Map(this.fileHashes);
         const previousStats = new Map(this.fileStats);
         const previousPartialScan = this.partialScan;
@@ -669,21 +726,10 @@ export class FileSynchronizer {
 
         const fileChanges = this.compareStates(previousHashes, effective.fileHashes);
 
-        this.fileHashes = effective.fileHashes;
-        this.fileStats = effective.fileStats;
-        this.partialScan = effective.partialScan;
-        this.unscannedDirPrefixes = effective.unscannedDirPrefixes;
-        this.merkleRoot = nextMerkleRoot;
-        this.fullHashCounter = nextCounter;
-
         const hasDiffs = fileChanges.added.length > 0 || fileChanges.removed.length > 0 || fileChanges.modified.length > 0;
-        const metadataChanged = previousPartialScan !== this.partialScan
-            || !this.arraysEqual(previousUnscannedDirPrefixes, this.unscannedDirPrefixes);
-        const counterAdvanced = previousCounter !== this.fullHashCounter;
-
-        if (hasDiffs || hashedCount > 0 || metadataChanged || counterAdvanced) {
-            await this.saveSnapshot();
-        }
+        const metadataChanged = previousPartialScan !== effective.partialScan
+            || !this.arraysEqual(previousUnscannedDirPrefixes, effective.unscannedDirPrefixes);
+        const counterAdvanced = previousCounter !== nextCounter;
 
         if (hasDiffs) {
             console.log(`[Synchronizer] Found changes: ${fileChanges.added.length} added, ${fileChanges.removed.length} removed, ${fileChanges.modified.length} modified.`);
@@ -691,13 +737,35 @@ export class FileSynchronizer {
             console.log('[Synchronizer] No file content changes detected.');
         }
 
-        return {
+        const changes: FileChangeResult = {
             ...fileChanges,
             hashedCount,
-            partialScan: this.partialScan,
-            unscannedDirPrefixes: [...this.unscannedDirPrefixes],
+            partialScan: effective.partialScan,
+            unscannedDirPrefixes: [...effective.unscannedDirPrefixes],
             fullHashRun
         };
+
+        const nextState: SynchronizerCheckpointState = {
+            ...effective,
+            merkleRoot: nextMerkleRoot,
+            fullHashCounter: nextCounter,
+        };
+        const shouldPersist = hasDiffs || hashedCount > 0 || metadataChanged || counterAdvanced;
+        let commit: Promise<void> | undefined;
+
+        return {
+            changes,
+            commit: () => {
+                commit ??= this.commitPreparedState(baseVersion, nextState, shouldPersist);
+                return commit;
+            },
+        };
+    }
+
+    public async checkForChanges(): Promise<FileChangeResult> {
+        const prepared = await this.prepareChanges();
+        await prepared.commit();
+        return prepared.changes;
     }
 
     public getFileHash(filePath: string): string | undefined {

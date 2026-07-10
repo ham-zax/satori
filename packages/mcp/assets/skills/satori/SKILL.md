@@ -53,9 +53,9 @@ Satori exposes exactly six MCP tools:
 ## Index Rules
 
 - `manage_index` actions are `create`, `reindex`, `sync`, `status`, `clear`, and `repair`. Responses are JSON envelopes in MCP text content (`tool`, `version`, `action`, `path`, `status`, `message`/`humanText`, optional `reason`/`hints`/`warnings`/`preflight`) — parse structured fields for branching.
-- If any tool returns `requires_reindex`, run `manage_index(action="reindex")`, then retry the original call. Do not substitute `sync`.
+- If any tool returns `requires_reindex`, stop normal navigation and report the exact proof failure. Provider-backed `create` and `reindex` are expensive full rebuilds and require explicit user approval before invocation; do not substitute `sync` for a required rebuild.
 - Use `manage_index(action="sync")` for freshness convergence and ignore-rule updates.
-- Use `manage_index(action="repair")` only to rebuild local readiness when vector payload and trusted fingerprint proof already match; if repair refuses, follow create/reindex hints.
+- Use `manage_index(action="repair")` only to rebuild local readiness when vector payload and trusted fingerprint proof already match; if repair refuses, report its proof failure and request approval before following a create/reindex hint.
 - Never call `manage_index(action="clear")` unless the user explicitly requests destructive reset.
 - Respect blocked and actively indexing states instead of forcing retries blindly.
 - `MISSING_PROVIDER_CONFIG` is active only when it appears as the tool response `code` or `reason`. If it appears inside search results, it may just be matched code content.

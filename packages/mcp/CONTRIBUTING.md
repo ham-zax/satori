@@ -6,10 +6,12 @@ This guide covers contribution rules specific to the MCP server package.
 
 Only these tools are supported:
 
-- `manage_index` (`action`: `create | sync | status | clear`)
-- `search_codebase`
-- `read_file`
 - `list_codebases`
+- `manage_index` (`action`: `create | reindex | sync | status | clear | repair`)
+- `search_codebase`
+- `file_outline`
+- `call_graph`
+- `read_file`
 
 Legacy tool names from pre-1.0 are intentionally removed.
 

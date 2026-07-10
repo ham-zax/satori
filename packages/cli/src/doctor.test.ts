@@ -88,6 +88,22 @@ test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () 
     assert.equal(result.checks.find((check) => check.name === "milvus_token")?.status, "ok");
 });
 
+test("runDoctor rejects unsupported embedding providers", () => {
+    const result = runDoctor(baseDoctorOptions({
+        nodeVersion: "v22.0.0",
+        env: {
+            EMBEDDING_PROVIDER: "Typo",
+            VOYAGEAI_API_KEY: "pa-test",
+            MILVUS_ADDRESS: "localhost:19530",
+        },
+    }));
+
+    assert.equal(result.status, "error");
+    const providerCheck = result.checks.find((check) => check.name === "embedding_provider");
+    assert.equal(providerCheck?.status, "error");
+    assert.match(providerCheck?.message || "", /OpenAI, VoyageAI, Gemini, or Ollama/);
+});
+
 test("runDoctor flags unsupported Node versions", () => {
     const result = runDoctor(baseDoctorOptions({
         nodeVersion: "v18.19.0",

@@ -44,6 +44,14 @@ function mkdtemp(prefix: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+test("bridge manage_index schema includes repair", () => {
+	assert.match(JSON.stringify(__testInternals.manageIndexSchema), /"const":"repair"/);
+});
+
+test("bridge npm fallback matches the current CLI package version", () => {
+	assert.equal(__testInternals.defaultNpmPackage, "@zokizuan/satori-cli@0.4.14");
+});
+
 test("resolveCliInvocationConfig prefers project-local config over global fallback", () => {
 	withCleanSatoriEnv(() => {
 		const root = mkdtemp("satori-bridge-local-first-");

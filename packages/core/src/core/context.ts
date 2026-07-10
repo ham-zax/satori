@@ -23,7 +23,7 @@ import {
     INDEX_COMPLETION_MARKER_RELATIVE_PATH,
     deleteCollectionWithVerification
 } from '../vectordb';
-import { buildMilvusIdInFilter } from '../vectordb/filters';
+import { buildMilvusIdInFilter, escapeMilvusStringLiteral } from '../vectordb/filters';
 import { SemanticSearchRequest, SemanticSearchResult } from '../types';
 import { envManager } from '../utils/env-manager';
 import {
@@ -85,11 +85,21 @@ interface CodebaseIgnoreState {
 
 type RepairIndexOptions = {
     trustedFingerprint?: IndexCompletionFingerprint;
+    preferredCollectionName?: string;
 };
 
 type ReindexByChangeOptions = {
     targetCollectionName?: string;
     maintainCompletionMarker?: boolean;
+};
+
+type ReindexByChangeResult = {
+    added: number;
+    removed: number;
+    modified: number;
+    changedFiles: string[];
+    navigationRecovery?: 'rebuilt' | 'failed';
+    collectionName?: string;
 };
 
 type ExpectedIndexedChunk = {
@@ -118,6 +128,7 @@ export class Context {
     private runtimeCustomIgnorePatterns: string[];
     private ignoreStateByCollection: Map<string, CodebaseIgnoreState>;
     private synchronizers = new Map<string, FileSynchronizer>();
+    private reindexByChangeQueues = new Map<string, Promise<void>>();
     private writeCollectionOverrides = new Map<string, string>();
     private symbolRegistryStateRoot?: string;
 
@@ -758,14 +769,41 @@ export class Context {
         codebasePath: string,
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
         options: ReindexByChangeOptions = {}
-    ): Promise<{
-        added: number;
-        removed: number;
-        modified: number;
-        changedFiles: string[];
-        navigationRecovery?: 'rebuilt' | 'failed';
-        collectionName?: string;
-    }> {
+    ): Promise<ReindexByChangeResult> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        return this.runSerializedReindexByChange(
+            canonicalRoot,
+            () => this.performReindexByChange(codebasePath, progressCallback, options),
+        );
+    }
+
+    private async runSerializedReindexByChange<T>(
+        canonicalRoot: string,
+        operation: () => Promise<T>,
+    ): Promise<T> {
+        const previous = this.reindexByChangeQueues.get(canonicalRoot) || Promise.resolve();
+        let release!: () => void;
+        const current = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        this.reindexByChangeQueues.set(canonicalRoot, current);
+
+        await previous;
+        try {
+            return await operation();
+        } finally {
+            release();
+            if (this.reindexByChangeQueues.get(canonicalRoot) === current) {
+                this.reindexByChangeQueues.delete(canonicalRoot);
+            }
+        }
+    }
+
+    private async performReindexByChange(
+        codebasePath: string,
+        progressCallback: ((progress: { phase: string; current: number; total: number; percentage: number }) => void) | undefined,
+        options: ReindexByChangeOptions,
+    ): Promise<ReindexByChangeResult> {
         this.loadIndexProfileForCodebase(codebasePath);
         const synchronizerKey = this.resolveCollectionName(codebasePath);
         const synchronizer = this.synchronizers.get(synchronizerKey);
@@ -834,7 +872,8 @@ export class Context {
             : false;
 
         progressCallback?.({ phase: 'Checking for file changes...', current: 0, total: 100, percentage: 0 });
-        const { added, removed, modified } = await currentSynchronizer.checkForChanges();
+        const preparedChanges = await currentSynchronizer.prepareChanges();
+        const { added, removed, modified } = preparedChanges.changes;
         const totalChanges = added.length + removed.length + modified.length;
 
         if (totalChanges === 0) {
@@ -843,6 +882,7 @@ export class Context {
                     requirePayloadProof: true,
                 });
             }
+            await preparedChanges.commit();
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
             console.log('[Context] ✅ No file changes detected.');
             return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: targetCollectionName };
@@ -967,6 +1007,9 @@ export class Context {
                 requirePayloadProof: markerWasMissing,
             });
         }
+        if (readinessArtifactsComplete) {
+            await preparedChanges.commit();
+        }
 
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
         progressCallback?.({ phase: 'Re-indexing complete!', current: totalChanges, total: totalChanges, percentage: 100 });
@@ -982,8 +1025,7 @@ export class Context {
     }
 
     private async deleteFileChunks(collectionName: string, relativePath: string): Promise<void> {
-        // Escape backslashes for Milvus query expression (Windows path compatibility)
-        const escapedPath = relativePath.replace(/\\/g, '\\\\');
+        const escapedPath = escapeMilvusStringLiteral(relativePath);
         const results = await this.vectorDatabase.query(
             collectionName,
             `relativePath == "${escapedPath}"`,
@@ -1979,8 +2021,19 @@ export class Context {
         // 1. Resolve collection
         const familyCollectionNames = await this.listRelatedCollectionNames(canonicalPath);
         const activeCollectionName = this.getWriteCollectionName(canonicalPath);
+        const preferredCollectionName = options.preferredCollectionName?.trim();
         let selectedCollection: string | null = null;
-        if (familyCollectionNames.includes(activeCollectionName)) {
+        if (preferredCollectionName) {
+            if (!familyCollectionNames.includes(preferredCollectionName)) {
+                return {
+                    status: 'blocked',
+                    reason: 'needs_create',
+                    message: `Repair snapshot collection '${preferredCollectionName}' does not exist in the codebase collection family.`,
+                    missingCount: 0,
+                };
+            }
+            selectedCollection = preferredCollectionName;
+        } else if (familyCollectionNames.includes(activeCollectionName)) {
             selectedCollection = activeCollectionName;
         } else {
             const { alternateFamilyName } = this.buildCollectionFamilies(canonicalPath);

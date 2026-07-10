@@ -398,6 +398,7 @@ Why it matters:
 - `sync`: converge changed files and ignore-rule updates.
 - `status`: inspect readiness.
 - `clear`: destructive removal, explicit only.
+- `repair`: rebuild local readiness only when vector payload and trusted fingerprint proof match.
 
 Use cases:
 
@@ -1026,30 +1027,30 @@ The indexing-lock contract includes:
 
 - stable non-ok reason codes such as `indexing`, `requires_reindex`, and `not_indexed`,
 - a single completion source of truth through marker documents,
-- deterministic status polling for long-running create/reindex actions,
+- deterministic kickoff responses for create/reindex and explicit status checks for later progress,
 - blocked actions while a root is actively indexing.
 
 Why it matters:
 
 - Agents get machine-readable reasons instead of ambiguous failure text.
-- Long indexing runs can be polled instead of abandoned.
+- Long indexing runs remain observable through explicit status requests.
 - Multiple roots can be reasoned about independently.
 
-### 62. Long-Running Create/Reindex Polling
+### 62. Long-Running Create/Reindex Kickoff
 
-The shell CLI and bridge paths account for `manage_index create|reindex` being long-running operations.
+The shell CLI and bridge return the initial `manage_index create|reindex` response without polling to terminal state.
 
 Behavior includes:
 
-- minimum polling timeout floors for create/reindex,
-- initial call result is evaluated before polling begins,
-- immediate errors or non-ok envelopes are not masked by polling,
+- create/reindex responses report whether work was accepted or rejected,
+- immediate errors or non-ok envelopes are returned unchanged,
+- callers use the returned status hints or an explicit `manage_index(action="status")` request to observe later progress,
 - deterministic JSON tool-error payloads are emitted on call timeout instead of empty stdout.
 
 Why it matters:
 
 - Indexing large repositories does not look like a broken CLI just because it takes time.
-- Automation can distinguish timeout, non-ok lifecycle state, and successful completion.
+- Automation can distinguish timeout, non-ok lifecycle state, accepted kickoff, and later completion.
 
 ### 63. CLI Run Modes
 

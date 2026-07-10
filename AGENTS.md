@@ -53,7 +53,7 @@ Do not invent tools, parameters, write capabilities, rerank knobs, or output sha
 - `call_graph` is advisory context only: do not treat inbound/outbound edges as sole blast-radius authority; confirm impact with scoped search, tests, or direct references before editing.
 - If a grouped search result has `callGraphHint.supported=false`, treat `navigationFallback` as authoritative and call tools from its args. Do not reconstruct spans from prose.
 - Prefer `recommendedNextAction` when present; inspect `warnings[].action`, `capabilities`, and result `fallbacks` before deciding the next proof step.
-- If any tool returns `requires_reindex` or `hints.reindex`, stop and run `manage_index(action="reindex", path=<hinted path or indexed root>)`; do not substitute `sync`.
+- If any tool returns `requires_reindex` or `hints.reindex`, stop normal navigation and report the exact proof failure. Provider-backed `create` and `reindex` are expensive full rebuilds and require explicit user approval before invocation; do not substitute `sync` for a required rebuild.
 - If `list_codebases` or `manage_index status` reports `provider_incomplete` / `missing_provider_config` / `MISSING_PROVIDER_CONFIG`, set the missing env vars and restart the MCP server before treating fingerprint or marker failures as index truth.
 - `search_codebase` is the sync-on-read freshness tool. Other tools may run compatibility gates but do not imply the same freshness behavior.
 - `search_codebase` defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `debug=false`.

@@ -22,7 +22,7 @@ import {
 	type CliCommandType,
 } from "./recovery.js";
 
-const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-cli@0.4.2";
+const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-cli@0.4.14";
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_CALL_TIMEOUT_MS = 600_000;
 const MANAGE_INDEX_POLL_MIN_TIMEOUT_MS = 180_000;
@@ -832,6 +832,7 @@ const MANAGE_INDEX_SCHEMA = Type.Object({
 		Type.Literal("sync"),
 		Type.Literal("status"),
 		Type.Literal("clear"),
+		Type.Literal("repair"),
 	]),
 	path: Type.String({ description: "ABSOLUTE path to the target codebase." }),
 	force: Type.Optional(Type.Boolean({ description: "Only for create. Force rebuild from scratch." })),
@@ -933,7 +934,7 @@ const TOOL_SPECS: McpToolSpec[] = [
 	{
 		name: "manage_index",
 		description:
-			"Manage Satori index lifecycle operations (create/reindex/sync/status/clear), including reindex preflight guardrails with explicit override support.",
+			"Manage Satori index lifecycle operations (create/reindex/sync/status/clear/repair), including reindex preflight guardrails with explicit override support.",
 		parameters: MANAGE_INDEX_SCHEMA,
 	},
 	{
@@ -1053,6 +1054,8 @@ export default function satoriBridgeExtension(pi: ExtensionAPI) {
 }
 
 export const __testInternals = {
+	defaultNpmPackage: DEFAULT_NPM_PACKAGE,
+	manageIndexSchema: MANAGE_INDEX_SCHEMA,
 	loadBridgeConfig,
 	resolveCliInvocationConfig,
 	parseEnvFile,

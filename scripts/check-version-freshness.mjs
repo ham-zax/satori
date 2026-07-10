@@ -14,6 +14,9 @@ const DEFAULT_SCAN_PATHS = [
   'packages/mcp/README.md',
   'packages/cli/README.md',
   'packages/mcp/src/config.ts',
+  'examples/pi-extension/satori-bridge/index.ts',
+  'examples/pi-extension/satori-bridge/README.md',
+  'examples/pi-extension/satori-bridge/config.example.json',
 ];
 
 const PUBLISHABLE_PACKAGE_NAMES = new Set([

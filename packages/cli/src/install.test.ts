@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { executeInstallCommand } from "./install.js";
 
@@ -70,6 +71,66 @@ function withTempHome(run: (homeDir: string) => void): void {
 
 function readFile(filePath: string): string {
     return fs.readFileSync(filePath, "utf8");
+}
+
+function isProcessLive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function readChildPid(child: ChildProcess): Promise<number> {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Timed out waiting for managed runtime child PID.")), 5_000);
+        let stdout = "";
+        child.stdout?.setEncoding("utf8");
+        child.stdout?.on("data", (chunk) => {
+            stdout += String(chunk);
+            const match = stdout.match(/SATORI_TEST_CHILD_PID=(\d+)/);
+            if (match) {
+                clearTimeout(timeout);
+                resolve(Number(match[1]));
+            }
+        });
+    });
+}
+
+async function assertLauncherReapsChild(homeDir: string, signal: "SIGINT" | "SIGTERM"): Promise<void> {
+    const runtimeCode = [
+        'console.log(`SATORI_TEST_CHILD_PID=${process.pid}`);',
+        `process.on(${JSON.stringify(signal)}, () => process.exit(0));`,
+        "setInterval(() => {}, 1_000);",
+    ].join("");
+    executeInstallCommand({
+        kind: "install",
+        client: "codex",
+        dryRun: false,
+    }, {
+        homeDir,
+        runtimeCommand: { command: process.execPath, args: ["-e", runtimeCode] },
+    });
+
+    const launcher = spawn(process.execPath, [launcherPath(homeDir)], {
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    let childPid: number | undefined;
+    try {
+        childPid = await readChildPid(launcher);
+        launcher.kill(signal);
+        const [, exitSignal] = await once(launcher, "exit") as [number | null, NodeJS.Signals | null];
+        assert.equal(exitSignal, signal);
+        assert.equal(isProcessLive(childPid), false, `runtime child ${childPid} survived launcher ${signal}`);
+    } finally {
+        if (childPid && isProcessLive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+        }
+        if (launcher.exitCode === null && launcher.signalCode === null) {
+            launcher.kill("SIGKILL");
+        }
+    }
 }
 
 function extractCodexGuidanceCommand(content: string): string {
@@ -197,6 +258,19 @@ test("install writes the actual installed runtime bin path into the stable launc
         const launcher = readFile(launcherPath(homeDir));
         assert.equal(launcher.includes("custom/server.mjs"), true);
     });
+});
+
+test("managed launcher forwards termination signals and reaps its runtime child", {
+    skip: process.platform === "win32" ? "POSIX signal forwarding is not observable on Windows" : false,
+}, async () => {
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-launcher-signal-"));
+        try {
+            await assertLauncherReapsChild(homeDir, signal);
+        } finally {
+            fs.rmSync(homeDir, { recursive: true, force: true });
+        }
+    }
 });
 
 // F-OP-02: install result must surface the managed package specifier used.

@@ -49,6 +49,7 @@ export interface DoctorOptions {
 
 const PACKAGE_VERSION_NOTE =
     "Satori ships independent package versions (cli, mcp, core). Doctor reports the installed set for support and debugging; versions need not match each other.";
+const SUPPORTED_EMBEDDING_PROVIDERS = new Set(["OpenAI", "VoyageAI", "Gemini", "Ollama"]);
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -287,7 +288,17 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
     }
 
     const provider = selectedProvider(env);
-    addCheck(checks, "embedding_provider", "ok", `Embedding provider: ${provider}.`);
+    if (SUPPORTED_EMBEDDING_PROVIDERS.has(provider)) {
+        addCheck(checks, "embedding_provider", "ok", `Embedding provider: ${provider}.`);
+    } else {
+        addCheck(
+            checks,
+            "embedding_provider",
+            "error",
+            `Unsupported embedding provider: ${provider}. Use OpenAI, VoyageAI, Gemini, or Ollama.`,
+        );
+        nextSteps.push("Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, or Ollama.");
+    }
     addCheck(checks, "embedding_model", "ok", `Embedding model: ${selectedModel(env, provider)}.`);
     addCheck(checks, "embedding_dimension", "ok", `Embedding output dimension: ${selectedDimension(env, provider)}.`);
 

@@ -4,7 +4,12 @@ import {
     deleteCollectionWithVerification,
     type VectorDatabase,
 } from "@zokizuan/satori-core";
+import path from "node:path";
 import type { SnapshotManager } from "./snapshot.js";
+import {
+    MutationLeaseCoordinator,
+    type RootMutationLease,
+} from "./mutation-lease.js";
 
 const SATORI_COLLECTION_PREFIXES = ["code_chunks_", "hybrid_code_chunks_"];
 const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
@@ -32,11 +37,18 @@ type VectorBackendMaintenanceHost = {
     context: Context;
     snapshotManager: SnapshotManager;
     getSnapshotAllCodebases(): Array<{ path: string; info: { lastUpdated?: string } }>;
+    canonicalizeCodebasePath(codebasePath: string): string;
     resolveCollectionName(codebasePath: string): string;
     markCodebaseCleared(codebasePath: string, collectionName?: string): void;
     saveSnapshotIfSupported(): void;
     unwatchCodebase(codebasePath: string): Promise<void>;
+    mutationLeaseCoordinator: MutationLeaseCoordinator | null;
 };
+
+export type ZillizCollectionDropResult =
+    | { status: "dropped"; droppedCodebasePath?: string }
+    | { status: "blocked"; activeLease: RootMutationLease }
+    | { status: "unmapped" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -113,7 +125,7 @@ export class VectorBackendMaintenance {
             .map((name) => ({ name }));
     }
 
-    private parseCodebaseFromMetadata(metadataValue: unknown): string | undefined {
+    private parseCodebaseFromMetadata(metadataValue: unknown): string | null | undefined {
         if (typeof metadataValue !== "string" || metadataValue.trim().length === 0) {
             return undefined;
         }
@@ -121,31 +133,68 @@ export class VectorBackendMaintenance {
         try {
             const metadata: unknown = JSON.parse(metadataValue);
             const codebasePath = isRecord(metadata) ? metadata.codebasePath : undefined;
-            return typeof codebasePath === "string" && codebasePath.trim().length > 0
-                ? codebasePath
-                : undefined;
+            if (typeof codebasePath !== "string" || codebasePath.trim().length === 0) {
+                return undefined;
+            }
+            const trimmedPath = codebasePath.trim();
+            return path.isAbsolute(trimmedPath)
+                ? this.host.canonicalizeCodebasePath(trimmedPath)
+                : null;
         } catch {
-            return undefined;
+            return null;
         }
+    }
+
+    private buildSnapshotCollectionOwnership(): {
+        byCollectionName: Map<string, string>;
+        ambiguousCollections: Set<string>;
+    } {
+        const byCollectionName = new Map<string, string>();
+        const ambiguousCollections = new Set<string>();
+        for (const entry of this.host.getSnapshotAllCodebases()) {
+            const canonicalRoot = this.host.canonicalizeCodebasePath(entry.path);
+            const collectionName = this.host.resolveCollectionName(canonicalRoot);
+            const existingRoot = byCollectionName.get(collectionName);
+            if (existingRoot && existingRoot !== canonicalRoot) {
+                byCollectionName.delete(collectionName);
+                ambiguousCollections.add(collectionName);
+                continue;
+            }
+            if (!ambiguousCollections.has(collectionName)) {
+                byCollectionName.set(collectionName, canonicalRoot);
+            }
+        }
+        return { byCollectionName, ambiguousCollections };
     }
 
     private async resolveCollectionCodebasePath(
         vectorDb: VectorDatabase,
         collectionName: string,
         byCollectionName: Map<string, string>,
+        ambiguousCollections: Set<string>,
     ): Promise<string | undefined> {
-        const knownPath = byCollectionName.get(collectionName);
-        if (knownPath) {
-            return knownPath;
+        if (ambiguousCollections.has(collectionName)) {
+            return undefined;
         }
+        const knownPath = byCollectionName.get(collectionName);
 
         try {
             const results = await vectorDb.query(collectionName, "", ["metadata"], 1);
             if (!Array.isArray(results) || results.length === 0) {
-                return undefined;
+                return knownPath;
             }
 
-            return this.parseCodebaseFromMetadata(results[0]?.metadata);
+            const remotePath = this.parseCodebaseFromMetadata(results[0]?.metadata);
+            if (remotePath === null) {
+                return undefined;
+            }
+            if (!remotePath) {
+                return knownPath;
+            }
+            if (knownPath && knownPath !== remotePath) {
+                return undefined;
+            }
+            return remotePath;
         } catch {
             return undefined;
         }
@@ -198,11 +247,7 @@ export class VectorBackendMaintenance {
         const collectionDetails = await this.listCollectionDetailsWithFallback(vectorDb);
         const codeCollections = collectionDetails.filter((detail) => this.isSatoriCodeCollection(detail.name));
 
-        const trackedCodebases = this.host.getSnapshotAllCodebases().map((entry) => entry.path);
-        const byCollectionName = new Map<string, string>();
-        for (const codebasePath of trackedCodebases) {
-            byCollectionName.set(this.host.resolveCollectionName(codebasePath), codebasePath);
-        }
+        const { byCollectionName, ambiguousCollections } = this.buildSnapshotCollectionOwnership();
 
         const snapshotLastUpdatedByPath = new Map<string, number>();
         for (const entry of this.host.getSnapshotAllCodebases()) {
@@ -214,7 +259,12 @@ export class VectorBackendMaintenance {
 
         const candidates: CandidateCollection[] = [];
         for (const detail of codeCollections) {
-            const codebasePath = await this.resolveCollectionCodebasePath(vectorDb, detail.name, byCollectionName);
+            const codebasePath = await this.resolveCollectionCodebasePath(
+                vectorDb,
+                detail.name,
+                byCollectionName,
+                ambiguousCollections,
+            );
             candidates.push({
                 name: detail.name,
                 createdAt: detail.createdAt,
@@ -291,7 +341,10 @@ Agent instructions:
         }
     }
 
-    public async dropZillizCollectionForCreate(collectionName: string): Promise<{ droppedCodebasePath?: string }> {
+    public async dropZillizCollectionForCreate(
+        collectionName: string,
+        createLease?: RootMutationLease,
+    ): Promise<ZillizCollectionDropResult> {
         const trimmedName = collectionName.trim();
         if (trimmedName.length === 0) {
             throw new Error("zillizDropCollection must be a non-empty string.");
@@ -306,20 +359,121 @@ Agent instructions:
             throw new Error(`Collection '${trimmedName}' does not exist in the connected Zilliz cluster.`);
         }
 
-        const droppedCodebasePath = await this.resolveCollectionCodebasePath(vectorDb, trimmedName, new Map());
-        await deleteCollectionWithVerification(vectorDb, trimmedName);
+        const { byCollectionName, ambiguousCollections } = this.buildSnapshotCollectionOwnership();
+        const droppedCodebasePath = await this.resolveCollectionCodebasePath(
+            vectorDb,
+            trimmedName,
+            byCollectionName,
+            ambiguousCollections,
+        );
+        if (!droppedCodebasePath) {
+            return { status: "unmapped" };
+        }
+        const coordinator = this.host.mutationLeaseCoordinator;
+        let droppedRootLease: RootMutationLease | undefined;
+        let operationTerminal = false;
+        const persistDroppedRootPhase = (phase: import("../config.js").IndexOperationPhase, mutateSnapshot?: () => void): void => {
+            if (!droppedRootLease) {
+                mutateSnapshot?.();
+                if (mutateSnapshot) {
+                    this.host.saveSnapshotIfSupported();
+                }
+                return;
+            }
+            coordinator?.assertCurrent(droppedRootLease);
+            if (typeof this.host.snapshotManager.commitOperationPhase === "function") {
+                this.host.snapshotManager.commitOperationPhase(
+                    droppedRootLease,
+                    phase,
+                    mutateSnapshot,
+                    () => coordinator?.assertCurrent(droppedRootLease!),
+                );
+            } else if (phase === "accepted" && typeof this.host.snapshotManager.startOperation === "function") {
+                this.host.snapshotManager.startOperation(droppedRootLease);
+                mutateSnapshot?.();
+                if (this.host.snapshotManager.saveCodebaseSnapshot() === false) {
+                    throw new Error(`Failed to persist clear phase '${phase}' for '${droppedCodebasePath}'.`);
+                }
+            } else if (typeof this.host.snapshotManager.transitionOperation === "function") {
+                this.host.snapshotManager.transitionOperation(droppedRootLease, phase);
+                mutateSnapshot?.();
+                if (this.host.snapshotManager.saveCodebaseSnapshot() === false) {
+                    throw new Error(`Failed to persist clear phase '${phase}' for '${droppedCodebasePath}'.`);
+                }
+            } else {
+                mutateSnapshot?.();
+                if (mutateSnapshot) {
+                    this.host.saveSnapshotIfSupported();
+                }
+            }
+            operationTerminal = phase === "completed" || phase === "failed" || phase === "blocked";
+        };
 
-        if (droppedCodebasePath) {
-            this.host.snapshotManager.removeCodebaseCompletely(droppedCodebasePath);
-            this.host.markCodebaseCleared(droppedCodebasePath, trimmedName);
-            this.host.saveSnapshotIfSupported();
-            try {
-                await this.host.unwatchCodebase(droppedCodebasePath);
-            } catch {
-                // Best-effort watcher cleanup; dropping cloud collection remains successful.
+        if (
+            coordinator
+            && (!createLease || !coordinator.isLeaseForRoot(createLease, droppedCodebasePath))
+        ) {
+            const leaseResult = coordinator.acquire(droppedCodebasePath, "clear");
+            if (!leaseResult.acquired) {
+                return { status: "blocked", activeLease: leaseResult.activeLease };
+            }
+            droppedRootLease = leaseResult.lease;
+        }
+
+        try {
+            if (droppedRootLease && typeof this.host.snapshotManager.startOperation === "function") {
+                persistDroppedRootPhase("accepted");
+            }
+            if (createLease) {
+                coordinator?.assertCurrent(createLease);
+            }
+            if (droppedRootLease) {
+                coordinator?.assertCurrent(droppedRootLease);
+                persistDroppedRootPhase("writing");
+            }
+            await deleteCollectionWithVerification(vectorDb, trimmedName, {
+                beforeDropAttempt: () => {
+                    if (createLease) {
+                        coordinator?.assertCurrent(createLease);
+                    }
+                    if (droppedRootLease) {
+                        coordinator?.assertCurrent(droppedRootLease);
+                    }
+                },
+            });
+
+            if (createLease) {
+                coordinator?.assertCurrent(createLease);
+            }
+            if (droppedRootLease) {
+                coordinator?.assertCurrent(droppedRootLease);
+                persistDroppedRootPhase("publishing");
+            }
+            if (droppedCodebasePath) {
+                persistDroppedRootPhase("completed", () => {
+                    this.host.markCodebaseCleared(droppedCodebasePath, trimmedName);
+                });
+                try {
+                    await this.host.unwatchCodebase(droppedCodebasePath);
+                } catch {
+                    // Best-effort watcher cleanup; dropping cloud collection remains successful.
+                }
+            }
+        } catch (error) {
+            if (droppedRootLease && !operationTerminal && coordinator?.isCurrent(droppedRootLease)) {
+                try {
+                    persistDroppedRootPhase("failed");
+                } catch {
+                    // Lease fencing is authoritative; never overwrite a newer writer's receipt.
+                }
+            }
+            throw error;
+        } finally {
+            if (droppedRootLease) {
+                coordinator?.release(droppedRootLease);
             }
         }
 
-        return { droppedCodebasePath };
+        return { status: "dropped", droppedCodebasePath };
     }
 }

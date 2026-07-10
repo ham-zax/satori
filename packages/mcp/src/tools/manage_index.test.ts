@@ -66,12 +66,19 @@ test("manage_index public action enum includes repair and full lifecycle set", (
     assert.equal(rejected.success, false);
 });
 
-test("manage_index tool description lists every public action including repair", () => {
+test("manage_index tool description lists actions and durable receipt semantics", () => {
     const description = manageIndexTool.description({} as ToolContext);
     for (const action of MANAGE_INDEX_ACTIONS) {
         assert.match(description, new RegExp(action));
     }
     assert.match(description, /create\/reindex\/sync\/status\/clear\/repair/);
+    assert.match(description, /durable `operation` receipt/);
+    assert.match(description, /latest persisted receipt after restart/);
+    assert.match(description, /Terminal phases are `completed`, `failed`, and `blocked`/);
+    assert.match(description, /optional `repairProof` evidence/);
+    assert.match(description, /No related collection routes to create/);
+    assert.match(description, /generation routes to reindex/);
+    assert.match(description, /does not re-embed or rewrite source chunks/);
 });
 
 test("manage_index status envelope includes symbolQuality observed registry field", async () => {
@@ -184,6 +191,9 @@ test("public docs and skills list manage_index repair and do not claim text-only
     );
     assert.match(e2e, /create\|reindex\|sync\|status\|clear\|repair/);
     assert.match(e2e, /JSON envelope \(serialized in `content\[0\]\.text`\)/);
+    assert.match(e2e, /optional `repairProof`/);
+    assert.match(e2e, /no related collection[^.\n]*create/i);
+    assert.match(e2e, /malformed completion marker[^.\n]*reindex/i);
     assert.doesNotMatch(
         e2e,
         /manage_index` action router supports `create\|reindex\|sync\|status\|clear`;/,
@@ -312,7 +322,10 @@ test("manage_index status prefers missing_provider_config over fingerprint requi
                         reason: "requires_reindex",
                         message: "Index fingerprint mismatch.",
                         humanText: "Index fingerprint mismatch.\n🧬 Reindex reason: fingerprint_mismatch",
-                        hints: { reindex: { tool: "manage_index", args: { action: "reindex", path: "/repo" } } },
+                        hints: {
+                            reindex: { tool: "manage_index", args: { action: "reindex", path: "/repo" } },
+                            activeMutation: { action: "create", generation: 7, operationId: "op-7", pid: 42 },
+                        },
                     }),
                 }],
             }),
@@ -329,6 +342,7 @@ test("manage_index status prefers missing_provider_config over fingerprint requi
     assert.equal(payload.reason, "missing_provider_config");
     assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
     assert.deepEqual(payload.hints.setup.missingEnv, ["MILVUS_ADDRESS", "VOYAGEAI_API_KEY"]);
+    assert.deepEqual(payload.hints.activeMutation, { action: "create", generation: 7, operationId: "op-7", pid: 42 });
     assert.doesNotMatch(payload.message, /fingerprint/i);
 });
 

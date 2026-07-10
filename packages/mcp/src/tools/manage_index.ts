@@ -34,7 +34,7 @@ const manageIndexInputSchema = z.object({
 export const manageIndexTool: McpTool = {
     name: "manage_index",
     description: () =>
-        "Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for a codebase path. repair rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match; otherwise it refuses and asks for create/reindex. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action=\"sync\" for immediate convergence and action=\"reindex\" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). create/reindex return the kickoff response immediately and do not poll to terminal state; use action=\"status\" to observe progress.",
+        "Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for a codebase path. repair rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match. Repair responses may include optional `repairProof` evidence for collection, snapshot, marker, fingerprint, payload, staleRemoteChunks, and navigation. No related collection routes to create; an existing incompatible, incomplete, stale, malformed, or unprovable generation routes to reindex; backend failures preserve partial proof when collection began and should be diagnosed before retrying repair. Successful repair may write a fresh completion marker and rebuild navigation, but it does not re-embed or rewrite source chunks. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action=\"sync\" for immediate convergence and action=\"reindex\" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). create/reindex return the kickoff response immediately and do not poll to terminal state; use action=\"status\" to observe progress. Mutation responses may include a durable `operation` receipt with `id`, canonical root, generation, accepted time, current phase, last durable transition, runtime fingerprint, and writer identity. Status returns the latest persisted receipt after restart. In a status envelope, top-level `action` remains `status` while `operation.action` names the observed mutation. Terminal phases are `completed`, `failed`, and `blocked`; `operation` is absent when no durable operation exists or contention was rejected before lease acquisition.",
     inputSchemaZod: () => manageIndexInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = manageIndexInputSchema.safeParse(args || {});
@@ -194,7 +194,11 @@ function preferProviderIncompleteForStatus(
                 code: issue.code,
                 message: issue.message,
                 humanText: issue.message,
-                hints: issue.hints,
+                hints: {
+                    ...issue.hints,
+                    ...(hints?.activeMutation ? { activeMutation: hints.activeMutation } : {}),
+                },
+                ...(payload.operation ? { operation: payload.operation } : {}),
             }),
         }],
     };

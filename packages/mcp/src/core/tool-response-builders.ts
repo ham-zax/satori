@@ -92,6 +92,8 @@ export class ToolResponseBuilders {
             preflight?: ReindexPreflightResult;
             message?: string;
             symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
+            operation?: ManageIndexResponseEnvelope["operation"];
+            repairProof?: ManageIndexResponseEnvelope["repairProof"];
         } = {},
     ): ManageIndexResponseEnvelope {
         const envelope: ManageIndexResponseEnvelope = {
@@ -125,6 +127,12 @@ export class ToolResponseBuilders {
         if (options.symbolQuality) {
             envelope.symbolQuality = options.symbolQuality;
         }
+        if (options.operation) {
+            envelope.operation = options.operation;
+        }
+        if (options.repairProof) {
+            envelope.repairProof = options.repairProof;
+        }
         return envelope;
     }
 
@@ -152,6 +160,8 @@ export class ToolResponseBuilders {
             preflight?: ReindexPreflightResult;
             message?: string;
             symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
+            operation?: ManageIndexResponseEnvelope["operation"];
+            repairProof?: ManageIndexResponseEnvelope["repairProof"];
         } = {},
     ): { content: Array<{ type: "text"; text: string }> } {
         return this.manageResponseFromEnvelope(
@@ -164,12 +174,16 @@ export class ToolResponseBuilders {
         codebasePath: string,
         diagnostic: VectorBackendDiagnostic,
         humanText = diagnostic.message,
+        operation?: ManageIndexResponseEnvelope["operation"],
+        repairProof?: ManageIndexResponseEnvelope["repairProof"],
     ): { content: Array<{ type: "text"; text: string }> } {
         return this.manageResponse(action, codebasePath, "error", humanText, {
             reason: "vector_backend_unavailable",
             code: diagnostic.code,
             message: diagnostic.message,
             hints: diagnostic.hints,
+            operation,
+            repairProof,
         });
     }
 
@@ -381,6 +395,7 @@ export class ToolResponseBuilders {
             case "synced":
             case "skipped_recent":
             case "reconciled_ignore_change":
+            case "skipped_mutation_in_progress":
                 return null;
 
             default: {

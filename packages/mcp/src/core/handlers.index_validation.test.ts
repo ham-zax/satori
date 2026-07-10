@@ -7,8 +7,9 @@ import crypto from 'node:crypto';
 import { COLLECTION_LIMIT_MESSAGE, RemoteCollectionDeletePendingError } from '@zokizuan/satori-core';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
-import { IndexFingerprint } from '../config.js';
+import { IndexFingerprint, type IndexOperationReceipt } from '../config.js';
 import type { ManageIndexResponseEnvelope } from './manage-types.js';
+import { MutationLeaseCoordinator } from './mutation-lease.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -48,7 +49,10 @@ interface ValidationHarnessOptions {
     hasIndexedCollectionImpl?: (codebasePath: string) => Promise<boolean>;
     hasCollectionImpl?: (collectionName: string) => Promise<boolean>;
     dropCollectionImpl?: (collectionName: string) => Promise<void>;
+    resolveCollectionNameImpl?: (codebasePath: string) => string;
     omitStagedCollectionResolver?: boolean;
+    mutationLeaseCoordinator?: MutationLeaseCoordinator;
+    operationReceipts?: boolean;
 }
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
@@ -69,10 +73,12 @@ function resolveCollectionName(codebasePath: string): string {
 function createHandlersForValidation(options: ValidationHarnessOptions): {
     handlers: ToolHandlers;
     droppedCollections: string[];
-    snapshotEvents: { removed: string[]; indexing: string[]; saved: number };
+    queriedCollections: string[];
+    snapshotEvents: { removed: string[]; indexing: string[]; phases: string[]; saved: number };
 } {
     const droppedCollections: string[] = [];
-    const snapshotEvents = { removed: [] as string[], indexing: [] as string[], saved: 0 };
+    const queriedCollections: string[] = [];
+    const snapshotEvents = { removed: [] as string[], indexing: [] as string[], phases: [] as string[], saved: 0 };
     const backendProvider = options.backendProvider || 'milvus';
     const collectionDetails = options.collectionDetails || [];
     const metadataByCollection = options.metadataByCollection || {};
@@ -84,6 +90,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         listCollectionDetails: async () => collectionDetails,
         listCollections: async () => collectionDetails.map((detail) => detail.name),
         query: async (collectionName: string) => {
+            queriedCollections.push(collectionName);
             const metadata = metadataByCollection[collectionName];
             if (!metadata?.codebasePath) {
                 return [];
@@ -113,7 +120,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
             return false;
         },
         getVectorStore: () => vectorStore,
-        resolveCollectionName,
+        resolveCollectionName: options.resolveCollectionNameImpl || resolveCollectionName,
         pruneUnprovenStagedCollectionFamily: options.pruneUnprovenStagedCollectionFamilyImpl || (async () => []),
         ...(!options.omitStagedCollectionResolver ? {
             resolveStagedCollectionName: (codebasePath: string, generationId: string) =>
@@ -124,12 +131,13 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         clearIndex: async () => undefined,
     } as unknown as HandlerContext;
 
+    let latestOperation: IndexOperationReceipt | undefined;
     const snapshotManager = {
         getIndexingCodebases: () => [],
         getCodebaseInfo: () => undefined,
         getIndexedCodebases: () => [],
         getCodebaseStatus: () => 'not_found',
-        removeCodebaseCompletely: (codebasePath: string) => {
+        markCodebaseCleared: (codebasePath: string) => {
             snapshotEvents.removed.push(codebasePath);
         },
         setCodebaseIndexing: (codebasePath: string) => {
@@ -139,20 +147,59 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
             snapshotEvents.saved += 1;
         },
         getAllCodebases: () => snapshotCodebases,
+        ...(options.operationReceipts ? {
+            startOperation: (lease: import('./mutation-lease.js').RootMutationLease) => {
+                latestOperation = {
+                    id: lease.operationId,
+                    action: lease.action,
+                    canonicalRoot: lease.canonicalRoot,
+                    generation: lease.generation,
+                    acceptedAt: lease.acquiredAt,
+                    phase: 'accepted',
+                    lastDurableTransitionAt: lease.acquiredAt,
+                    runtimeFingerprint: RUNTIME_FINGERPRINT,
+                    writer: { ownerId: lease.ownerId, pid: lease.pid, satoriVersion: 'test' },
+                };
+                snapshotEvents.phases.push('accepted');
+                return latestOperation;
+            },
+            transitionOperation: (_lease: import('./mutation-lease.js').RootMutationLease, phase: IndexOperationReceipt['phase']) => {
+                assert.ok(latestOperation);
+                latestOperation = { ...latestOperation, phase, lastDurableTransitionAt: new Date().toISOString() };
+                snapshotEvents.phases.push(phase);
+                return latestOperation;
+            },
+            getLatestOperation: () => latestOperation,
+        } : {}),
     } as unknown as HandlerSnapshotManager;
 
     const syncManager = {
         unregisterCodebaseWatcher: async () => undefined,
     } as unknown as HandlerSyncManager;
 
-    const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+    const handlers = new ToolHandlers(
+        context,
+        snapshotManager,
+        syncManager,
+        RUNTIME_FINGERPRINT,
+        CAPABILITIES,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        null,
+        options.mutationLeaseCoordinator ?? null,
+    );
     (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = async () => undefined;
-    return { handlers, droppedCollections, snapshotEvents };
+    return { handlers, droppedCollections, queriedCollections, snapshotEvents };
 }
 
 function parseManageEnvelope(response: ToolTextResponse): ManageIndexResponseEnvelope {
     const payload = response?.content?.[0]?.text;
-    assert.equal(typeof payload, 'string');
+    if (typeof payload !== 'string') {
+        assert.fail('Expected manage_index response text.');
+    }
     return JSON.parse(payload) as ManageIndexResponseEnvelope;
 }
 
@@ -189,6 +236,32 @@ test('handleIndexCodebase returns Zilliz eviction guidance with free-tier reason
         assert.match(text, /manage_index \{"action":"create","path":".*","zillizDropCollection":"<collection_name>"\}/i);
         assert.match(text, /Agent instructions:/i);
         assert.match(text, /Do not auto-delete without explicit user confirmation/i);
+    });
+});
+
+test('handleIndexCodebase does not publish indexing state after losing the mutation lease', async () => {
+    await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'lease-state'),
+            ownerId: 'owner-a',
+        });
+        const { handlers, snapshotEvents } = createHandlersForValidation({
+            mutationLeaseCoordinator: coordinator,
+            checkCollectionLimitImpl: async () => true,
+            pruneUnprovenStagedCollectionFamilyImpl: async () => {
+                const lease = coordinator.getActiveLease(repoPath);
+                assert.ok(lease);
+                coordinator.release(lease);
+                return [];
+            },
+        });
+
+        const envelope = parseManageEnvelope(await handlers.handleIndexCodebase({ path: repoPath }));
+
+        assert.equal(envelope.status, 'error');
+        assert.match(envelope.humanText, /mutation lease .* is no longer current/i);
+        assert.deepEqual(snapshotEvents.indexing, []);
+        assert.equal(snapshotEvents.saved, 0);
     });
 });
 
@@ -281,6 +354,191 @@ test('handleIndexCodebase supports explicit zillizDropCollection for user-select
         assert.match(text, /Dropped Zilliz collection 'hybrid_code_chunks_deadbeef'/i);
         assert.equal(droppedCollections.length, 1);
         assert.equal(droppedCollections[0], 'hybrid_code_chunks_deadbeef');
+    });
+});
+
+test('handleIndexCodebase refuses cross-root Zilliz eviction while the mapped root has a live writer', async () => {
+    await withTempRepo(async (repoPath) => {
+        const mappedRoot = path.join(path.dirname(repoPath), 'mapped-root');
+        const stateDir = path.join(path.dirname(repoPath), 'mutation-leases');
+        fs.mkdirSync(mappedRoot);
+        const activeOwner = new MutationLeaseCoordinator({ stateDir, ownerId: 'active-owner' });
+        const handlerCoordinator = new MutationLeaseCoordinator({ stateDir, ownerId: 'handler-owner' });
+        const activeResult = activeOwner.acquire(mappedRoot, 'sync');
+        assert.equal(activeResult.acquired, true);
+        if (!activeResult.acquired) return;
+
+        try {
+            const existingCollections = new Set<string>(['hybrid_code_chunks_deadbeef']);
+            const { handlers, droppedCollections, snapshotEvents } = createHandlersForValidation({
+                backendProvider: 'zilliz',
+                checkCollectionLimitImpl: async () => true,
+                collectionDetails: [
+                    { name: 'hybrid_code_chunks_deadbeef', createdAt: '2026-01-01T00:00:00.000Z' }
+                ],
+                metadataByCollection: {
+                    hybrid_code_chunks_deadbeef: { codebasePath: mappedRoot }
+                },
+                hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+                dropCollectionImpl: async (collectionName) => {
+                    existingCollections.delete(collectionName);
+                },
+                mutationLeaseCoordinator: handlerCoordinator,
+            });
+
+            const response = await handlers.handleIndexCodebase({
+                path: repoPath,
+                zillizDropCollection: 'hybrid_code_chunks_deadbeef'
+            });
+            const envelope = parseManageEnvelope(response);
+
+            assert.equal(envelope.status, 'blocked');
+            assert.equal(envelope.reason, 'mutation_in_progress');
+            assert.equal((envelope.hints?.activeMutation as { canonicalRoot?: string })?.canonicalRoot, mappedRoot);
+            assert.deepEqual(droppedCollections, []);
+            assert.deepEqual(snapshotEvents.removed, []);
+            assert.equal(existingCollections.has('hybrid_code_chunks_deadbeef'), true);
+        } finally {
+            activeOwner.release(activeResult.lease);
+        }
+    });
+});
+
+test('handleIndexCodebase refuses Zilliz eviction when collection ownership cannot be proven', async () => {
+    await withTempRepo(async (repoPath) => {
+        const stateDir = path.join(path.dirname(repoPath), 'mutation-leases');
+        const existingCollections = new Set<string>(['hybrid_code_chunks_deadbeef']);
+        const { handlers, droppedCollections, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => true,
+            collectionDetails: [
+                { name: 'hybrid_code_chunks_deadbeef', createdAt: '2026-01-01T00:00:00.000Z' }
+            ],
+            hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async (collectionName) => {
+                existingCollections.delete(collectionName);
+            },
+            mutationLeaseCoordinator: new MutationLeaseCoordinator({ stateDir }),
+        });
+
+        const response = await handlers.handleIndexCodebase({
+            path: repoPath,
+            zillizDropCollection: 'hybrid_code_chunks_deadbeef'
+        });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'error');
+        assert.match(envelope.humanText, /owning codebase root could not be proven/i);
+        assert.deepEqual(droppedCollections, []);
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.equal(existingCollections.has('hybrid_code_chunks_deadbeef'), true);
+    });
+});
+
+test('handleIndexCodebase refuses Zilliz eviction with a relative remote owner path', async () => {
+    await withTempRepo(async (repoPath) => {
+        const existingCollections = new Set<string>(['hybrid_code_chunks_deadbeef']);
+        const { handlers, droppedCollections, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => true,
+            collectionDetails: [{ name: 'hybrid_code_chunks_deadbeef' }],
+            metadataByCollection: {
+                hybrid_code_chunks_deadbeef: { codebasePath: 'relative/repo' },
+            },
+            hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async (collectionName) => {
+                existingCollections.delete(collectionName);
+            },
+        });
+
+        const response = await handlers.handleIndexCodebase({
+            path: repoPath,
+            zillizDropCollection: 'hybrid_code_chunks_deadbeef',
+        });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'error');
+        assert.match(envelope.humanText, /owning codebase root could not be proven/i);
+        assert.deepEqual(droppedCollections, []);
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.equal(existingCollections.has('hybrid_code_chunks_deadbeef'), true);
+    });
+});
+
+test('handleIndexCodebase refuses Zilliz eviction with ambiguous snapshot owners', async () => {
+    await withTempRepo(async (repoPath) => {
+        const rootA = path.join(path.dirname(repoPath), 'root-a');
+        const rootB = path.join(path.dirname(repoPath), 'root-b');
+        fs.mkdirSync(rootA);
+        fs.mkdirSync(rootB);
+        const existingCollections = new Set<string>(['hybrid_code_chunks_deadbeef']);
+        const { handlers, droppedCollections, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => true,
+            collectionDetails: [{ name: 'hybrid_code_chunks_deadbeef' }],
+            snapshotCodebases: [
+                { path: rootA, info: { lastUpdated: '2026-01-01T00:00:00.000Z', status: 'indexed' } },
+                { path: rootB, info: { lastUpdated: '2026-01-02T00:00:00.000Z', status: 'indexed' } },
+            ],
+            resolveCollectionNameImpl: (codebasePath) => codebasePath === repoPath
+                ? 'hybrid_code_chunks_target000'
+                : 'hybrid_code_chunks_deadbeef',
+            hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async (collectionName) => {
+                existingCollections.delete(collectionName);
+            },
+        });
+
+        const response = await handlers.handleIndexCodebase({
+            path: repoPath,
+            zillizDropCollection: 'hybrid_code_chunks_deadbeef',
+        });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'error');
+        assert.deepEqual(droppedCollections, []);
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.equal(existingCollections.has('hybrid_code_chunks_deadbeef'), true);
+    });
+});
+
+test('handleIndexCodebase refuses Zilliz eviction when snapshot and remote owners disagree', async () => {
+    await withTempRepo(async (repoPath) => {
+        const snapshotRoot = path.join(path.dirname(repoPath), 'snapshot-root');
+        const remoteRoot = path.join(path.dirname(repoPath), 'remote-root');
+        fs.mkdirSync(snapshotRoot);
+        fs.mkdirSync(remoteRoot);
+        const existingCollections = new Set<string>(['hybrid_code_chunks_deadbeef']);
+        const { handlers, droppedCollections, queriedCollections, snapshotEvents } = createHandlersForValidation({
+            backendProvider: 'zilliz',
+            checkCollectionLimitImpl: async () => true,
+            collectionDetails: [{ name: 'hybrid_code_chunks_deadbeef' }],
+            snapshotCodebases: [
+                { path: snapshotRoot, info: { lastUpdated: '2026-01-01T00:00:00.000Z', status: 'indexed' } },
+            ],
+            metadataByCollection: {
+                hybrid_code_chunks_deadbeef: { codebasePath: remoteRoot },
+            },
+            resolveCollectionNameImpl: (codebasePath) => codebasePath === repoPath
+                ? 'hybrid_code_chunks_target000'
+                : 'hybrid_code_chunks_deadbeef',
+            hasCollectionImpl: async (collectionName) => existingCollections.has(collectionName),
+            dropCollectionImpl: async (collectionName) => {
+                existingCollections.delete(collectionName);
+            },
+        });
+
+        const response = await handlers.handleIndexCodebase({
+            path: repoPath,
+            zillizDropCollection: 'hybrid_code_chunks_deadbeef',
+        });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'error');
+        assert.deepEqual(queriedCollections, ['hybrid_code_chunks_deadbeef']);
+        assert.deepEqual(droppedCollections, []);
+        assert.deepEqual(snapshotEvents.removed, []);
+        assert.equal(existingCollections.has('hybrid_code_chunks_deadbeef'), true);
     });
 });
 
@@ -419,13 +677,13 @@ test('handleIndexCodebase force reindex stages into a new generation without eag
                 existingCollections.delete(collectionName);
             },
         });
-        let startedArgs: [string, boolean, string | undefined] | null = null;
+        const started: { args?: [string, boolean, string | undefined] } = {};
         (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = async (
             codebasePath: string,
             forceReindex: boolean,
             stagedCollectionName?: string
         ) => {
-            startedArgs = [codebasePath, forceReindex, stagedCollectionName];
+            started.args = [codebasePath, forceReindex, stagedCollectionName];
         };
 
         const response = await handlers.handleIndexCodebase({
@@ -436,9 +694,9 @@ test('handleIndexCodebase force reindex stages into a new generation without eag
         const envelope = parseManageEnvelope(response);
         assert.equal(envelope.status, 'ok');
         assert.match(envelope.humanText, /Started background indexing/i);
-        assert.ok(startedArgs);
-        assert.deepEqual(startedArgs?.slice(0, 2), [repoPath, true]);
-        assert.match(String(startedArgs?.[2] || ''), new RegExp(`^${modernCollection}__gen_run_`));
+        assert.ok(started.args);
+        assert.deepEqual(started.args.slice(0, 2), [repoPath, true]);
+        assert.match(String(started.args[2] || ''), new RegExp(`^${modernCollection}__gen_run_`));
         assert.deepEqual(droppedCollections, []);
         assert.deepEqual(snapshotEvents.removed, []);
     });
@@ -651,5 +909,27 @@ test('handleIndexCodebase create kickoff states search is blocked until indexing
         );
         assert.doesNotMatch(humanText, /results may be incomplete until indexing completes/i);
         assert.deepEqual(snapshotEvents.indexing, [repoPath]);
+    });
+});
+
+test('handleIndexCodebase create kickoff returns its durable scanning receipt', async () => {
+    await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'receipt-leases'),
+            ownerId: 'create-receipt-owner',
+        });
+        const { handlers, snapshotEvents } = createHandlersForValidation({
+            checkCollectionLimitImpl: async () => true,
+            mutationLeaseCoordinator: coordinator,
+            operationReceipts: true,
+        });
+
+        const envelope = parseManageEnvelope(await handlers.handleIndexCodebase({ path: repoPath }));
+
+        assert.equal(envelope.status, 'ok');
+        assert.equal(envelope.operation?.action, 'create');
+        assert.equal(envelope.operation?.phase, 'scanning');
+        assert.equal(envelope.operation?.canonicalRoot, repoPath);
+        assert.deepEqual(snapshotEvents.phases, ['accepted', 'scanning']);
     });
 });

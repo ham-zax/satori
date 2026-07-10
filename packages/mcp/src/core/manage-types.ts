@@ -1,4 +1,5 @@
-import type { SymbolQualitySummary } from "@zokizuan/satori-core";
+import type { RepairProof, SymbolQualitySummary } from "@zokizuan/satori-core";
+import type { IndexOperationReceipt } from "../config.js";
 import { WarningCode } from "./warnings.js";
 
 /** Public manage_index action set (SSOT for schema, docs, and contract tests). */
@@ -32,6 +33,7 @@ export type ManageIndexReason =
     | "missing_provider_config"
     | "vector_backend_unavailable"
     | "runtime_owner_conflict"
+    | "mutation_in_progress"
     | "needs_create";
 
 export type VectorBackendResponseCode =
@@ -69,6 +71,8 @@ export interface ManageIndexResponseEnvelope {
         confidence: "high" | "low";
         probeFailed?: boolean;
     };
+    operation?: IndexOperationReceipt;
+    repairProof?: RepairProof;
     /** Observed symbol quality from registry (F9); not parser-cause diagnosis. */
     symbolQuality?: SymbolQualitySummary;
 }

@@ -44,6 +44,7 @@ interface SymbolIndexFile {
 export interface WriteSymbolRegistrySidecarInput {
     registry: SymbolRegistry;
     stateRoot?: string;
+    beforePublish?: () => void;
 }
 
 export interface WriteSymbolRegistrySidecarResult {
@@ -61,6 +62,7 @@ export interface WriteRelationshipSidecarInput {
     records: RelationshipRecord[];
     files?: SymbolRegistryManifestFile[];
     stateRoot?: string;
+    beforePublish?: () => void;
 }
 
 export interface WriteRelationshipSidecarResult {
@@ -158,12 +160,13 @@ function uniqueSidecarEntryName(kind: string): string {
     return `${kind}${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
 }
 
-async function writeJsonAtomically(filePath: string, value: unknown): Promise<void> {
+async function writeJsonAtomically(filePath: string, value: unknown, beforePublish?: () => void): Promise<void> {
     const directory = path.dirname(filePath);
     await fs.promises.mkdir(directory, { recursive: true });
     const temporaryPath = path.join(directory, uniqueSidecarEntryName(TEMP_ENTRY_PREFIX));
     try {
         await fs.promises.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+        beforePublish?.();
         await fs.promises.rename(temporaryPath, filePath);
     } catch (error) {
         await fs.promises.rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -174,12 +177,14 @@ async function writeJsonAtomically(filePath: string, value: unknown): Promise<vo
 async function replaceDirectoryWithRollback(
     finalPath: string,
     temporaryPath: string,
-    afterReplace?: () => Promise<void>
+    afterReplace?: () => Promise<void>,
+    beforePublish?: () => void,
 ): Promise<void> {
     const parentDirectory = path.dirname(finalPath);
     const backupPath = path.join(parentDirectory, uniqueSidecarEntryName(BACKUP_ENTRY_PREFIX));
     let backupCreated = false;
 
+    beforePublish?.();
     try {
         await fs.promises.rename(finalPath, backupPath);
         backupCreated = true;
@@ -191,6 +196,7 @@ async function replaceDirectoryWithRollback(
     }
 
     try {
+        beforePublish?.();
         await fs.promises.rename(temporaryPath, finalPath);
         if (afterReplace) {
             await afterReplace();
@@ -305,7 +311,8 @@ export async function writeSymbolRegistrySidecar(input: WriteSymbolRegistrySidec
         await replaceDirectoryWithRollback(
             symbolsDir,
             temporarySymbolsDir,
-            () => writeJsonAtomically(path.join(rootPath, 'manifest.json'), input.registry.manifest)
+            () => writeJsonAtomically(path.join(rootPath, 'manifest.json'), input.registry.manifest, input.beforePublish),
+            input.beforePublish,
         );
 
         if (!relationshipManifestExists) {
@@ -314,7 +321,7 @@ export async function writeSymbolRegistrySidecar(input: WriteSymbolRegistrySidec
                 path.join(temporaryRelationshipsDir, 'manifest.json'),
                 buildRelationshipManifest(manifestHash, input.registry.manifest.relationshipVersion, input.registry.manifest.builtAt)
             );
-            await replaceDirectoryWithRollback(relationshipsDir, temporaryRelationshipsDir);
+            await replaceDirectoryWithRollback(relationshipsDir, temporaryRelationshipsDir, undefined, input.beforePublish);
         }
     } catch (error) {
         await fs.promises.rm(temporarySymbolsDir, { recursive: true, force: true }).catch(() => undefined);
@@ -355,7 +362,7 @@ export async function writeRelationshipSidecar(input: WriteRelationshipSidecarIn
             });
         }
 
-        await replaceDirectoryWithRollback(relationshipsDir, temporaryRelationshipsDir);
+        await replaceDirectoryWithRollback(relationshipsDir, temporaryRelationshipsDir, undefined, input.beforePublish);
     } catch (error) {
         await fs.promises.rm(temporaryRelationshipsDir, { recursive: true, force: true }).catch(() => undefined);
         throw error;

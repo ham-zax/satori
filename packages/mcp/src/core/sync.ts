@@ -5,13 +5,27 @@ import chokidar, { FSWatcher } from "chokidar";
 import ignore from "ignore";
 import { Context } from "@zokizuan/satori-core";
 import { SnapshotManager } from "./snapshot.js";
-import { DEFAULT_WATCH_DEBOUNCE_MS } from "../config.js";
+import {
+    DEFAULT_WATCH_DEBOUNCE_MS,
+    type IndexOperationPhase,
+    type IndexOperationReceipt,
+} from "../config.js";
+import {
+    formatMutationLeaseBlockedMessage,
+    MutationLeaseCoordinator,
+    type RootMutationLease,
+} from "./mutation-lease.js";
 
 interface SyncManagerOptions {
     watchEnabled?: boolean;
     watchDebounceMs?: number;
     now?: () => number;
-    onSyncCompleted?: (codebasePath: string, stats: SyncStats) => Promise<void> | void;
+    onSyncCompleted?: (
+        codebasePath: string,
+        stats: SyncStats,
+        assertMutationCurrent: () => void,
+    ) => Promise<void> | void;
+    mutationLeaseCoordinator?: MutationLeaseCoordinator;
 }
 
 export type FreshnessDecisionMode =
@@ -20,6 +34,7 @@ export type FreshnessDecisionMode =
     | 'coalesced'
     | 'skipped_indexing'
     | 'skipped_requires_reindex'
+    | 'skipped_mutation_in_progress'
     | 'skipped_missing_path'
     | 'reconciled_ignore_change'
     | 'ignore_reload_failed';
@@ -41,11 +56,15 @@ export interface FreshnessDecision {
     errorMessage?: string;
     fallbackSyncExecuted?: boolean;
     fallbackStats?: { added: number; removed: number; modified: number };
+    activeMutation?: RootMutationLease;
+    operation?: IndexOperationReceipt;
 }
 
 interface SyncExecutionOutcome {
     mode: Exclude<FreshnessDecisionMode, 'coalesced' | 'skipped_recent'>;
     stats?: SyncStats;
+    activeMutation?: RootMutationLease;
+    operation?: IndexOperationReceipt;
 }
 
 interface SyncStats {
@@ -63,6 +82,7 @@ interface EnsureFreshnessOptions {
     reason?: 'default' | 'ignore_change';
     coalescedEdits?: number;
     skipIgnoreControlCheck?: boolean;
+    mutationLease?: RootMutationLease;
 }
 
 interface IgnoreReloadResult {
@@ -95,6 +115,20 @@ function errorCode(error: unknown): string | undefined {
     return typeof code === "string" ? code : undefined;
 }
 
+export class SyncOperationError extends Error {
+    public readonly cause: unknown;
+
+    constructor(
+        message: string,
+        public readonly operation: IndexOperationReceipt | undefined,
+        options?: { cause?: unknown },
+    ) {
+        super(message);
+        this.name = "SyncOperationError";
+        this.cause = options?.cause;
+    }
+}
+
 export class SyncManager {
     private context: Context;
     private snapshotManager: SnapshotManager;
@@ -112,7 +146,8 @@ export class SyncManager {
     private pendingIgnoreChangeEdits: Map<string, number> = new Map();
     private activeIgnoreReconciles: Map<string, Promise<FreshnessDecision>> = new Map();
     private readonly now: () => number;
-    private readonly onSyncCompleted?: (codebasePath: string, stats: SyncStats) => Promise<void> | void;
+    private readonly onSyncCompleted?: SyncManagerOptions['onSyncCompleted'];
+    private readonly mutationLeaseCoordinator?: MutationLeaseCoordinator;
 
     constructor(context: Context, snapshotManager: SnapshotManager, options: SyncManagerOptions = {}) {
         this.context = context;
@@ -121,16 +156,114 @@ export class SyncManager {
         this.watchDebounceMs = Math.max(1, options.watchDebounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS);
         this.now = options.now || (() => Date.now());
         this.onSyncCompleted = options.onSyncCompleted;
+        this.mutationLeaseCoordinator = options.mutationLeaseCoordinator;
     }
 
-    public async recordCurrentIgnoreControlSignature(codebasePath: string): Promise<void> {
+    private persistOwnedOperationStart(lease: RootMutationLease | undefined, ownsLease: boolean): IndexOperationReceipt | undefined {
+        if (!lease || !ownsLease || typeof this.snapshotManager.startOperation !== "function") {
+            return undefined;
+        }
+        this.assertMutationCurrent(lease);
+        const operation = typeof this.snapshotManager.commitOperationPhase === "function"
+            ? this.snapshotManager.commitOperationPhase(
+                lease,
+                "accepted",
+                undefined,
+                () => this.assertMutationCurrent(lease),
+            )
+            : this.snapshotManager.startOperation(lease);
+        if (
+            typeof this.snapshotManager.commitOperationPhase !== "function"
+            && this.snapshotManager.saveCodebaseSnapshot() === false
+        ) {
+            throw new Error(`Failed to persist accepted sync operation receipt for '${lease.canonicalRoot}'.`);
+        }
+        return operation;
+    }
+
+    private persistOwnedOperationPhase(
+        lease: RootMutationLease | undefined,
+        ownsLease: boolean,
+        phase: IndexOperationPhase,
+        mutateSnapshot?: () => void,
+    ): IndexOperationReceipt | undefined {
+        if (!lease || !ownsLease) {
+            mutateSnapshot?.();
+            return undefined;
+        }
+        if (typeof this.snapshotManager.transitionOperation !== "function") {
+            mutateSnapshot?.();
+            return undefined;
+        }
+        this.assertMutationCurrent(lease);
+        const operation = typeof this.snapshotManager.commitOperationPhase === "function"
+            ? this.snapshotManager.commitOperationPhase(
+                lease,
+                phase,
+                mutateSnapshot,
+                () => this.assertMutationCurrent(lease),
+            )
+            : (() => {
+                const next = this.snapshotManager.transitionOperation(lease, phase);
+                mutateSnapshot?.();
+                if (this.snapshotManager.saveCodebaseSnapshot() === false) {
+                    throw new Error(`Failed to persist sync operation phase '${phase}' for '${lease.canonicalRoot}'.`);
+                }
+                return next;
+            })();
+        return operation;
+    }
+
+    public async recordCurrentIgnoreControlSignature(
+        codebasePath: string,
+        existingLease?: RootMutationLease,
+    ): Promise<void> {
         if (typeof this.snapshotManager.setCodebaseIgnoreControlSignature !== 'function') {
             return;
         }
 
-        const currentIgnoreControlSignature = await this.computeIgnoreControlSignature(codebasePath);
-        this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
-        this.snapshotManager.saveCodebaseSnapshot();
+        let lease = existingLease;
+        let releaseLease = false;
+        let lastDurableOperation: IndexOperationReceipt | undefined;
+        if (this.mutationLeaseCoordinator) {
+            if (lease) {
+                this.mutationLeaseCoordinator.assertCurrent(lease);
+            } else {
+                const acquired = this.mutationLeaseCoordinator.acquire(codebasePath, 'sync');
+                if (!acquired.acquired) {
+                    throw new Error(formatMutationLeaseBlockedMessage(acquired.activeLease));
+                }
+                lease = acquired.lease;
+                releaseLease = true;
+            }
+        }
+
+        try {
+            lastDurableOperation = this.persistOwnedOperationStart(lease, releaseLease);
+            const currentIgnoreControlSignature = await this.computeIgnoreControlSignature(codebasePath);
+            this.assertMutationCurrent(lease);
+            const operation = this.persistOwnedOperationPhase(lease, releaseLease, "completed", () => {
+                this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
+            });
+            if (operation) {
+                lastDurableOperation = operation;
+            } else {
+                this.snapshotManager.saveCodebaseSnapshot();
+            }
+        } catch (error) {
+            if (releaseLease && lease && this.mutationLeaseCoordinator?.isCurrent(lease)) {
+                try {
+                    lastDurableOperation = this.persistOwnedOperationPhase(lease, true, "failed") ?? lastDurableOperation;
+                } catch {
+                    // Preserve the last receipt this operation durably owned.
+                }
+            }
+            throw new SyncOperationError(errorMessage(error), lastDurableOperation, { cause: error });
+        } finally {
+            if (releaseLease && lease) {
+                this.mutationLeaseCoordinator?.release(lease);
+            }
+        }
     }
 
     /**
@@ -143,19 +276,20 @@ export class SyncManager {
         options: EnsureFreshnessOptions = {}
     ): Promise<FreshnessDecision> {
         if (options.reason === 'ignore_change') {
-            return this.runIgnoreReconcile(codebasePath, options.coalescedEdits);
+            return this.runIgnoreReconcile(codebasePath, options.coalescedEdits, undefined, options.mutationLease);
         }
 
         const checkedAtMs = this.now();
         const checkedAt = new Date(checkedAtMs).toISOString();
 
+        let currentIgnoreControlSignature: string | undefined;
         if (options.skipIgnoreControlCheck !== true) {
-            const currentIgnoreControlSignature = await this.computeIgnoreControlSignature(codebasePath);
+            currentIgnoreControlSignature = await this.computeIgnoreControlSignature(codebasePath);
             const persistedIgnoreControlSignature = this.snapshotManager.getCodebaseIgnoreControlSignature?.(codebasePath);
 
             if (typeof persistedIgnoreControlSignature === 'string') {
                 if (persistedIgnoreControlSignature !== currentIgnoreControlSignature) {
-                    return this.runIgnoreReconcile(codebasePath, 1, currentIgnoreControlSignature);
+                    return this.runIgnoreReconcile(codebasePath, 1, currentIgnoreControlSignature, options.mutationLease);
                 }
             } else if (
                 (this.snapshotManager.getCodebaseStatus(codebasePath) === 'indexed'
@@ -170,18 +304,16 @@ export class SyncManager {
                     : false;
 
                 if (indexedPaths.length > 0 || hasSynchronizer) {
-                    return this.runIgnoreReconcile(codebasePath, 1, currentIgnoreControlSignature);
+                    return this.runIgnoreReconcile(codebasePath, 1, currentIgnoreControlSignature, options.mutationLease);
                 }
 
-                this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
-                this.snapshotManager.saveCodebaseSnapshot();
             }
         }
 
         // 1. Coalescing: Join existing in-flight sync
         if (this.activeSyncs.has(codebasePath)) {
             console.log(`[SYNC] 🛡️ Request Coalesced: Attaching to active sync for '${codebasePath}'`);
-            await this.activeSyncs.get(codebasePath);
+            const outcome = await this.activeSyncs.get(codebasePath);
             const lastSync = this.lastSyncTimes.get(codebasePath);
             return {
                 mode: 'coalesced',
@@ -189,6 +321,13 @@ export class SyncManager {
                 thresholdMs,
                 lastSyncAt: lastSync ? new Date(lastSync).toISOString() : undefined,
                 ageMs: lastSync ? Math.max(0, checkedAtMs - lastSync) : undefined,
+                stats: outcome?.stats ? {
+                    added: outcome.stats.added,
+                    removed: outcome.stats.removed,
+                    modified: outcome.stats.modified,
+                } : undefined,
+                activeMutation: outcome?.activeMutation,
+                operation: outcome?.operation,
             };
         }
 
@@ -211,7 +350,11 @@ export class SyncManager {
 
         const syncPromise = (async () => {
             try {
-                return await this.syncCodebase(codebasePath);
+                return await this.syncCodebase(
+                    codebasePath,
+                    options.mutationLease,
+                    currentIgnoreControlSignature,
+                );
             } catch (e) {
                 // Log and rethrow to allow callers to handle/see failure
                 console.error(`[SYNC] Error syncing '${codebasePath}':`, e);
@@ -235,13 +378,16 @@ export class SyncManager {
                 removed: outcome.stats.removed,
                 modified: outcome.stats.modified
             } : undefined,
+            activeMutation: outcome.activeMutation,
+            operation: outcome.operation,
         };
     }
 
     private async runIgnoreReconcile(
         codebasePath: string,
         coalescedEdits: number = 1,
-        nextIgnoreControlSignature?: string
+        nextIgnoreControlSignature?: string,
+        existingLease?: RootMutationLease,
     ): Promise<FreshnessDecision> {
         const reconcileKey = this.normalizeReconcileKey(codebasePath);
         const inFlight = this.activeIgnoreReconciles.get(reconcileKey);
@@ -258,20 +404,64 @@ export class SyncManager {
             };
         }
 
-        console.log(`[SYNC] 🔁 Ignore control files changed for '${codebasePath}', running reconciliation.`);
-        const promise = this.reconcileIgnoreRulesChange(codebasePath, coalescedEdits, nextIgnoreControlSignature);
-        this.activeIgnoreReconciles.set(reconcileKey, promise);
+        let lease = existingLease;
+        let releaseLease = false;
+        let lastDurableOperation: IndexOperationReceipt | undefined;
+        if (this.mutationLeaseCoordinator) {
+            if (lease) {
+                this.mutationLeaseCoordinator.assertCurrent(lease);
+            } else {
+                const acquired = this.mutationLeaseCoordinator.acquire(codebasePath, 'sync');
+                if (!acquired.acquired) {
+                    return {
+                        mode: 'skipped_mutation_in_progress',
+                        checkedAt,
+                        thresholdMs: 0,
+                        activeMutation: acquired.activeLease,
+                    };
+                }
+                lease = acquired.lease;
+                releaseLease = true;
+            }
+        }
+
         try {
-            return await promise;
+            lastDurableOperation = this.persistOwnedOperationStart(lease, releaseLease);
+            console.log(`[SYNC] 🔁 Ignore control files changed for '${codebasePath}', running reconciliation.`);
+            const promise = this.reconcileIgnoreRulesChange(codebasePath, coalescedEdits, nextIgnoreControlSignature, lease);
+            this.activeIgnoreReconciles.set(reconcileKey, promise);
+            const decision = await promise;
+            const phase = decision.mode === "ignore_reload_failed" ? "failed" : "completed";
+            const operation = this.persistOwnedOperationPhase(lease, releaseLease, phase);
+            if (operation) {
+                lastDurableOperation = operation;
+            }
+            return {
+                ...decision,
+                ...(lastDurableOperation ? { operation: lastDurableOperation } : {}),
+            };
+        } catch (error) {
+            if (releaseLease && lease && this.mutationLeaseCoordinator?.isCurrent(lease)) {
+                try {
+                    lastDurableOperation = this.persistOwnedOperationPhase(lease, true, "failed") ?? lastDurableOperation;
+                } catch {
+                    // Preserve the last receipt this operation durably owned.
+                }
+            }
+            throw new SyncOperationError(errorMessage(error), lastDurableOperation, { cause: error });
         } finally {
             this.activeIgnoreReconciles.delete(reconcileKey);
+            if (releaseLease && lease) {
+                this.mutationLeaseCoordinator?.release(lease);
+            }
         }
     }
 
     private async reconcileIgnoreRulesChange(
         codebasePath: string,
         coalescedEdits: number = 1,
-        nextIgnoreControlSignature?: string
+        nextIgnoreControlSignature?: string,
+        mutationLease?: RootMutationLease,
     ): Promise<FreshnessDecision> {
         const checkedAtMs = this.now();
         const checkedAt = new Date(checkedAtMs).toISOString();
@@ -299,10 +489,18 @@ export class SyncManager {
                 throw new Error('missing_manifest_and_synchronizer');
             }
 
-            const { previousMatcher, matcher, version } = await this.reloadIgnoreRulesForCodebase(codebasePath);
+            const { previousMatcher, matcher, version } = await this.reloadIgnoreRulesForCodebase(
+                codebasePath,
+                mutationLease,
+            );
 
             if (typeof this.context.recreateSynchronizerForCodebase === 'function') {
-                await this.context.recreateSynchronizerForCodebase(codebasePath);
+                this.assertMutationCurrent(mutationLease);
+                await this.context.recreateSynchronizerForCodebase(
+                    codebasePath,
+                    mutationLease ? () => this.assertMutationCurrent(mutationLease) : undefined,
+                );
+                this.assertMutationCurrent(mutationLease);
             }
 
             // Self-healing delete rule: remove anything currently indexed that new matcher ignores.
@@ -310,16 +508,28 @@ export class SyncManager {
             const retainedPaths = indexedPathsBeforeReload.filter((relativePath) => !this.matcherIgnoresRelativePath(matcher, relativePath));
 
             if (toDelete.length > 0 && typeof this.context.deleteIndexedPathsByRelativePaths === 'function') {
-                await this.context.deleteIndexedPathsByRelativePaths(codebasePath, toDelete);
+                if (mutationLease) {
+                    this.mutationLeaseCoordinator?.assertCurrent(mutationLease);
+                }
+                await this.context.deleteIndexedPathsByRelativePaths(
+                    codebasePath,
+                    toDelete,
+                    mutationLease ? () => this.assertMutationCurrent(mutationLease) : undefined,
+                );
                 indexedStateMutated = true;
             }
 
             if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
+                this.assertMutationCurrent(mutationLease);
                 this.snapshotManager.setCodebaseIndexManifest(codebasePath, retainedPaths);
             }
+            this.assertMutationCurrent(mutationLease);
             this.snapshotManager.saveCodebaseSnapshot();
 
-            const syncDecision = await this.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+            const syncDecision = await this.ensureFreshness(codebasePath, 0, {
+                skipIgnoreControlCheck: true,
+                mutationLease,
+            });
             const lastSyncAt = syncDecision.lastSyncAt;
             const lastSyncMs = lastSyncAt ? Date.parse(lastSyncAt) : undefined;
             const newlyIgnoredCount = previousMatcher
@@ -327,8 +537,10 @@ export class SyncManager {
                 : toDelete.length;
 
             if (typeof this.snapshotManager.setCodebaseIgnoreControlSignature === 'function') {
+                this.assertMutationCurrent(mutationLease);
                 this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, resolvedIgnoreControlSignature);
             }
+            this.assertMutationCurrent(mutationLease);
             this.snapshotManager.saveCodebaseSnapshot();
 
             return {
@@ -352,7 +564,10 @@ export class SyncManager {
             let fallbackStats: { added: number; removed: number; modified: number } | undefined;
             let fallbackRecovered = false;
             try {
-                const fallbackDecision = await this.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+                const fallbackDecision = await this.ensureFreshness(codebasePath, 0, {
+                    skipIgnoreControlCheck: true,
+                    mutationLease,
+                });
                 fallbackSyncExecuted = true;
                 fallbackStats = fallbackDecision.stats;
                 fallbackRecovered = fallbackDecision.mode === 'synced';
@@ -361,6 +576,7 @@ export class SyncManager {
             }
 
             if (indexedStateMutated && !fallbackRecovered) {
+                this.assertMutationCurrent(mutationLease);
                 this.snapshotManager.setCodebaseRequiresReindex(
                     codebasePath,
                     'navigation_recovery_failed',
@@ -383,7 +599,11 @@ export class SyncManager {
         }
     }
 
-    private async syncCodebase(codebasePath: string): Promise<SyncExecutionOutcome> {
+    private async syncCodebase(
+        codebasePath: string,
+        existingLease?: RootMutationLease,
+        currentIgnoreControlSignature?: string,
+    ): Promise<SyncExecutionOutcome> {
         if (this.snapshotManager.getCodebaseStatus(codebasePath) === 'indexing') {
             console.log(`[SYNC] ⏭️  Skipping sync for '${codebasePath}' because indexing is active.`);
             return { mode: 'skipped_indexing' };
@@ -394,74 +614,157 @@ export class SyncManager {
             return { mode: 'skipped_requires_reindex' };
         }
 
-        // Async existence check to avoid blocking event loop
-        try {
-            await fs.promises.access(codebasePath);
-        } catch {
-            // Path doesn't exist anymore; clear vector/navigation state before
-            // dropping snapshot ownership so a recreated path cannot inherit it.
-            console.log(`[SYNC] 🗑️ Codebase '${codebasePath}' no longer exists. Clearing index state and removing from snapshot.`);
-            try {
-                await this.context.clearIndex(codebasePath);
-                this.snapshotManager.removeIndexedCodebase(codebasePath);
-                this.snapshotManager.saveCodebaseSnapshot();
-                await this.unwatchCodebase(codebasePath);
-            } catch (e) {
-                console.error(`[SYNC] Failed to clean index state for missing codebase '${codebasePath}':`, e);
-                throw e;
+        let lease = existingLease;
+        let releaseLease = false;
+        let lastDurableOperation: IndexOperationReceipt | undefined;
+        if (this.mutationLeaseCoordinator) {
+            if (lease) {
+                this.mutationLeaseCoordinator.assertCurrent(lease);
+            } else {
+                const acquired = this.mutationLeaseCoordinator.acquire(codebasePath, 'sync');
+                if (!acquired.acquired) {
+                    return { mode: 'skipped_mutation_in_progress', activeMutation: acquired.activeLease };
+                }
+                lease = acquired.lease;
+                releaseLease = true;
             }
-            return { mode: 'skipped_missing_path' };
         }
 
         try {
+            lastDurableOperation = this.persistOwnedOperationStart(lease, releaseLease);
+            // Async existence check to avoid blocking event loop.
+            let pathMissing = false;
+            try {
+                this.assertMutationCurrent(lease);
+                await fs.promises.access(codebasePath);
+            } catch (error) {
+                const code = errorCode(error);
+                if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+                    throw error;
+                }
+                pathMissing = true;
+            }
+
+            if (pathMissing) {
+                // Clear vector/navigation state before dropping snapshot ownership
+                // so a recreated path cannot inherit it.
+                console.log(`[SYNC] 🗑️ Codebase '${codebasePath}' no longer exists. Clearing index state and removing from snapshot.`);
+                this.assertMutationCurrent(lease);
+                await this.context.clearIndex(codebasePath, undefined, {
+                    ...(lease ? { assertMutationCurrent: () => this.assertMutationCurrent(lease) } : {}),
+                });
+                this.assertMutationCurrent(lease);
+                const operation = this.persistOwnedOperationPhase(lease, releaseLease, "completed", () => {
+                    this.snapshotManager.removeIndexedCodebase(codebasePath);
+                });
+                if (operation) {
+                    lastDurableOperation = operation;
+                } else {
+                    this.snapshotManager.saveCodebaseSnapshot();
+                }
+                await this.unwatchCodebase(codebasePath);
+                return { mode: 'skipped_missing_path', operation: lastDurableOperation };
+            }
+
             // Incremental sync
             const collectionName = this.snapshotManager.getCodebaseCollectionName?.(codebasePath);
             const syncOptions = {
                 ...(collectionName ? { targetCollectionName: collectionName } : {}),
                 maintainCompletionMarker: true,
+                ...(lease ? {
+                    assertMutationCurrent: () => this.assertMutationCurrent(lease),
+                } : {}),
             };
+            if (lease) {
+                this.mutationLeaseCoordinator?.assertCurrent(lease);
+            }
+            const writingOperation = this.persistOwnedOperationPhase(lease, releaseLease, "writing");
+            if (writingOperation) {
+                lastDurableOperation = writingOperation;
+            }
             const stats: SyncStats = await this.context.reindexByChange(codebasePath, undefined, syncOptions);
+            if (lease) {
+                this.mutationLeaseCoordinator?.assertCurrent(lease);
+            }
 
             if (typeof this.context.getTrackedRelativePaths === 'function') {
                 const trackedPaths = this.context.getTrackedRelativePaths(codebasePath);
                 if (typeof this.snapshotManager.setCodebaseIndexManifest === 'function') {
+                    this.assertMutationCurrent(lease);
                     this.snapshotManager.setCodebaseIndexManifest(codebasePath, trackedPaths);
                 }
+            }
+
+            if (
+                currentIgnoreControlSignature !== undefined
+                && typeof this.snapshotManager.setCodebaseIgnoreControlSignature === 'function'
+            ) {
+                this.assertMutationCurrent(lease);
+                this.snapshotManager.setCodebaseIgnoreControlSignature(codebasePath, currentIgnoreControlSignature);
             }
 
             // Centralized State Update
             this.lastSyncTimes.set(codebasePath, this.now());
 
             if (stats.navigationRecovery === 'failed') {
-                this.snapshotManager.setCodebaseRequiresReindex(
-                    codebasePath,
-                    'navigation_recovery_failed',
-                    'Incremental sync completed, but navigation sidecar recovery failed. Reindex is required before navigation tools are reliable.'
-                );
-                this.snapshotManager.saveCodebaseSnapshot();
-                return { mode: 'skipped_requires_reindex', stats };
+                this.assertMutationCurrent(lease);
+                const operation = this.persistOwnedOperationPhase(lease, releaseLease, "failed", () => {
+                    this.snapshotManager.setCodebaseRequiresReindex(
+                        codebasePath,
+                        'navigation_recovery_failed',
+                        'Incremental sync completed, but navigation sidecar recovery failed. Reindex is required before navigation tools are reliable.'
+                    );
+                });
+                if (operation) {
+                    lastDurableOperation = operation;
+                } else {
+                    this.snapshotManager.saveCodebaseSnapshot();
+                }
+                return { mode: 'skipped_requires_reindex', stats, operation: lastDurableOperation };
             }
 
-            // Persist Snapshot
-            this.snapshotManager.setCodebaseSyncCompleted(codebasePath, stats, undefined, 'verified', stats.collectionName || collectionName);
-            this.snapshotManager.saveCodebaseSnapshot();
-
             if (this.onSyncCompleted) {
+                const assertMutationCurrent = () => this.assertMutationCurrent(lease);
+                assertMutationCurrent();
                 await this.onSyncCompleted(codebasePath, {
                     added: stats.added,
                     removed: stats.removed,
                     modified: stats.modified,
                     changedFiles: Array.isArray(stats.changedFiles) ? stats.changedFiles : []
-                });
+                }, assertMutationCurrent);
+                assertMutationCurrent();
+            }
+
+            if (lease) {
+                this.mutationLeaseCoordinator?.assertCurrent(lease);
+            }
+            const operation = this.persistOwnedOperationPhase(lease, releaseLease, "completed", () => {
+                this.snapshotManager.setCodebaseSyncCompleted(codebasePath, stats, undefined, 'verified', stats.collectionName || collectionName);
+            });
+            if (operation) {
+                lastDurableOperation = operation;
+            } else {
+                this.snapshotManager.saveCodebaseSnapshot();
             }
 
             if (stats.added > 0 || stats.removed > 0 || stats.modified > 0) {
                 console.log(`[SYNC] ✅ Sync Result for '${codebasePath}': +${stats.added}, -${stats.removed}, ~${stats.modified}`);
             }
-            return { mode: 'synced', stats };
+            return { mode: 'synced', stats, operation: lastDurableOperation };
         } catch (error) {
             console.error(`[SYNC] Failed to sync '${codebasePath}':`, error);
-            throw error; // Let ensureFreshness handle the catch/finally
+            if (releaseLease && lease && this.mutationLeaseCoordinator?.isCurrent(lease)) {
+                try {
+                    lastDurableOperation = this.persistOwnedOperationPhase(lease, true, "failed") ?? lastDurableOperation;
+                } catch {
+                    // Preserve the last receipt this operation durably owned.
+                }
+            }
+            throw new SyncOperationError(errorMessage(error), lastDurableOperation, { cause: error });
+        } finally {
+            if (releaseLease && lease) {
+                this.mutationLeaseCoordinator?.release(lease);
+            }
         }
     }
 
@@ -531,23 +834,36 @@ export class SyncManager {
         return 0;
     }
 
-    private async reloadIgnoreRulesForCodebase(codebasePath: string): Promise<IgnoreReloadResult> {
+    private async reloadIgnoreRulesForCodebase(
+        codebasePath: string,
+        mutationLease?: RootMutationLease,
+    ): Promise<IgnoreReloadResult> {
         const previousMatcher = this.watcherIgnoreMatchers.get(codebasePath);
 
         if (typeof this.context.reloadIgnoreRulesForCodebase === 'function') {
+            this.assertMutationCurrent(mutationLease);
             await this.context.reloadIgnoreRulesForCodebase(codebasePath);
+            this.assertMutationCurrent(mutationLease);
         }
 
         const matcher = await this.buildIgnoreMatcherForCodebase(codebasePath);
+        this.assertMutationCurrent(mutationLease);
         this.watcherIgnoreMatchers.set(codebasePath, matcher);
 
         const version = this.getIgnoreRuleVersion(codebasePath) + 1;
         this.ignoreRulesVersions.set(codebasePath, version);
         if (typeof this.snapshotManager.setCodebaseIgnoreRulesVersion === 'function') {
+            this.assertMutationCurrent(mutationLease);
             this.snapshotManager.setCodebaseIgnoreRulesVersion(codebasePath, version);
         }
 
         return { previousMatcher, matcher, version };
+    }
+
+    private assertMutationCurrent(lease?: RootMutationLease): void {
+        if (lease) {
+            this.mutationLeaseCoordinator?.assertCurrent(lease);
+        }
     }
 
     private async buildIgnoreMatcherForCodebase(codebasePath: string): Promise<ReturnType<typeof ignore>> {

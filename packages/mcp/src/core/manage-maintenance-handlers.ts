@@ -8,7 +8,7 @@ import {
     type SymbolQualitySummary,
 } from "@zokizuan/satori-core";
 import type { SnapshotCorruptionWarning, SnapshotManager } from "./snapshot.js";
-import type { SyncManager } from "./sync.js";
+import { SyncOperationError, type SyncManager } from "./sync.js";
 import type {
     CompletionProbeDebugHint,
     TrackedRootReadiness,
@@ -19,6 +19,7 @@ import {
     type VectorBackendDiagnostic,
 } from "./backend-diagnostics.js";
 import { requireAbsoluteFilesystemPath } from "../utils.js";
+import type { IndexOperationPhase, IndexOperationReceipt } from "../config.js";
 import type {
     ManageIndexAction,
     ManageIndexReason,
@@ -29,6 +30,11 @@ import {
     type RuntimeOwnerMutationAction,
     type RuntimeOwnersSummary,
 } from "./runtime-owner.js";
+import {
+    MutationLeaseCoordinator,
+    formatMutationLeaseBlockedMessage,
+    type RootMutationLease,
+} from "./mutation-lease.js";
 
 type ToolArgs = Record<string, unknown>;
 
@@ -39,7 +45,7 @@ type ToolTextResponse = {
 
 type ManageMaintenanceHandlersHost = {
     context: Pick<Context, "clearIndex">;
-    snapshotManager: Pick<SnapshotManager, "removeCodebaseCompletely">;
+    snapshotManager: Pick<SnapshotManager, "removeCodebaseCompletely" | "getLatestOperation" | "startOperation" | "transitionOperation" | "commitOperationPhase" | "saveCodebaseSnapshot">;
     syncManager: Pick<SyncManager, "ensureFreshness">;
     trackedRootReadiness: Pick<
         TrackedRootReadiness,
@@ -55,7 +61,10 @@ type ManageMaintenanceHandlersHost = {
         action: Extract<RuntimeOwnerMutationAction, "clear" | "sync">,
         codebasePath: string,
     ): Promise<ToolTextResponse | null>;
-    recoverStaleIndexingStateIfNeeded(codebasePath: string): Promise<void>;
+    recoverStaleIndexingStateIfNeeded(
+        codebasePath: string,
+        existingLease?: RootMutationLease,
+    ): Promise<RootMutationLease | undefined>;
     manageResponse(
         action: ManageIndexAction | string,
         path: string,
@@ -92,9 +101,11 @@ type ManageMaintenanceHandlersHost = {
         path: string,
         diagnostic: VectorBackendDiagnostic,
         humanText?: string,
+        operation?: import("../config.js").IndexOperationReceipt,
     ): ToolTextResponse;
     /** Optional live MCP runtime owner summary for status diagnostics. */
     getLiveOwnersSummary?(): Promise<RuntimeOwnersSummary | null> | RuntimeOwnersSummary | null;
+    mutationLeaseCoordinator: MutationLeaseCoordinator | null;
 };
 
 function collectErrorFragments(
@@ -172,6 +183,10 @@ function formatUnknownError(error: unknown): string {
     }
 }
 
+function formatActiveMutationStatusLine(lease: RootMutationLease): string {
+    return `Active mutation: ${lease.action} operation=${lease.operationId} generation=${lease.generation} pid=${lease.pid} acquiredAt=${lease.acquiredAt}`;
+}
+
 export class ManageMaintenanceHandlers {
     constructor(private readonly host: ManageMaintenanceHandlersHost) {}
 
@@ -182,6 +197,38 @@ export class ManageMaintenanceHandlers {
             return this.host.manageResponse("clear", codebasePath, "error", absolutePathResult.message);
         }
         const requestedPath = absolutePathResult.absolutePath;
+        let mutationLease: RootMutationLease | undefined;
+        let operationTerminal = false;
+        let lastDurableOperation: IndexOperationReceipt | undefined;
+        const persistOperation = (phase: IndexOperationPhase, mutateSnapshot?: () => void) => {
+            if (!mutationLease) {
+                mutateSnapshot?.();
+                return undefined;
+            }
+            if (typeof this.host.snapshotManager.transitionOperation !== "function") {
+                mutateSnapshot?.();
+                return undefined;
+            }
+            this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
+            const operation = typeof this.host.snapshotManager.commitOperationPhase === "function"
+                ? this.host.snapshotManager.commitOperationPhase(
+                    mutationLease,
+                    phase,
+                    mutateSnapshot,
+                    () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!),
+                )
+                : (() => {
+                    const next = this.host.snapshotManager.transitionOperation(mutationLease!, phase);
+                    mutateSnapshot?.();
+                    if (this.host.snapshotManager.saveCodebaseSnapshot() === false) {
+                        throw new Error(`Failed to persist clear operation receipt for '${requestedPath}'.`);
+                    }
+                    return next;
+                })();
+            lastDurableOperation = operation;
+            operationTerminal = phase === "completed" || phase === "failed" || phase === "blocked";
+            return operation;
+        };
 
         if (this.host.getSnapshotAllCodebases().length === 0) {
             return this.host.manageResponse(
@@ -209,8 +256,43 @@ export class ManageMaintenanceHandlers {
                 return runtimeOwnerConflict;
             }
 
+            const leaseResult = this.host.mutationLeaseCoordinator?.acquire(absolutePath, "clear");
+            if (leaseResult && !leaseResult.acquired) {
+                return this.host.manageResponse(
+                    "clear",
+                    absolutePath,
+                    "blocked",
+                    formatMutationLeaseBlockedMessage(leaseResult.activeLease),
+                    {
+                        reason: "mutation_in_progress",
+                        hints: {
+                            status: this.host.buildStatusHint(absolutePath),
+                            activeMutation: leaseResult.activeLease,
+                        },
+                    },
+                );
+            }
+            mutationLease = leaseResult?.lease;
+            if (mutationLease && typeof this.host.snapshotManager.startOperation === "function") {
+                const operation = typeof this.host.snapshotManager.commitOperationPhase === "function"
+                    ? this.host.snapshotManager.commitOperationPhase(
+                        mutationLease,
+                        "accepted",
+                        undefined,
+                        () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!),
+                    )
+                    : this.host.snapshotManager.startOperation(mutationLease);
+                if (
+                    typeof this.host.snapshotManager.commitOperationPhase !== "function"
+                    && this.host.snapshotManager.saveCodebaseSnapshot() === false
+                ) {
+                    throw new Error(`Failed to persist accepted clear operation receipt for '${absolutePath}'.`);
+                }
+                lastDurableOperation = operation;
+            }
+
             if (pathExists) {
-                await this.host.recoverStaleIndexingStateIfNeeded(absolutePath);
+                await this.host.recoverStaleIndexingStateIfNeeded(absolutePath, mutationLease);
             }
 
             const isIndexed = this.host.getSnapshotIndexedCodebases().includes(absolutePath);
@@ -219,8 +301,9 @@ export class ManageMaintenanceHandlers {
             const isRequiresReindex = status === "requires_reindex";
 
             if (!isIndexed && !isIndexing && !isRequiresReindex) {
+                const operation = persistOperation("blocked");
                 if (!pathExists) {
-                    return this.host.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
+                    return this.host.manageResponse("clear", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`, operation ? { operation } : undefined);
                 }
                 return this.host.manageResponse(
                     "clear",
@@ -232,11 +315,13 @@ export class ManageMaintenanceHandlers {
                         hints: {
                             create: this.host.buildCreateHint(absolutePath),
                         },
+                        ...(operation ? { operation } : {}),
                     },
                 );
             }
 
             if (isIndexing) {
+                const operation = persistOperation("blocked");
                 return this.host.manageResponse(
                     "clear",
                     absolutePath,
@@ -249,6 +334,7 @@ export class ManageMaintenanceHandlers {
                             retryAfterMs: this.host.getManageRetryAfterMs(),
                             indexing: this.host.buildIndexingMetadata(absolutePath),
                         },
+                        ...(operation ? { operation } : {}),
                     },
                 );
             }
@@ -256,29 +342,46 @@ export class ManageMaintenanceHandlers {
             console.log(`[CLEAR] Clearing codebase: ${absolutePath}`);
 
             try {
-                await this.host.context.clearIndex(absolutePath);
+                persistOperation("writing");
+                if (mutationLease) {
+                    this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
+                }
+                await this.host.context.clearIndex(absolutePath, undefined, {
+                    ...(mutationLease ? {
+                        assertMutationCurrent: () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!),
+                    } : {}),
+                });
                 console.log(`[CLEAR] Successfully cleared index for: ${absolutePath}`);
             } catch (error: unknown) {
                 if (error instanceof RemoteCollectionDeletePendingError) {
                     const errorMsg = `Remote deletion is still pending for ${absolutePath}. Local index state was not changed. Details: ${formatUnknownError(error)}`;
                     console.error(`[CLEAR] ${errorMsg}`);
+                    const operation = persistOperation("failed");
                     return this.host.manageResponse("clear", absolutePath, "error", errorMsg, {
                         reason: "remote_delete_pending",
                         hints: {
                             retry: this.host.buildStatusHint(absolutePath),
                             clear: { tool: "manage_index", args: { action: "clear", path: absolutePath } },
                         },
+                        ...(operation ? { operation } : {}),
                     });
                 }
                 const errorMsg = `Failed to clear ${absolutePath}: ${formatUnknownError(error)}`;
                 console.error(`[CLEAR] ${errorMsg}`);
-                return this.host.manageResponse("clear", absolutePath, "error", errorMsg);
+                const operation = persistOperation("failed");
+                return this.host.manageResponse("clear", absolutePath, "error", errorMsg, operation ? { operation } : undefined);
             }
 
-            this.host.snapshotManager.removeCodebaseCompletely(absolutePath);
-            this.host.markCodebaseCleared(absolutePath, this.host.resolveCollectionName(absolutePath));
+            if (mutationLease) {
+                this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
+            }
+            const operation = persistOperation("completed", () => {
+                this.host.markCodebaseCleared(absolutePath, this.host.resolveCollectionName(absolutePath));
+            });
+            if (!operation) {
+                this.host.saveSnapshotIfSupported();
+            }
             this.host.clearIndexingStats();
-            this.host.saveSnapshotIfSupported();
             await this.host.unwatchCodebase(absolutePath);
 
             let resultText = `Successfully cleared codebase '${absolutePath}'`;
@@ -289,13 +392,26 @@ export class ManageMaintenanceHandlers {
                 resultText += `\n${remainingIndexed} other indexed codebase(s) and ${remainingIndexing} indexing codebase(s) remain`;
             }
 
-            return this.host.manageResponse("clear", absolutePath, "ok", resultText);
+            return this.host.manageResponse("clear", absolutePath, "ok", resultText, operation ? { operation } : undefined);
         } catch (error) {
+            let operation;
+            try {
+                operation = mutationLease && !operationTerminal && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease)
+                    ? persistOperation("failed")
+                    : lastDurableOperation;
+            } catch (receiptError) {
+                console.error("Failed to persist terminal clear receipt:", receiptError);
+                operation = lastDurableOperation;
+            }
             const errorMessage = typeof error === "string" ? error : (error instanceof Error ? error.message : String(error));
             if (errorMessage === COLLECTION_LIMIT_MESSAGE || errorMessage.includes(COLLECTION_LIMIT_MESSAGE)) {
-                return this.host.manageResponse("clear", requestedPath, "error", COLLECTION_LIMIT_MESSAGE);
+                return this.host.manageResponse("clear", requestedPath, "error", COLLECTION_LIMIT_MESSAGE, operation ? { operation } : undefined);
             }
-            return this.host.manageResponse("clear", requestedPath, "error", `Error clearing index: ${errorMessage}`);
+            return this.host.manageResponse("clear", requestedPath, "error", `Error clearing index: ${errorMessage}`, operation ? { operation } : undefined);
+        } finally {
+            if (mutationLease) {
+                this.host.mutationLeaseCoordinator?.release(mutationLease);
+            }
         }
     }
 
@@ -310,8 +426,15 @@ export class ManageMaintenanceHandlers {
         try {
             const absolutePath = requestedPath;
 
+            this.host.refreshSnapshotStateFromDisk();
+            const latestOperation = typeof this.host.snapshotManager.getLatestOperation === "function"
+                ? this.host.snapshotManager.getLatestOperation(absolutePath)
+                : undefined;
+
             if (!fs.existsSync(absolutePath)) {
-                return this.host.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`);
+                return this.host.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`, {
+                    ...(latestOperation ? { operation: latestOperation } : {}),
+                });
             }
 
             const stat = fs.statSync(absolutePath);
@@ -319,14 +442,18 @@ export class ManageMaintenanceHandlers {
                 return this.host.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
             }
 
-            this.host.refreshSnapshotStateFromDisk();
             const snapshotCorruptionWarning = this.host.getSnapshotCorruptionWarning();
             await this.host.recoverStaleIndexingStateIfNeeded(absolutePath);
 
             const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absolutePath);
             if (trackedRootState.state === "requires_reindex") {
+                const operation = typeof this.host.snapshotManager.getLatestOperation === "function"
+                    ? this.host.snapshotManager.getLatestOperation(trackedRootState.codebasePath)
+                    : undefined;
                 const statusMessage = this.host.buildReindexInstruction(trackedRootState.codebasePath, trackedRootState.message);
                 const compatibilityStatus = this.host.buildCompatibilityStatusLines(trackedRootState.codebasePath);
+                const activeMutation = this.host.mutationLeaseCoordinator?.getActiveLease(trackedRootState.codebasePath);
+                const activeMutationLine = activeMutation ? `\n${formatActiveMutationStatusLine(activeMutation)}` : "";
                 const pathInfo = codebasePath !== trackedRootState.codebasePath
                     ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${trackedRootState.codebasePath}'`
                     : "";
@@ -334,10 +461,14 @@ export class ManageMaintenanceHandlers {
                     "status",
                     trackedRootState.codebasePath,
                     "requires_reindex",
-                    statusMessage + compatibilityStatus + pathInfo,
+                    statusMessage + compatibilityStatus + activeMutationLine + pathInfo,
                     {
                         reason: "requires_reindex",
-                        hints: this.host.buildManageRequiresReindexHints(trackedRootState.codebasePath),
+                        hints: {
+                            ...this.host.buildManageRequiresReindexHints(trackedRootState.codebasePath),
+                            ...(activeMutation ? { activeMutation } : {}),
+                        },
+                        ...(operation ? { operation } : {}),
                     },
                 );
             }
@@ -521,16 +652,30 @@ export class ManageMaintenanceHandlers {
                 }
             }
 
+            const activeMutation = this.host.mutationLeaseCoordinator?.getActiveLease(envelopePath);
+            const activeMutationLine = activeMutation ? `\n${formatActiveMutationStatusLine(activeMutation)}` : "";
+            if (activeMutation) {
+                envelopeHints = {
+                    ...(envelopeHints || {}),
+                    activeMutation,
+                };
+            }
+
+            const operation = typeof this.host.snapshotManager.getLatestOperation === "function"
+                ? this.host.snapshotManager.getLatestOperation(envelopePath)
+                : undefined;
+
             return this.host.manageResponse(
                 "status",
                 envelopePath,
                 envelopeStatus,
-                statusMessage + compatibilityStatus + pathInfo + snapshotWarningText + runtimeOwnersLine,
+                statusMessage + compatibilityStatus + pathInfo + snapshotWarningText + runtimeOwnersLine + activeMutationLine,
                 {
                     reason: envelopeReason,
                     hints: envelopeHints,
                     warnings,
                     ...(symbolQuality ? { symbolQuality } : {}),
+                    ...(operation ? { operation } : {}),
                 },
             );
         } catch (error: unknown) {
@@ -617,6 +762,7 @@ export class ManageMaintenanceHandlers {
 
             console.log(`[SYNC] Manually triggering incremental sync for: ${absolutePath}`);
             const decision = await this.host.syncManager.ensureFreshness(absolutePath, 0);
+            const operationOptions = decision.operation ? { operation: decision.operation } : undefined;
 
             if (decision.mode === "ignore_reload_failed") {
                 const fallbackLine = decision.fallbackSyncExecuted
@@ -627,6 +773,7 @@ export class ManageMaintenanceHandlers {
                     absolutePath,
                     "error",
                     `Error syncing codebase: ignore-rule reconciliation failed (${decision.errorMessage || "unknown_ignore_reload_error"}).${fallbackLine}`,
+                    operationOptions,
                 );
             }
 
@@ -647,6 +794,25 @@ export class ManageMaintenanceHandlers {
                 );
             }
 
+            if (decision.mode === "skipped_mutation_in_progress") {
+                const activeMutation = decision.activeMutation;
+                return this.host.manageResponse(
+                    "sync",
+                    absolutePath,
+                    "blocked",
+                    activeMutation
+                        ? formatMutationLeaseBlockedMessage(activeMutation)
+                        : `Another mutation is already in progress for '${absolutePath}'. Use manage_index status to observe it.`,
+                    {
+                        reason: "mutation_in_progress",
+                        hints: {
+                            status: this.host.buildStatusHint(absolutePath),
+                            ...(activeMutation ? { activeMutation } : {}),
+                        },
+                    },
+                );
+            }
+
             if (decision.mode === "skipped_requires_reindex") {
                 return this.host.manageResponse(
                     "sync",
@@ -659,12 +825,13 @@ export class ManageMaintenanceHandlers {
                             reindex: this.host.buildReindexHint(absolutePath),
                             status: this.host.buildStatusHint(absolutePath),
                         },
+                        ...(decision.operation ? { operation: decision.operation } : {}),
                     },
                 );
             }
 
             if (decision.mode === "skipped_missing_path") {
-                return this.host.manageResponse("sync", absolutePath, "error", `Error: Codebase path '${absolutePath}' no longer exists.`);
+                return this.host.manageResponse("sync", absolutePath, "error", `Error: Codebase path '${absolutePath}' no longer exists.`, operationOptions);
             }
 
             const added = decision.stats?.added ?? 0;
@@ -683,16 +850,17 @@ export class ManageMaintenanceHandlers {
                         absolutePath,
                         "error",
                         `Error syncing codebase: coalesced in-flight reconcile failed (${decision.errorMessage}).${fallbackLine}`,
+                        operationOptions,
                     );
                 }
                 await this.host.touchWatchedCodebase(absolutePath);
-                return this.host.manageResponse("sync", absolutePath, "ok", `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`);
+                return this.host.manageResponse("sync", absolutePath, "ok", `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`, operationOptions);
             }
 
             if (decision.mode === "reconciled_ignore_change") {
                 if (totalChanges === 0 && ignoredDeletes === 0) {
                     await this.host.touchWatchedCodebase(absolutePath);
-                    return this.host.manageResponse("sync", absolutePath, "ok", `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`);
+                    return this.host.manageResponse("sync", absolutePath, "ok", `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`, operationOptions);
                 }
 
                 const resultMessage =
@@ -702,25 +870,26 @@ export class ManageMaintenanceHandlers {
                     `\nTotal changes: ${totalChanges + ignoredDeletes}`;
                 console.log(`[SYNC] ✅ Sync+ignore reconcile completed: +${added}, -${removed}, ~${modified}, ignoredDeleted=${ignoredDeletes}`);
                 await this.host.touchWatchedCodebase(absolutePath);
-                return this.host.manageResponse("sync", absolutePath, "ok", resultMessage);
+                return this.host.manageResponse("sync", absolutePath, "ok", resultMessage, operationOptions);
             }
 
             if (totalChanges === 0) {
                 await this.host.touchWatchedCodebase(absolutePath);
-                return this.host.manageResponse("sync", absolutePath, "ok", `✅ No changes detected for codebase '${absolutePath}'. Index is up to date.`);
+                return this.host.manageResponse("sync", absolutePath, "ok", `✅ No changes detected for codebase '${absolutePath}'. Index is up to date.`, operationOptions);
             }
 
             const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${added} file(s) added\n- ${removed} file(s) removed\n~ ${modified} file(s) modified\n\nTotal changes: ${totalChanges}`;
             console.log(`[SYNC] ✅ Sync completed: +${added}, -${removed}, ~${modified}`);
             await this.host.touchWatchedCodebase(absolutePath);
-            return this.host.manageResponse("sync", absolutePath, "ok", resultMessage);
+            return this.host.manageResponse("sync", absolutePath, "ok", resultMessage, operationOptions);
         } catch (error: unknown) {
             console.error("[SYNC] Error during sync:", error);
+            const operation = error instanceof SyncOperationError ? error.operation : undefined;
             const vectorBackendDiagnostic = classifyVectorBackendError(error);
             if (vectorBackendDiagnostic) {
-                return this.host.manageVectorBackendResponse("sync", requestedPath, vectorBackendDiagnostic);
+                return this.host.manageVectorBackendResponse("sync", requestedPath, vectorBackendDiagnostic, undefined, operation);
             }
-            return this.host.manageResponse("sync", requestedPath, "error", `Error syncing codebase: ${formatUnknownError(error)}`);
+            return this.host.manageResponse("sync", requestedPath, "error", `Error syncing codebase: ${formatUnknownError(error)}`, operation ? { operation } : undefined);
         }
     }
 }

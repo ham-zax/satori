@@ -316,3 +316,41 @@ test('FileSynchronizer serializes prepared commits and rejects a stale change se
         fs.rmSync(tempHome, { recursive: true, force: true });
     }
 });
+
+test('FileSynchronizer does not publish a prepared checkpoint after mutation lease loss', async () => {
+    const prevHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-fenced-commit-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-fenced-commit-repo-'));
+
+    try {
+        process.env.HOME = tempHome;
+        const sourcePath = path.join(tempRepo, 'source.ts');
+        fs.writeFileSync(sourcePath, 'export const value = 1;\n', 'utf8');
+
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize();
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(tempRepo);
+        const baselineSnapshot = fs.readFileSync(snapshotPath, 'utf8');
+        const baselineHash = synchronizer.getFileHash('source.ts');
+
+        fs.writeFileSync(sourcePath, 'export const value = 2;\n', 'utf8');
+        const prepared = await synchronizer.prepareChanges();
+        await assert.rejects(
+            () => prepared.commit(() => {
+                throw new Error('mutation lease lost');
+            }),
+            /mutation lease lost/,
+        );
+
+        assert.equal(fs.readFileSync(snapshotPath, 'utf8'), baselineSnapshot);
+        assert.equal(synchronizer.getFileHash('source.ts'), baselineHash);
+    } finally {
+        if (prevHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = prevHome;
+        }
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});

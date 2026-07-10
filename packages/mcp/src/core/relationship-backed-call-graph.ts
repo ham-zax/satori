@@ -542,35 +542,45 @@ export class RelationshipBackedCallGraph {
         };
     }
 
-    public async rebuildForIndex(codebasePath: string): Promise<void> {
+    public async rebuildForIndex(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
         try {
             const sidecar = await this.host.callGraphManager.rebuildForCodebase(
                 codebasePath,
-                this.host.getContextActiveIgnorePatterns(codebasePath)
+                this.host.getContextActiveIgnorePatterns(codebasePath),
+                assertMutationCurrent,
             );
+            assertMutationCurrent?.();
             this.host.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
             this.host.saveSnapshotIfSupported();
             console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
         } catch (error) {
+            assertMutationCurrent?.();
             console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after indexing '${codebasePath}': ${formatUnknownError(error)}`);
         }
     }
 
-    public async rebuildForSyncDelta(codebasePath: string, changedFiles: string[]): Promise<boolean> {
+    public async rebuildForSyncDelta(
+        codebasePath: string,
+        changedFiles: string[],
+        assertMutationCurrent?: () => void,
+    ): Promise<boolean> {
         try {
             const sidecar = await this.host.callGraphManager.rebuildIfSupportedDelta(
                 codebasePath,
                 changedFiles,
-                this.host.getContextActiveIgnorePatterns(codebasePath)
+                this.host.getContextActiveIgnorePatterns(codebasePath),
+                assertMutationCurrent,
             );
             if (!sidecar) {
                 return false;
             }
+            assertMutationCurrent?.();
             this.host.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
             this.host.saveSnapshotIfSupported();
             console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync delta (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
             return true;
         } catch (error) {
+            assertMutationCurrent?.();
             console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after sync '${codebasePath}': ${formatUnknownError(error)}`);
             return false;
         }

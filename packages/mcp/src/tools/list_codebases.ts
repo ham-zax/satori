@@ -13,7 +13,9 @@ function formatSnapshotCorruptionWarning(warning: ReturnType<ToolContext["snapsh
         return [];
     }
     const lines = [
-        "WARNING: Snapshot state was recovered after a corrupt snapshot was quarantined. Tracked codebases may be incomplete.",
+        warning.quarantinedPath
+            ? "WARNING: Snapshot state was recovered after a corrupt snapshot was quarantined. Tracked codebases may be incomplete."
+            : "WARNING: Snapshot state could not be refreshed because the snapshot is corrupt. Last loaded state was preserved.",
         `Snapshot path: ${warning.snapshotPath}`,
     ];
     if (warning.quarantinedPath) {

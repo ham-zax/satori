@@ -5,13 +5,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Context } from './context';
+import type { RepairProof } from './repair-proof';
 import { resolveNavigationSqlitePath, SQLiteNavigationStore, validateNavigationStoreParity } from '../navigation';
 import { clearSymbolRegistrySidecar, readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols';
 import type { SymbolRecord, SymbolRegistryManifestFile } from '../symbols';
 import { Embedding } from '../embedding';
 import type { EmbeddingVector } from '../embedding';
 import { AstCodeSplitter } from '../splitter';
-import type { Splitter } from '../splitter';
+import type { CodeChunk, Splitter } from '../splitter';
 import type {
     CollectionDetails,
     HybridSearchOptions,
@@ -117,6 +118,15 @@ type ContextWithDeleteFileChunks = {
 
 type ContextWithExpectedChunks = {
     getExpectedChunksAndSymbols: (...args: unknown[]) => Promise<unknown>;
+};
+
+type ContextWithProcessChunkBatch = {
+    processChunkBatch(
+        chunks: CodeChunk[],
+        codebasePath: string,
+        collectionName: string,
+        assertMutationCurrent?: () => void,
+    ): Promise<void>;
 };
 
 class InMemoryVectorDatabase implements VectorDatabase {
@@ -227,6 +237,66 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 }
 
+test('Context blocks vector insertion when the mutation guard fails after embedding', async () => {
+    const vectorDatabase = new InMemoryVectorDatabase();
+    const context = new Context({
+        embedding: new TestEmbedding(),
+        vectorDatabase,
+    }) as unknown as ContextWithProcessChunkBatch;
+    const chunk: CodeChunk = {
+        content: 'export const value = 1;',
+        metadata: {
+            startLine: 1,
+            endLine: 1,
+            language: 'typescript',
+            filePath: '/repo/value.ts',
+        },
+    };
+
+    await assert.rejects(
+        () => context.processChunkBatch([chunk], '/repo', 'chunks', () => {
+            throw new Error('mutation lease lost');
+        }),
+        /mutation lease lost/,
+    );
+
+    assert.deepEqual(vectorDatabase.mutationCalls, []);
+});
+
+test('Context blocks completion marker insertion when the mutation guard fails', async () => {
+    const vectorDatabase = new InMemoryVectorDatabase();
+    const context = new Context({
+        embedding: new TestEmbedding(),
+        vectorDatabase,
+    });
+    const codebasePath = '/repo';
+    const collectionName = context.resolveCollectionName(codebasePath);
+    await vectorDatabase.createHybridCollection(collectionName);
+
+    await assert.rejects(
+        () => context.writeIndexCompletionMarker(codebasePath, {
+            kind: 'satori_index_completion_v1',
+            codebasePath,
+            fingerprint: {
+                embeddingProvider: 'TestEmbedding',
+                embeddingModel: 'TestEmbedding',
+                embeddingDimension: 4,
+                vectorStoreProvider: 'Milvus',
+                schemaVersion: 'hybrid_v3',
+            },
+            indexedFiles: 1,
+            totalChunks: 1,
+            completedAt: '2026-07-10T00:00:00.000Z',
+            runId: 'guard-test',
+        }, undefined, () => {
+            throw new Error('mutation lease lost');
+        }),
+        /mutation lease lost/,
+    );
+
+    assert.deepEqual(vectorDatabase.mutationCalls, []);
+});
+
 test('Context.deleteFileChunks escapes relative paths as Milvus string literals', async () => {
     const vectorDatabase = new InMemoryVectorDatabase();
     const context = new Context({
@@ -247,6 +317,14 @@ async function readTrustedFingerprint(context: Context, codebasePath: string): P
     const marker = await context.getIndexCompletionMarker(codebasePath);
     assert.ok(marker);
     return marker.fingerprint;
+}
+
+function verifiedSnapshotEvidence(fingerprint: IndexCompletionFingerprint) {
+    return {
+        status: 'verified' as const,
+        basis: 'verified_snapshot_fingerprint',
+        fingerprint,
+    };
 }
 
 function buildCompletionMarkerDoc(input: {
@@ -1796,6 +1874,87 @@ test('Context.writeSymbolRegistryForCompletedIndex removes stale sqlite cache wh
     }
 });
 
+test('Context.repairIndex recommends create only when no related collection exists', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-no-collection-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            symbolRegistryStateRoot: path.join(tempRoot, 'state'),
+        });
+
+        const result = await context.repairIndex(codebasePath);
+
+        assert.equal(result.status, 'blocked');
+        assert.equal(result.reason, 'needs_create');
+        assert.equal(result.proof.collection.status, 'missing');
+        assert.equal(result.proof.collection.basis, 'no_related_collection');
+        assert.equal(result.proof.payload.status, 'not_checked');
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex requires reindex when multiple staged collections lack snapshot authority', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-multiple-staged-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: path.join(tempRoot, 'state'),
+        });
+        vectorDatabase.collections.set(context.resolveStagedCollectionName(codebasePath, 'one'), new Map());
+        vectorDatabase.collections.set(context.resolveStagedCollectionName(codebasePath, 'two'), new Map());
+
+        const result = await context.repairIndex(codebasePath);
+
+        assert.equal(result.status, 'requires_reindex');
+        assert.equal(result.reason, 'requires_reindex');
+        assert.equal(result.proof.collection.status, 'failed');
+        assert.equal(result.proof.collection.basis, 'multiple_staged_collections');
+        assert.equal(result.proof.collection.observedCount, 2);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex requires reindex when the snapshot-selected collection is missing but a related collection exists', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-missing-snapshot-collection-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: path.join(tempRoot, 'state'),
+        });
+        const existingCollection = context.resolveStagedCollectionName(codebasePath, 'existing');
+        const missingCollection = context.resolveStagedCollectionName(codebasePath, 'missing');
+        vectorDatabase.collections.set(existingCollection, new Map());
+
+        const result = await context.repairIndex(codebasePath, {
+            preferredCollectionName: missingCollection,
+        });
+
+        assert.equal(result.status, 'requires_reindex');
+        assert.equal(result.reason, 'requires_reindex');
+        assert.equal(result.proof.collection.status, 'failed');
+        assert.equal(result.proof.collection.basis, 'snapshot_collection_missing_from_family');
+        assert.equal(result.proof.collection.observedCount, 1);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context.repairIndex missing_marker_doc + complete collection repairs marker and sidecars without embedding chunk writes', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-ok-'));
     const stateRoot = path.join(tempRoot, 'state');
@@ -1840,9 +1999,18 @@ test('Context.repairIndex missing_marker_doc + complete collection repairs marke
 
         // 3. Run repairIndex
         throwOnEmbed = true;
-        const repairResult = await context.repairIndex(codebasePath, { trustedFingerprint });
+        const repairResult = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+        });
         assert.equal(repairResult.status, 'ok');
         assert.match(repairResult.message, /readiness repaired/i);
+        assert.equal(repairResult.proof.collection.status, 'matched');
+        assert.equal(repairResult.proof.snapshot.status, 'matched');
+        assert.equal(repairResult.proof.marker.status, 'missing');
+        assert.equal(repairResult.proof.fingerprint.status, 'matched');
+        assert.equal(repairResult.proof.payload.status, 'matched');
+        assert.equal(repairResult.proof.staleRemoteChunks.status, 'matched');
+        assert.equal(repairResult.proof.navigation.status, 'matched');
 
         // 4. Verify marker and sidecars are rebuilt
         const activeCollection = await context.getActiveIndexedCollectionName(codebasePath);
@@ -1882,13 +2050,117 @@ test('Context.repairIndex missing marker refuses to forge current fingerprint ov
         });
 
         const repairResult = await upgradedContext.repairIndex(codebasePath, {
-            trustedFingerprint: originalFingerprint,
+            snapshotEvidence: verifiedSnapshotEvidence(originalFingerprint),
         });
 
         assert.equal(repairResult.status, 'requires_reindex');
         assert.equal(repairResult.reason, 'requires_reindex');
         assert.match(repairResult.message, /cannot prove vector provenance|runtime fingerprint/i);
+        assert.equal(repairResult.proof.collection.status, 'matched');
+        assert.equal(repairResult.proof.marker.status, 'missing');
+        assert.equal(repairResult.proof.snapshot.status, 'failed');
+        assert.equal(repairResult.proof.fingerprint.status, 'failed');
+        assert.equal(repairResult.proof.payload.status, 'not_checked');
         assert.equal(await upgradedContext.getIndexCompletionMarker(codebasePath), null);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex reports a malformed completion marker as failed evidence', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-malformed-marker-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function auth() { return true; }\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        const fingerprint = await readTrustedFingerprint(context, codebasePath);
+        const collectionName = context.resolveCollectionName(codebasePath);
+        await context.clearIndexCompletionMarker(codebasePath);
+        await vectorDatabase.insert(collectionName, [{
+            id: INDEX_COMPLETION_MARKER_DOC_ID,
+            vector: [],
+            content: 'malformed marker',
+            relativePath: '.__satori__/index_completion_marker.json',
+            startLine: 0,
+            endLine: 0,
+            fileExtension: '.satori_meta',
+            metadata: {
+                kind: 'satori_index_completion_v1',
+                codebasePath: path.join(tempRoot, 'wrong-root'),
+            },
+        }]);
+        const mutationCountBeforeRepair = vectorDatabase.mutationCalls.length;
+
+        const result = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(fingerprint),
+        });
+
+        assert.equal(result.status, 'requires_reindex');
+        assert.equal(result.reason, 'requires_reindex');
+        assert.equal(result.proof.marker.status, 'failed');
+        assert.equal(result.proof.marker.basis, 'malformed_completion_marker');
+        assert.equal(result.proof.fingerprint.status, 'matched');
+        assert.equal(vectorDatabase.mutationCalls.length, mutationCountBeforeRepair);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex publishes partial proof before a backend payload probe fails', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-backend-proof-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function auth() { return true; }\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        const fingerprint = await readTrustedFingerprint(context, codebasePath);
+        await context.clearIndexCompletionMarker(codebasePath);
+
+        const originalQuery = vectorDatabase.query.bind(vectorDatabase);
+        vectorDatabase.query = async (collectionName, filter, outputFields, limit) => {
+            if (filter.startsWith('id in [')) {
+                throw new Error('milvus connection closed during payload proof');
+            }
+            return originalQuery(collectionName, filter, outputFields, limit);
+        };
+        const proofUpdates: RepairProof[] = [];
+
+        await assert.rejects(
+            context.repairIndex(codebasePath, {
+                snapshotEvidence: verifiedSnapshotEvidence(fingerprint),
+                onProofUpdate: (proof) => {
+                    proofUpdates.push(proof);
+                },
+            }),
+            /connection closed/i,
+        );
+        const partialProof = proofUpdates.at(-1);
+        assert.equal(partialProof?.collection.status, 'matched');
+        assert.equal(partialProof?.snapshot.status, 'matched');
+        assert.equal(partialProof?.marker.status, 'missing');
+        assert.equal(partialProof?.fingerprint.status, 'matched');
+        assert.equal(partialProof?.payload.status, 'not_checked');
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -1918,11 +2190,16 @@ test('Context.repairIndex blocks when deleted source leaves extra remote chunks'
         await context.clearIndexCompletionMarker(codebasePath);
         fs.rmSync(oldPath);
 
-        const repairResult = await context.repairIndex(codebasePath, { trustedFingerprint });
+        const repairResult = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+        });
 
-        assert.equal(repairResult.status, 'blocked');
-        assert.equal(repairResult.reason, 'needs_create');
+        assert.equal(repairResult.status, 'requires_reindex');
+        assert.equal(repairResult.reason, 'requires_reindex');
         assert.match(repairResult.message, /stale remote chunk/i);
+        assert.equal(repairResult.proof.payload.status, 'failed');
+        assert.ok((repairResult.proof.staleRemoteChunks.extraCount || 0) > 0);
+        assert.equal(repairResult.proof.staleRemoteChunks.status, 'failed');
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -1951,11 +2228,15 @@ test('Context.repairIndex blocks zero-file repair when remote chunks remain', as
         await context.clearIndexCompletionMarker(codebasePath);
         fs.rmSync(sourcePath);
 
-        const repairResult = await context.repairIndex(codebasePath, { trustedFingerprint });
+        const repairResult = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+        });
 
-        assert.equal(repairResult.status, 'blocked');
-        assert.equal(repairResult.reason, 'needs_create');
+        assert.equal(repairResult.status, 'requires_reindex');
+        assert.equal(repairResult.reason, 'requires_reindex');
         assert.match(repairResult.message, /no indexable files/i);
+        assert.equal(repairResult.proof.payload.status, 'failed');
+        assert.equal(repairResult.proof.staleRemoteChunks.status, 'failed');
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -1992,7 +2273,9 @@ test('Context.repairIndex writes the completion marker to the staged collection 
         vectorDatabase.collections.delete(stableCollection);
 
         await clearSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
-        const repairResult = await context.repairIndex(codebasePath, { trustedFingerprint });
+        const repairResult = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+        });
 
         assert.equal(repairResult.status, 'ok');
         assert.equal(vectorDatabase.collections.has(stableCollection), false);
@@ -2044,7 +2327,7 @@ test('Context.repairIndex uses the snapshot-selected staged collection when mult
         vectorDatabase.collections.delete(stableCollection);
 
         const repairResult = await context.repairIndex(codebasePath, {
-            trustedFingerprint,
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
             preferredCollectionName: selectedCollection,
         });
 
@@ -2057,7 +2340,69 @@ test('Context.repairIndex uses the snapshot-selected staged collection when mult
     }
 });
 
-test('Context.repairIndex missing_marker_doc + missing expected chunk refuses with needs_create', async () => {
+test('Context.repairIndex requires reindex when exact payload equality exceeds the query ceiling', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-query-limit-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function auth() { return true; }\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        const fingerprint = await readTrustedFingerprint(context, codebasePath);
+        await context.clearIndexCompletionMarker(codebasePath);
+
+        const expectedChunks = Array.from({ length: 16384 }, (_, index) => ({
+            id: `expected-${index}`,
+            relativePath: 'src/auth.ts',
+            startLine: 1,
+            endLine: 1,
+            content: 'chunk',
+            language: 'typescript',
+            chunkIndex: index,
+        }));
+        const proofContext = context as unknown as ContextWithExpectedChunks;
+        proofContext.getExpectedChunksAndSymbols = async () => ({
+            expectedChunks,
+            symbolRecords: [],
+            symbolManifestFiles: [],
+        });
+        const originalQuery = vectorDatabase.query.bind(vectorDatabase);
+        vectorDatabase.query = async (collectionName, filter, outputFields, limit) => {
+            const idInMatch = /^id in \[(.*)\]$/.exec(filter);
+            if (idInMatch?.[1]) {
+                return [...idInMatch[1].matchAll(/"((?:\\.|[^"\\])*)"/g)]
+                    .slice(0, limit)
+                    .map((match) => ({ id: match[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\') }));
+            }
+            return originalQuery(collectionName, filter, outputFields, limit);
+        };
+
+        const result = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(fingerprint),
+        });
+
+        assert.equal(result.status, 'requires_reindex');
+        assert.equal(result.reason, 'requires_reindex');
+        assert.equal(result.proof.payload.status, 'unproven');
+        assert.equal(result.proof.payload.basis, 'exact_payload_query_limit_exceeded');
+        assert.equal(result.proof.payload.expectedCount, 16384);
+        assert.equal(result.proof.staleRemoteChunks.status, 'unproven');
+        assert.equal(result.proof.staleRemoteChunks.basis, 'exact_payload_query_limit_exceeded');
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex missing_marker_doc + missing expected chunk requires reindex with structured proof', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-missing-chunk-'));
     const stateRoot = path.join(tempRoot, 'state');
     const codebasePath = path.join(tempRoot, 'repo');
@@ -2092,11 +2437,16 @@ test('Context.repairIndex missing_marker_doc + missing expected chunk refuses wi
         // Clear completion marker
         await context.clearIndexCompletionMarker(codebasePath);
 
-        // 3. Run repairIndex - should fail coverage verification and return blocked status
-        const repairResult = await context.repairIndex(codebasePath, { trustedFingerprint });
-        assert.equal(repairResult.status, 'blocked');
-        assert.equal(repairResult.reason, 'needs_create');
+        // 3. Run repairIndex - coverage failure requires a full rebuild.
+        const repairResult = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+        });
+        assert.equal(repairResult.status, 'requires_reindex');
+        assert.equal(repairResult.reason, 'requires_reindex');
         assert.ok(repairResult.missingCount && repairResult.missingCount > 0);
+        assert.equal(repairResult.proof.payload.status, 'failed');
+        assert.ok((repairResult.proof.payload.missingCount || 0) > 0);
+        assert.equal(repairResult.proof.staleRemoteChunks.status, 'not_checked');
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -2201,6 +2551,9 @@ test('Context.repairIndex fingerprint mismatch returns requires_reindex, not rep
         assert.equal(repairResult.status, 'requires_reindex');
         assert.equal(repairResult.reason, 'requires_reindex');
         assert.match(repairResult.message, /incompatible with the current runtime/i);
+        assert.equal(repairResult.proof.marker.status, 'failed');
+        assert.equal(repairResult.proof.fingerprint.status, 'failed');
+        assert.equal(repairResult.proof.payload.status, 'not_checked');
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

@@ -208,7 +208,11 @@ export class CallGraphSidecarManager {
         }
     }
 
-    public async rebuildForCodebase(codebasePath: string, ignorePatterns: string[] = []): Promise<CallGraphSidecarInfo> {
+    public async rebuildForCodebase(
+        codebasePath: string,
+        ignorePatterns: string[] = [],
+        assertMutationCurrent?: () => void,
+    ): Promise<CallGraphSidecarInfo> {
         const absoluteRoot = path.resolve(codebasePath);
         const files = await this.collectSourceFiles(absoluteRoot, ignorePatterns);
         const graph = await this.buildGraph(absoluteRoot, files);
@@ -225,7 +229,9 @@ export class CallGraphSidecarManager {
 
         const sidecarPath = this.getSidecarPath(absoluteRoot);
         const sidecarDir = path.dirname(sidecarPath);
+        assertMutationCurrent?.();
         await fs.promises.mkdir(sidecarDir, { recursive: true });
+        assertMutationCurrent?.();
         await fs.promises.writeFile(sidecarPath, JSON.stringify(sidecar, null, 2), 'utf8');
 
         return {
@@ -239,11 +245,16 @@ export class CallGraphSidecarManager {
         };
     }
 
-    public async rebuildIfSupportedDelta(codebasePath: string, changedFiles: string[], ignorePatterns: string[] = []): Promise<CallGraphSidecarInfo | null> {
+    public async rebuildIfSupportedDelta(
+        codebasePath: string,
+        changedFiles: string[],
+        ignorePatterns: string[] = [],
+        assertMutationCurrent?: () => void,
+    ): Promise<CallGraphSidecarInfo | null> {
         if (!this.shouldRebuildForDelta(changedFiles)) {
             return null;
         }
-        return this.rebuildForCodebase(codebasePath, ignorePatterns);
+        return this.rebuildForCodebase(codebasePath, ignorePatterns, assertMutationCurrent);
     }
 
     public queryGraph(

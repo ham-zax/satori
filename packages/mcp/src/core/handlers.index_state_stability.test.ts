@@ -423,9 +423,9 @@ test('handleSearchCode fails closed when the configured vector backend collectio
         assert.equal(payload.recommendedNextAction?.args?.path, repoPath);
         assert.equal(semanticSearchCalls, 0);
         assert.equal(ensureFreshnessCalls, 0);
-        assert.equal(removedCodebasePath, repoPath);
-        assert.equal(saveCalls, 1);
-        assert.equal(unwatchCalls, 1);
+        assert.equal(removedCodebasePath, null);
+        assert.equal(saveCalls, 0);
+        assert.equal(unwatchCalls, 0);
     });
 });
 
@@ -827,9 +827,9 @@ test('handleGetIndexingStatus returns not_indexed when search collection readine
         assert.equal(payload.reason, 'not_indexed');
         assert.match(payload.humanText || '', /vector collection is missing from the configured vector backend/i);
         assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
-        assert.equal(removedCodebasePath, repoPath);
-        assert.equal(saveCalls, 1);
-        assert.equal(unwatchCalls, 1);
+        assert.equal(removedCodebasePath, null);
+        assert.equal(saveCalls, 0);
+        assert.equal(unwatchCalls, 0);
     });
 });
 

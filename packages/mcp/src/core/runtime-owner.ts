@@ -395,7 +395,7 @@ function readLinuxProcessSnapshot(pid: number): ProcessSnapshot | null {
     return { pid, ppid, cmd, cwd, processStartTime };
 }
 
-class DefaultProcessInspector implements ProcessInspector {
+export class DefaultProcessInspector implements ProcessInspector {
     inspect(pid: number): ProcessSnapshot | null {
         if (!processExists(pid)) {
             return null;

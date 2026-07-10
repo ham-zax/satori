@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
-import { IndexFingerprint } from '../config.js';
+import type { IndexFingerprint, IndexOperationPhase, IndexOperationReceipt } from '../config.js';
 import type { ManageIndexResponseEnvelope } from './manage-types.js';
 import type { RuntimeOwnerMutationGate } from './runtime-owner.js';
+import { MutationLeaseCoordinator, type RootMutationLease } from './mutation-lease.js';
 
 type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
 type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
@@ -22,6 +23,13 @@ type MutationCounters = {
 type RuntimeOwnerHint = Array<{ pid?: number }>;
 type BackendHint = { nextSteps: string[] };
 type RuntimeMismatchHint = { indexedFingerprint?: string };
+type ToolHandlersWithManageIndexingHost = {
+    manageIndexingHandlers: {
+        host: {
+            rebuildCallGraphForIndex(codebasePath: string): Promise<void>;
+        };
+    };
+};
 type IndexingInfo = { status: 'indexing'; indexingPercentage: number; lastUpdated: string };
 type IndexFailedInfo = { status: 'indexfailed'; errorMessage: string; lastAttemptedPercentage?: number; lastUpdated: string };
 type IndexedInfo = {
@@ -88,8 +96,65 @@ function createHandlers(repoPath: string): ToolHandlers {
 
 function parseManageEnvelope(response: ToolTextResponse): ManageIndexResponseEnvelope {
     const payload = response?.content?.[0]?.text;
-    assert.equal(typeof payload, 'string');
+    if (typeof payload !== 'string') {
+        assert.fail('Expected manage_index response text.');
+    }
     return JSON.parse(payload) as ManageIndexResponseEnvelope;
+}
+
+function createReceiptHarness() {
+    let latestOperation: IndexOperationReceipt | undefined;
+    const persistedPhases: IndexOperationPhase[] = [];
+    let startCalls = 0;
+
+    return {
+        persistedPhases,
+        get startCalls() {
+            return startCalls;
+        },
+        get latestOperation() {
+            return latestOperation ? structuredClone(latestOperation) : undefined;
+        },
+        snapshotMethods: {
+            startOperation(lease: RootMutationLease): IndexOperationReceipt {
+                startCalls += 1;
+                latestOperation = {
+                    id: lease.operationId,
+                    action: lease.action,
+                    canonicalRoot: lease.canonicalRoot,
+                    generation: lease.generation,
+                    acceptedAt: lease.acquiredAt,
+                    phase: 'accepted',
+                    lastDurableTransitionAt: lease.acquiredAt,
+                    runtimeFingerprint: RUNTIME_FINGERPRINT,
+                    writer: {
+                        ownerId: lease.ownerId,
+                        pid: lease.pid,
+                        satoriVersion: 'test',
+                    },
+                };
+                return structuredClone(latestOperation);
+            },
+            transitionOperation(lease: RootMutationLease, phase: IndexOperationPhase): IndexOperationReceipt {
+                assert.equal(latestOperation?.id, lease.operationId);
+                latestOperation = {
+                    ...latestOperation,
+                    phase,
+                    lastDurableTransitionAt: new Date().toISOString(),
+                } as IndexOperationReceipt;
+                return structuredClone(latestOperation);
+            },
+            getLatestOperation(): IndexOperationReceipt | undefined {
+                return latestOperation ? structuredClone(latestOperation) : undefined;
+            },
+            saveCodebaseSnapshot(): boolean {
+                if (latestOperation) {
+                    persistedPhases.push(latestOperation.phase);
+                }
+                return true;
+            },
+        },
+    };
 }
 
 function assertBlockedEnvelope(envelope: ManageIndexResponseEnvelope, repoPath: string, action: 'create' | 'sync' | 'clear') {
@@ -136,7 +201,12 @@ function runtimeOwnerConflictGate(): RuntimeOwnerMutationGate {
     };
 }
 
-function createMutationReadyHandlers(repoPath: string, gate: RuntimeOwnerMutationGate, counters: MutationCounters): ToolHandlers {
+function createMutationReadyHandlers(
+    repoPath: string,
+    gate: RuntimeOwnerMutationGate,
+    counters: MutationCounters,
+    mutationLeaseCoordinator?: MutationLeaseCoordinator,
+): ToolHandlers {
     const context = {
         getVectorStore: () => ({
             checkCollectionLimit: async () => {
@@ -191,7 +261,8 @@ function createMutationReadyHandlers(repoPath: string, gate: RuntimeOwnerMutatio
         null,
         undefined,
         undefined,
-        gate
+        gate,
+        mutationLeaseCoordinator,
     );
 }
 
@@ -287,6 +358,185 @@ test('handleClearIndex blocks before destructive clear when runtime owners confl
         assert.equal(envelope.status, 'blocked');
         assert.equal(envelope.reason, 'runtime_owner_conflict');
         assert.equal(counters.clearIndexCalls ?? 0, 0);
+    });
+});
+
+test('handleClearIndex blocks before destructive clear when another process holds the root lease', async () => {
+    await withTempRepo(async (repoPath) => {
+        const stateDir = path.join(path.dirname(repoPath), 'lease-state');
+        const processes = new Map([
+            [101, { pid: 101, processStartTime: 'first' }],
+            [202, { pid: 202, processStartTime: 'second' }],
+        ]);
+        const processInspector = {
+            inspect(pid: number) {
+                return processes.get(pid) ?? null;
+            },
+        };
+        const owner = new MutationLeaseCoordinator({
+            stateDir,
+            ownerId: 'first-owner',
+            currentProcess: processes.get(101),
+            processInspector,
+        });
+        const contender = new MutationLeaseCoordinator({
+            stateDir,
+            ownerId: 'second-owner',
+            currentProcess: processes.get(202),
+            processInspector,
+        });
+        assert.equal(owner.acquire(repoPath, 'create').acquired, true);
+
+        const counters: MutationCounters = {};
+        const gate: RuntimeOwnerMutationGate = { checkMutation: () => ({ blocked: false }) };
+        const handlers = createMutationReadyHandlers(repoPath, gate, counters, contender);
+        const envelope = parseManageEnvelope(await handlers.handleClearIndex({ path: repoPath }));
+
+        assert.equal(envelope.status, 'blocked');
+        assert.equal(envelope.reason, 'mutation_in_progress');
+        assert.equal(envelope.operation, undefined);
+        assert.equal((envelope.hints?.activeMutation as { ownerId?: string } | undefined)?.ownerId, 'first-owner');
+        assert.equal(counters.clearIndexCalls ?? 0, 0);
+        assert.equal(envelope.operation, undefined);
+    });
+});
+
+test('handleClearIndex persists one clear receipt before clearing and keeps it after lifecycle removal', async () => {
+    await withTempRepo(async (repoPath) => {
+        let currentInfo: IndexingInfo | IndexedInfo | undefined = {
+            status: 'indexing',
+            indexingPercentage: 98,
+            lastUpdated: '2026-02-27T23:57:03.000Z',
+        };
+        const receipts = createReceiptHarness();
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'clear-receipt-leases'),
+            ownerId: 'clear-receipt-owner',
+        });
+        let clearCalls = 0;
+
+        const context = {
+            getIndexCompletionMarker: async () => ({
+                kind: 'satori_index_completion_v1',
+                codebasePath: repoPath,
+                fingerprint: RUNTIME_FINGERPRINT,
+                indexedFiles: 1,
+                totalChunks: 2,
+                completedAt: '2026-02-27T23:57:10.000Z',
+                runId: 'clear-recovery-run',
+            }),
+            clearIndex: async () => {
+                assert.ok(receipts.persistedPhases.includes('accepted'));
+                assert.equal(receipts.latestOperation?.action, 'clear');
+                clearCalls += 1;
+            },
+            resolveCollectionName: () => 'test_collection',
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getAllCodebases: () => currentInfo ? [{ path: repoPath, info: currentInfo }] : [],
+            getIndexingCodebases: () => currentInfo?.status === 'indexing' ? [repoPath] : [],
+            getIndexedCodebases: () => currentInfo?.status === 'indexed' ? [repoPath] : [],
+            getCodebaseStatus: () => currentInfo?.status ?? 'not_found',
+            getCodebaseInfo: () => currentInfo,
+            getIndexingProgress: () => currentInfo?.status === 'indexing' ? currentInfo.indexingPercentage : undefined,
+            setCodebaseIndexed: (_path: string, stats: { indexedFiles: number; totalChunks: number }, indexFingerprint: IndexFingerprint) => {
+                currentInfo = {
+                    status: 'indexed',
+                    indexedFiles: stats.indexedFiles,
+                    totalChunks: stats.totalChunks,
+                    indexStatus: 'completed',
+                    indexFingerprint,
+                    fingerprintSource: 'verified',
+                    lastUpdated: new Date().toISOString(),
+                };
+            },
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            markCodebaseCleared: () => { currentInfo = undefined; },
+            ...receipts.snapshotMethods,
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+            unwatchCodebase: async () => undefined,
+        } as unknown as HandlerSyncManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
+
+        const clearEnvelope = parseManageEnvelope(await handlers.handleClearIndex({ path: repoPath }));
+        assert.equal(clearCalls, 1);
+        assert.equal(receipts.startCalls, 1);
+        assert.deepEqual(receipts.persistedPhases, ['accepted', 'accepted', 'writing', 'completed']);
+        assert.equal(clearEnvelope.status, 'ok');
+        assert.equal(clearEnvelope.operation?.action, 'clear');
+        assert.equal(clearEnvelope.operation?.phase, 'completed');
+
+        const statusEnvelope = parseManageEnvelope(await handlers.handleGetIndexingStatus({ path: repoPath }));
+        assert.equal(statusEnvelope.status, 'not_indexed');
+        assert.deepEqual(statusEnvelope.operation, clearEnvelope.operation);
+    });
+});
+
+test('handleClearIndex returns a failed receipt when the destructive clear fails', async () => {
+    await withTempRepo(async (repoPath) => {
+        const receipts = createReceiptHarness();
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'clear-failure-receipt-leases'),
+            ownerId: 'clear-failure-owner',
+        });
+        const info: IndexedInfo = {
+            status: 'indexed',
+            indexedFiles: 1,
+            totalChunks: 2,
+            indexStatus: 'completed',
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified',
+            lastUpdated: new Date().toISOString(),
+        };
+        const context = {
+            clearIndex: async () => { throw new Error('clear failed'); },
+            resolveCollectionName: () => 'test_collection',
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => info,
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            ...receipts.snapshotMethods,
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
+
+        const envelope = parseManageEnvelope(await handlers.handleClearIndex({ path: repoPath }));
+        assert.equal(envelope.status, 'error');
+        assert.equal(envelope.operation?.action, 'clear');
+        assert.equal(envelope.operation?.phase, 'failed');
+        assert.deepEqual(receipts.persistedPhases, ['accepted', 'writing', 'failed']);
     });
 });
 
@@ -406,7 +656,11 @@ test('handleGetIndexingStatus recovers stale indexing state to failed when compl
         };
         let markerCalls = 0;
         let failedCalls = 0;
-        let saveCalls = 0;
+        const receipts = createReceiptHarness();
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'stale-recovery-receipt-leases'),
+            ownerId: 'stale-recovery-owner',
+        });
 
         const context = {
             getIndexCompletionMarker: async () => {
@@ -432,11 +686,24 @@ test('handleGetIndexingStatus recovers stale indexing state to failed when compl
                 };
             },
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-            saveCodebaseSnapshot: () => { saveCalls += 1; }
+            ...receipts.snapshotMethods,
         } as unknown as HandlerSnapshotManager;
 
         const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const envelope = parseManageEnvelope(response);
@@ -445,9 +712,85 @@ test('handleGetIndexingStatus recovers stale indexing state to failed when compl
 
         assert.equal(markerCalls, 1);
         assert.equal(failedCalls, 1);
-        assert.equal(saveCalls, 1);
+        assert.equal(receipts.startCalls, 1);
+        assert.deepEqual(receipts.persistedPhases, ['accepted', 'proving', 'failed']);
+        assert.equal(envelope.operation?.action, 'repair');
+        assert.equal(envelope.operation?.phase, 'failed');
         assert.match(text, /indexing failed/i);
         assert.match(text, /Interrupted indexing detected without completion marker proof/i);
+    });
+});
+
+test('handleGetIndexingStatus does not recover stale indexing state owned by a live writer', async () => {
+    await withTempRepo(async (repoPath) => {
+        const stateDir = path.join(path.dirname(repoPath), 'mutation-leases');
+        const activeOwner = new MutationLeaseCoordinator({ stateDir, ownerId: 'active-owner' });
+        const statusCoordinator = new MutationLeaseCoordinator({ stateDir, ownerId: 'status-owner' });
+        const activeResult = activeOwner.acquire(repoPath, 'create');
+        assert.equal(activeResult.acquired, true);
+        if (!activeResult.acquired) return;
+        let markerCalls = 0;
+        let failedCalls = 0;
+        let saveCalls = 0;
+        let startOperationCalls = 0;
+
+        try {
+            const currentInfo: IndexingInfo = {
+                status: 'indexing',
+                indexingPercentage: 98,
+                lastUpdated: '2026-02-27T23:57:03.000Z'
+            };
+            const context = {
+                getIndexCompletionMarker: async () => {
+                    markerCalls += 1;
+                    return null;
+                }
+            } as unknown as HandlerContext;
+            const snapshotManager = {
+                getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
+                getIndexingCodebases: () => [repoPath],
+                getIndexedCodebases: () => [],
+                getCodebaseStatus: () => 'indexing',
+                getCodebaseInfo: () => currentInfo,
+                getIndexingProgress: () => currentInfo.indexingPercentage,
+                setCodebaseIndexFailed: () => { failedCalls += 1; },
+                ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+                startOperation: () => {
+                    startOperationCalls += 1;
+                    throw new Error('contended recovery must not start a receipt');
+                },
+                getLatestOperation: () => undefined,
+                saveCodebaseSnapshot: () => { saveCalls += 1; }
+            } as unknown as HandlerSnapshotManager;
+            const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
+            const handlers = new ToolHandlers(
+                context,
+                snapshotManager,
+                syncManager,
+                RUNTIME_FINGERPRINT,
+                CAPABILITIES,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                null,
+                statusCoordinator,
+            );
+
+            const envelope = parseManageEnvelope(await handlers.handleGetIndexingStatus({ path: repoPath }));
+            assert.equal(envelope.status, 'not_ready');
+            assert.equal(envelope.reason, 'indexing');
+            assert.equal(markerCalls, 0);
+            assert.equal(failedCalls, 0);
+            assert.equal(saveCalls, 0);
+            assert.equal(startOperationCalls, 0);
+            assert.equal(envelope.operation, undefined);
+            assert.deepEqual(envelope.hints?.activeMutation, activeResult.lease);
+            assert.match(envelope.humanText, /Active mutation: create/);
+        } finally {
+            activeOwner.release(activeResult.lease);
+        }
     });
 });
 
@@ -464,7 +807,11 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
         };
         let markerCalls = 0;
         let setIndexedCalls = 0;
-        let saveCalls = 0;
+        const receipts = createReceiptHarness();
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'stale-promotion-receipt-leases'),
+            ownerId: 'stale-promotion-owner',
+        });
 
         const context = {
             getIndexCompletionMarker: async () => {
@@ -511,11 +858,24 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
                 }
                 return { allowed: true, changed: false };
             },
-            saveCodebaseSnapshot: () => { saveCalls += 1; }
+            ...receipts.snapshotMethods,
         } as unknown as HandlerSnapshotManager;
 
         const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
 
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const envelope = parseManageEnvelope(response);
@@ -524,7 +884,10 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
         assert.equal(envelope.reason, 'requires_reindex');
         assert.equal(markerCalls, 1);
         assert.equal(setIndexedCalls, 1);
-        assert.equal(saveCalls, 1);
+        assert.equal(receipts.startCalls, 1);
+        assert.deepEqual(receipts.persistedPhases, ['accepted', 'proving', 'publishing', 'completed']);
+        assert.equal(envelope.operation?.action, 'repair');
+        assert.equal(envelope.operation?.phase, 'completed');
         assert.match(envelope.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
         assert.equal((envelope.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3');
     });
@@ -751,7 +1114,7 @@ test('handleRepairIndex parses, executes, and rebuilds call graph on success', a
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
 
         // Mock rebuildCallGraphForIndex
-        ((handlers as any).manageIndexingHandlers as any).host.rebuildCallGraphForIndex = async (codebasePath: string) => {
+        (handlers as unknown as ToolHandlersWithManageIndexingHost).manageIndexingHandlers.host.rebuildCallGraphForIndex = async (codebasePath: string) => {
             assert.equal(codebasePath, repoPath);
             rebuildCallGraphCalled = true;
         };
@@ -766,14 +1129,24 @@ test('handleRepairIndex parses, executes, and rebuilds call graph on success', a
     });
 });
 
-test('handleRepairIndex returns blocked/needs_create when repairIndex reports blocked coverage', async () => {
+test('handleRepairIndex returns structured proof and reindex action when existing payload coverage fails', async () => {
     await withTempRepo(async (repoPath) => {
+        const repairProof = {
+            collection: { status: 'matched', basis: 'selected_active_collection' },
+            snapshot: { status: 'matched', basis: 'verified_snapshot_fingerprint' },
+            marker: { status: 'missing', basis: 'completion_marker_missing' },
+            fingerprint: { status: 'matched', basis: 'verified_snapshot_fingerprint' },
+            payload: { status: 'failed', expectedCount: 7, observedCount: 4, missingCount: 3 },
+            staleRemoteChunks: { status: 'not_checked' },
+            navigation: { status: 'not_checked' },
+        } as const;
         const context = {
             repairIndex: async () => ({
-                status: 'blocked',
-                reason: 'needs_create',
+                status: 'requires_reindex',
+                reason: 'requires_reindex',
                 message: 'Coverage verification failed',
                 missingCount: 3,
+                proof: repairProof,
             })
         } as unknown as HandlerContext;
 
@@ -798,13 +1171,61 @@ test('handleRepairIndex returns blocked/needs_create when repairIndex reports bl
         const response = await handlers.handleRepairIndex({ path: repoPath });
         const envelope = parseManageEnvelope(response);
 
-        assert.equal(envelope.status, 'blocked');
+        const repairEnvelope = envelope as typeof envelope & {
+            repairProof?: typeof repairProof;
+        };
+        assert.equal(envelope.status, 'requires_reindex');
         assert.equal(envelope.action, 'repair');
-        assert.equal(envelope.reason, 'needs_create');
-        assert.equal(envelope.hints?.missingCount, 3);
-        assert.deepEqual(envelope.hints?.create, {
+        assert.equal(envelope.reason, 'requires_reindex');
+        assert.equal(repairEnvelope.repairProof?.payload.missingCount, 3);
+        assert.deepEqual(envelope.hints?.nextAction, {
             tool: 'manage_index',
-            args: { action: 'create', path: repoPath }
+            args: { action: 'reindex', path: repoPath }
+        });
+    });
+});
+
+test('handleRepairIndex recommends create only when collection proof is missing', async () => {
+    await withTempRepo(async (repoPath) => {
+        const repairProof = {
+            collection: { status: 'missing', basis: 'no_related_collection', observedCount: 0 },
+            snapshot: { status: 'missing', basis: 'snapshot_fingerprint_missing' },
+            marker: { status: 'not_checked' },
+            fingerprint: { status: 'not_checked' },
+            payload: { status: 'not_checked' },
+            staleRemoteChunks: { status: 'not_checked' },
+            navigation: { status: 'not_checked' },
+        } as const;
+        const context = {
+            repairIndex: async () => ({
+                status: 'blocked',
+                reason: 'needs_create',
+                message: 'No existing collection found for this codebase family.',
+                missingCount: 0,
+                proof: repairProof,
+            }),
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => 'not_found',
+            getCodebaseInfo: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined,
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+        } as unknown as HandlerSyncManager;
+
+        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const envelope = parseManageEnvelope(await handlers.handleRepairIndex({ path: repoPath }));
+
+        assert.equal(envelope.status, 'blocked');
+        assert.equal(envelope.reason, 'needs_create');
+        assert.deepEqual(envelope.hints?.nextAction, {
+            tool: 'manage_index',
+            args: { action: 'create', path: repoPath },
         });
     });
 });

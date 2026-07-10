@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SnapshotManager } from './snapshot.js';
-import { IndexFingerprint } from '../config.js';
+import { IndexFingerprint, type IndexOperationReceipt } from '../config.js';
+import type { RootMutationLease } from './mutation-lease.js';
 
 type SnapshotPrivateAccess = {
     shouldBreakStaleLock(lockPath: string): boolean;
@@ -31,6 +32,43 @@ const FINGERPRINT_B: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3'
 };
+
+function operationReceipt(
+    codebasePath: string,
+    generation: number,
+    phase: IndexOperationReceipt['phase'] = 'accepted',
+): IndexOperationReceipt {
+    const timestamp = new Date(Date.UTC(2026, 0, 1, 0, 0, generation)).toISOString();
+    return {
+        id: `operation-${generation}`,
+        action: 'create',
+        canonicalRoot: codebasePath,
+        generation,
+        acceptedAt: timestamp,
+        phase,
+        lastDurableTransitionAt: timestamp,
+        runtimeFingerprint: FINGERPRINT_A,
+        writer: {
+            ownerId: 'test-owner',
+            pid: process.pid,
+            satoriVersion: '4.11.16',
+        },
+    };
+}
+
+function operationLease(codebasePath: string, generation = 1): RootMutationLease {
+    const receipt = operationReceipt(codebasePath, generation);
+    return {
+        canonicalRoot: codebasePath,
+        generation,
+        operationId: receipt.id,
+        action: receipt.action,
+        ownerId: receipt.writer.ownerId,
+        pid: receipt.writer.pid,
+        acquiredAt: receipt.acceptedAt,
+        lastHeartbeatAt: receipt.acceptedAt,
+    };
+}
 
 function withTempHome<T>(fn: (homeDir: string) => T): T {
     const prevHome = process.env.HOME;
@@ -121,6 +159,55 @@ test('fingerprint mismatch does not persistently downgrade searchable entry', ()
         const updated = reader.getCodebaseInfo(codebase);
         assert.ok(updated);
         assert.equal(updated?.status, 'indexed');
+    });
+});
+
+test('pure fingerprint access gate reports legacy and missing evidence without mutating lifecycle state', () => {
+    withTempHome((homeDir) => {
+        const legacyCodebase = path.join(homeDir, 'repo-legacy-pure');
+        const missingCodebase = path.join(homeDir, 'repo-missing-pure');
+        fs.mkdirSync(legacyCodebase, { recursive: true });
+        fs.mkdirSync(missingCodebase, { recursive: true });
+        const { dir, file } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+            formatVersion: 'v3',
+            codebases: {
+                [legacyCodebase]: {
+                    status: 'indexed',
+                    indexedFiles: 1,
+                    totalChunks: 1,
+                    indexStatus: 'completed',
+                    fingerprintSource: 'assumed_v2',
+                    indexFingerprint: FINGERPRINT_A,
+                    lastUpdated: new Date().toISOString(),
+                },
+                [missingCodebase]: {
+                    status: 'indexed',
+                    indexedFiles: 1,
+                    totalChunks: 1,
+                    indexStatus: 'completed',
+                    lastUpdated: new Date().toISOString(),
+                },
+            },
+            lastUpdated: new Date().toISOString(),
+        }, null, 2));
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const legacyGate = reader.ensureFingerprintCompatibilityOnAccess(legacyCodebase, { mutate: false });
+        const missingGate = reader.ensureFingerprintCompatibilityOnAccess(missingCodebase, { mutate: false });
+
+        assert.deepEqual(
+            { allowed: legacyGate.allowed, changed: legacyGate.changed, reason: legacyGate.reason },
+            { allowed: false, changed: false, reason: 'legacy_unverified_fingerprint' },
+        );
+        assert.deepEqual(
+            { allowed: missingGate.allowed, changed: missingGate.changed, reason: missingGate.reason },
+            { allowed: false, changed: false, reason: 'missing_fingerprint' },
+        );
+        assert.equal(reader.getCodebaseInfo(legacyCodebase)?.status, 'indexed');
+        assert.equal(reader.getCodebaseInfo(missingCodebase)?.status, 'indexed');
     });
 });
 
@@ -216,6 +303,31 @@ test('matching runtime recovers stale fingerprint-mismatch requires_reindex entr
         assert.equal(recovered.indexFingerprint?.embeddingModel, FINGERPRINT_A.embeddingModel);
         assert.equal(recovered.added, 0);
         assert.equal(recovered.modified, 0);
+    });
+});
+
+test('pure fingerprint access gate keeps a resolved mismatch blocked for lifecycle recovery', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-resolved-mismatch-pure');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setCodebaseIndexed(codebase, {
+            indexedFiles: 3,
+            totalChunks: 12,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        writer.setCodebaseRequiresReindex(codebase, 'fingerprint_mismatch', 'Index fingerprint mismatch.');
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const gate = reader.ensureFingerprintCompatibilityOnAccess(codebase, { mutate: false });
+
+        assert.equal(gate.allowed, false);
+        assert.equal(gate.changed, false);
+        assert.equal(gate.reason, 'fingerprint_mismatch');
+        assert.equal(reader.getCodebaseInfo(codebase)?.status, 'requires_reindex');
     });
 });
 
@@ -538,6 +650,306 @@ test('saveCodebaseSnapshot merges persisted snapshot entries to avoid cross-proc
     });
 });
 
+test('latest operation receipt persists without requiring a codebase lifecycle entry', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-only');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        const receipt = operationReceipt(codebase, 1);
+        writer.setLatestOperation(codebase, receipt);
+        writer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.deepEqual(reader.getLatestOperation(codebase), receipt);
+        assert.equal(reader.getCodebaseInfo(codebase), undefined);
+    });
+});
+
+test('operation transitions reject phase regression and terminal rewrites', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-transitions');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        const lease = operationLease(codebase);
+
+        manager.startOperation(lease);
+        manager.transitionOperation(lease, 'writing');
+        assert.throws(() => manager.transitionOperation(lease, 'scanning'), /cannot regress/);
+        manager.transitionOperation(lease, 'completed');
+        assert.throws(() => manager.transitionOperation(lease, 'failed'), /already terminal/);
+        assert.equal(manager.transitionOperation(lease, 'completed').phase, 'completed');
+    });
+});
+
+test('failed operation commit rolls back the receipt and lifecycle mutation', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-rollback');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexed(codebase, {
+            indexedFiles: 1,
+            totalChunks: 1,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        assert.equal(manager.saveCodebaseSnapshot(), true);
+
+        const lease = operationLease(codebase);
+        const originalSave = manager.saveCodebaseSnapshot.bind(manager);
+        manager.saveCodebaseSnapshot = () => false;
+        assert.throws(() => manager.commitOperationPhase(lease, 'accepted', () => {
+            manager.setCodebaseIndexing(codebase, 0);
+        }), /Failed to persist operation phase 'accepted'/);
+        manager.saveCodebaseSnapshot = originalSave;
+
+        assert.equal(manager.getCodebaseStatus(codebase), 'indexed');
+        assert.equal(manager.getLatestOperation(codebase), undefined);
+        assert.equal(manager.saveCodebaseSnapshot(), true);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseStatus(codebase), 'indexed');
+        assert.equal(reader.getLatestOperation(codebase), undefined);
+    });
+});
+
+test('operation commit rejects a stale local generation before lifecycle mutation', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-local-authority');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setLatestOperation(codebase, operationReceipt(codebase, 2, 'writing'));
+        let mutated = false;
+
+        assert.throws(() => manager.commitOperationPhase(operationLease(codebase, 1), 'accepted', () => {
+            mutated = true;
+        }), /did not become durable/);
+
+        assert.equal(mutated, false);
+        assert.deepEqual(manager.getLatestOperation(codebase), operationReceipt(codebase, 2, 'writing'));
+    });
+});
+
+test('operation commit rejects when a newer disk generation wins the save merge', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-disk-authority');
+        fs.mkdirSync(codebase, { recursive: true });
+        const stale = new SnapshotManager(FINGERPRINT_A);
+        const current = new SnapshotManager(FINGERPRINT_A);
+        current.setLatestOperation(codebase, operationReceipt(codebase, 2, 'writing'));
+        assert.equal(current.saveCodebaseSnapshot(), true);
+
+        assert.throws(
+            () => stale.commitOperationPhase(operationLease(codebase, 1), 'accepted'),
+            /did not become durable/,
+        );
+        assert.deepEqual(stale.getLatestOperation(codebase), operationReceipt(codebase, 2, 'writing'));
+    });
+});
+
+test('operation commit rejects when a forward disk phase wins the save merge', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-disk-phase');
+        fs.mkdirSync(codebase, { recursive: true });
+        const stale = new SnapshotManager(FINGERPRINT_A);
+        const current = new SnapshotManager(FINGERPRINT_A);
+        current.setLatestOperation(codebase, operationReceipt(codebase, 1, 'writing'));
+        assert.equal(current.saveCodebaseSnapshot(), true);
+
+        assert.throws(
+            () => stale.commitOperationPhase(operationLease(codebase, 1), 'accepted'),
+            /did not become durable/,
+        );
+        assert.equal(stale.getLatestOperation(codebase)?.phase, 'writing');
+    });
+});
+
+test('operation commit runs its lease fence again while holding the snapshot lock', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-final-fence');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        const lease = operationLease(codebase);
+        let checks = 0;
+
+        assert.throws(() => manager.commitOperationPhase(lease, 'accepted', undefined, () => {
+            checks += 1;
+            if (checks === 2) {
+                throw new Error('lease lost before snapshot publication');
+            }
+        }), /lease lost before snapshot publication/);
+
+        assert.equal(checks, 2);
+        assert.equal(manager.getLatestOperation(codebase), undefined);
+        assert.equal(fs.existsSync(snapshotPathsFor(homeDir).file), false);
+    });
+});
+
+test('snapshot merge prefers higher operation generation over a newer stale timestamp', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-fence');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const staleWriter = new SnapshotManager(FINGERPRINT_A);
+        staleWriter.setCodebaseIndexing(codebase, 90);
+        staleWriter.setLatestOperation(codebase, {
+            ...operationReceipt(codebase, 1),
+            lastDurableTransitionAt: '2030-01-01T00:00:00.000Z',
+        });
+
+        const currentWriter = new SnapshotManager(FINGERPRINT_A);
+        currentWriter.setCodebaseIndexed(codebase, {
+            indexedFiles: 4,
+            totalChunks: 12,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        currentWriter.setLatestOperation(codebase, operationReceipt(codebase, 2, 'completed'));
+        currentWriter.saveCodebaseSnapshot();
+
+        staleWriter.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseInfo(codebase)?.status, 'indexed');
+        assert.equal(reader.getLatestOperation(codebase)?.generation, 2);
+        assert.equal(reader.getLatestOperation(codebase)?.phase, 'completed');
+    });
+});
+
+test('snapshot merge keeps forward phase authority and rejects conflicting terminal outcomes', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-phase-fence');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setLatestOperation(codebase, operationReceipt(codebase, 1, 'completed'));
+        writer.saveCodebaseSnapshot();
+
+        const stale = new SnapshotManager(FINGERPRINT_A);
+        stale.setLatestOperation(codebase, {
+            ...operationReceipt(codebase, 1, 'writing'),
+            lastDurableTransitionAt: '2030-01-01T00:00:00.000Z',
+        });
+        assert.equal(stale.saveCodebaseSnapshot(), true);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getLatestOperation(codebase)?.phase, 'completed');
+
+        const conflicting = new SnapshotManager(FINGERPRINT_A);
+        conflicting.setLatestOperation(codebase, operationReceipt(codebase, 1, 'failed'));
+        assert.equal(conflicting.saveCodebaseSnapshot(), false);
+        reader.refreshFromDiskIfChanged();
+        assert.equal(reader.getLatestOperation(codebase)?.phase, 'completed');
+    });
+});
+
+test('stale clear cannot delete lifecycle state owned by a newer operation generation', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-stale-clear');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const staleClearer = new SnapshotManager(FINGERPRINT_A);
+        staleClearer.setCodebaseIndexed(codebase, { indexedFiles: 1, totalChunks: 2, status: 'completed' }, FINGERPRINT_A);
+        staleClearer.setLatestOperation(codebase, operationReceipt(codebase, 1, 'completed'));
+        staleClearer.saveCodebaseSnapshot();
+
+        const currentWriter = new SnapshotManager(FINGERPRINT_A);
+        currentWriter.loadCodebaseSnapshot();
+        currentWriter.setCodebaseIndexed(codebase, { indexedFiles: 3, totalChunks: 6, status: 'completed' }, FINGERPRINT_A);
+        currentWriter.setLatestOperation(codebase, operationReceipt(codebase, 2, 'completed'));
+        currentWriter.saveCodebaseSnapshot();
+
+        staleClearer.markCodebaseCleared(codebase, 'stale-collection');
+        staleClearer.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseInfo(codebase)?.status, 'indexed');
+        assert.equal(reader.getLatestOperation(codebase)?.generation, 2);
+        assert.equal(reader.isCodebaseCleared(codebase), false);
+    });
+});
+
+test('stale create cannot remove a clear tombstone owned by a newer generation', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-stale-create');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const staleCreator = new SnapshotManager(FINGERPRINT_A);
+        staleCreator.setCodebaseIndexed(codebase, { indexedFiles: 1, totalChunks: 2, status: 'completed' }, FINGERPRINT_A);
+        staleCreator.setLatestOperation(codebase, operationReceipt(codebase, 1, 'completed'));
+        staleCreator.saveCodebaseSnapshot();
+
+        const currentClearer = new SnapshotManager(FINGERPRINT_A);
+        currentClearer.loadCodebaseSnapshot();
+        currentClearer.setLatestOperation(codebase, {
+            ...operationReceipt(codebase, 2, 'completed'),
+            action: 'clear',
+        });
+        currentClearer.markCodebaseCleared(codebase, 'current-collection');
+        currentClearer.saveCodebaseSnapshot();
+
+        staleCreator.setCodebaseIndexed(codebase, { indexedFiles: 9, totalChunks: 18, status: 'completed' }, FINGERPRINT_A);
+        staleCreator.saveCodebaseSnapshot();
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseInfo(codebase), undefined);
+        assert.equal(reader.getLatestOperation(codebase)?.generation, 2);
+        assert.equal(reader.isCodebaseCleared(codebase, 'current-collection'), true);
+    });
+});
+
+test('malformed operation refresh preserves prior state and does not rewrite disk', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-malformed-operation');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { file } = snapshotPathsFor(homeDir);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.setCodebaseIndexed(codebase, { indexedFiles: 1, totalChunks: 2, status: 'completed' }, FINGERPRINT_A);
+        reader.setLatestOperation(codebase, operationReceipt(codebase, 1, 'completed'));
+        reader.saveCodebaseSnapshot();
+        reader.loadCodebaseSnapshot();
+
+        const malformed = JSON.stringify({
+            formatVersion: 'v3',
+            codebases: {},
+            latestOperations: { [codebase]: { generation: 2 } },
+            lastUpdated: new Date().toISOString(),
+        }, null, 2);
+        fs.writeFileSync(file, malformed);
+
+        assert.equal(reader.refreshFromDiskIfChanged(), false);
+        assert.equal(reader.getCodebaseInfo(codebase)?.status, 'indexed');
+        assert.equal(reader.getLatestOperation(codebase)?.generation, 1);
+        assert.equal(fs.readFileSync(file, 'utf8'), malformed);
+    });
+});
+
+test('malformed persisted operation blocks save without rewriting disk', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-malformed-operation-save');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { file } = snapshotPathsFor(homeDir);
+        const malformed = JSON.stringify({
+            formatVersion: 'v3',
+            codebases: {},
+            latestOperations: { [codebase]: { generation: 2 } },
+            lastUpdated: new Date().toISOString(),
+        }, null, 2);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, malformed);
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setLatestOperation(codebase, operationReceipt(codebase, 3));
+        assert.equal(writer.saveCodebaseSnapshot(), false);
+        assert.equal(fs.readFileSync(file, 'utf8'), malformed);
+    });
+});
+
 test('saveCodebaseSnapshot honors explicit removals via tombstones', () => {
     withTempHome((homeDir) => {
         const codebaseA = path.join(homeDir, 'repo-a');
@@ -593,6 +1005,62 @@ test('refreshFromDiskIfChanged reloads persisted snapshot entries from another p
         const all = reader.getAllCodebases().map((entry) => entry.path).sort();
         assert.deepEqual(all, [codebaseA, codebaseB].sort());
         assert.equal(reader.getCodebaseInfo(codebaseB)?.status, 'requires_reindex');
+    });
+});
+
+test('refreshFromDiskIfChanged does not migrate an older snapshot during a read', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-current');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { file } = snapshotPathsFor(homeDir);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.setCodebaseIndexed(codebase, {
+            indexedFiles: 1,
+            totalChunks: 1,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        reader.saveCodebaseSnapshot();
+        reader.loadCodebaseSnapshot();
+
+        fs.writeFileSync(file, JSON.stringify({
+            formatVersion: 'v2',
+            codebases: {},
+            lastUpdated: new Date().toISOString(),
+        }, null, 2));
+
+        assert.equal(reader.refreshFromDiskIfChanged(), false);
+        assert.equal(reader.getCodebaseInfo(codebase)?.status, 'indexed');
+        assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).formatVersion, 'v2');
+        assert.match(reader.getSnapshotCorruptionWarning()?.message || '', /requires current v3 format/);
+    });
+});
+
+test('refreshFromDiskIfChanged preserves the last valid state when current snapshot is corrupt', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-current');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { dir, file } = snapshotPathsFor(homeDir);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.setCodebaseIndexed(codebase, {
+            indexedFiles: 1,
+            totalChunks: 1,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        reader.saveCodebaseSnapshot();
+        reader.loadCodebaseSnapshot();
+
+        fs.writeFileSync(file, '{ corrupt json');
+
+        assert.equal(reader.refreshFromDiskIfChanged(), false);
+        assert.equal(reader.getCodebaseInfo(codebase)?.status, 'indexed');
+        assert.equal(fs.readFileSync(file, 'utf8'), '{ corrupt json');
+        assert.equal(
+            fs.readdirSync(dir).some((name) => name.startsWith('mcp-codebase-snapshot.json.corrupt-')),
+            false,
+        );
+        assert.equal(reader.getSnapshotCorruptionWarning()?.quarantinedPath, undefined);
     });
 });
 
@@ -988,6 +1456,7 @@ test('loadCodebaseSnapshot triggers persistence for migrated v2 snapshot', () =>
         let persisted = false;
         loader.saveCodebaseSnapshot = (forceWrite = false) => {
             persisted = forceWrite === true;
+            return true;
         };
         loader.loadCodebaseSnapshot();
         assert.equal(persisted, true);

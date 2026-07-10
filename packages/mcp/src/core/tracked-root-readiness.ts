@@ -88,7 +88,6 @@ export type TrackedRootReadinessHost = {
         state: "ready" | "missing" | "unknown";
         collectionName?: string;
     }>;
-    markCodebaseSearchStateMissing(codebasePath: string): Promise<void>;
     buildCreateHint(codebasePath: string): { tool: string; args: { action: string; path: string } };
     buildStatusHint(codebasePath: string): { tool: string; args: { action: string; path: string } };
     buildManageIndexRecommendedAction(action: ManageIndexAction, codebasePath: string, rationale: string): SearchRecommendedNextAction;
@@ -421,7 +420,6 @@ export class TrackedRootReadiness {
 
         const collectionState = await this.host.probeLocalSearchCollectionState(effectiveRoot);
         if (collectionState.state === "missing") {
-            await this.host.markCodebaseSearchStateMissing(effectiveRoot);
             return {
                 state: "missing_collection",
                 codebasePath: effectiveRoot,

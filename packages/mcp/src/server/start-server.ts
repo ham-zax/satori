@@ -25,11 +25,12 @@ import {
     RuntimeOwnerRegistry,
     buildRuntimeOwnerIdentityFromConfig,
 } from "../core/runtime-owner.js";
+import { MutationLeaseCoordinator } from "../core/mutation-lease.js";
 import { ToolContext } from "../tools/types.js";
 import { getMcpToolList, toolRegistry } from "../tools/registry.js";
 import { createLocalOnlyContext, ProviderRuntime, resolveConfiguredEmbeddingDimension } from "./provider-runtime.js";
 
-export type ServerRunMode = "mcp" | "cli";
+export type ServerRunMode = "mcp" | "cli" | "postflight";
 
 export interface StartMcpServerOptions {
     runMode?: ServerRunMode;
@@ -58,6 +59,9 @@ export async function runPostConnectStartupLifecycle(
     runMode: ServerRunMode,
     dependencies: StartupLifecycleDependencies
 ): Promise<void> {
+    if (runMode === "postflight") {
+        return;
+    }
     if (runMode === "cli") {
         try {
             await dependencies.verifyCloudState();
@@ -116,6 +120,7 @@ class ContextMcpServer {
     private callGraphManager: CallGraphSidecarManager;
     private providerRuntime: ProviderRuntime;
     private runtimeOwnerRegistry: RuntimeOwnerRegistry;
+    private mutationLeaseCoordinator: MutationLeaseCoordinator;
     private runMode: ServerRunMode;
     private protocolStdin?: Readable;
     private protocolStdout?: Writable;
@@ -156,6 +161,7 @@ class ContextMcpServer {
             const message = error instanceof Error ? error.message : String(error);
             console.warn(`[RUNTIME-OWNER] Failed to register current Satori runtime owner; index mutations will fail closed until the owner registry is writable: ${message}`);
         }
+        this.mutationLeaseCoordinator = new MutationLeaseCoordinator();
 
         this.snapshotManager = new SnapshotManager(this.runtimeFingerprint);
         this.callGraphManager = new CallGraphSidecarManager(this.runtimeFingerprint);
@@ -163,6 +169,7 @@ class ContextMcpServer {
         this.syncManager = new SyncManager(localContext, this.snapshotManager, {
             watchEnabled: this.watchSyncEnabled,
             watchDebounceMs: this.watchDebounceMs,
+            mutationLeaseCoordinator: this.mutationLeaseCoordinator,
         });
         this.toolHandlers = new ToolHandlers(
             localContext,
@@ -175,7 +182,8 @@ class ContextMcpServer {
             null,
             undefined,
             undefined,
-            this.runtimeOwnerRegistry
+            this.runtimeOwnerRegistry,
+            this.mutationLeaseCoordinator,
         );
         this.providerRuntime = new ProviderRuntime({
             config,
@@ -187,6 +195,7 @@ class ContextMcpServer {
             watchDebounceMs: this.watchDebounceMs,
             callGraphManager: this.callGraphManager,
             runtimeOwnerGate: this.runtimeOwnerRegistry,
+            mutationLeaseCoordinator: this.mutationLeaseCoordinator,
         });
         this.toolContext = {
             context: localContext,

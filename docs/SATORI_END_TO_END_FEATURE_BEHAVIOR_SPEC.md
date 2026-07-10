@@ -53,6 +53,10 @@ Architecture in words:
 - Core sync (`packages/core`) tracks file state (stats, hashes, merkle root, partial-scan metadata).
 - MCP runtime (`packages/mcp`) owns snapshot status, freshness gating, search orchestration, call graph sidecar lifecycle, and tool routing.
 - Public installer/doctor ownership is `packages/cli` (`satori-cli`). Install/uninstall mutate client config and managed runtime under `~/.satori/`; they are not MCP tools.
+- Every non-dry-run install runs a bounded postflight through the exact installed launcher. The additive `postflight` receipt proves managed client configuration, MCP initialization and installed version, the canonical six-tool list, runtime-owner registration, and child/owner cleanup. Static provider/backend gaps are warnings; runtime or wiring proof failures return a non-zero install exit while preserving installed artifacts.
+- Postflight starts MCP with internal `SATORI_RUN_MODE=postflight`: it registers the runtime owner and serves MCP, but skips interrupted-index recovery, background sync, watchers, lifecycle calls, search, and all provider-backed work.
+- Managed launchers preserve the five-second signal-shutdown grace for cooperative provider/watcher cleanup. On client stdin EOF they proxy EOF to the runtime, which performs the same graceful shutdown and owner unregister; a separate 1.5-second EOF fallback reaps a non-cooperative child before the MCP SDK kills the launcher.
+- Doctor is read-only: it validates static provider/backend configuration, installed packages, managed launcher target/version, configured Codex/Claude/OpenCode launcher wiring, live owner version/fingerprint/config identity, process-start identity when available, and active/abandoned/corrupt mutation leases. It never evicts a lease based on elapsed time.
 - `packages/mcp/src/cli` is residual non-bin tool-shell glue (list/call wrappers). `install`/`uninstall` there are hard-deprecated and exit with guidance to `satori-cli`; they must not write configs or install managed runtime.
 - Installer runtime cache paths are private implementation details; public setup remains the one-command CLI installer flow.
 - Sidecar/index artifacts are consumed by `search_codebase`, `file_outline`, `call_graph`, `read_file`.
@@ -99,6 +103,7 @@ Behavior contract:
 - [stdio-safety.ts](/home/hamza/repo/satori/packages/mcp/src/server/stdio-safety.ts) (console-to-stderr and cli-mode stdout guard).
 - [packages/cli/src/index.ts](/home/hamza/repo/satori/packages/cli/src/index.ts) (public `satori-cli`: install/doctor + tool shell).
 - [packages/cli/src/install.ts](/home/hamza/repo/satori/packages/cli/src/install.ts) (installer SSOT).
+- [packages/cli/src/install-postflight.ts](/home/hamza/repo/satori/packages/cli/src/install-postflight.ts) (bounded non-mutating launcher/config/protocol/tool/owner/termination proof).
 - [packages/mcp/src/cli/index.ts](/home/hamza/repo/satori/packages/mcp/src/cli/index.ts) (legacy non-bin tool shell; install hard-deprecated).
 - [packages/mcp/src/cli/install.ssot.test.ts](/home/hamza/repo/satori/packages/mcp/src/cli/install.ssot.test.ts) (MCP install mutation surface must stay gone).
 - [registry.ts](/home/hamza/repo/satori/packages/mcp/src/tools/registry.ts) (6-tool surface).
@@ -151,22 +156,29 @@ Outputs:
   - `status` (`ok|not_ready|not_indexed|requires_reindex|blocked|error`)
   - `reason` (when applicable)
   - `message`, `humanText`
-  - optional `warnings`, `hints`, `preflight`
+  - optional `warnings`, `hints`, `preflight`, `operation`, `repairProof`, `symbolQuality`
 - `humanText` remains deterministic operator-facing guidance; structured fields are authoritative for client branching.
-- `repair` rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match; otherwise the envelope refuses and points to create/reindex.
+- The additive optional `repairProof` field does not change the version 1 envelope. It contains `collection`, `snapshot`, `marker`, `fingerprint`, `payload`, `staleRemoteChunks`, and `navigation`; each item has `status=matched|failed|missing|unproven|not_checked`, an optional explanatory `basis`, and optional counts. Pre-proof input/provider/owner/lease/indexing refusals may omit it. Once evidence collection begins, backend and publication failures preserve the latest partial proof.
+- `repair` verifies trusted runtime fingerprint provenance, exact remote payload equality, and absence of stale remote chunks before publishing readiness. It may write a fresh completion marker and rebuild navigation, but does not re-embed or rewrite source chunks.
 
 Warnings/hints:
 - Reindex guidance text when blocked by fingerprint mismatch.
 - Zilliz collection-limit guidance with explicit next action.
 - Vector backend failures return structured `status=error`, `reason=vector_backend_unavailable`, stable diagnostic code, and remediation in `hints.backend`.
+- Repair recovery is mechanically fixed: no related collection returns `blocked/needs_create` with create as `hints.nextAction`; any existing incompatible, incomplete, stale, malformed, or unprovable generation returns `requires_reindex` with reindex as `hints.nextAction`. Backend failure uses `hints.backend`; diagnose it and retry repair rather than inventing a lifecycle action.
 - `create` path resolves and can return "already indexed" guidance.
 - `reindex` preflight can emit deterministic warnings (`REINDEX_UNNECESSARY_IGNORE_ONLY`, `REINDEX_PREFLIGHT_UNKNOWN`, `IGNORE_POLICY_PROBE_FAILED`).
 - Runtime-owner conflicts return `status=blocked`, `reason=runtime_owner_conflict`, and `hints.runtimeOwners` / `hints.nextStep`. This blocks `create`, `reindex`, `sync`, and `clear` when another live Satori MCP runtime has a different runtime fingerprint, Satori package version, or normalized config identity.
+- Root mutations are also serialized across processes by a canonical-root lease. Contention returns `status=blocked`, `reason=mutation_in_progress`, and `hints.activeMutation`; `status` exposes the same live writer evidence. Leases have no wall-clock expiry: takeover requires dead-process or process-start mismatch evidence.
+- A mutation response includes an optional durable `operation` receipt after lease acquisition. The receipt contains the mutation action, canonical root, lease generation, accepted time, durable phase, last durable transition time, runtime fingerprint, and writer identity. Terminal phases are `completed`, `failed`, and `blocked`.
+- `status` returns the latest persisted receipt across process restarts. Its top-level `action` remains `status`; `operation.action` names the observed mutation. Calls rejected before lease acquisition do not fabricate a receipt.
+- Explicit `zillizDropCollection` eviction must prove the collection's owning root from the snapshot or remote metadata and hold leases for both affected roots. Unknown ownership or a live mapped-root writer refuses deletion without changing remote or local state.
 
 Determinism:
 - Action dispatch deterministic switch.
 - Fingerprint gate deterministic via snapshot/runtime fingerprint comparison.
 - Index mutations are gated by the runtime owner registry at `~/.satori/runtime/owners.json`; owner records are written with a lock and atomic rename, dead/stale owners are pruned, and live PID validation uses process identity evidence rather than PID alone.
+- Mutation leases are persisted per canonical root under `~/.satori/runtime/mutation-leases`; generations are monotonic, release is generation/owner checked, and read-only collection readiness probes never erase snapshot or watcher state.
 - Reindex preflight outcomes are deterministic and bounded:
   - `reindex_required`
   - `reindex_unnecessary_ignore_only` (blocked unless `allowUnnecessaryReindex=true`)
@@ -177,13 +189,14 @@ Common recipes:
 1. First-time index: `manage_index {action:"create", path}`.
 2. Recovery: `manage_index {action:"reindex", path}` when blocked by fingerprint/requires_reindex.
 3. Immediate ignore convergence: `manage_index {action:"sync", path}`.
-4. Local readiness repair without full rebuild: `manage_index {action:"repair", path}` when payload+fingerprint proof allow; otherwise follow create/reindex hints.
+4. Local readiness repair without full rebuild: `manage_index {action:"repair", path}` when payload+fingerprint proof allow. Use create only for no related collection, reindex for an existing untrusted/incomplete generation, and backend diagnostics followed by repair retry for backend failure.
 5. Status observation: `manage_index {action:"status", path}` (create/reindex kick off asynchronously).
+   When `hints.activeMutation` is present, observe that operation rather than starting a competing mutation. No `expiresAt` is reported because elapsed time alone cannot evict a live writer.
 
 Behavior:
 - Trigger: action call.
 - Effect: runs mapped handler with validations/gates.
-- Observability: structured manage envelope with stable statuses/reasons/warnings + human guidance text.
+- Observability: structured manage envelope with stable statuses/reasons/warnings, optional durable operation receipt, optional repair proof, and human guidance text.
 - Determinism: fixed action routing and gate checks.
 - Performance: `create/reindex` background indexing; `sync` incremental; `status`/`repair` read/repair paths; `clear` destructive.
 
@@ -545,8 +558,8 @@ Recent vs legacy:
 
 1) `manage_index` action semantics
 - Trigger: action dispatch for `create|reindex|sync|status|clear|repair`.
-- Effect: create/reindex start background indexing, sync runs incremental `reindexByChange`, status reports current state, clear removes index+snapshot state, repair rebuilds local readiness only under trusted fingerprint/payload proof.
-- Observability: JSON envelopes in `content[0].text` (plus logs); indexing-blocked responses include `retryAfterMs=2000`, independent of watcher debounce.
+- Effect: create/reindex start background indexing, sync runs incremental `reindexByChange`, status reports current state, clear removes index+snapshot state, repair proves the selected generation's fingerprint and exact payload before rebuilding local readiness without rewriting source chunks.
+- Observability: JSON envelopes in `content[0].text` (plus logs); repair may expose additive structured `repairProof`, and indexing-blocked responses include `retryAfterMs=2000`, independent of watcher debounce.
 - Determinism: absolute-path enforcement and status/fingerprint gates.
 - Performance: create/reindex heavy background operation, sync incremental.
 - Partial index behavior: when full indexing returns `limit_reached`, search may expose the partial vector state, but complete navigation sidecars are not published. `file_outline` and `call_graph` must fail closed with `requires_reindex` and reason `partial_index_navigation_unavailable` rather than treating the missing registry as an ordinary sidecar miss.
@@ -803,18 +816,24 @@ Behavior contract:
 - Any search/navigation tool returning `status:"not_indexed"` with `reason:"index_failed"` is preserving a failed lifecycle state from the snapshot. Inspect `indexingFailure`, then run `manage_index {action:"create", path:hints.create.args.path}` when you want to restart that failed partial attempt.
 - Do not convert `reason:"index_failed"` into `reindex`; `reindex` is reserved for explicit `requires_reindex` compatibility gates.
 
-5) “call graph not ready”
+5) “repair refused”
+- Inspect `repairProof` rather than inferring from prose. A missing related collection maps to `hints.nextAction=manage_index create`.
+- Malformed completion marker, missing snapshot-selected collection with another family generation present, multiple staged generations, fingerprint failure, missing expected chunks, stale remote chunks, or inability to prove exact payload equality maps to `status:"requires_reindex"` and `hints.nextAction=manage_index reindex`.
+- Backend failure may include the latest partial `repairProof`; follow `hints.backend.nextSteps`, restore backend health, and retry repair.
+- Successful repair can write a fresh completion marker and rebuild navigation, but it does not re-embed or rewrite source chunks.
+
+6) “call graph not ready”
 - If `call_graph` returns `not_ready`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, or `incompatible_relationship_sidecar`, reindex.
 - While waiting, use `search_codebase` `navigationFallback.readSpan` and optional `fileOutlineWindow` only when they are actually emitted.
 - If search emits `openSymbol` without `callGraph`, read the exact symbol first and treat graph traversal as unavailable until readiness is repaired.
 
-6) “partial scan detected” (core sync)
+7) “partial scan detected” (core sync)
 - Observe `partialScan=true` and `unscannedDirPrefixes` in core sync diagnostics.
 - Restore permissions/access for unreadable files/dirs.
 - Re-run sync/search; verify no false removals and eventual convergence.
 - If persistent, inspect ignore patterns and filesystem permissions.
 
-6) “collection limit reached”
+8) “collection limit reached”
 - On create, if collection-limit guidance appears, explicitly choose a collection to drop.
 - Retry with `manage_index {action:"create", path:"<target>", zillizDropCollection:"<chosen_collection>"}`.
 - Current product behavior: handler returns guided text (often as `isError:true`) and expects operator decision. “ask user confirmation before delete” is an AGENTS/process policy, not a hard-coded MCP schema confirmation flag.
@@ -861,6 +880,8 @@ Behavior contract:
 | Search navigation next-step hint | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped output includes compact nextActions...` |
 | Subdirectory query fallback context correctness | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `subdirectory query builds navigationFallback from effectiveRoot...` |
 | Backend diagnostics for stopped/unavailable vector backend | [setup-errors.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/setup-errors.test.ts), [search_codebase.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/search_codebase.test.ts), [manage_index.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/manage_index.test.ts) |
+| Installer postflight is exact, non-mutating, and bounded | [install-postflight.test.ts](/home/hamza/repo/satori/packages/cli/src/install-postflight.test.ts), [index.test.ts](/home/hamza/repo/satori/packages/cli/src/index.test.ts), [install.test.ts](/home/hamza/repo/satori/packages/cli/src/install.test.ts), [start-server.lifecycle.test.ts](/home/hamza/repo/satori/packages/mcp/src/server/start-server.lifecycle.test.ts) |
+| Structured repair proof and deterministic recovery | [context.test.ts](/home/hamza/repo/satori/packages/core/src/core/context.test.ts) `recommends create only when no related collection exists`, `snapshot-selected collection is missing but a related collection exists`, `reports a malformed completion marker as failed evidence`, `requires reindex when exact payload equality exceeds the query ceiling`, `missing expected chunk requires reindex with structured proof`; [manage-indexing-handlers.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/manage-indexing-handlers.test.ts) `preserves partial proof when the vector backend fails`, `preserves matched navigation proof when watcher touch fails afterward`; [handlers.manage_index_blocking.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.manage_index_blocking.test.ts) public proof and next-action assertions |
 | `file_outline` exact mode statuses | [handlers.file_outline.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.file_outline.test.ts) `exact mode resolves unique`, `returns ambiguous`, `returns not_found` |
 | `file_outline` requires_reindex/metadata warning | [handlers.file_outline.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.file_outline.test.ts) `returns requires_reindex...`, `OUTLINE_MISSING_SYMBOL_METADATA` |
 | `call_graph` requires_reindex and status mapping | [handlers.call_graph.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.call_graph.test.ts) `requires_reindex envelope...`, `maps missing_symbol to not_found` |

@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SyncManager } from './sync.js';
+import { SyncManager, SyncOperationError } from './sync.js';
+import {
+    MutationLeaseCoordinator,
+    type MutationLeaseProcessSnapshot,
+    type RootMutationLease,
+} from './mutation-lease.js';
+import type { IndexFingerprint, IndexOperationReceipt } from '../config.js';
 
 type CodebaseStatus = 'indexed' | 'indexing' | 'indexfailed' | 'sync_completed' | 'requires_reindex' | 'not_found';
 type SyncContext = ConstructorParameters<typeof SyncManager>[0];
@@ -32,6 +38,15 @@ function createSnapshot(statusByPath: Map<string, CodebaseStatus>) {
     const ignoreRulesVersionByPath = new Map<string, number>();
     const ignoreControlSignatureByPath = new Map<string, string>();
     const requiresReindexByPath = new Map<string, { reason: string; message?: string }>();
+    const receiptHistory: IndexOperationReceipt[] = [];
+    let latestOperation: IndexOperationReceipt | undefined;
+    const runtimeFingerprint: IndexFingerprint = {
+        embeddingProvider: 'VoyageAI',
+        embeddingModel: 'voyage-code-3',
+        embeddingDimension: 1024,
+        vectorStoreProvider: 'Milvus',
+        schemaVersion: 'hybrid_v3',
+    };
 
     return {
         getCodebaseStatus(codebasePath: string): CodebaseStatus {
@@ -68,7 +83,45 @@ function createSnapshot(statusByPath: Map<string, CodebaseStatus>) {
             statusByPath.set(codebasePath, 'requires_reindex');
             requiresReindexByPath.set(codebasePath, { reason, message });
         },
-        saveCodebaseSnapshot() { },
+        startOperation(lease: RootMutationLease): IndexOperationReceipt {
+            latestOperation = {
+                id: lease.operationId,
+                action: lease.action,
+                canonicalRoot: lease.canonicalRoot,
+                generation: lease.generation,
+                acceptedAt: lease.acquiredAt,
+                phase: 'accepted',
+                lastDurableTransitionAt: lease.acquiredAt,
+                runtimeFingerprint,
+                writer: {
+                    ownerId: lease.ownerId,
+                    pid: lease.pid,
+                    satoriVersion: 'test',
+                },
+            };
+            return structuredClone(latestOperation);
+        },
+        transitionOperation(lease: RootMutationLease, phase: IndexOperationReceipt['phase']): IndexOperationReceipt {
+            assert.equal(latestOperation?.id, lease.operationId);
+            latestOperation = {
+                ...latestOperation!,
+                phase,
+                lastDurableTransitionAt: new Date().toISOString(),
+            };
+            return structuredClone(latestOperation);
+        },
+        getLatestOperation(): IndexOperationReceipt | undefined {
+            return latestOperation ? structuredClone(latestOperation) : undefined;
+        },
+        getReceiptHistory(): IndexOperationReceipt[] {
+            return structuredClone(receiptHistory);
+        },
+        saveCodebaseSnapshot() {
+            if (latestOperation) {
+                receiptHistory.push(structuredClone(latestOperation));
+            }
+            return true;
+        },
         removeIndexedCodebase(codebasePath: string) {
             statusByPath.delete(codebasePath);
             indexManifestByPath.delete(codebasePath);
@@ -156,6 +209,230 @@ test('ensureFreshness clears core index artifacts when an indexed path is delete
     assert.equal(statusByPath.has(codebasePath), false);
 
     await manager.stopWatcherMode();
+});
+
+test('ensureFreshness does not mutate while another process owns the root lease', async () => {
+    const codebasePath = createTempDir();
+    const stateDir = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshotManager = createSnapshot(statusByPath);
+    const processes = new Map<number, MutationLeaseProcessSnapshot>([
+        [101, { pid: 101, processStartTime: 'first' }],
+        [202, { pid: 202, processStartTime: 'second' }],
+    ]);
+    const processInspector = {
+        inspect(pid: number) {
+            return processes.get(pid) ?? null;
+        },
+    };
+    const owner = new MutationLeaseCoordinator({
+        stateDir,
+        ownerId: 'first-owner',
+        currentProcess: processes.get(101),
+        processInspector,
+    });
+    const contender = new MutationLeaseCoordinator({
+        stateDir,
+        ownerId: 'second-owner',
+        currentProcess: processes.get(202),
+        processInspector,
+    });
+    assert.equal(owner.acquire(codebasePath, 'create').acquired, true);
+
+    const context = createContext();
+    const manager = new SyncManager(
+        context as unknown as SyncContext,
+        snapshotManager as unknown as SyncSnapshotManager,
+        { watchEnabled: false, mutationLeaseCoordinator: contender },
+    );
+    const decision = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+
+    assert.equal(decision.mode, 'skipped_mutation_in_progress');
+    assert.equal(decision.activeMutation?.ownerId, 'first-owner');
+    assert.equal(context.calls, 0);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+test('coalesced sync callers receive the same durable completed receipt', async () => {
+    const codebasePath = createTempDir();
+    const stateDir = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    let releaseSync!: () => void;
+    const syncGate = new Promise<void>((resolve) => {
+        releaseSync = resolve;
+    });
+    let syncStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+        syncStarted = resolve;
+    });
+    const context = {
+        async reindexByChange() {
+            syncStarted();
+            await syncGate;
+            return { added: 1, removed: 0, modified: 0, changedFiles: ['src/new.ts'] };
+        },
+    };
+    const coordinator = new MutationLeaseCoordinator({ stateDir, ownerId: 'sync-owner' });
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
+        watchEnabled: false,
+        mutationLeaseCoordinator: coordinator,
+    });
+
+    const first = manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+    await started;
+    const second = manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+    assert.deepEqual(snapshot.getReceiptHistory().map((receipt) => receipt.phase), ['accepted', 'writing']);
+    releaseSync();
+
+    const [firstDecision, secondDecision] = await Promise.all([first, second]);
+    assert.equal(firstDecision.mode, 'synced');
+    assert.equal(secondDecision.mode, 'coalesced');
+    assert.equal(firstDecision.operation?.phase, 'completed');
+    assert.equal(secondDecision.operation?.id, firstDecision.operation?.id);
+    assert.equal(coordinator.getActiveLease(codebasePath), undefined);
+
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+test('sync failure persists and throws the exact failed receipt before lease release', async () => {
+    const codebasePath = createTempDir();
+    const stateDir = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    const coordinator = new MutationLeaseCoordinator({ stateDir, ownerId: 'sync-owner' });
+    const manager = new SyncManager({
+        async reindexByChange() {
+            throw new Error('sync exploded');
+        },
+    } as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
+        watchEnabled: false,
+        mutationLeaseCoordinator: coordinator,
+    });
+
+    await assert.rejects(
+        manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true }),
+        (error: unknown) => {
+            assert.ok(error instanceof SyncOperationError);
+            assert.equal(error.operation?.phase, 'failed');
+            assert.equal(error.operation?.id, snapshot.getLatestOperation()?.id);
+            return true;
+        },
+    );
+    assert.equal(snapshot.getLatestOperation()?.phase, 'failed');
+    assert.equal(coordinator.getActiveLease(codebasePath), undefined);
+
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+test('ensureFreshness does not persist a missing ignore baseline while another process owns the root lease', async () => {
+    const codebasePath = createTempDir();
+    const stateDir = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshotManager = createSnapshot(statusByPath);
+    let signatureWrites = 0;
+    const setSignature = snapshotManager.setCodebaseIgnoreControlSignature.bind(snapshotManager);
+    snapshotManager.setCodebaseIgnoreControlSignature = (root: string, signature: string) => {
+        signatureWrites += 1;
+        setSignature(root, signature);
+    };
+    const processes = new Map<number, MutationLeaseProcessSnapshot>([
+        [101, { pid: 101, processStartTime: 'first' }],
+        [202, { pid: 202, processStartTime: 'second' }],
+    ]);
+    const processInspector = {
+        inspect(pid: number) {
+            return processes.get(pid) ?? null;
+        },
+    };
+    const owner = new MutationLeaseCoordinator({
+        stateDir,
+        ownerId: 'first-owner',
+        currentProcess: processes.get(101),
+        processInspector,
+    });
+    const contender = new MutationLeaseCoordinator({
+        stateDir,
+        ownerId: 'second-owner',
+        currentProcess: processes.get(202),
+        processInspector,
+    });
+    assert.equal(owner.acquire(codebasePath, 'create').acquired, true);
+
+    const context = createContext();
+    const manager = new SyncManager(
+        context as unknown as SyncContext,
+        snapshotManager as unknown as SyncSnapshotManager,
+        { watchEnabled: false, mutationLeaseCoordinator: contender },
+    );
+    const decision = await manager.ensureFreshness(codebasePath, 0);
+
+    assert.equal(decision.mode, 'skipped_mutation_in_progress');
+    assert.equal(signatureWrites, 0);
+    assert.equal(snapshotManager.getCodebaseIgnoreControlSignature(codebasePath), undefined);
+    assert.equal(context.calls, 0);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+test('ensureFreshness does not treat mutation lease loss as a missing root', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshotManager = createSnapshot(statusByPath);
+    let assertions = 0;
+    let clearCalls = 0;
+    const lease = {
+        canonicalRoot: codebasePath,
+        generation: 1,
+        operationId: 'operation',
+        action: 'sync' as const,
+        ownerId: 'owner',
+        pid: process.pid,
+        acquiredAt: new Date(0).toISOString(),
+        lastHeartbeatAt: new Date(0).toISOString(),
+    };
+    const mutationLeaseCoordinator = {
+        assertCurrent() {
+            assertions += 1;
+            if (assertions === 2) {
+                throw new Error('lease_lost');
+            }
+        },
+        release() {
+            return false;
+        },
+    };
+    const context = {
+        ...createContext(),
+        async clearIndex() {
+            clearCalls += 1;
+        },
+    };
+    const manager = new SyncManager(
+        context as unknown as SyncContext,
+        snapshotManager as unknown as SyncSnapshotManager,
+        {
+            watchEnabled: false,
+            mutationLeaseCoordinator: mutationLeaseCoordinator as unknown as MutationLeaseCoordinator,
+        },
+    );
+
+    await assert.rejects(
+        manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true, mutationLease: lease }),
+        /lease_lost/,
+    );
+    assert.equal(clearCalls, 0);
+    assert.equal(snapshotManager.getCodebaseStatus(codebasePath), 'indexed');
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
 test('ensureFreshness passes trusted snapshot collection to incremental sync', async () => {
@@ -948,7 +1225,9 @@ test('ignore-change reconciliation runs after in-flight sync and is not skipped 
     snapshot.setCodebaseIndexManifest(codebasePath, ['src/a.ts']);
 
     let syncCalls = 0;
-    let releaseFirstSync: (() => void) | null = null;
+    let releaseFirstSync: () => void = () => {
+        assert.fail('First sync gate was not initialized.');
+    };
     const firstSyncGate = new Promise<void>((resolve) => {
         releaseFirstSync = resolve;
     });
@@ -998,9 +1277,7 @@ test('ignore-change reconciliation runs after in-flight sync and is not skipped 
     await wait(20);
     assert.equal(syncCalls, 1);
 
-    if (releaseFirstSync) {
-        releaseFirstSync();
-    }
+    releaseFirstSync();
     await inFlightSync;
 
     const ignoreDecision = await ignoreDecisionPromise;

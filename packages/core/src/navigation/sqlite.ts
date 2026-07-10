@@ -654,6 +654,7 @@ export function resolveNavigationSqlitePath(stateRoot: string | undefined, norma
 
 export interface ImportNavigationToSqliteInput extends NavigationStoreInput {
     sourceStore?: NavigationStore;
+    beforePublish?: () => void;
 }
 
 export interface ImportNavigationToSqliteResult {
@@ -807,6 +808,7 @@ export async function importNavigationToSqlite(input: ImportNavigationToSqliteIn
         closeDatabase(database);
         database = undefined;
 
+        input.beforePublish?.();
         await fs.promises.rename(temporarySqlitePath, sqlitePath);
 
         return {

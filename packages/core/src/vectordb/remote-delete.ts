@@ -5,6 +5,7 @@ export interface VerifiedCollectionDeleteOptions {
     initialBackoffMs?: number;
     backoffMultiplier?: number;
     sleep?: (ms: number) => Promise<void>;
+    beforeDropAttempt?: () => void;
 }
 
 export interface VerifiedCollectionDeleteResult {
@@ -57,6 +58,7 @@ export async function deleteCollectionWithVerification(
     let lastError: unknown;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         lastError = undefined;
+        options.beforeDropAttempt?.();
         try {
             await vectorDatabase.dropCollection(collectionName);
         } catch (error) {

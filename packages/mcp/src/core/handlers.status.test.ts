@@ -6,6 +6,7 @@ import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
+import { MutationLeaseCoordinator } from './mutation-lease.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -155,5 +156,54 @@ test('handleGetIndexingStatus includes fingerprint diagnostics when access gate 
         assert.match(text, /Indexed fingerprint: VoyageAI\/voyage-4-large\/1024\/Milvus\/dense_v3/i);
         assert.match(text, /Fingerprint source: assumed_v2/i);
         assert.match(text, /Reindex reason: legacy_unverified_fingerprint/i);
+    });
+});
+
+test('handleGetIndexingStatus includes active writer evidence on requires_reindex', async () => {
+    await withTempRepo(async (repoPath) => {
+        const stateDir = path.join(path.dirname(repoPath), 'mutation-leases');
+        const activeOwner = new MutationLeaseCoordinator({ stateDir, ownerId: 'active-owner' });
+        const statusCoordinator = new MutationLeaseCoordinator({ stateDir, ownerId: 'status-owner' });
+        const activeResult = activeOwner.acquire(repoPath, 'sync');
+        assert.equal(activeResult.acquired, true);
+        if (!activeResult.acquired) return;
+
+        try {
+            const snapshotManager = {
+                ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+                getCodebaseStatus: () => 'requires_reindex',
+                getCodebaseInfo: () => ({
+                    status: 'requires_reindex',
+                    message: 'Legacy fingerprint mismatch.',
+                    lastUpdated: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                    indexFingerprint: RUNTIME_FINGERPRINT,
+                    fingerprintSource: 'verified',
+                    reindexReason: 'fingerprint_mismatch'
+                })
+            } as unknown as HandlerSnapshotManager;
+            const handlers = new ToolHandlers(
+                {} as unknown as HandlerContext,
+                snapshotManager,
+                {} as unknown as HandlerSyncManager,
+                RUNTIME_FINGERPRINT,
+                CAPABILITIES,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                null,
+                statusCoordinator,
+            );
+
+            const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'requires_reindex');
+            assert.deepEqual(payload.hints?.activeMutation, activeResult.lease);
+            assert.match(payload.humanText, /Active mutation: sync/);
+            assert.equal(payload.hints?.activeMutation?.expiresAt, undefined);
+        } finally {
+            activeOwner.release(activeResult.lease);
+        }
     });
 });

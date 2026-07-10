@@ -32,6 +32,25 @@ export interface IndexFingerprint {
     schemaVersion: 'dense_v3' | 'hybrid_v3';
 }
 
+export type IndexOperationAction = 'create' | 'reindex' | 'sync' | 'repair' | 'clear';
+export type IndexOperationPhase = 'accepted' | 'preflight' | 'scanning' | 'writing' | 'proving' | 'publishing' | 'completed' | 'failed' | 'blocked';
+
+export interface IndexOperationReceipt {
+    id: string;
+    action: IndexOperationAction;
+    canonicalRoot: string;
+    generation: number;
+    acceptedAt: string;
+    phase: IndexOperationPhase;
+    lastDurableTransitionAt: string;
+    runtimeFingerprint: IndexFingerprint;
+    writer: {
+        ownerId: string;
+        pid: number;
+        satoriVersion: string;
+    };
+}
+
 export interface ContextMcpConfig {
     name: string;
     version: string;
@@ -155,6 +174,7 @@ export interface CodebaseSnapshotV3 {
     formatVersion: 'v3';
     codebases: Record<string, CodebaseInfo>;  // codebasePath -> CodebaseInfo
     clearTombstones?: Record<string, CodebaseClearTombstone>;
+    latestOperations?: Record<string, IndexOperationReceipt>;
     lastUpdated: string;
 }
 

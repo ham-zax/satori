@@ -143,6 +143,34 @@ test('resolveNavigationSidecarRoot is deterministic and rooted under navigation 
     assert.notEqual(first, moved);
 });
 
+test('writeSymbolRegistrySidecar does not publish after the mutation guard fails', async () => {
+    await withTempDir(async (stateRoot) => {
+        const registry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 0 }]),
+            symbols: [],
+        });
+        let guardCalls = 0;
+
+        await assert.rejects(
+            () => writeSymbolRegistrySidecar({
+                stateRoot,
+                registry,
+                beforePublish: () => {
+                    guardCalls += 1;
+                    if (guardCalls === 2) {
+                        throw new Error('mutation lease lost');
+                    }
+                },
+            }),
+            /mutation lease lost/,
+        );
+
+        assert.equal(guardCalls, 2);
+        const sidecar = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+        assert.notEqual(sidecar.status, 'ok');
+    });
+});
+
 test('writeSymbolRegistrySidecar writes sharding-ready registry files and read restores indexes', async () => {
     await withTempDir(async (stateRoot) => {
         const auth = createSynthesizedFileSymbol({

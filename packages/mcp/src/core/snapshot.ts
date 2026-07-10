@@ -15,7 +15,11 @@ import {
     CallGraphSidecarInfo,
     FingerprintSource,
     IndexFingerprint,
+    IndexOperationReceipt,
+    IndexOperationPhase,
+    resolveMcpPackageVersion,
 } from "../config.js";
+import type { RootMutationLease } from "./mutation-lease.js";
 
 export type AccessGateReason = 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';
 export interface SnapshotCorruptionWarning {
@@ -24,6 +28,22 @@ export interface SnapshotCorruptionWarning {
     message: string;
 }
 type MergeClass = 'searchable' | 'terminal_bad' | 'active';
+
+const OPERATION_PHASE_RANK: Record<IndexOperationPhase, number> = {
+    accepted: 0,
+    preflight: 1,
+    scanning: 2,
+    writing: 3,
+    proving: 4,
+    publishing: 5,
+    completed: 6,
+    failed: 6,
+    blocked: 6,
+};
+
+function isTerminalOperationPhase(phase: IndexOperationPhase): boolean {
+    return phase === "completed" || phase === "failed" || phase === "blocked";
+}
 
 function isSearchableStatus(status: CodebaseInfo['status']): boolean {
     return status === 'indexed' || status === 'sync_completed';
@@ -99,6 +119,10 @@ export interface AccessGateResult {
     message?: string;
 }
 
+export interface AccessGateOptions {
+    mutate?: boolean;
+}
+
 export class SnapshotManager {
     private static readonly SNAPSHOT_LOCK_WAIT_MS = 2000;
     private static readonly SNAPSHOT_LOCK_RETRY_MS = 25;
@@ -111,12 +135,41 @@ export class SnapshotManager {
     private codebaseFileCount: Map<string, number> = new Map();
     private codebaseInfoMap: Map<string, CodebaseInfo> = new Map();
     private clearTombstones: Map<string, CodebaseClearTombstone> = new Map();
+    private latestOperations: Map<string, IndexOperationReceipt> = new Map();
     private pendingRemovals: Set<string> = new Set();
     private pendingTombstoneRemovals: Set<string> = new Set();
     private isDirty = false;
     private lastLoadedSnapshotStateToken: string | null = null;
     private snapshotCorruptionWarning: SnapshotCorruptionWarning | undefined;
     private runtimeFingerprint: IndexFingerprint;
+
+    private captureMutableState(): {
+        codebaseInfoMap: Map<string, CodebaseInfo>;
+        clearTombstones: Map<string, CodebaseClearTombstone>;
+        latestOperations: Map<string, IndexOperationReceipt>;
+        pendingRemovals: Set<string>;
+        pendingTombstoneRemovals: Set<string>;
+        isDirty: boolean;
+    } {
+        return {
+            codebaseInfoMap: structuredClone(this.codebaseInfoMap),
+            clearTombstones: structuredClone(this.clearTombstones),
+            latestOperations: structuredClone(this.latestOperations),
+            pendingRemovals: new Set(this.pendingRemovals),
+            pendingTombstoneRemovals: new Set(this.pendingTombstoneRemovals),
+            isDirty: this.isDirty,
+        };
+    }
+
+    private restoreMutableState(checkpoint: ReturnType<SnapshotManager["captureMutableState"]>): void {
+        this.codebaseInfoMap = checkpoint.codebaseInfoMap;
+        this.clearTombstones = checkpoint.clearTombstones;
+        this.latestOperations = checkpoint.latestOperations;
+        this.pendingRemovals = checkpoint.pendingRemovals;
+        this.pendingTombstoneRemovals = checkpoint.pendingTombstoneRemovals;
+        this.isDirty = checkpoint.isDirty;
+        this.refreshDerivedState();
+    }
 
     constructor(runtimeFingerprint: IndexFingerprint) {
         this.runtimeFingerprint = runtimeFingerprint;
@@ -235,7 +288,18 @@ export class SnapshotManager {
         return Number.isFinite(parsed) ? parsed : Number.NaN;
     }
 
-    private pickPreferredInfo(localInfo: CodebaseInfo, diskInfo: CodebaseInfo): CodebaseInfo {
+    private pickPreferredInfo(
+        localInfo: CodebaseInfo,
+        diskInfo: CodebaseInfo,
+        localOperation?: IndexOperationReceipt,
+        diskOperation?: IndexOperationReceipt,
+    ): CodebaseInfo {
+        const localGeneration = localOperation?.generation ?? -1;
+        const diskGeneration = diskOperation?.generation ?? -1;
+        if (localGeneration !== diskGeneration) {
+            return localGeneration > diskGeneration ? localInfo : diskInfo;
+        }
+
         const localStatus = localInfo.status;
         const diskStatus = diskInfo.status;
         const localClass = mergeClassForStatus(localStatus);
@@ -449,6 +513,33 @@ export class SnapshotManager {
         );
     }
 
+    private isValidOperationReceipt(value: unknown, codebasePath: string): value is IndexOperationReceipt {
+        if (!isRecord(value) || !isRecord(value.writer)) {
+            return false;
+        }
+        const actions = ["create", "reindex", "sync", "repair", "clear"];
+        const phases = ["accepted", "preflight", "scanning", "writing", "proving", "publishing", "completed", "failed", "blocked"];
+        return typeof value.id === "string"
+            && value.id.length > 0
+            && actions.includes(String(value.action))
+            && value.canonicalRoot === codebasePath
+            && Number.isSafeInteger(value.generation)
+            && Number(value.generation) > 0
+            && typeof value.acceptedAt === "string"
+            && !Number.isNaN(Date.parse(value.acceptedAt))
+            && phases.includes(String(value.phase))
+            && typeof value.lastDurableTransitionAt === "string"
+            && !Number.isNaN(Date.parse(value.lastDurableTransitionAt))
+            && Date.parse(value.lastDurableTransitionAt) >= Date.parse(value.acceptedAt)
+            && this.isValidIndexFingerprint(value.runtimeFingerprint)
+            && typeof value.writer.ownerId === "string"
+            && value.writer.ownerId.length > 0
+            && Number.isSafeInteger(value.writer.pid)
+            && Number(value.writer.pid) > 0
+            && typeof value.writer.satoriVersion === "string"
+            && value.writer.satoriVersion.length > 0;
+    }
+
     private isValidCodebaseInfoShape(rawInfo: unknown): rawInfo is CodebaseInfo {
         if (!isRecord(rawInfo)) {
             return false;
@@ -571,6 +662,23 @@ export class SnapshotManager {
         return map;
     }
 
+    private operationMapFromV3Snapshot(snapshot: CodebaseSnapshotV3): Map<string, IndexOperationReceipt> {
+        const map = new Map<string, IndexOperationReceipt>();
+        if (snapshot.latestOperations === undefined) {
+            return map;
+        }
+        if (!isRecord(snapshot.latestOperations)) {
+            throw new Error("Snapshot latestOperations must be an object.");
+        }
+        for (const [codebasePath, rawReceipt] of Object.entries(snapshot.latestOperations)) {
+            if (!this.isValidOperationReceipt(rawReceipt, codebasePath)) {
+                throw new Error(`Snapshot latest operation is malformed for '${codebasePath}'.`);
+            }
+            map.set(codebasePath, rawReceipt);
+        }
+        return map;
+    }
+
     private mapToCodebaseRecord(map: Map<string, CodebaseInfo>): Record<string, CodebaseInfo> {
         const entries = Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
         const codebases: Record<string, CodebaseInfo> = {};
@@ -590,6 +698,17 @@ export class SnapshotManager {
             tombstones[codebasePath] = tombstone;
         }
         return tombstones;
+    }
+
+    private mapToOperationRecord(map: Map<string, IndexOperationReceipt>): Record<string, IndexOperationReceipt> | undefined {
+        if (map.size === 0) {
+            return undefined;
+        }
+        const operations: Record<string, IndexOperationReceipt> = {};
+        for (const [codebasePath, receipt] of Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+            operations[codebasePath] = receipt;
+        }
+        return operations;
     }
 
     private codebaseRecordsEqual(left: Record<string, CodebaseInfo>, right: Record<string, CodebaseInfo>): boolean {
@@ -650,11 +769,41 @@ export class SnapshotManager {
         return new Map();
     }
 
-    private mergeWithPersistedSnapshot(): Map<string, CodebaseInfo> {
+    private readOperationMapFromDisk(): Map<string, IndexOperationReceipt> {
+        if (!fs.existsSync(this.snapshotFilePath)) {
+            return new Map();
+        }
+        const snapshot: unknown = JSON.parse(fs.readFileSync(this.snapshotFilePath, "utf8"));
+        return this.isV3Format(snapshot) ? this.operationMapFromV3Snapshot(snapshot) : new Map();
+    }
+
+    private compareOperationAuthority(
+        local: IndexOperationReceipt | undefined,
+        disk: IndexOperationReceipt | undefined,
+    ): number {
+        const localGeneration = local?.generation ?? 0;
+        const diskGeneration = disk?.generation ?? 0;
+        if (localGeneration !== diskGeneration) {
+            return localGeneration - diskGeneration;
+        }
+        if (local && disk && local.id !== disk.id) {
+            throw new Error(`Conflicting operation ids at generation ${localGeneration} for '${local.canonicalRoot}'.`);
+        }
+        return 0;
+    }
+
+    private mergeWithPersistedSnapshot(
+        persistedOperations: Map<string, IndexOperationReceipt>,
+    ): Map<string, CodebaseInfo> {
         const merged = this.readCodebaseMapFromDisk();
 
         for (const removedPath of this.pendingRemovals) {
-            merged.delete(removedPath);
+            if (this.compareOperationAuthority(
+                this.latestOperations.get(removedPath),
+                persistedOperations.get(removedPath),
+            ) >= 0) {
+                merged.delete(removedPath);
+            }
         }
 
         for (const [codebasePath, localInfo] of this.codebaseInfoMap.entries()) {
@@ -663,17 +812,61 @@ export class SnapshotManager {
                 merged.set(codebasePath, localInfo);
                 continue;
             }
-            merged.set(codebasePath, this.pickPreferredInfo(localInfo, persistedInfo));
+            merged.set(codebasePath, this.pickPreferredInfo(
+                localInfo,
+                persistedInfo,
+                this.latestOperations.get(codebasePath),
+                persistedOperations.get(codebasePath),
+            ));
         }
 
         return merged;
     }
 
-    private mergeTombstonesWithPersistedSnapshot(): Map<string, CodebaseClearTombstone> {
+    private pickPreferredOperation(local: IndexOperationReceipt, disk: IndexOperationReceipt): IndexOperationReceipt {
+        if (local.generation === disk.generation && local.id !== disk.id) {
+            throw new Error(`Conflicting operation ids at generation ${local.generation} for '${local.canonicalRoot}'.`);
+        }
+        if (local.generation !== disk.generation) {
+            return local.generation > disk.generation ? local : disk;
+        }
+        if (isTerminalOperationPhase(local.phase) && isTerminalOperationPhase(disk.phase) && local.phase !== disk.phase) {
+            throw new Error(`Conflicting terminal phases for operation '${local.id}' at generation ${local.generation}.`);
+        }
+        if (OPERATION_PHASE_RANK[local.phase] !== OPERATION_PHASE_RANK[disk.phase]) {
+            return OPERATION_PHASE_RANK[local.phase] > OPERATION_PHASE_RANK[disk.phase] ? local : disk;
+        }
+        const localMs = this.parseTimestampMs(local.lastDurableTransitionAt);
+        const diskMs = this.parseTimestampMs(disk.lastDurableTransitionAt);
+        if (localMs !== diskMs) {
+            return localMs > diskMs ? local : disk;
+        }
+        return stableSerialize(local) >= stableSerialize(disk) ? local : disk;
+    }
+
+    private mergeOperationsWithPersistedSnapshot(
+        persisted: Map<string, IndexOperationReceipt>,
+    ): Map<string, IndexOperationReceipt> {
+        const merged = new Map(persisted);
+        for (const [codebasePath, local] of this.latestOperations.entries()) {
+            const disk = merged.get(codebasePath);
+            merged.set(codebasePath, disk ? this.pickPreferredOperation(local, disk) : local);
+        }
+        return merged;
+    }
+
+    private mergeTombstonesWithPersistedSnapshot(
+        persistedOperations: Map<string, IndexOperationReceipt>,
+    ): Map<string, CodebaseClearTombstone> {
         const merged = this.readTombstoneMapFromDisk();
 
         for (const removedPath of this.pendingTombstoneRemovals) {
-            merged.delete(removedPath);
+            if (this.compareOperationAuthority(
+                this.latestOperations.get(removedPath),
+                persistedOperations.get(removedPath),
+            ) >= 0) {
+                merged.delete(removedPath);
+            }
         }
 
         for (const [codebasePath, tombstone] of this.clearTombstones.entries()) {
@@ -683,10 +876,51 @@ export class SnapshotManager {
         return merged;
     }
 
+    private reconcileMergedLifecycleState(
+        codebases: Map<string, CodebaseInfo>,
+        tombstones: Map<string, CodebaseClearTombstone>,
+        persistedOperations: Map<string, IndexOperationReceipt>,
+    ): void {
+        for (const codebasePath of codebases.keys()) {
+            const tombstone = tombstones.get(codebasePath);
+            if (!tombstone) {
+                continue;
+            }
+            const authority = this.compareOperationAuthority(
+                this.latestOperations.get(codebasePath),
+                persistedOperations.get(codebasePath),
+            );
+            if (this.pendingRemovals.has(codebasePath)) {
+                if (authority >= 0) {
+                    codebases.delete(codebasePath);
+                } else {
+                    tombstones.delete(codebasePath);
+                }
+                continue;
+            }
+            if (this.pendingTombstoneRemovals.has(codebasePath)) {
+                if (authority >= 0) {
+                    tombstones.delete(codebasePath);
+                } else {
+                    codebases.delete(codebasePath);
+                }
+                continue;
+            }
+            const infoTimestamp = this.parseTimestampMs(codebases.get(codebasePath)?.lastUpdated);
+            const clearTimestamp = this.parseTimestampMs(tombstone.clearedAt);
+            if (clearTimestamp >= infoTimestamp) {
+                codebases.delete(codebasePath);
+            } else {
+                tombstones.delete(codebasePath);
+            }
+        }
+    }
+
     private loadV1Format(snapshot: CodebaseSnapshotV1): void {
         console.log('[SNAPSHOT] Loading v1 format snapshot');
         this.codebaseInfoMap = this.mapFromV1Snapshot(snapshot);
         this.clearTombstones.clear();
+        this.latestOperations.clear();
         this.refreshDerivedState();
     }
 
@@ -694,13 +928,18 @@ export class SnapshotManager {
         console.log('[SNAPSHOT] Loading v2 format snapshot');
         this.codebaseInfoMap = this.mapFromV2Snapshot(snapshot);
         this.clearTombstones.clear();
+        this.latestOperations.clear();
         this.refreshDerivedState();
     }
 
     private loadV3Format(snapshot: CodebaseSnapshotV3): void {
         console.log('[SNAPSHOT] Loading v3 format snapshot');
-        this.codebaseInfoMap = this.mapFromV3Snapshot(snapshot);
-        this.clearTombstones = this.tombstoneMapFromV3Snapshot(snapshot);
+        const codebaseInfoMap = this.mapFromV3Snapshot(snapshot);
+        const clearTombstones = this.tombstoneMapFromV3Snapshot(snapshot);
+        const latestOperations = this.operationMapFromV3Snapshot(snapshot);
+        this.codebaseInfoMap = codebaseInfoMap;
+        this.clearTombstones = clearTombstones;
+        this.latestOperations = latestOperations;
         this.refreshDerivedState();
     }
 
@@ -754,7 +993,7 @@ export class SnapshotManager {
 
     public loadCodebaseSnapshot(): void {
         console.log('[SNAPSHOT] Loading codebase snapshot from:', this.snapshotFilePath);
-        const hadRuntimeState = this.codebaseInfoMap.size > 0 || this.clearTombstones.size > 0;
+        const hadRuntimeState = this.codebaseInfoMap.size > 0 || this.clearTombstones.size > 0 || this.latestOperations.size > 0;
 
         try {
             this.pendingRemovals.clear();
@@ -772,6 +1011,7 @@ export class SnapshotManager {
                     : undefined;
                 this.codebaseInfoMap.clear();
                 this.clearTombstones.clear();
+                this.latestOperations.clear();
                 this.refreshDerivedState();
                 this.lastLoadedSnapshotStateToken = null;
                 return;
@@ -800,6 +1040,7 @@ export class SnapshotManager {
                 if (!hadRuntimeState) {
                     this.codebaseInfoMap.clear();
                     this.clearTombstones.clear();
+                    this.latestOperations.clear();
                 }
                 this.refreshDerivedState();
                 this.isDirty = hadRuntimeState;
@@ -817,6 +1058,7 @@ export class SnapshotManager {
             if (!hadRuntimeState) {
                 this.codebaseInfoMap.clear();
                 this.clearTombstones.clear();
+                this.latestOperations.clear();
             }
             this.pendingRemovals.clear();
             this.pendingTombstoneRemovals.clear();
@@ -826,13 +1068,16 @@ export class SnapshotManager {
         }
     }
 
-    public saveCodebaseSnapshot(forceWrite = false): void {
+    public saveCodebaseSnapshot(forceWrite = false, beforeCommit?: () => void): boolean {
         if (!forceWrite && !this.isDirty && this.pendingRemovals.size === 0 && this.pendingTombstoneRemovals.size === 0) {
-            return;
+            beforeCommit?.();
+            return true;
         }
 
         let lockHandle: { fd: number; path: string } | null = null;
         let tempSnapshotPath: string | null = null;
+        let commitGuardError: unknown;
+        let commitGuardFailed = false;
         try {
             const snapshotDir = path.dirname(this.snapshotFilePath);
             if (!fs.existsSync(snapshotDir)) {
@@ -842,25 +1087,37 @@ export class SnapshotManager {
             lockHandle = this.acquireSnapshotLock();
             if (!lockHandle) {
                 console.warn(`[SNAPSHOT] Could not acquire snapshot lock within ${SnapshotManager.SNAPSHOT_LOCK_WAIT_MS}ms. Skipping save to avoid cross-process corruption.`);
-                return;
+                return false;
             }
 
-            const mergedCodebaseMap = this.mergeWithPersistedSnapshot();
-            const mergedTombstones = this.mergeTombstonesWithPersistedSnapshot();
+            const persistedOperations = this.readOperationMapFromDisk();
+            const mergedCodebaseMap = this.mergeWithPersistedSnapshot(persistedOperations);
+            const mergedTombstones = this.mergeTombstonesWithPersistedSnapshot(persistedOperations);
+            const mergedOperations = this.mergeOperationsWithPersistedSnapshot(persistedOperations);
+            this.reconcileMergedLifecycleState(mergedCodebaseMap, mergedTombstones, persistedOperations);
             const codebases = this.mapToCodebaseRecord(mergedCodebaseMap);
 
             const snapshot: CodebaseSnapshotV3 = {
                 formatVersion: 'v3',
                 codebases,
                 clearTombstones: this.mapToTombstoneRecord(mergedTombstones),
+                latestOperations: this.mapToOperationRecord(mergedOperations),
                 lastUpdated: new Date().toISOString(),
             };
 
             tempSnapshotPath = `${this.snapshotFilePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
             fs.writeFileSync(tempSnapshotPath, JSON.stringify(snapshot, null, 2));
+            try {
+                beforeCommit?.();
+            } catch (error) {
+                commitGuardFailed = true;
+                commitGuardError = error;
+                throw error;
+            }
             fs.renameSync(tempSnapshotPath, this.snapshotFilePath);
             this.codebaseInfoMap = mergedCodebaseMap;
             this.clearTombstones = mergedTombstones;
+            this.latestOperations = mergedOperations;
             this.pendingRemovals.clear();
             this.pendingTombstoneRemovals.clear();
             this.isDirty = false;
@@ -868,8 +1125,13 @@ export class SnapshotManager {
             this.rememberCurrentSnapshotStateToken();
 
             console.log(`[SNAPSHOT] Snapshot saved in v3 format. Indexed: ${this.indexedCodebases.length}, Indexing: ${this.indexingCodebases.size}, Failed: ${this.getFailedCodebases().length}, RequiresReindex: ${this.getCodebasesRequiringReindex().length}`);
+            return true;
         } catch (error) {
+            if (commitGuardFailed) {
+                throw commitGuardError;
+            }
             console.error('[SNAPSHOT] Error saving snapshot:', error);
+            return false;
         } finally {
             if (tempSnapshotPath && fs.existsSync(tempSnapshotPath)) {
                 try {
@@ -894,8 +1156,23 @@ export class SnapshotManager {
             return false;
         }
 
-        this.loadCodebaseSnapshot();
-        return true;
+        try {
+            const snapshot: unknown = JSON.parse(fs.readFileSync(this.snapshotFilePath, 'utf8'));
+            if (!this.isV3Format(snapshot)) {
+                throw new Error('Read-time snapshot refresh requires current v3 format.');
+            }
+            this.loadV3Format(snapshot);
+            this.snapshotCorruptionWarning = undefined;
+            this.rememberCurrentSnapshotStateToken();
+            return true;
+        } catch (error) {
+            this.snapshotCorruptionWarning = {
+                snapshotPath: this.snapshotFilePath,
+                message: errorMessage(error),
+            };
+            this.lastLoadedSnapshotStateToken = currentStateToken;
+            return false;
+        }
     }
 
     public getIndexedCodebases(): string[] {
@@ -922,6 +1199,114 @@ export class SnapshotManager {
 
     public getCodebaseInfo(codebasePath: string): CodebaseInfo | undefined {
         return this.codebaseInfoMap.get(codebasePath);
+    }
+
+    public getLatestOperation(codebasePath: string): IndexOperationReceipt | undefined {
+        const receipt = this.latestOperations.get(codebasePath);
+        return receipt ? structuredClone(receipt) : undefined;
+    }
+
+    public setLatestOperation(codebasePath: string, receipt: IndexOperationReceipt): void {
+        if (!this.isValidOperationReceipt(receipt, codebasePath)) {
+            throw new Error(`Invalid operation receipt for '${codebasePath}'.`);
+        }
+        const existing = this.latestOperations.get(codebasePath);
+        const preferred = existing ? this.pickPreferredOperation(receipt, existing) : receipt;
+        if (preferred !== existing) {
+            this.latestOperations.set(codebasePath, structuredClone(preferred));
+            this.markDirty();
+        }
+    }
+
+    public startOperation(lease: RootMutationLease): IndexOperationReceipt {
+        const receipt: IndexOperationReceipt = {
+            id: lease.operationId,
+            action: lease.action,
+            canonicalRoot: lease.canonicalRoot,
+            generation: lease.generation,
+            acceptedAt: lease.acquiredAt,
+            phase: "accepted",
+            lastDurableTransitionAt: lease.acquiredAt,
+            runtimeFingerprint: this.runtimeFingerprint,
+            writer: {
+                ownerId: lease.ownerId,
+                pid: lease.pid,
+                satoriVersion: resolveMcpPackageVersion(),
+            },
+        };
+        this.setLatestOperation(lease.canonicalRoot, receipt);
+        return receipt;
+    }
+
+    public transitionOperation(lease: RootMutationLease, phase: IndexOperationPhase): IndexOperationReceipt {
+        const current = this.latestOperations.get(lease.canonicalRoot);
+        if (!current || current.id !== lease.operationId || current.generation !== lease.generation) {
+            throw new Error(`Operation receipt is no longer current for '${lease.canonicalRoot}'.`);
+        }
+        if (phase === current.phase) {
+            return structuredClone(current);
+        }
+        if (isTerminalOperationPhase(current.phase)) {
+            throw new Error(`Operation '${current.id}' is already terminal with phase '${current.phase}'.`);
+        }
+        if (!isTerminalOperationPhase(phase) && OPERATION_PHASE_RANK[phase] < OPERATION_PHASE_RANK[current.phase]) {
+            throw new Error(`Operation '${current.id}' cannot regress from '${current.phase}' to '${phase}'.`);
+        }
+        const next: IndexOperationReceipt = {
+            ...current,
+            phase,
+            lastDurableTransitionAt: new Date().toISOString(),
+        };
+        this.setLatestOperation(lease.canonicalRoot, next);
+        return next;
+    }
+
+    private requireDurableOperation(
+        lease: RootMutationLease,
+        phase: IndexOperationPhase,
+    ): IndexOperationReceipt {
+        const current = this.latestOperations.get(lease.canonicalRoot);
+        if (
+            !current
+            || current.id !== lease.operationId
+            || current.generation !== lease.generation
+            || current.phase !== phase
+        ) {
+            throw new Error(
+                `Operation '${lease.operationId}' phase '${phase}' did not become durable for '${lease.canonicalRoot}'.`,
+            );
+        }
+        return structuredClone(current);
+    }
+
+    public commitOperationPhase(
+        lease: RootMutationLease,
+        phase: IndexOperationPhase,
+        mutateSnapshot?: () => void,
+        assertCurrent?: () => void,
+    ): IndexOperationReceipt {
+        const checkpoint = this.captureMutableState();
+        let saveSucceeded = false;
+        try {
+            assertCurrent?.();
+            if (phase === "accepted") {
+                this.startOperation(lease);
+            } else {
+                this.transitionOperation(lease, phase);
+            }
+            this.requireDurableOperation(lease, phase);
+            mutateSnapshot?.();
+            if (!this.saveCodebaseSnapshot(false, assertCurrent)) {
+                throw new Error(`Failed to persist operation phase '${phase}' for '${lease.canonicalRoot}'.`);
+            }
+            saveSucceeded = true;
+            return this.requireDurableOperation(lease, phase);
+        } catch (error) {
+            if (!saveSucceeded) {
+                this.restoreMutableState(checkpoint);
+            }
+            throw error;
+        }
     }
 
     public getCodebaseCollectionName(codebasePath: string): string | undefined {
@@ -1287,7 +1672,10 @@ export class SnapshotManager {
         return undefined;
     }
 
-    public ensureFingerprintCompatibilityOnAccess(codebasePath: string): AccessGateResult {
+    public ensureFingerprintCompatibilityOnAccess(
+        codebasePath: string,
+        options: AccessGateOptions = {},
+    ): AccessGateResult {
         const info = this.codebaseInfoMap.get(codebasePath);
         if (!info) {
             return { allowed: true, changed: false };
@@ -1299,6 +1687,14 @@ export class SnapshotManager {
                 && info.indexFingerprint
                 && fingerprintsEqual(info.indexFingerprint, this.runtimeFingerprint)
             ) {
+                if (options.mutate === false) {
+                    return {
+                        allowed: false,
+                        changed: false,
+                        reason: info.reindexReason,
+                        message: info.message,
+                    };
+                }
                 this.recoverCodebaseFromResolvedFingerprintMismatch(codebasePath, info);
                 return {
                     allowed: true,
@@ -1319,10 +1715,12 @@ export class SnapshotManager {
 
         if (info.fingerprintSource === 'assumed_v2') {
             const message = 'This index was migrated from a legacy snapshot (v2) without a verifiable fingerprint and must be rebuilt before use.';
-            this.setCodebaseRequiresReindex(codebasePath, 'legacy_unverified_fingerprint', message);
+            if (options.mutate !== false) {
+                this.setCodebaseRequiresReindex(codebasePath, 'legacy_unverified_fingerprint', message);
+            }
             return {
                 allowed: false,
-                changed: true,
+                changed: options.mutate !== false,
                 reason: 'legacy_unverified_fingerprint',
                 message
             };
@@ -1330,10 +1728,12 @@ export class SnapshotManager {
 
         if (!info.indexFingerprint) {
             const message = 'This index has no fingerprint metadata and cannot be validated against the current runtime. Rebuild is required.';
-            this.setCodebaseRequiresReindex(codebasePath, 'missing_fingerprint', message);
+            if (options.mutate !== false) {
+                this.setCodebaseRequiresReindex(codebasePath, 'missing_fingerprint', message);
+            }
             return {
                 allowed: false,
-                changed: true,
+                changed: options.mutate !== false,
                 reason: 'missing_fingerprint',
                 message
             };

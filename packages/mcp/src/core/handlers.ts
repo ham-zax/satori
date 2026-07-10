@@ -149,6 +149,7 @@ import {
     type RuntimeOwnerMutationGate,
     type RuntimeOwnerMutationGateResult,
 } from "./runtime-owner.js";
+import { MutationLeaseCoordinator, type RootMutationLease } from "./mutation-lease.js";
 
 const SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING = 'SEARCH_PARTIAL_INDEX:limit_reached';
 const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = 'SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE';
@@ -209,9 +210,9 @@ type TrackedRootEntry = {
 type IndexCompletionMarkerContext = {
     getIndexCompletionMarker?: (codebasePath: string) => Promise<IndexCompletionMarkerDocument | null>;
     getActiveIndexedCollectionName?: (codebasePath: string) => Promise<string | null>;
-    clearIndexCompletionMarker?: (codebasePath: string) => Promise<void>;
-    pruneIndexedCollectionFamily?: (codebasePath: string, keepCollectionName: string) => Promise<string[]>;
-    pruneUnprovenStagedCollectionFamily?: (codebasePath: string) => Promise<string[]>;
+    clearIndexCompletionMarker?: (codebasePath: string, assertMutationCurrent?: () => void) => Promise<void>;
+    pruneIndexedCollectionFamily?: (codebasePath: string, keepCollectionName: string, options?: { assertMutationCurrent?: () => void }) => Promise<string[]>;
+    pruneUnprovenStagedCollectionFamily?: (codebasePath: string, options?: { assertMutationCurrent?: () => void }) => Promise<string[]>;
 };
 
 type ToolTextResponse = {
@@ -268,7 +269,10 @@ type SnapshotManagerCapabilities = {
     getIndexedCodebases?: () => string[];
     getIndexingCodebases?: () => string[];
     getIndexingProgress?: (codebasePath: string) => number | undefined;
-    ensureFingerprintCompatibilityOnAccess?: (codebasePath: string) => SnapshotAccessGateResult;
+    ensureFingerprintCompatibilityOnAccess?: (
+        codebasePath: string,
+        options?: { mutate?: boolean },
+    ) => SnapshotAccessGateResult;
     getCodebaseCollectionName?: (codebasePath: string) => string | undefined;
     markCodebaseCleared?: (codebasePath: string, collectionName?: string) => void;
     saveCodebaseSnapshot?: () => void;
@@ -416,7 +420,8 @@ export class ToolHandlers {
         reranker?: VoyageAIReranker | null,
         gitignoreForceReloadEveryN: number = SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N,
         navigationStore: NavigationStore = createRuntimeNavigationStore(),
-        private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null = null
+        private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null = null,
+        private readonly mutationLeaseCoordinator: MutationLeaseCoordinator | null = null,
     ) {
         this.context = context;
         this.snapshotManager = snapshotManager;
@@ -503,7 +508,6 @@ export class ToolHandlers {
             enforceFingerprintGate: this.enforceFingerprintGate.bind(this),
             validateCompletionProof: (codebasePath: string) => this.validateCompletionProof(codebasePath),
             probeLocalSearchCollectionState: (codebasePath: string) => this.probeLocalSearchCollectionState(codebasePath),
-            markCodebaseSearchStateMissing: this.markCodebaseSearchStateMissing.bind(this),
             buildCreateHint: this.buildCreateHint.bind(this),
             buildStatusHint: this.buildStatusHint.bind(this),
             buildManageIndexRecommendedAction: this.buildManageIndexRecommendedAction.bind(this),
@@ -515,10 +519,12 @@ export class ToolHandlers {
             context: this.context,
             snapshotManager: this.snapshotManager,
             getSnapshotAllCodebases: this.getSnapshotAllCodebases.bind(this),
+            canonicalizeCodebasePath: this.canonicalizeCodebasePath.bind(this),
             resolveCollectionName: this.resolveCollectionName.bind(this),
             markCodebaseCleared: this.markCodebaseCleared.bind(this),
             saveSnapshotIfSupported: this.saveSnapshotIfSupported.bind(this),
             unwatchCodebase: this.unwatchCodebase.bind(this),
+            mutationLeaseCoordinator: this.mutationLeaseCoordinator,
         };
         this.vectorBackendMaintenance = new VectorBackendMaintenance(vectorBackendMaintenanceHost);
 
@@ -613,6 +619,7 @@ export class ToolHandlers {
                 }
                 return this.runtimeOwnerGate.getLiveOwnersSummary();
             },
+            mutationLeaseCoordinator: this.mutationLeaseCoordinator,
         };
         this.manageMaintenanceHandlers = new ManageMaintenanceHandlers(manageMaintenanceHandlersHost);
 
@@ -625,6 +632,7 @@ export class ToolHandlers {
                 codebasePath: string,
                 forceReindex: boolean,
                 writeCollectionName?: string,
+                mutationLease?: import("./mutation-lease.js").RootMutationLease,
             ) => Promise<void> | void;
         }).startBackgroundIndexing;
         const manageIndexingHandlersHost: ConstructorParameters<typeof ManageIndexingHandlers>[0] = {
@@ -651,6 +659,7 @@ export class ToolHandlers {
             getSnapshotIndexedCodebases: this.getSnapshotIndexedCodebases.bind(this),
             buildManageActionBlockedMessage: this.buildManageActionBlockedMessage.bind(this),
             buildCreateHint: this.buildCreateHint.bind(this),
+            buildReindexHint: this.buildReindexHint.bind(this),
             buildStatusHint: this.buildStatusHint.bind(this),
             getManageRetryAfterMs: this.getManageRetryAfterMs.bind(this),
             buildIndexingMetadata: this.buildIndexingMetadata.bind(this),
@@ -679,6 +688,7 @@ export class ToolHandlers {
             getSnapshotIndexingProgress: this.getSnapshotIndexingProgress.bind(this),
             clearIndexCompletionMarker: this.clearIndexCompletionMarker.bind(this),
             evaluateReindexPreflight: this.evaluateReindexPreflight.bind(this),
+            mutationLeaseCoordinator: this.mutationLeaseCoordinator,
         };
         this.manageIndexingHandlers = new ManageIndexingHandlers(manageIndexingHandlersHost);
         console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`);
@@ -922,7 +932,10 @@ export class ToolHandlers {
     }
 
     private ensureSnapshotFingerprintCompatibility(codebasePath: string): SnapshotAccessGateResult {
-        const gate = this.snapshotCapabilities().ensureFingerprintCompatibilityOnAccess?.(codebasePath);
+        const gate = this.snapshotCapabilities().ensureFingerprintCompatibilityOnAccess?.(
+            codebasePath,
+            { mutate: false },
+        );
         if (!gate || typeof gate.allowed !== 'boolean' || typeof gate.changed !== 'boolean') {
             return { allowed: true, changed: false };
         }
@@ -991,17 +1004,17 @@ export class ToolHandlers {
         return Array.isArray(paths) ? paths.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 
-    private async clearIndexCompletionMarker(codebasePath: string): Promise<void> {
-        await this.contextLifecycle().clearIndexCompletionMarker?.(codebasePath);
+    private async clearIndexCompletionMarker(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
+        await this.contextLifecycle().clearIndexCompletionMarker?.(codebasePath, assertMutationCurrent);
     }
 
-    private async pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string): Promise<string[]> {
-        const dropped = await this.contextLifecycle().pruneIndexedCollectionFamily?.(codebasePath, keepCollectionName);
+    private async pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string, assertMutationCurrent?: () => void): Promise<string[]> {
+        const dropped = await this.contextLifecycle().pruneIndexedCollectionFamily?.(codebasePath, keepCollectionName, { assertMutationCurrent });
         return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 
-    private async pruneUnprovenStagedCollectionFamily(codebasePath: string): Promise<string[]> {
-        const dropped = await this.contextLifecycle().pruneUnprovenStagedCollectionFamily?.(codebasePath);
+    private async pruneUnprovenStagedCollectionFamily(codebasePath: string, assertMutationCurrent?: () => void): Promise<string[]> {
+        const dropped = await this.contextLifecycle().pruneUnprovenStagedCollectionFamily?.(codebasePath, { assertMutationCurrent });
         return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 
@@ -1084,7 +1097,10 @@ export class ToolHandlers {
         return (this.now() - lastUpdatedMs) > graceMs;
     }
 
-    private async recoverStaleIndexingStateIfNeeded(codebasePath: string): Promise<void> {
+    private async recoverStaleIndexingStateIfNeeded(
+        codebasePath: string,
+        existingLease?: RootMutationLease,
+    ): Promise<RootMutationLease | undefined> {
         const indexingCodebases = this.getSnapshotIndexingCodebases();
         if (!Array.isArray(indexingCodebases) || !indexingCodebases.includes(codebasePath)) {
             return;
@@ -1097,30 +1113,138 @@ export class ToolHandlers {
             return;
         }
 
-        let marker: IndexCompletionMarkerDocument | null = null;
+        let recoveryLease = existingLease;
+        let releaseRecoveryLease = false;
+        let operationTerminal = false;
+        const persistRecoveryPhase = (
+            phase: import("../config.js").IndexOperationPhase,
+            mutateSnapshot?: () => void,
+        ): void => {
+            if (!releaseRecoveryLease || !recoveryLease || typeof this.snapshotManager.transitionOperation !== "function") {
+                mutateSnapshot?.();
+                return;
+            }
+            this.mutationLeaseCoordinator?.assertCurrent(recoveryLease);
+            if (typeof this.snapshotManager.commitOperationPhase === "function") {
+                this.snapshotManager.commitOperationPhase(
+                    recoveryLease,
+                    phase,
+                    mutateSnapshot,
+                    () => this.mutationLeaseCoordinator?.assertCurrent(recoveryLease!),
+                );
+            } else {
+                this.snapshotManager.transitionOperation(recoveryLease, phase);
+                mutateSnapshot?.();
+                if (this.snapshotManager.saveCodebaseSnapshot() === false) {
+                    throw new Error(`Failed to persist stale-index recovery phase '${phase}' for '${codebasePath}'.`);
+                }
+            }
+            operationTerminal = phase === "completed" || phase === "failed" || phase === "blocked";
+        };
+        if (this.mutationLeaseCoordinator) {
+            if (recoveryLease) {
+                this.mutationLeaseCoordinator.assertCurrent(recoveryLease);
+            } else {
+                const leaseResult = this.mutationLeaseCoordinator.acquire(codebasePath, "repair");
+                if (!leaseResult.acquired) {
+                    return leaseResult.activeLease;
+                }
+                recoveryLease = leaseResult.lease;
+                releaseRecoveryLease = true;
+            }
+        }
+
         try {
-            marker = await completionMarkerContext.getIndexCompletionMarker(codebasePath);
-        } catch (error: unknown) {
-            console.warn(`[INDEX-RECOVERY] Stale indexing recovery probe failed for '${codebasePath}': ${formatUnknownError(error)}`);
-            return;
-        }
+            if (releaseRecoveryLease && recoveryLease && typeof this.snapshotManager.startOperation === "function") {
+                if (typeof this.snapshotManager.commitOperationPhase === "function") {
+                    this.snapshotManager.commitOperationPhase(
+                        recoveryLease,
+                        "accepted",
+                        undefined,
+                        () => this.mutationLeaseCoordinator?.assertCurrent(recoveryLease!),
+                    );
+                } else {
+                    this.snapshotManager.startOperation(recoveryLease);
+                }
+                if (
+                    typeof this.snapshotManager.commitOperationPhase !== "function"
+                    && this.snapshotManager.saveCodebaseSnapshot() === false
+                ) {
+                    throw new Error(`Failed to persist accepted stale-index recovery receipt for '${codebasePath}'.`);
+                }
+            }
+            this.refreshSnapshotStateFromDisk();
+            if (!this.getSnapshotIndexingCodebases().includes(codebasePath) || !this.isIndexingStateStale(codebasePath)) {
+                persistRecoveryPhase("completed");
+                return;
+            }
 
-        const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
-        if (decision.action === "promote_indexed") {
-            const collectionName = await this.getActiveIndexedCollectionNameForSnapshotRecovery(codebasePath);
-            this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
-            this.saveSnapshotIfSupported();
-            const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
-                ? " using completion marker proof from a different runtime fingerprint"
-                : " using completion marker proof";
-            console.log(`[INDEX-RECOVERY] Promoted stale indexing state to indexed for '${codebasePath}'${recoveryMode}.`);
-            return;
-        }
+            let marker: IndexCompletionMarkerDocument | null = null;
+            try {
+                persistRecoveryPhase("proving");
+                marker = await completionMarkerContext.getIndexCompletionMarker(codebasePath);
+            } catch (error: unknown) {
+                console.warn(`[INDEX-RECOVERY] Stale indexing recovery probe failed for '${codebasePath}': ${formatUnknownError(error)}`);
+                persistRecoveryPhase("failed");
+                return;
+            }
 
-        const lastProgress = this.getSnapshotIndexingProgress(codebasePath);
-        this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message, lastProgress);
-        this.saveSnapshotIfSupported();
-        console.log(`[INDEX-RECOVERY] Marked stale indexing state as failed for '${codebasePath}' (${decision.reason}).`);
+            if (recoveryLease) {
+                this.mutationLeaseCoordinator?.assertCurrent(recoveryLease);
+            }
+            const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
+            if (decision.action === "promote_indexed") {
+                const collectionName = await this.getActiveIndexedCollectionNameForSnapshotRecovery(codebasePath);
+                if (recoveryLease) {
+                    this.mutationLeaseCoordinator?.assertCurrent(recoveryLease);
+                }
+                if (releaseRecoveryLease) {
+                    persistRecoveryPhase("publishing");
+                }
+                if (releaseRecoveryLease) {
+                    persistRecoveryPhase("completed", () => {
+                        this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
+                    });
+                } else {
+                    this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
+                    this.saveSnapshotIfSupported();
+                }
+                const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
+                    ? " using completion marker proof from a different runtime fingerprint"
+                    : " using completion marker proof";
+                console.log(`[INDEX-RECOVERY] Promoted stale indexing state to indexed for '${codebasePath}'${recoveryMode}.`);
+                return;
+            }
+
+            const lastProgress = this.getSnapshotIndexingProgress(codebasePath);
+            if (releaseRecoveryLease) {
+                persistRecoveryPhase("failed", () => {
+                    this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message, lastProgress);
+                });
+            } else {
+                this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message, lastProgress);
+                this.saveSnapshotIfSupported();
+            }
+            console.log(`[INDEX-RECOVERY] Marked stale indexing state as failed for '${codebasePath}' (${decision.reason}).`);
+        } catch (error) {
+            if (
+                releaseRecoveryLease
+                && recoveryLease
+                && !operationTerminal
+                && this.mutationLeaseCoordinator?.isCurrent(recoveryLease)
+            ) {
+                try {
+                    persistRecoveryPhase("failed");
+                } catch {
+                    // Preserve the last durable receipt owned by this recovery operation.
+                }
+            }
+            throw error;
+        } finally {
+            if (releaseRecoveryLease && recoveryLease) {
+                this.mutationLeaseCoordinator?.release(recoveryLease);
+            }
+        }
     }
 
     private buildManageActionBlockedMessage(codebasePath: string, action: RuntimeOwnerMutationAction): string {
@@ -1409,26 +1533,6 @@ export class ToolHandlers {
         } catch (error) {
             console.warn(`[SEARCH-READINESS] Failed to probe collection '${collectionName}' for '${codebasePath}': ${formatUnknownError(error)}`);
             return { state: 'unknown' };
-        }
-    }
-
-    private async markCodebaseSearchStateMissing(codebasePath: string): Promise<void> {
-        const snapshotManager = this.snapshotManager as unknown as {
-            removeCodebaseCompletely?: (path: string) => void;
-            saveCodebaseSnapshot?: () => void;
-        };
-
-        if (typeof snapshotManager.removeCodebaseCompletely === 'function') {
-            snapshotManager.removeCodebaseCompletely(codebasePath);
-            if (typeof snapshotManager.saveCodebaseSnapshot === 'function') {
-                snapshotManager.saveCodebaseSnapshot();
-            }
-        }
-
-        try {
-            await this.unwatchCodebase(codebasePath);
-        } catch (error) {
-            console.warn(`[SEARCH-READINESS] Failed to unwatch stale codebase '${codebasePath}': ${formatUnknownError(error)}`);
         }
     }
 
@@ -2119,8 +2223,8 @@ export class ToolHandlers {
         return this.relationshipBackedCallGraph.build(input);
     }
 
-    private async rebuildCallGraphForIndex(codebasePath: string): Promise<void> {
-        await this.relationshipBackedCallGraph.rebuildForIndex(codebasePath);
+    private async rebuildCallGraphForIndex(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
+        await this.relationshipBackedCallGraph.rebuildForIndex(codebasePath, assertMutationCurrent);
     }
 
     private async rebuildCallGraphForSyncDelta(codebasePath: string, changedFiles: string[]): Promise<boolean> {
@@ -2135,8 +2239,11 @@ export class ToolHandlers {
         return this.vectorBackendMaintenance.buildCollectionLimitMessage(targetCodebasePath);
     }
 
-    private async dropZillizCollectionForCreate(collectionName: string): Promise<{ droppedCodebasePath?: string }> {
-        return this.vectorBackendMaintenance.dropZillizCollectionForCreate(collectionName);
+    private async dropZillizCollectionForCreate(
+        collectionName: string,
+        createLease?: import("./mutation-lease.js").RootMutationLease,
+    ) {
+        return this.vectorBackendMaintenance.dropZillizCollectionForCreate(collectionName, createLease);
     }
 
     public async handleIndexCodebase(args: IndexCodebaseArgs) {

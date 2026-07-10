@@ -82,7 +82,7 @@ export interface FileChangeResult {
 
 export interface PreparedFileChangeSet {
     readonly changes: FileChangeResult;
-    commit(): Promise<void>;
+    commit(assertMutationCurrent?: () => void): Promise<void>;
 }
 
 const SNAPSHOT_VERSION = 2;
@@ -575,8 +575,12 @@ export class FileSynchronizer {
         return true;
     }
 
-    private async saveSnapshot(state?: SynchronizerCheckpointState): Promise<void> {
+    private async saveSnapshot(
+        state?: SynchronizerCheckpointState,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
         const merkleDir = path.dirname(this.snapshotPath);
+        assertMutationCurrent?.();
         await fsp.mkdir(merkleDir, { recursive: true });
 
         const checkpoint = state ?? {
@@ -603,6 +607,7 @@ export class FileSynchronizer {
         const tempSnapshotPath = `${this.snapshotPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         try {
             await fsp.writeFile(tempSnapshotPath, JSON.stringify(payload), 'utf-8');
+            assertMutationCurrent?.();
             await fsp.rename(tempSnapshotPath, this.snapshotPath);
         } finally {
             await fsp.unlink(tempSnapshotPath).catch(() => undefined);
@@ -716,15 +721,17 @@ export class FileSynchronizer {
     private commitPreparedState(
         baseVersion: number,
         nextState: SynchronizerCheckpointState,
-        shouldPersist: boolean
+        shouldPersist: boolean,
+        assertMutationCurrent?: () => void,
     ): Promise<void> {
         const commit = this.commitQueue.then(async () => {
             if (this.checkpointVersion !== baseVersion) {
                 throw new Error('[Synchronizer] Cannot commit stale prepared changes. Prepare the filesystem delta again.');
             }
             if (shouldPersist) {
-                await this.saveSnapshot(nextState);
+                await this.saveSnapshot(nextState, assertMutationCurrent);
             }
+            assertMutationCurrent?.();
             this.applyCheckpointState(nextState);
             this.checkpointVersion += 1;
         });
@@ -732,7 +739,7 @@ export class FileSynchronizer {
         return commit;
     }
 
-    public async initialize(): Promise<void> {
+    public async initialize(assertMutationCurrent?: () => void): Promise<void> {
         console.log(`Initializing file synchronizer for ${this.rootDir}`);
         const { migrated } = await this.loadSnapshot();
 
@@ -745,7 +752,7 @@ export class FileSynchronizer {
             this.partialScan = effective.partialScan;
             this.unscannedDirPrefixes = effective.unscannedDirPrefixes;
             this.merkleRoot = computeMerkleRoot(this.fileHashes);
-            await this.saveSnapshot();
+            await this.saveSnapshot(undefined, assertMutationCurrent);
         } else if (!this.merkleRoot) {
             this.merkleRoot = computeMerkleRoot(this.fileHashes);
         }
@@ -803,8 +810,8 @@ export class FileSynchronizer {
 
         return {
             changes,
-            commit: () => {
-                commit ??= this.commitPreparedState(baseVersion, nextState, shouldPersist);
+            commit: (assertMutationCurrent?: () => void) => {
+                commit ??= this.commitPreparedState(baseVersion, nextState, shouldPersist, assertMutationCurrent);
                 return commit;
             },
         };

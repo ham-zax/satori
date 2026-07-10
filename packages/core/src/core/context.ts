@@ -65,6 +65,11 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import ignore from 'ignore';
 import { FileSynchronizer } from '../sync/synchronizer';
+import type {
+    RepairIndexResult,
+    RepairProof,
+    RepairSnapshotEvidence,
+} from './repair-proof';
 
 export interface ContextConfig {
     embedding?: Embedding;
@@ -84,13 +89,25 @@ interface CodebaseIgnoreState {
 }
 
 type RepairIndexOptions = {
-    trustedFingerprint?: IndexCompletionFingerprint;
+    snapshotEvidence?: RepairSnapshotEvidence;
     preferredCollectionName?: string;
+    assertMutationCurrent?: () => void;
+    onProofUpdate?: (proof: RepairProof) => void;
 };
+
+type RepairCompletionMarkerResolution =
+    | { status: 'missing' }
+    | { status: 'malformed' }
+    | { status: 'matched'; marker: IndexCompletionMarkerDocument };
 
 type ReindexByChangeOptions = {
     targetCollectionName?: string;
     maintainCompletionMarker?: boolean;
+    assertMutationCurrent?: () => void;
+};
+
+type MutationGuardOptions = {
+    assertMutationCurrent?: () => void;
 };
 
 type ReindexByChangeResult = {
@@ -280,15 +297,15 @@ export class Context {
     /**
      * Public wrapper for prepareCollection private method
      */
-    async ensureCollectionPrepared(codebasePath: string): Promise<void> {
-        return this.prepareCollection(codebasePath);
+    async ensureCollectionPrepared(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
+        return this.prepareCollection(codebasePath, false, assertMutationCurrent);
     }
 
     /**
      * Recreate synchronizer for a codebase using currently active ignore patterns.
      * This is used when ignore rules change and we need deterministic reconciliation.
      */
-    async recreateSynchronizerForCodebase(codebasePath: string): Promise<void> {
+    async recreateSynchronizerForCodebase(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
         this.loadIndexProfileForCodebase(codebasePath);
         const collectionName = this.resolveCollectionName(codebasePath);
         const synchronizer = new FileSynchronizer(
@@ -296,7 +313,7 @@ export class Context {
             this.getActiveIgnorePatterns(codebasePath),
             this.getIndexedExtensionsForCodebase(codebasePath)
         );
-        await synchronizer.initialize();
+        await synchronizer.initialize(assertMutationCurrent);
         this.synchronizers.set(collectionName, synchronizer);
     }
 
@@ -321,12 +338,16 @@ export class Context {
      * Delete indexed chunks for a list of relative paths in a codebase.
      * Returns the number of file paths processed for deletion.
      */
-    async deleteIndexedPathsByRelativePaths(codebasePath: string, relativePaths: string[]): Promise<number> {
+    async deleteIndexedPathsByRelativePaths(
+        codebasePath: string,
+        relativePaths: string[],
+        assertMutationCurrent?: () => void,
+    ): Promise<number> {
         const collectionName = await this.getActiveIndexedCollectionName(codebasePath) || this.getWriteCollectionName(codebasePath);
         const uniquePaths = Array.from(new Set(this.normalizeRelativePathsForCodebase(codebasePath, relativePaths)));
 
         for (const relativePath of uniquePaths) {
-            await this.deleteFileChunks(collectionName, relativePath);
+            await this.deleteFileChunks(collectionName, relativePath, assertMutationCurrent);
         }
         return uniquePaths.length;
     }
@@ -482,6 +503,23 @@ export class Context {
         return null;
     }
 
+    private async resolveRepairCompletionMarkerForCollection(
+        codebasePath: string,
+        collectionName: string,
+    ): Promise<RepairCompletionMarkerResolution> {
+        const rows = await this.queryCompletionMarkerRows(collectionName);
+        if (rows.length === 0) {
+            return { status: 'missing' };
+        }
+        for (const row of rows) {
+            const marker = this.parseCompletionMarker(codebasePath, row?.metadata);
+            if (marker) {
+                return { status: 'matched', marker };
+            }
+        }
+        return { status: 'malformed' };
+    }
+
     private async collectionHasIndexedPayload(
         collectionName: string,
         marker: IndexCompletionMarkerDocument
@@ -542,6 +580,7 @@ export class Context {
         totalChunks: number,
         collectionName?: string,
         indexStatus: 'completed' | 'limit_reached' = 'completed',
+        assertMutationCurrent?: () => void,
     ): Promise<void> {
         await this.writeIndexCompletionMarker(codebasePath, {
             kind: 'satori_index_completion_v1',
@@ -552,7 +591,7 @@ export class Context {
             completedAt: new Date().toISOString(),
             runId: crypto.randomUUID(),
             indexStatus,
-        }, collectionName);
+        }, collectionName, assertMutationCurrent);
     }
 
     private async resolveActiveIndexedCollection(
@@ -636,7 +675,11 @@ export class Context {
         return active?.collectionName || null;
     }
 
-    public async pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string): Promise<string[]> {
+    public async pruneIndexedCollectionFamily(
+        codebasePath: string,
+        keepCollectionName: string,
+        options: MutationGuardOptions = {},
+    ): Promise<string[]> {
         const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
         const droppedCollections: string[] = [];
 
@@ -644,14 +687,19 @@ export class Context {
             if (collectionName === keepCollectionName) {
                 continue;
             }
-            await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
+            await deleteCollectionWithVerification(this.vectorDatabase, collectionName, {
+                beforeDropAttempt: options.assertMutationCurrent,
+            });
             droppedCollections.push(collectionName);
         }
 
         return droppedCollections.sort((left, right) => left.localeCompare(right));
     }
 
-    public async pruneUnprovenStagedCollectionFamily(codebasePath: string): Promise<string[]> {
+    public async pruneUnprovenStagedCollectionFamily(
+        codebasePath: string,
+        options: MutationGuardOptions = {},
+    ): Promise<string[]> {
         const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
         const droppedCollections: string[] = [];
 
@@ -666,7 +714,9 @@ export class Context {
             if (!marker && await this.collectionHasAnyIndexedPayload(collectionName)) {
                 continue;
             }
-            await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
+            await deleteCollectionWithVerification(this.vectorDatabase, collectionName, {
+                beforeDropAttempt: options.assertMutationCurrent,
+            });
             droppedCollections.push(collectionName);
         }
 
@@ -683,7 +733,8 @@ export class Context {
     async indexCodebase(
         codebasePath: string,
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
-        forceReindex: boolean = false
+        forceReindex: boolean = false,
+        options: MutationGuardOptions = {},
     ): Promise<{ indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' }> {
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
@@ -697,8 +748,8 @@ export class Context {
         // 2. Check and prepare vector collection
         progressCallback?.({ phase: 'Preparing collection...', current: 0, total: 100, percentage: 0 });
         console.log(`Debug2: Preparing vector collection for codebase${forceReindex ? ' (FORCE REINDEX)' : ''}`);
-        await this.prepareCollection(codebasePath, forceReindex);
-        await this.clearIndexCompletionMarker(codebasePath);
+        await this.prepareCollection(codebasePath, forceReindex, options.assertMutationCurrent);
+        await this.clearIndexCompletionMarker(codebasePath, options.assertMutationCurrent);
 
         // 3. Recursively traverse codebase to get all supported files
         progressCallback?.({ phase: 'Scanning files...', current: 5, total: 100, percentage: 5 });
@@ -706,13 +757,13 @@ export class Context {
         console.log(`[Context] 📁 Found ${codeFiles.length} code files`);
 
         if (codeFiles.length === 0) {
-            await this.clearSymbolRegistryForCodebase(codebasePath);
-            await this.writeCompletedIndexMarker(codebasePath, 0, 0);
+            await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+            await this.writeCompletedIndexMarker(codebasePath, 0, 0, undefined, 'completed', options.assertMutationCurrent);
             progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
             return { indexedFiles: 0, totalChunks: 0, status: 'completed' };
         }
 
-        await this.clearSymbolRegistryForCodebase(codebasePath);
+        await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
 
         // 3. Process each file with streaming chunk processing
         // Reserve 10% for preparation, 90% for actual indexing
@@ -734,20 +785,22 @@ export class Context {
                     total: totalFiles,
                     percentage: Math.round(progressPercentage)
                 });
-            }
+            },
+            undefined,
+            options.assertMutationCurrent,
         );
 
         console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
 
         if (result.status === 'completed') {
-            await this.writeSymbolRegistryForCompletedIndex(codebasePath, result.symbolRecords, result.symbolManifestFiles);
-            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed');
+            await this.writeSymbolRegistryForCompletedIndex(codebasePath, result.symbolRecords, result.symbolManifestFiles, options.assertMutationCurrent);
+            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed', options.assertMutationCurrent);
         } else {
             // limit_reached: do not publish complete navigation sidecars, but seal partial vector
             // proof so MCP readiness can allow warned partial search (not "missing marker" stale_local).
             // indexStatus must stay on the marker so interrupted-index recovery does not promote as fully completed.
             console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
-            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'limit_reached');
+            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'limit_reached', options.assertMutationCurrent);
             console.warn('[Context] ⚠️  Wrote completion marker for limit_reached partial index (navigation remains unpublished).');
         }
 
@@ -818,7 +871,7 @@ export class Context {
                 this.getActiveIgnorePatterns(codebasePath),
                 this.getIndexedExtensionsForCodebase(codebasePath)
             );
-            await newSynchronizer.initialize();
+            await newSynchronizer.initialize(options.assertMutationCurrent);
             this.synchronizers.set(synchronizerKey, newSynchronizer);
         }
 
@@ -854,7 +907,7 @@ export class Context {
                 return { added: 0, removed: 0, modified: 0, changedFiles: [] };
             }
 
-            await this.indexCodebase(codebasePath, progressCallback);
+            await this.indexCodebase(codebasePath, progressCallback, false, options);
             return {
                 added: changedFiles.length,
                 removed: 0,
@@ -880,9 +933,11 @@ export class Context {
             if (maintainCompletionMarker && markerWasMissing) {
                 await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
                     requirePayloadProof: true,
+                    assertMutationCurrent: options.assertMutationCurrent,
                 });
             }
-            await preparedChanges.commit();
+            options.assertMutationCurrent?.();
+            await preparedChanges.commit(options.assertMutationCurrent);
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
             console.log('[Context] ✅ No file changes detected.');
             return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: targetCollectionName };
@@ -907,18 +962,18 @@ export class Context {
 
         try {
             if (maintainCompletionMarker) {
-                await this.clearIndexCompletionMarkerFromCollection(targetCollectionName);
+                await this.clearIndexCompletionMarkerFromCollection(targetCollectionName, options.assertMutationCurrent);
             }
 
             // Handle removed files
             for (const file of removed) {
-                await this.deleteFileChunks(targetCollectionName, file);
+                await this.deleteFileChunks(targetCollectionName, file, options.assertMutationCurrent);
                 updateProgress(`Removed ${file}`);
             }
 
             // Handle modified files
             for (const file of modified) {
-                await this.deleteFileChunks(targetCollectionName, file);
+                await this.deleteFileChunks(targetCollectionName, file, options.assertMutationCurrent);
                 updateProgress(`Deleted old chunks for ${file}`);
             }
 
@@ -946,7 +1001,8 @@ export class Context {
                     (filePath, fileIndex, totalFiles) => {
                         updateProgress(`Indexed ${filePath} (${fileIndex}/${totalFiles})`);
                     },
-                    targetCollectionName
+                    targetCollectionName,
+                    options.assertMutationCurrent,
                 );
             }
 
@@ -964,6 +1020,7 @@ export class Context {
                     Array.from(new Set([...added, ...modified, ...removed])),
                     indexedDelta.symbolRecords,
                     indexedDelta.symbolManifestFiles,
+                    options.assertMutationCurrent,
                 );
                 readinessArtifactsComplete = true;
             } else if (!canRebuildNavigationArtifacts && indexedDelta.status === 'completed') {
@@ -974,21 +1031,21 @@ export class Context {
                     percentage: 100,
                 });
                 try {
-                    await this.rebuildNavigationArtifacts(codebasePath);
+                    await this.rebuildNavigationArtifacts(codebasePath, options.assertMutationCurrent);
                     navigationRecovery = 'rebuilt';
                     readinessArtifactsComplete = true;
                     console.log('[Context] 🧭 Rebuilt navigation sidecars after incremental sync found no compatible pre-sync registry.');
                 } catch (error) {
-                    await this.clearSymbolRegistryForCodebase(codebasePath);
-                    await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker);
+                    await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+                    await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker, options.assertMutationCurrent);
                     navigationRecovery = 'failed';
                     console.warn(
                         `[Context] ⚠️  Failed to recover navigation sidecars after incremental sync; reindex is required: ${error instanceof Error ? error.message : String(error)}`
                     );
                 }
             } else {
-                await this.clearSymbolRegistryForCodebase(codebasePath);
-                await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker);
+                await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+                await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker, options.assertMutationCurrent);
                 navigationRecovery = 'failed';
                 if (!canRebuildNavigationArtifacts) {
                     console.log('[Context] ⏭️ Skipping navigation rebuild because no compatible symbol registry existed before incremental sync.');
@@ -997,18 +1054,20 @@ export class Context {
                 }
             }
         } catch (error) {
-            await this.clearSymbolRegistryForCodebase(codebasePath);
-            await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker);
+            await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+            await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker, options.assertMutationCurrent);
             throw error;
         }
 
         if (maintainCompletionMarker && readinessArtifactsComplete) {
             await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
                 requirePayloadProof: markerWasMissing,
+                assertMutationCurrent: options.assertMutationCurrent,
             });
         }
         if (readinessArtifactsComplete) {
-            await preparedChanges.commit();
+            options.assertMutationCurrent?.();
+            await preparedChanges.commit(options.assertMutationCurrent);
         }
 
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
@@ -1024,7 +1083,11 @@ export class Context {
         };
     }
 
-    private async deleteFileChunks(collectionName: string, relativePath: string): Promise<void> {
+    private async deleteFileChunks(
+        collectionName: string,
+        relativePath: string,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
         const escapedPath = escapeMilvusStringLiteral(relativePath);
         const results = await this.vectorDatabase.query(
             collectionName,
@@ -1035,6 +1098,7 @@ export class Context {
         if (results.length > 0) {
             const ids = results.map(r => r.id as string).filter(id => id);
             if (ids.length > 0) {
+                assertMutationCurrent?.();
                 await this.vectorDatabase.delete(collectionName, ids);
                 console.log(`[Context] Deleted ${ids.length} chunks for file ${relativePath}`);
             }
@@ -1279,7 +1343,10 @@ export class Context {
         );
     }
 
-    private async clearIndexCompletionMarkerFromCollection(collectionName: string): Promise<void> {
+    private async clearIndexCompletionMarkerFromCollection(
+        collectionName: string,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
         const rows = await this.queryCompletionMarkerRows(collectionName);
         const markerIds = rows
             .map((row) => (typeof row.id === 'string' ? row.id : ''))
@@ -1287,10 +1354,11 @@ export class Context {
         if (markerIds.length === 0) {
             return;
         }
+        assertMutationCurrent?.();
         await this.vectorDatabase.delete(collectionName, Array.from(new Set(markerIds)));
     }
 
-    async clearIndexCompletionMarker(codebasePath: string): Promise<void> {
+    async clearIndexCompletionMarker(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
         const collectionName = this.getWriteCollectionName(codebasePath);
         const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
         if (!hasCollection) {
@@ -1298,17 +1366,18 @@ export class Context {
             if (!activeCollectionName) {
                 return;
             }
-            await this.clearIndexCompletionMarkerFromCollection(activeCollectionName);
+            await this.clearIndexCompletionMarkerFromCollection(activeCollectionName, assertMutationCurrent);
             return;
         }
 
-        await this.clearIndexCompletionMarkerFromCollection(collectionName);
+        await this.clearIndexCompletionMarkerFromCollection(collectionName, assertMutationCurrent);
     }
 
     async writeIndexCompletionMarker(
         codebasePath: string,
         marker: IndexCompletionMarkerDocument,
-        collectionNameOverride?: string
+        collectionNameOverride?: string,
+        assertMutationCurrent?: () => void,
     ): Promise<void> {
         const collectionName = collectionNameOverride || this.getWriteCollectionName(codebasePath);
         const hasCollection = await this.vectorDatabase.hasCollection(collectionName);
@@ -1316,7 +1385,7 @@ export class Context {
             throw new Error(`Cannot write completion marker: collection '${collectionName}' does not exist.`);
         }
 
-        await this.clearIndexCompletionMarkerFromCollection(collectionName);
+        await this.clearIndexCompletionMarkerFromCollection(collectionName, assertMutationCurrent);
 
         const vector = new Array<number>(this.embedding.getDimension()).fill(0);
         const markerDoc: VectorDocument = {
@@ -1331,8 +1400,10 @@ export class Context {
         };
 
         if (this.getIsHybrid() === true) {
+            assertMutationCurrent?.();
             await this.vectorDatabase.insertHybrid(collectionName, [markerDoc]);
         } else {
+            assertMutationCurrent?.();
             await this.vectorDatabase.insert(collectionName, [markerDoc]);
         }
     }
@@ -1358,7 +1429,8 @@ export class Context {
      */
     async clearIndex(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void
+        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        options: MutationGuardOptions = {},
     ): Promise<void> {
         console.log(`[Context] 🧹 Cleaning index data for ${codebasePath}...`);
 
@@ -1367,12 +1439,15 @@ export class Context {
         progressCallback?.({ phase: 'Removing index data...', current: 50, total: 100, percentage: 50 });
 
         for (const collectionName of await this.listRelatedCollectionNames(codebasePath)) {
-            await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
+            await deleteCollectionWithVerification(this.vectorDatabase, collectionName, {
+                beforeDropAttempt: options.assertMutationCurrent,
+            });
         }
 
-        await this.clearSymbolRegistryForCodebase(codebasePath);
+        await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
 
         // Delete snapshot file
+        options.assertMutationCurrent?.();
         await FileSynchronizer.deleteSnapshot(codebasePath);
         const familyCollectionName = this.resolveCollectionName(codebasePath);
         this.synchronizers.delete(familyCollectionName);
@@ -1581,7 +1656,11 @@ export class Context {
     /**
      * Prepare vector collection
      */
-    private async prepareCollection(codebasePath: string, forceReindex: boolean = false): Promise<void> {
+    private async prepareCollection(
+        codebasePath: string,
+        forceReindex: boolean = false,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
         const isHybrid = this.getIsHybrid();
         const collectionType = isHybrid === true ? 'hybrid vector' : 'vector';
         console.log(`[Context] 🔧 Preparing ${collectionType} collection for codebase: ${codebasePath}${forceReindex ? ' (FORCE REINDEX)' : ''}`);
@@ -1597,6 +1676,7 @@ export class Context {
 
         if (collectionExists && forceReindex) {
             console.log(`[Context] 🗑️  Dropping existing collection ${collectionName} for force reindex...`);
+            assertMutationCurrent?.();
             await this.vectorDatabase.dropCollection(collectionName);
             console.log(`[Context] ✅ Collection ${collectionName} dropped successfully`);
         }
@@ -1607,8 +1687,10 @@ export class Context {
         const dirName = path.basename(codebasePath);
 
         if (isHybrid === true) {
+            assertMutationCurrent?.();
             await this.vectorDatabase.createHybridCollection(collectionName, dimension, `Hybrid Index for ${dirName}`);
         } else {
+            assertMutationCurrent?.();
             await this.vectorDatabase.createCollection(collectionName, dimension, `Index for ${dirName}`);
         }
 
@@ -1668,7 +1750,8 @@ export class Context {
         filePaths: string[],
         codebasePath: string,
         onFileProcessed?: (filePath: string, fileIndex: number, totalFiles: number) => void,
-        collectionName: string = this.getWriteCollectionName(codebasePath)
+        collectionName: string = this.getWriteCollectionName(codebasePath),
+        assertMutationCurrent?: () => void,
     ): Promise<{
         processedFiles: number;
         totalChunks: number;
@@ -1740,7 +1823,7 @@ export class Context {
                     // Process batch when buffer reaches EMBEDDING_BATCH_SIZE
                     if (chunkBuffer.length >= EMBEDDING_BATCH_SIZE) {
                         try {
-                            await this.processChunkBuffer(chunkBuffer, collectionName);
+                            await this.processChunkBuffer(chunkBuffer, collectionName, assertMutationCurrent);
                         } catch (error) {
                             const searchType = isHybrid === true ? 'hybrid' : 'regular';
                             console.error(`[Context] ❌ Failed to process chunk batch for ${searchType}:`, error);
@@ -1779,7 +1862,7 @@ export class Context {
             const searchType = isHybrid === true ? 'hybrid' : 'regular';
             console.log(`📝 Processing final batch of ${chunkBuffer.length} chunks for ${searchType}`);
             try {
-                await this.processChunkBuffer(chunkBuffer, collectionName);
+                await this.processChunkBuffer(chunkBuffer, collectionName, assertMutationCurrent);
             } catch (error) {
                 console.error(`[Context] ❌ Failed to process final chunk batch for ${searchType}:`, error);
                 if (error instanceof Error) {
@@ -1872,23 +1955,33 @@ export class Context {
     private async refreshCompletionMarkerFromCurrentSource(
         codebasePath: string,
         collectionName: string,
-        options: { requirePayloadProof?: boolean } = {}
+        options: { requirePayloadProof?: boolean; assertMutationCurrent?: () => void } = {}
     ): Promise<void> {
         await this.loadIgnorePatterns(codebasePath);
         const codeFiles = await this.getCodeFiles(codebasePath);
         const { expectedChunks } = await this.getExpectedChunksAndSymbols(codeFiles, codebasePath);
         if (options.requirePayloadProof === true) {
-            await this.ensureNavigationArtifactsReadyForMarkerRefresh(codebasePath);
+            await this.ensureNavigationArtifactsReadyForMarkerRefresh(codebasePath, options.assertMutationCurrent);
             const verification = await this.verifyCollectionPayloadMatchesCurrentSource(collectionName, codeFiles, expectedChunks);
             if (!verification.ok) {
-                await this.clearIndexCompletionMarkerFromCollection(collectionName);
+                await this.clearIndexCompletionMarkerFromCollection(collectionName, options.assertMutationCurrent);
                 throw new Error(`Cannot refresh completion marker for '${codebasePath}': ${verification.message}`);
             }
         }
-        await this.writeCompletedIndexMarker(codebasePath, codeFiles.length, expectedChunks.length, collectionName);
+        await this.writeCompletedIndexMarker(
+            codebasePath,
+            codeFiles.length,
+            expectedChunks.length,
+            collectionName,
+            'completed',
+            options.assertMutationCurrent,
+        );
     }
 
-    private async ensureNavigationArtifactsReadyForMarkerRefresh(codebasePath: string): Promise<void> {
+    private async ensureNavigationArtifactsReadyForMarkerRefresh(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
         const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
         const registry = await readSymbolRegistrySidecar({
             stateRoot: this.symbolRegistryStateRoot,
@@ -1904,15 +1997,20 @@ export class Context {
                 return;
             }
         }
-        await this.rebuildNavigationArtifacts(codebasePath);
+        await this.rebuildNavigationArtifacts(codebasePath, assertMutationCurrent);
     }
 
-    private async clearCompletionMarkerAfterSyncFailure(codebasePath: string, collectionName: string, targetKnown: boolean): Promise<void> {
+    private async clearCompletionMarkerAfterSyncFailure(
+        codebasePath: string,
+        collectionName: string,
+        targetKnown: boolean,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
         if (targetKnown) {
-            await this.clearIndexCompletionMarkerFromCollection(collectionName);
+            await this.clearIndexCompletionMarkerFromCollection(collectionName, assertMutationCurrent);
             return;
         }
-        await this.clearIndexCompletionMarker(codebasePath);
+        await this.clearIndexCompletionMarker(codebasePath, assertMutationCurrent);
     }
 
     private async verifyCollectionPayloadMatchesCurrentSource(
@@ -2005,82 +2103,161 @@ export class Context {
     public async repairIndex(
         codebasePath: string,
         options: RepairIndexOptions = {}
-    ): Promise<{
-        status: 'ok' | 'blocked' | 'requires_reindex';
-        reason?: 'needs_create' | 'requires_reindex';
-        message: string;
-        missingCount?: number;
-        warnings?: string[];
-        indexedFiles?: number;
-        totalChunks?: number;
-        trackedRelativePaths?: string[];
-        collectionName?: string;
-    }> {
+    ): Promise<RepairIndexResult> {
         const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
+        const currentFingerprint = this.buildIndexCompletionFingerprint();
+        const snapshotEvidence = options.snapshotEvidence ?? {
+            status: 'missing' as const,
+            basis: 'snapshot_fingerprint_missing',
+        };
+        const snapshotFingerprintMatches = snapshotEvidence.status === 'verified'
+            && this.indexCompletionFingerprintsMatch(snapshotEvidence.fingerprint, currentFingerprint);
+        const proof: RepairProof = {
+            collection: { status: 'not_checked' },
+            snapshot: snapshotEvidence.status === 'missing'
+                ? { status: 'missing', basis: snapshotEvidence.basis }
+                : snapshotEvidence.status === 'unproven'
+                    ? { status: 'unproven', basis: snapshotEvidence.basis }
+                    : snapshotFingerprintMatches
+                        ? { status: 'matched', basis: snapshotEvidence.basis }
+                        : { status: 'failed', basis: 'snapshot_fingerprint_mismatch' },
+            marker: { status: 'not_checked' },
+            fingerprint: { status: 'not_checked' },
+            payload: { status: 'not_checked' },
+            staleRemoteChunks: { status: 'not_checked' },
+            navigation: { status: 'not_checked' },
+        };
+        const publishProof = (): void => {
+            options.onProofUpdate?.({
+                collection: { ...proof.collection },
+                snapshot: { ...proof.snapshot },
+                marker: { ...proof.marker },
+                fingerprint: { ...proof.fingerprint },
+                payload: { ...proof.payload },
+                staleRemoteChunks: { ...proof.staleRemoteChunks },
+                navigation: { ...proof.navigation },
+            });
+        };
+        const withProof = (result: Omit<RepairIndexResult, 'proof'>): RepairIndexResult => {
+            publishProof();
+            return {
+                ...result,
+                proof,
+            };
+        };
+        publishProof();
 
         // 1. Resolve collection
         const familyCollectionNames = await this.listRelatedCollectionNames(canonicalPath);
         const activeCollectionName = this.getWriteCollectionName(canonicalPath);
         const preferredCollectionName = options.preferredCollectionName?.trim();
         let selectedCollection: string | null = null;
+        let collectionSelectionBasis = 'selected_active_collection';
         if (preferredCollectionName) {
             if (!familyCollectionNames.includes(preferredCollectionName)) {
-                return {
-                    status: 'blocked',
-                    reason: 'needs_create',
+                const hasRelatedCollection = familyCollectionNames.length > 0;
+                proof.collection = hasRelatedCollection
+                    ? {
+                        status: 'failed',
+                        basis: 'snapshot_collection_missing_from_family',
+                        observedCount: familyCollectionNames.length,
+                    }
+                    : { status: 'missing', basis: 'no_related_collection', observedCount: 0 };
+                return withProof({
+                    status: hasRelatedCollection ? 'requires_reindex' : 'blocked',
+                    reason: hasRelatedCollection ? 'requires_reindex' : 'needs_create',
                     message: `Repair snapshot collection '${preferredCollectionName}' does not exist in the codebase collection family.`,
                     missingCount: 0,
-                };
+                });
             }
             selectedCollection = preferredCollectionName;
+            collectionSelectionBasis = 'selected_snapshot_collection';
         } else if (familyCollectionNames.includes(activeCollectionName)) {
             selectedCollection = activeCollectionName;
         } else {
             const { alternateFamilyName } = this.buildCollectionFamilies(canonicalPath);
             if (familyCollectionNames.includes(alternateFamilyName)) {
                 selectedCollection = alternateFamilyName;
+                collectionSelectionBasis = 'selected_alternate_collection';
             } else {
                 const stagedCollections = familyCollectionNames.filter((collectionName) => collectionName.includes('__gen_'));
                 if (stagedCollections.length === 1) {
                     selectedCollection = stagedCollections[0];
+                    collectionSelectionBasis = 'selected_single_staged_collection';
                 } else if (stagedCollections.length > 1) {
-                    return {
-                        status: 'blocked',
-                        reason: 'needs_create',
+                    proof.collection = {
+                        status: 'failed',
+                        basis: 'multiple_staged_collections',
+                        observedCount: stagedCollections.length,
+                    };
+                    return withProof({
+                        status: 'requires_reindex',
+                        reason: 'requires_reindex',
                         message: `Repair found multiple staged collections for '${canonicalPath}' and cannot choose one deterministically.`,
                         missingCount: 0,
-                    };
+                    });
                 }
             }
         }
 
         if (!selectedCollection) {
-            return {
+            proof.collection = { status: 'missing', basis: 'no_related_collection', observedCount: 0 };
+            return withProof({
                 status: 'blocked',
                 reason: 'needs_create',
                 message: 'No existing collection found for this codebase family.',
                 missingCount: 0
-            };
+            });
         }
+        proof.collection = {
+            status: 'matched',
+            basis: collectionSelectionBasis,
+            observedCount: familyCollectionNames.length,
+        };
+        publishProof();
 
         // 2. Check completion marker if present in the selected collection
-        const currentFingerprint = this.buildIndexCompletionFingerprint();
-        const marker = await this.resolveCompletionMarkerForCollection(canonicalPath, selectedCollection);
-        if (marker) {
+        const markerResolution = await this.resolveRepairCompletionMarkerForCollection(canonicalPath, selectedCollection);
+        if (markerResolution.status === 'malformed') {
+            proof.marker = { status: 'failed', basis: 'malformed_completion_marker' };
+            proof.fingerprint = snapshotFingerprintMatches
+                ? { status: 'matched', basis: snapshotEvidence.basis }
+                : { status: 'unproven', basis: 'malformed_completion_marker' };
+            return withProof({
+                status: 'requires_reindex',
+                reason: 'requires_reindex',
+                message: `Repair found a malformed completion marker in collection '${selectedCollection}' and cannot trust that generation.`,
+            });
+        }
+        if (markerResolution.status === 'matched') {
+            const marker = markerResolution.marker;
             if (!this.indexCompletionFingerprintsMatch(marker.fingerprint, currentFingerprint)) {
-                return {
+                proof.marker = { status: 'failed', basis: 'completion_marker_fingerprint_mismatch' };
+                proof.fingerprint = { status: 'failed', basis: 'completion_marker_fingerprint_mismatch' };
+                return withProof({
                     status: 'requires_reindex',
                     reason: 'requires_reindex',
                     message: 'The existing index is incompatible with the current runtime fingerprint.',
-                };
+                });
             }
-        } else if (!this.indexCompletionFingerprintsMatch(options.trustedFingerprint, currentFingerprint)) {
-            return {
+            proof.marker = { status: 'matched', basis: 'completion_marker_fingerprint' };
+            proof.fingerprint = { status: 'matched', basis: 'completion_marker_fingerprint' };
+        } else {
+            proof.marker = { status: 'missing', basis: 'completion_marker_missing' };
+            if (snapshotFingerprintMatches) {
+                proof.fingerprint = { status: 'matched', basis: snapshotEvidence.basis };
+            } else {
+                proof.fingerprint = proof.snapshot.status === 'failed'
+                    ? { status: 'failed', basis: proof.snapshot.basis }
+                    : { status: 'unproven', basis: 'no_trusted_fingerprint_evidence' };
+                return withProof({
                 status: 'requires_reindex',
                 reason: 'requires_reindex',
                 message: `Repair cannot prove vector provenance for collection '${selectedCollection}' because the completion marker is missing and no trusted matching fingerprint was supplied.`,
-            };
+                });
+            }
         }
+        publishProof();
 
         // 3. Load ignore/index policy and indexable files
         await this.loadIgnorePatterns(canonicalPath);
@@ -2089,17 +2266,46 @@ export class Context {
 
         if (codeFiles.length === 0) {
             if (await this.collectionHasAnyIndexedPayload(selectedCollection)) {
-                return {
-                    status: 'blocked',
-                    reason: 'needs_create',
+                proof.payload = {
+                    status: 'failed',
+                    basis: 'remote_payload_without_indexable_source',
+                    expectedCount: 0,
+                };
+                proof.staleRemoteChunks = {
+                    status: 'failed',
+                    basis: 'remote_payload_without_indexable_source',
+                };
+                return withProof({
+                    status: 'requires_reindex',
+                    reason: 'requires_reindex',
                     message: `Coverage verification failed: collection '${selectedCollection}' contains remote chunks but the current index policy finds no indexable files.`,
                     missingCount: 0,
                     trackedRelativePaths,
-                };
+                });
             }
-            await this.clearSymbolRegistryForCodebase(canonicalPath);
-            await this.writeCompletedIndexMarker(canonicalPath, 0, 0, selectedCollection);
-            return {
+            proof.payload = {
+                status: 'matched',
+                basis: 'empty_source_and_payload',
+                expectedCount: 0,
+                observedCount: 0,
+                missingCount: 0,
+            };
+            proof.staleRemoteChunks = {
+                status: 'matched',
+                basis: 'empty_source_and_payload',
+                extraCount: 0,
+            };
+            await this.clearSymbolRegistryForCodebase(canonicalPath, options.assertMutationCurrent);
+            await this.writeCompletedIndexMarker(
+                canonicalPath,
+                0,
+                0,
+                selectedCollection,
+                'completed',
+                options.assertMutationCurrent,
+            );
+            proof.navigation = { status: 'matched', basis: 'navigation_sidecars_rebuilt' };
+            return withProof({
                 status: 'ok',
                 message: 'No files to index. Local readiness repaired (navigation sidecars rebuilt, fresh completion marker written) without vector writes.',
                 indexedFiles: 0,
@@ -2107,7 +2313,7 @@ export class Context {
                 warnings: [],
                 trackedRelativePaths,
                 collectionName: selectedCollection,
-            };
+            });
         }
 
         // 4. Split source files and compute expected chunk IDs
@@ -2164,25 +2370,53 @@ export class Context {
         }
 
         if (missingChunksCount > 0 || hasFileCoverageIssue) {
-            return {
-                status: 'blocked',
-                reason: 'needs_create',
-                message: `Coverage verification failed: ${missingChunksCount || (hasFileCoverageIssue ? 1 : 0)} expected chunk(s) are missing from collection '${selectedCollection}'.`,
-                missingCount: missingChunksCount || 1,
+            const effectiveMissingCount = missingChunksCount || 1;
+            proof.payload = {
+                status: 'failed',
+                basis: 'expected_chunks_missing',
+                expectedCount: expectedChunks.length,
+                observedCount: existingIds.size,
+                missingCount: effectiveMissingCount,
             };
+            return withProof({
+                status: 'requires_reindex',
+                reason: 'requires_reindex',
+                message: `Coverage verification failed: ${missingChunksCount || (hasFileCoverageIssue ? 1 : 0)} expected chunk(s) are missing from collection '${selectedCollection}'.`,
+                missingCount: effectiveMissingCount,
+            });
         }
+
+        proof.payload = {
+            status: 'unproven',
+            basis: 'expected_chunk_coverage_only',
+            expectedCount: expectedChunks.length,
+            observedCount: existingIds.size,
+            missingCount: 0,
+        };
+        publishProof();
 
         const expectedIdsSet = new Set(expectedChunks.map(c => c.id));
         const maxExactPayloadProbeRows = 16384;
         const remotePayloadLimit = expectedChunks.length + 1;
         if (remotePayloadLimit > maxExactPayloadProbeRows) {
-            return {
-                status: 'blocked',
-                reason: 'needs_create',
+            proof.payload = {
+                status: 'unproven',
+                basis: 'exact_payload_query_limit_exceeded',
+                expectedCount: expectedChunks.length,
+                observedCount: existingIds.size,
+                missingCount: 0,
+            };
+            proof.staleRemoteChunks = {
+                status: 'unproven',
+                basis: 'exact_payload_query_limit_exceeded',
+            };
+            return withProof({
+                status: 'requires_reindex',
+                reason: 'requires_reindex',
                 message: `Coverage verification failed: repair cannot prove exact remote payload equality for ${expectedChunks.length} expected chunks with the current vector query limit.`,
                 missingCount: 0,
                 trackedRelativePaths,
-            };
+            });
         }
         // Repair relies on query(filter, limit=N+1) returning N+1 rows when more than N payload rows exist.
         const remotePayloadRows = await this.vectorDatabase.query(
@@ -2201,22 +2435,66 @@ export class Context {
 
         if (remotePayloadRows.length !== expectedChunks.length || extraRemoteIds.size > 0) {
             const extraCount = Math.max(0, remotePayloadRows.length - expectedChunks.length, extraRemoteIds.size);
-            return {
-                status: 'blocked',
-                reason: 'needs_create',
+            proof.payload = {
+                status: 'failed',
+                basis: 'remote_payload_not_exact',
+                expectedCount: expectedChunks.length,
+                observedCount: remotePayloadRows.length,
+                missingCount: 0,
+                extraCount,
+            };
+            proof.staleRemoteChunks = {
+                status: 'failed',
+                basis: 'unexpected_remote_chunks',
+                extraCount,
+            };
+            return withProof({
+                status: 'requires_reindex',
+                reason: 'requires_reindex',
                 message: `Coverage verification failed: collection '${selectedCollection}' contains ${extraCount || 'unexpected'} stale remote chunk(s) outside the current indexable source set.`,
                 missingCount: 0,
                 trackedRelativePaths,
-            };
+            });
         }
+        proof.payload = {
+            status: 'matched',
+            basis: 'exact_remote_payload_equality',
+            expectedCount: expectedChunks.length,
+            observedCount: remotePayloadRows.length,
+            missingCount: 0,
+            extraCount: 0,
+        };
+        proof.staleRemoteChunks = {
+            status: 'matched',
+            basis: 'no_unexpected_remote_chunks',
+            extraCount: 0,
+        };
+        proof.navigation = {
+            status: 'unproven',
+            basis: 'navigation_rebuild_in_progress',
+        };
+        publishProof();
 
         // 6. Rebuild symbol registry/relationship sidecars
-        await this.writeSymbolRegistryForCompletedIndex(canonicalPath, symbolRecords, symbolManifestFiles);
+        await this.writeSymbolRegistryForCompletedIndex(
+            canonicalPath,
+            symbolRecords,
+            symbolManifestFiles,
+            options.assertMutationCurrent,
+        );
 
         // 7. Write new completion marker
-        await this.writeCompletedIndexMarker(canonicalPath, codeFiles.length, expectedChunks.length, selectedCollection);
+        await this.writeCompletedIndexMarker(
+            canonicalPath,
+            codeFiles.length,
+            expectedChunks.length,
+            selectedCollection,
+            'completed',
+            options.assertMutationCurrent,
+        );
 
-        return {
+        proof.navigation = { status: 'matched', basis: 'navigation_sidecars_rebuilt' };
+        return withProof({
             status: 'ok',
             message: 'Local readiness repaired (navigation sidecars rebuilt, fresh completion marker written) without vector writes.',
             indexedFiles: codeFiles.length,
@@ -2224,7 +2502,7 @@ export class Context {
             warnings: [],
             trackedRelativePaths,
             collectionName: selectedCollection,
-        };
+        });
     }
 
     private getSymbolExtractorVersion(): string {
@@ -2311,10 +2589,13 @@ export class Context {
         };
     }
 
-    private async rebuildNavigationArtifacts(codebasePath: string): Promise<void> {
+    private async rebuildNavigationArtifacts(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
         const codeFiles = await this.getCodeFiles(codebasePath);
         if (codeFiles.length === 0) {
-            await this.clearSymbolRegistryForCodebase(codebasePath);
+            await this.clearSymbolRegistryForCodebase(codebasePath, assertMutationCurrent);
             return;
         }
 
@@ -2323,6 +2604,7 @@ export class Context {
             codebasePath,
             navigationArtifacts.symbolRecords,
             navigationArtifacts.symbolManifestFiles,
+            assertMutationCurrent,
         );
     }
 
@@ -2332,6 +2614,7 @@ export class Context {
         changedRelativePaths: string[],
         rebuiltSymbolRecords: SymbolRecord[],
         rebuiltManifestFiles: SymbolRegistryManifestFile[],
+        assertMutationCurrent?: () => void,
     ): Promise<void> {
         const replacedPaths = new Set<string>([
             ...changedRelativePaths.map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, '')),
@@ -2344,7 +2627,7 @@ export class Context {
         ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
         if (mergedManifestFiles.length === 0) {
-            await this.clearSymbolRegistryForCodebase(codebasePath);
+            await this.clearSymbolRegistryForCodebase(codebasePath, assertMutationCurrent);
             return;
         }
 
@@ -2357,13 +2640,15 @@ export class Context {
             codebasePath,
             mergedSymbolRecords,
             mergedManifestFiles,
+            assertMutationCurrent,
         );
     }
 
     private async writeSymbolRegistryForCompletedIndex(
         codebasePath: string,
         symbolRecords: SymbolRecord[],
-        symbolManifestFiles: SymbolRegistryManifestFile[]
+        symbolManifestFiles: SymbolRegistryManifestFile[],
+        assertMutationCurrent?: () => void,
     ): Promise<void> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const manifestFiles = [...symbolManifestFiles].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -2382,9 +2667,11 @@ export class Context {
             symbols: symbolRecords,
         });
 
+        assertMutationCurrent?.();
         const result = await writeSymbolRegistrySidecar({
             stateRoot: this.symbolRegistryStateRoot,
             registry,
+            beforePublish: assertMutationCurrent,
         });
         const contentByFile = new Map<string, string>();
         for (const file of manifestFiles) {
@@ -2395,6 +2682,7 @@ export class Context {
             }
         }
         const relationshipRecords = buildRelationshipsForRegistry({ registry, contentByFile });
+        assertMutationCurrent?.();
         const relationshipResult = await writeRelationshipSidecar({
             stateRoot: this.symbolRegistryStateRoot,
             normalizedRootPath: canonicalRoot,
@@ -2403,16 +2691,20 @@ export class Context {
             builtAt: registry.manifest.builtAt,
             files: manifestFiles,
             records: relationshipRecords,
+            beforePublish: assertMutationCurrent,
         });
         console.log(`[Context] 🧭 Wrote symbol registry sidecar with ${result.symbolCount} symbols across ${result.fileShardCount} file shards`);
         console.log(`[Context] 🧭 Wrote relationship sidecar with ${relationshipResult.relationshipCount} relationships across ${relationshipResult.fileShardCount} file shards`);
+        assertMutationCurrent?.();
         try {
             const sqliteResult = await importNavigationToSqlite({
                 stateRoot: this.symbolRegistryStateRoot,
                 normalizedRootPath: canonicalRoot,
+                beforePublish: assertMutationCurrent,
             });
             console.log(`[Context] 🧭 Imported navigation sqlite cache at ${resolveNavigationSqlitePath(this.symbolRegistryStateRoot, canonicalRoot)} with ${sqliteResult.symbolCount} symbols and ${sqliteResult.relationshipCount} relationships`);
         } catch (error) {
+            assertMutationCurrent?.();
             const sqlitePath = resolveNavigationSqlitePath(this.symbolRegistryStateRoot, canonicalRoot);
             try {
                 await fs.promises.rm(sqlitePath, { recursive: true, force: true });
@@ -2423,7 +2715,11 @@ export class Context {
         }
     }
 
-    private async clearSymbolRegistryForCodebase(codebasePath: string): Promise<void> {
+    private async clearSymbolRegistryForCodebase(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
+        assertMutationCurrent?.();
         await clearSymbolRegistrySidecar({
             stateRoot: this.symbolRegistryStateRoot,
             normalizedRootPath: this.canonicalizeCodebasePath(codebasePath),
@@ -2435,7 +2731,8 @@ export class Context {
  */
     private async processChunkBuffer(
         chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string }>,
-        collectionName: string
+        collectionName: string,
+        assertMutationCurrent?: () => void,
     ): Promise<void> {
         if (chunkBuffer.length === 0) return;
 
@@ -2449,13 +2746,18 @@ export class Context {
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid' : 'regular';
         console.log(`[Context] 🔄 Processing batch of ${chunks.length} chunks (~${estimatedTokens} tokens) for ${searchType}`);
-        await this.processChunkBatch(chunks, codebasePath, collectionName);
+        await this.processChunkBatch(chunks, codebasePath, collectionName, assertMutationCurrent);
     }
 
     /**
      * Process a batch of chunks
      */
-    private async processChunkBatch(chunks: CodeChunk[], codebasePath: string, collectionName: string): Promise<void> {
+    private async processChunkBatch(
+        chunks: CodeChunk[],
+        codebasePath: string,
+        collectionName: string,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
         const isHybrid = this.getIsHybrid();
         const indexedAt = new Date().toISOString();
 
@@ -2496,6 +2798,7 @@ export class Context {
             });
 
             // Store to vector database
+            assertMutationCurrent?.();
             await this.vectorDatabase.insertHybrid(collectionName, documents);
         } else {
             // Create regular vector documents
@@ -2530,6 +2833,7 @@ export class Context {
             });
 
             // Store to vector database
+            assertMutationCurrent?.();
             await this.vectorDatabase.insert(collectionName, documents);
         }
     }

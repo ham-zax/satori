@@ -159,6 +159,10 @@ function createMutableSnapshot(repoPath: string, initialStatus: 'not_found' | 'i
     let currentStatus = initialStatus;
     let removedCompletely = 0;
     let saveCalls = 0;
+    const removeCodebaseCompletely = () => {
+        removedCompletely += 1;
+        currentStatus = 'not_found';
+    };
 
     return {
         get saveCalls() {
@@ -186,10 +190,8 @@ function createMutableSnapshot(repoPath: string, initialStatus: 'not_found' | 'i
             currentStatus = 'indexed';
         },
         setCodebaseIndexManifest: () => undefined,
-        removeCodebaseCompletely: () => {
-            removedCompletely += 1;
-            currentStatus = 'not_found';
-        },
+        removeCodebaseCompletely,
+        markCodebaseCleared: removeCodebaseCompletely,
         saveCodebaseSnapshot: () => {
             saveCalls += 1;
         },

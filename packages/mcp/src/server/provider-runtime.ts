@@ -10,6 +10,7 @@ import { CapabilityResolver } from "../core/capabilities.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { ToolHandlers } from "../core/handlers.js";
 import type { RuntimeOwnerMutationGate } from "../core/runtime-owner.js";
+import { MutationLeaseCoordinator } from "../core/mutation-lease.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import { SyncManager } from "../core/sync.js";
 import { ContextMcpConfig, IndexFingerprint } from "../config.js";
@@ -124,6 +125,7 @@ export class ProviderRuntime {
     private readonly watchDebounceMs: number;
     private readonly callGraphManager: CallGraphSidecarManager;
     private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null;
+    private readonly mutationLeaseCoordinator: MutationLeaseCoordinator;
     private readonly now: () => number;
     private embeddingRuntimePromise: Promise<ToolContext> | null = null;
     private vectorRuntimePromise: Promise<ToolContext> | null = null;
@@ -139,6 +141,7 @@ export class ProviderRuntime {
         watchDebounceMs: number;
         callGraphManager: CallGraphSidecarManager;
         runtimeOwnerGate?: RuntimeOwnerMutationGate | null;
+        mutationLeaseCoordinator?: MutationLeaseCoordinator;
         now?: () => number;
     }) {
         this.config = args.config;
@@ -150,6 +153,7 @@ export class ProviderRuntime {
         this.watchDebounceMs = args.watchDebounceMs;
         this.callGraphManager = args.callGraphManager;
         this.runtimeOwnerGate = args.runtimeOwnerGate || null;
+        this.mutationLeaseCoordinator = args.mutationLeaseCoordinator || new MutationLeaseCoordinator();
         this.now = args.now || (() => Date.now());
     }
 
@@ -222,14 +226,17 @@ export class ProviderRuntime {
         const syncManager = new SyncManager(context, this.snapshotManager, {
             watchEnabled: this.watchSyncEnabled,
             watchDebounceMs: this.watchDebounceMs,
-            onSyncCompleted: async (codebasePath, stats) => {
+            onSyncCompleted: async (codebasePath, stats, assertMutationCurrent) => {
                 try {
+                    assertMutationCurrent();
                     const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
                         codebasePath,
                         stats.changedFiles,
-                        context.getActiveIgnorePatterns(codebasePath)
+                        context.getActiveIgnorePatterns(codebasePath),
+                        assertMutationCurrent,
                     );
                     if (sidecar) {
+                        assertMutationCurrent();
                         this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
                         this.snapshotManager.saveCodebaseSnapshot();
                         console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
@@ -238,7 +245,8 @@ export class ProviderRuntime {
                     const message = error instanceof Error ? error.message : String(error);
                     console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${message}`);
                 }
-            }
+            },
+            mutationLeaseCoordinator: this.mutationLeaseCoordinator,
         });
         const reranker = requireEmbedding && this.capabilities.hasReranker()
             ? new VoyageAIReranker({
@@ -260,7 +268,8 @@ export class ProviderRuntime {
             reranker,
             undefined,
             undefined,
-            this.runtimeOwnerGate
+            this.runtimeOwnerGate,
+            this.mutationLeaseCoordinator,
         );
 
         const toolContext = {

@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "name": "Satori useful-context repeatable corpus",
+  "tasks": [
+    {
+      "id": "find-search-handler",
+      "queryClass": "owner_discovery",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "packages/mcp/src/core/handlers.ts",
+        "ownerSymbol": "handleSearchCode"
+      },
+      "workload": {
+        "setup": [
+          {
+            "tool": "manage_index",
+            "args": { "action": "status", "path": "$REPO_ROOT" }
+          }
+        ],
+        "invocations": [
+          {
+            "tool": "search_codebase",
+            "args": {
+              "path": "$REPO_ROOT",
+              "query": "where is search code behavior handled",
+              "scope": "runtime",
+              "resultMode": "grouped",
+              "groupBy": "symbol",
+              "rankingMode": "auto_changed_first"
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "restart the MCP runtime, verify setup status is indexed, then run the invocation once",
+          "warm": "repeat the identical invocation once in the same runtime without file or index changes"
+        }
+      }
+    },
+    {
+      "id": "find-exact-fast-path",
+      "queryClass": "exact_identifier",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "packages/mcp/src/core/search-exact-fast-path.ts",
+        "ownerSymbol": "runExactRegistryFastPath"
+      },
+      "workload": {
+        "setup": [
+          {
+            "tool": "manage_index",
+            "args": { "action": "status", "path": "$REPO_ROOT" }
+          }
+        ],
+        "invocations": [
+          {
+            "tool": "search_codebase",
+            "args": {
+              "path": "$REPO_ROOT",
+              "query": "runExactRegistryFastPath",
+              "scope": "runtime",
+              "resultMode": "grouped",
+              "groupBy": "symbol",
+              "rankingMode": "auto_changed_first"
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "restart the MCP runtime, verify setup status is indexed, then run the invocation once",
+          "warm": "repeat the identical invocation once in the same runtime without file or index changes"
+        }
+      }
+    },
+    {
+      "id": "open-repair-owner",
+      "queryClass": "exact_open",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "packages/core/src/core/context.ts",
+        "ownerSymbol": "repairIndex",
+        "span": { "startLine": 2103, "endLine": 2506 }
+      },
+      "workload": {
+        "setup": [
+          {
+            "tool": "manage_index",
+            "args": { "action": "status", "path": "$REPO_ROOT" }
+          }
+        ],
+        "invocations": [
+          {
+            "tool": "read_file",
+            "args": {
+              "path": "$REPO_ROOT/packages/core/src/core/context.ts",
+              "open_symbol": { "symbolLabel": "repairIndex" }
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "restart the MCP runtime, verify setup status is indexed, then run the invocation once",
+          "warm": "repeat the identical invocation once in the same runtime without file or index changes"
+        }
+      }
+    }
+  ]
+}

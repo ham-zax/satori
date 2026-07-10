@@ -237,8 +237,18 @@ export class ProviderRuntime {
                     );
                     if (sidecar) {
                         assertMutationCurrent();
-                        this.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
-                        this.snapshotManager.saveCodebaseSnapshot();
+                        const committed = this.snapshotManager.commitCodebaseCallGraphSidecar(
+                            codebasePath,
+                            sidecar,
+                            assertMutationCurrent,
+                        );
+                        if (!committed) {
+                            console.warn(
+                                `[CALL-GRAPH] Sync lifecycle rebuild discarded for '${codebasePath}': `
+                                + "fenced snapshot commit failed; in-memory sidecar rolled back.",
+                            );
+                            return;
+                        }
                         console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
                     }
                 } catch (error: unknown) {

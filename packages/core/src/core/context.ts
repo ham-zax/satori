@@ -2251,9 +2251,9 @@ export class Context {
                     ? { status: 'failed', basis: proof.snapshot.basis }
                     : { status: 'unproven', basis: 'no_trusted_fingerprint_evidence' };
                 return withProof({
-                status: 'requires_reindex',
-                reason: 'requires_reindex',
-                message: `Repair cannot prove vector provenance for collection '${selectedCollection}' because the completion marker is missing and no trusted matching fingerprint was supplied.`,
+                    status: 'requires_reindex',
+                    reason: 'requires_reindex',
+                    message: `Repair cannot prove vector provenance for collection '${selectedCollection}' because the completion marker is missing and no trusted matching fingerprint was supplied.`,
                 });
             }
         }

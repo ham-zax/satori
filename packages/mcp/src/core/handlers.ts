@@ -1097,15 +1097,24 @@ export class ToolHandlers {
         return (this.now() - lastUpdatedMs) > graceMs;
     }
 
+    /**
+     * Recover abandoned `indexing` lifecycle rows.
+     *
+     * Wall-clock grace applies only before exclusive ownership is proven. When
+     * `existingLease` is held (or startup forces exclusive acquisition), recovery
+     * runs immediately because a live compliant writer cannot share the root.
+     */
     private async recoverStaleIndexingStateIfNeeded(
         codebasePath: string,
         existingLease?: RootMutationLease,
+        options?: { skipGrace?: boolean },
     ): Promise<RootMutationLease | undefined> {
         const indexingCodebases = this.getSnapshotIndexingCodebases();
         if (!Array.isArray(indexingCodebases) || !indexingCodebases.includes(codebasePath)) {
             return;
         }
-        if (!this.isIndexingStateStale(codebasePath)) {
+        const skipGrace = Boolean(existingLease) || options?.skipGrace === true;
+        if (!skipGrace && !this.isIndexingStateStale(codebasePath)) {
             return;
         }
         const completionMarkerContext = this.context as unknown as IndexCompletionMarkerContext;
@@ -1116,12 +1125,32 @@ export class ToolHandlers {
         let recoveryLease = existingLease;
         let releaseRecoveryLease = false;
         let operationTerminal = false;
+        const persistRecoverySnapshot = (mutateSnapshot: () => void): void => {
+            if (!recoveryLease || typeof this.snapshotManager.saveCodebaseSnapshot !== "function") {
+                mutateSnapshot();
+                this.saveSnapshotIfSupported();
+                return;
+            }
+            this.mutationLeaseCoordinator?.assertCurrent(recoveryLease);
+            const assertCurrent = () => this.mutationLeaseCoordinator?.assertCurrent(recoveryLease!);
+            const committed = typeof this.snapshotManager.commitCodebaseLifecycleMutation === "function"
+                ? this.snapshotManager.commitCodebaseLifecycleMutation(mutateSnapshot, assertCurrent)
+                : (() => {
+                    mutateSnapshot();
+                    return this.snapshotManager.saveCodebaseSnapshot(false, assertCurrent);
+                })();
+            if (!committed) {
+                throw new Error(`Failed to persist interrupted-index recovery for '${codebasePath}'.`);
+            }
+        };
         const persistRecoveryPhase = (
             phase: import("../config.js").IndexOperationPhase,
             mutateSnapshot?: () => void,
         ): void => {
             if (!releaseRecoveryLease || !recoveryLease || typeof this.snapshotManager.transitionOperation !== "function") {
-                mutateSnapshot?.();
+                if (mutateSnapshot) {
+                    persistRecoverySnapshot(mutateSnapshot);
+                }
                 return;
             }
             this.mutationLeaseCoordinator?.assertCurrent(recoveryLease);
@@ -1135,7 +1164,10 @@ export class ToolHandlers {
             } else {
                 this.snapshotManager.transitionOperation(recoveryLease, phase);
                 mutateSnapshot?.();
-                if (this.snapshotManager.saveCodebaseSnapshot() === false) {
+                if (this.snapshotManager.saveCodebaseSnapshot(
+                    false,
+                    () => this.mutationLeaseCoordinator?.assertCurrent(recoveryLease!),
+                ) === false) {
                     throw new Error(`Failed to persist stale-index recovery phase '${phase}' for '${codebasePath}'.`);
                 }
             }
@@ -1168,14 +1200,22 @@ export class ToolHandlers {
                 }
                 if (
                     typeof this.snapshotManager.commitOperationPhase !== "function"
-                    && this.snapshotManager.saveCodebaseSnapshot() === false
+                    && this.snapshotManager.saveCodebaseSnapshot(
+                        false,
+                        () => this.mutationLeaseCoordinator?.assertCurrent(recoveryLease!),
+                    ) === false
                 ) {
                     throw new Error(`Failed to persist accepted stale-index recovery receipt for '${codebasePath}'.`);
                 }
             }
             this.refreshSnapshotStateFromDisk();
-            if (!this.getSnapshotIndexingCodebases().includes(codebasePath) || !this.isIndexingStateStale(codebasePath)) {
+            // Exclusive ownership (caller lease or self-acquired) supersedes wall-clock grace.
+            if (!this.getSnapshotIndexingCodebases().includes(codebasePath)) {
                 persistRecoveryPhase("completed");
+                return;
+            }
+            const holdsExclusiveOwnership = Boolean(recoveryLease);
+            if (!holdsExclusiveOwnership && !this.isIndexingStateStale(codebasePath)) {
                 return;
             }
 
@@ -1206,8 +1246,9 @@ export class ToolHandlers {
                         this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
                     });
                 } else {
-                    this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
-                    this.saveSnapshotIfSupported();
+                    persistRecoverySnapshot(() => {
+                        this.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
+                    });
                 }
                 const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
                     ? " using completion marker proof from a different runtime fingerprint"
@@ -1222,8 +1263,9 @@ export class ToolHandlers {
                     this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message, lastProgress);
                 });
             } else {
-                this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message, lastProgress);
-                this.saveSnapshotIfSupported();
+                persistRecoverySnapshot(() => {
+                    this.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message, lastProgress);
+                });
             }
             console.log(`[INDEX-RECOVERY] Marked stale indexing state as failed for '${codebasePath}' (${decision.reason}).`);
         } catch (error) {
@@ -1245,6 +1287,40 @@ export class ToolHandlers {
                 this.mutationLeaseCoordinator?.release(recoveryLease);
             }
         }
+    }
+
+    /**
+     * Startup entry for interrupted-index recovery. Acquires a mutation lease per
+     * root, skips live writers, and reuses the fenced recovery path (no unfenced
+     * snapshot lifecycle publication).
+     */
+    public async recoverInterruptedIndexingAtStartup(): Promise<void> {
+        const indexingCodebases = this.getSnapshotIndexingCodebases();
+        if (indexingCodebases.length === 0) {
+            console.log("[STARTUP] No interrupted indexing states required recovery");
+            return;
+        }
+
+        let attempted = 0;
+        let skippedLive = 0;
+        for (const codebasePath of indexingCodebases) {
+            const activeLease = await this.recoverStaleIndexingStateIfNeeded(
+                codebasePath,
+                undefined,
+                { skipGrace: true },
+            );
+            if (activeLease) {
+                skippedLive += 1;
+                console.log(
+                    `[STARTUP] Skipping interrupted indexing recovery for '${codebasePath}': `
+                    + `live mutation lease held (action=${activeLease.action}, `
+                    + `pid=${activeLease.pid}, generation=${activeLease.generation})`,
+                );
+                continue;
+            }
+            attempted += 1;
+        }
+        console.log(`[STARTUP] Recovery summary: attempted=${attempted}, skippedLiveWriter=${skippedLive}`);
     }
 
     private buildManageActionBlockedMessage(codebasePath: string, action: RuntimeOwnerMutationAction): string {

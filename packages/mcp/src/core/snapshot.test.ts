@@ -66,7 +66,6 @@ function operationLease(codebasePath: string, generation = 1): RootMutationLease
         ownerId: receipt.writer.ownerId,
         pid: receipt.writer.pid,
         acquiredAt: receipt.acceptedAt,
-        lastHeartbeatAt: receipt.acceptedAt,
     };
 }
 
@@ -711,6 +710,56 @@ test('failed operation commit rolls back the receipt and lifecycle mutation', ()
         reader.loadCodebaseSnapshot();
         assert.equal(reader.getCodebaseStatus(codebase), 'indexed');
         assert.equal(reader.getLatestOperation(codebase), undefined);
+    });
+});
+
+test('failed lifecycle mutation commit rolls back state before a later save', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-lifecycle-rollback');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexing(codebase, 42);
+        assert.equal(manager.saveCodebaseSnapshot(), true);
+
+        const originalSave = manager.saveCodebaseSnapshot.bind(manager);
+        manager.saveCodebaseSnapshot = () => false;
+        assert.equal(manager.commitCodebaseLifecycleMutation(() => {
+            manager.setCodebaseIndexFailed(codebase, 'recovery rejected', 42);
+        }), false);
+        manager.saveCodebaseSnapshot = originalSave;
+
+        assert.equal(manager.getCodebaseStatus(codebase), 'indexing');
+        assert.equal(manager.getIndexingProgress(codebase), 42);
+        assert.equal(manager.saveCodebaseSnapshot(), true);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseStatus(codebase), 'indexing');
+        assert.equal(reader.getIndexingProgress(codebase), 42);
+    });
+});
+
+test('lifecycle mutation commit rolls back when the final fence rejects publication', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-lifecycle-fence-rollback');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexing(codebase, 17);
+        assert.equal(manager.saveCodebaseSnapshot(), true);
+        let checks = 0;
+
+        assert.throws(() => manager.commitCodebaseLifecycleMutation(() => {
+            manager.setCodebaseIndexFailed(codebase, 'lease lost', 17);
+        }, () => {
+            checks += 1;
+            if (checks === 2) {
+                throw new Error('lease lost before lifecycle publication');
+            }
+        }), /lease lost before lifecycle publication/);
+
+        assert.equal(checks, 2);
+        assert.equal(manager.getCodebaseStatus(codebase), 'indexing');
+        assert.equal(manager.getIndexingProgress(codebase), 17);
     });
 });
 
@@ -1701,5 +1750,43 @@ test('dirty flag remains true when save is skipped due to lock contention', () =
         (manager as unknown as SnapshotPrivateAccess).sleepSync = () => false;
         manager.saveCodebaseSnapshot();
         assert.equal((manager as unknown as SnapshotDirtyView).isDirty, true);
+    });
+});
+
+test('commitCodebaseCallGraphSidecar fences with beforeCommit and rolls back on fence failure', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-call-graph-fence');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexed(codebase, {
+            indexedFiles: 2,
+            totalChunks: 4,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        manager.saveCodebaseSnapshot();
+
+        const previous = manager.getCodebaseInfo(codebase)?.callGraphSidecar;
+        const nextSidecar = {
+            version: 'v3' as const,
+            sidecarPath: path.join(homeDir, 'call-graph.json'),
+            builtAt: new Date().toISOString(),
+            nodeCount: 3,
+            edgeCount: 1,
+            noteCount: 0,
+            fingerprint: FINGERPRINT_A,
+        };
+
+        assert.throws(
+            () => manager.commitCodebaseCallGraphSidecar(codebase, nextSidecar, () => {
+                throw new Error('lease lost under snapshot lock');
+            }),
+            /lease lost under snapshot lock/,
+        );
+
+        assert.equal(manager.getCodebaseInfo(codebase)?.callGraphSidecar, previous);
+        assert.equal((manager as unknown as SnapshotDirtyView).isDirty, false);
+
+        assert.equal(manager.commitCodebaseCallGraphSidecar(codebase, nextSidecar), true);
+        assert.equal(manager.getCodebaseInfo(codebase)?.callGraphSidecar?.nodeCount, 3);
     });
 });

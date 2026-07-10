@@ -1309,6 +1309,29 @@ export class SnapshotManager {
         }
     }
 
+    /**
+     * Persist a lifecycle-only mutation transactionally under an optional fence.
+     * Rejected publication must not remain in memory for a later unrelated save.
+     */
+    public commitCodebaseLifecycleMutation(
+        mutateSnapshot: () => void,
+        beforeCommit?: () => void,
+    ): boolean {
+        const checkpoint = this.captureMutableState();
+        try {
+            beforeCommit?.();
+            mutateSnapshot();
+            if (!this.saveCodebaseSnapshot(false, beforeCommit)) {
+                this.restoreMutableState(checkpoint);
+                return false;
+            }
+            return true;
+        } catch (error) {
+            this.restoreMutableState(checkpoint);
+            throw error;
+        }
+    }
+
     public getCodebaseCollectionName(codebasePath: string): string | undefined {
         const collectionName = this.codebaseInfoMap.get(codebasePath)?.collectionName;
         return typeof collectionName === "string" && collectionName.trim().length > 0
@@ -1525,6 +1548,39 @@ export class SnapshotManager {
         this.assertMetadataMutationPreservesDerivedFields(existing, nextInfo, "setCodebaseCallGraphSidecar");
         this.codebaseInfoMap.set(codebasePath, nextInfo);
         this.markDirty();
+    }
+
+    /**
+     * Set call-graph sidecar metadata and persist under an optional mutation fence.
+     * On save failure or fence rejection, restores the previous in-memory sidecar.
+     */
+    public commitCodebaseCallGraphSidecar(
+        codebasePath: string,
+        sidecar: CallGraphSidecarInfo,
+        beforeCommit?: () => void,
+    ): boolean {
+        const existing = this.codebaseInfoMap.get(codebasePath);
+        if (!existing) {
+            return false;
+        }
+        const previousInfo: CodebaseInfo = { ...existing };
+        const wasDirty = this.isDirty;
+        this.setCodebaseCallGraphSidecar(codebasePath, sidecar);
+        try {
+            const saved = this.saveCodebaseSnapshot(false, beforeCommit);
+            if (!saved) {
+                this.codebaseInfoMap.set(codebasePath, previousInfo);
+                this.isDirty = wasDirty;
+                this.refreshDerivedState();
+                return false;
+            }
+            return true;
+        } catch (error) {
+            this.codebaseInfoMap.set(codebasePath, previousInfo);
+            this.isDirty = wasDirty;
+            this.refreshDerivedState();
+            throw error;
+        }
     }
 
     public setCodebaseIndexManifest(codebasePath: string, indexedPaths: string[]): void {

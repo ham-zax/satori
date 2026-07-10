@@ -534,7 +534,6 @@ function inspectLeaseFile(
         || lease.ownerId.length === 0
         || (lease.processStartTime !== undefined && typeof lease.processStartTime !== "string")
         || typeof lease.acquiredAt !== "string"
-        || typeof lease.lastHeartbeatAt !== "string"
     ) {
         return { state: "corrupt", detail: path.basename(filePath) };
     }

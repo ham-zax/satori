@@ -930,6 +930,211 @@ test('recent indexing state does not trigger stale-index recovery probes', async
     });
 });
 
+test('exclusive create lease supersedes recent abandoned indexing without waiting for grace', async () => {
+    await withTempRepo(async (repoPath) => {
+        const recent = new Date().toISOString();
+        let markerCalls = 0;
+        let failedCalls = 0;
+        let currentInfo: IndexingInfo | IndexFailedInfo = {
+            status: 'indexing',
+            indexingPercentage: 37,
+            lastUpdated: recent,
+        };
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'exclusive-create-recovery-leases'),
+            ownerId: 'exclusive-create-owner',
+        });
+        const context = {
+            getIndexCompletionMarker: async () => {
+                markerCalls += 1;
+                return null;
+            },
+            getCollectionList: async () => [],
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
+            getIndexingCodebases: () => currentInfo.status === 'indexing' ? [repoPath] : [],
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => currentInfo.status,
+            getCodebaseInfo: () => currentInfo,
+            getIndexingProgress: () => currentInfo.status === 'indexing' ? currentInfo.indexingPercentage : undefined,
+            setCodebaseIndexFailed: (_path: string, errorMessage: string, lastAttemptedPercentage?: number) => {
+                failedCalls += 1;
+                currentInfo = {
+                    status: 'indexfailed',
+                    errorMessage,
+                    lastAttemptedPercentage,
+                    lastUpdated: new Date().toISOString(),
+                };
+            },
+            setCodebaseIndexing: () => undefined,
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => true,
+            startOperation: () => undefined,
+            transitionOperation: () => undefined,
+            commitOperationPhase: (
+                _lease: RootMutationLease,
+                _phase: IndexOperationPhase,
+                mutateSnapshot?: () => void,
+            ) => {
+                mutateSnapshot?.();
+                return undefined;
+            },
+            getLatestOperation: () => undefined,
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
+
+        // After exclusive acquisition, recovery must run immediately (not wait 2 minutes).
+        // Kickoff may still fail later for other reasons; prove recovery side effects here.
+        await handlers.handleIndexCodebase({ path: repoPath });
+        assert.ok(markerCalls >= 1);
+        assert.equal(failedCalls, 1);
+        assert.equal(currentInfo.status, 'indexfailed');
+    });
+});
+
+test('startup recovery skips live writers and does not unfence lifecycle publication', async () => {
+    await withTempRepo(async (repoPath) => {
+        const stateDir = path.join(path.dirname(repoPath), 'startup-recovery-leases');
+        const activeOwner = new MutationLeaseCoordinator({ stateDir, ownerId: 'live-writer' });
+        const startupOwner = new MutationLeaseCoordinator({ stateDir, ownerId: 'startup-owner' });
+        const active = activeOwner.acquire(repoPath, 'create');
+        assert.equal(active.acquired, true);
+        if (!active.acquired) {
+            return;
+        }
+        let markerCalls = 0;
+        let failedCalls = 0;
+        let saveCalls = 0;
+        const currentInfo: IndexingInfo = {
+            status: 'indexing',
+            indexingPercentage: 50,
+            lastUpdated: '2026-02-27T23:57:03.000Z',
+        };
+        try {
+            const context = {
+                getIndexCompletionMarker: async () => {
+                    markerCalls += 1;
+                    return null;
+                },
+            } as unknown as HandlerContext;
+            const snapshotManager = {
+                getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
+                getIndexingCodebases: () => [repoPath],
+                getIndexedCodebases: () => [],
+                getCodebaseStatus: () => 'indexing',
+                getCodebaseInfo: () => currentInfo,
+                getIndexingProgress: () => currentInfo.indexingPercentage,
+                setCodebaseIndexFailed: () => { failedCalls += 1; },
+                ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+                saveCodebaseSnapshot: () => { saveCalls += 1; return true; },
+            } as unknown as HandlerSnapshotManager;
+            const handlers = new ToolHandlers(
+                context,
+                snapshotManager,
+                { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager,
+                RUNTIME_FINGERPRINT,
+                CAPABILITIES,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                null,
+                startupOwner,
+            );
+
+            await handlers.recoverInterruptedIndexingAtStartup();
+            assert.equal(markerCalls, 0);
+            assert.equal(failedCalls, 0);
+            assert.equal(saveCalls, 0);
+            assert.equal(currentInfo.status, 'indexing');
+        } finally {
+            activeOwner.release(active.lease);
+        }
+    });
+});
+
+test('startup recovery fences abandoned indexing when no live writer holds the lease', async () => {
+    await withTempRepo(async (repoPath) => {
+        const receiptHarness = createReceiptHarness();
+        let markerCalls = 0;
+        let failedCalls = 0;
+        let currentInfo: IndexingInfo | IndexFailedInfo = {
+            status: 'indexing',
+            indexingPercentage: 12,
+            lastUpdated: new Date().toISOString(),
+        };
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'startup-fenced-recovery-leases'),
+            ownerId: 'startup-recovery-owner',
+        });
+        const context = {
+            getIndexCompletionMarker: async () => {
+                markerCalls += 1;
+                return null;
+            },
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
+            getIndexingCodebases: () => currentInfo.status === 'indexing' ? [repoPath] : [],
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => currentInfo.status,
+            getCodebaseInfo: () => currentInfo,
+            getIndexingProgress: () => currentInfo.status === 'indexing' ? currentInfo.indexingPercentage : undefined,
+            setCodebaseIndexFailed: (_path: string, errorMessage: string, lastAttemptedPercentage?: number) => {
+                failedCalls += 1;
+                currentInfo = {
+                    status: 'indexfailed',
+                    errorMessage,
+                    lastAttemptedPercentage,
+                    lastUpdated: new Date().toISOString(),
+                };
+            },
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            ...receiptHarness.snapshotMethods,
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
+
+        await handlers.recoverInterruptedIndexingAtStartup();
+        assert.equal(markerCalls, 1);
+        assert.equal(failedCalls, 1);
+        assert.equal(currentInfo.status, 'indexfailed');
+        assert.equal(coordinator.getActiveLease(repoPath), undefined);
+        assert.equal(receiptHarness.startCalls, 1);
+        assert.deepEqual(receiptHarness.persistedPhases, ['accepted', 'proving', 'failed']);
+        assert.equal(receiptHarness.latestOperation?.action, 'repair');
+        assert.equal(receiptHarness.latestOperation?.phase, 'failed');
+    });
+});
+
 test('handleSyncCodebase routes through ensureFreshness and does not call raw reindexByChange', async () => {
     await withTempRepo(async (repoPath) => {
         let rawReindexCalls = 0;

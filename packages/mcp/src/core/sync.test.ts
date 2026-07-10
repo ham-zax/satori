@@ -396,7 +396,6 @@ test('ensureFreshness does not treat mutation lease loss as a missing root', asy
         ownerId: 'owner',
         pid: process.pid,
         acquiredAt: new Date(0).toISOString(),
-        lastHeartbeatAt: new Date(0).toISOString(),
     };
     const mutationLeaseCoordinator = {
         assertCurrent() {

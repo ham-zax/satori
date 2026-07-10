@@ -1,7 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { IndexCompletionMarkerDocument } from "@zokizuan/satori-core";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,8 +18,6 @@ import { SnapshotManager } from "../core/snapshot.js";
 import { SyncManager } from "../core/sync.js";
 import { ToolHandlers } from "../core/handlers.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
-import { getCompletionMarkerReader } from "../core/completion-proof.js";
-import { decideInterruptedIndexingRecovery } from "../core/indexing-recovery.js";
 import {
     RuntimeOwnerRegistry,
     buildRuntimeOwnerIdentityFromConfig,
@@ -229,43 +226,12 @@ class ContextMcpServer {
     }
 
     /**
-     * Verify cloud state and fix interrupted indexing snapshots.
+     * Verify interrupted indexing snapshots via the fenced recovery path.
+     * Must not publish lifecycle transitions without a mutation lease.
      */
-    private async verifyCloudState(toolContext: ToolContext): Promise<void> {
+    private async verifyCloudState(_toolContext: ToolContext): Promise<void> {
         console.log("[STARTUP] Verifying interrupted indexing state against completion markers...");
-        const indexingCodebases = toolContext.snapshotManager.getIndexingCodebases();
-        let promotedCount = 0;
-        let failedCount = 0;
-        const getIndexCompletionMarker = getCompletionMarkerReader(toolContext.context);
-
-        for (const codebasePath of indexingCodebases) {
-            const marker = getIndexCompletionMarker
-                ? await getIndexCompletionMarker(codebasePath) as IndexCompletionMarkerDocument | null
-                : null;
-            const decision = decideInterruptedIndexingRecovery(marker, this.runtimeFingerprint);
-            if (decision.action === "promote_indexed") {
-                const collectionName = typeof toolContext.context.getActiveIndexedCollectionName === "function"
-                    ? await toolContext.context.getActiveIndexedCollectionName(codebasePath) ?? undefined
-                    : undefined;
-                toolContext.snapshotManager.setCodebaseIndexed(codebasePath, decision.stats, decision.indexFingerprint, "verified", collectionName);
-                promotedCount++;
-                const recoveryMode = decision.reason === "valid_marker_runtime_mismatch"
-                    ? "indexed (fingerprint recovered from marker; current runtime differs)"
-                    : "indexed";
-                console.log(`[STARTUP] Recovered interrupted indexing from marker: ${codebasePath} -> ${recoveryMode}`);
-                continue;
-            }
-            toolContext.snapshotManager.setCodebaseIndexFailed(codebasePath, decision.message);
-            failedCount++;
-            console.log(`[STARTUP] Marked interrupted indexing as failed: ${codebasePath} (${decision.reason})`);
-        }
-
-        if (promotedCount > 0 || failedCount > 0) {
-            toolContext.snapshotManager.saveCodebaseSnapshot();
-            console.log(`[STARTUP] Recovery summary: promoted=${promotedCount}, failed=${failedCount}`);
-        } else {
-            console.log("[STARTUP] No interrupted indexing states required recovery");
-        }
+        await this.toolHandlers.recoverInterruptedIndexingAtStartup();
     }
 
     private setupTools(): void {

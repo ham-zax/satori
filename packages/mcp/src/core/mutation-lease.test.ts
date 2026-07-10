@@ -200,6 +200,61 @@ test("process-start mismatch permits takeover and old owner cannot release it", 
     });
 });
 
+test("live PID without processStartTime remains fail-closed and blocks takeover", async () => {
+    await withTempDir((tempDir) => {
+        const root = path.join(tempDir, "repo");
+        fs.mkdirSync(root);
+        const processes = new Map<number, MutationLeaseProcessSnapshot>([
+            [101, { pid: 101 }],
+            [202, { pid: 202 }],
+        ]);
+        const first = coordinator(path.join(tempDir, "state"), { pid: 101 }, processes, "owner-a");
+        const second = coordinator(path.join(tempDir, "state"), { pid: 202 }, processes, "owner-b");
+
+        const acquired = first.acquire(root, "create");
+        assert.equal(acquired.acquired, true);
+        if (acquired.acquired) {
+            assert.equal(acquired.lease.processStartTime, undefined);
+            assert.equal("lastHeartbeatAt" in acquired.lease, false);
+        }
+
+        const blocked = second.acquire(root, "repair");
+        assert.equal(blocked.acquired, false);
+        if (!blocked.acquired) {
+            assert.equal(blocked.activeLease.pid, 101);
+        }
+    });
+});
+
+test("old acquiredAt never evicts a live owner", async () => {
+    await withTempDir((tempDir) => {
+        const root = path.join(tempDir, "repo");
+        fs.mkdirSync(root);
+        const processes = new Map([
+            [101, snapshot(101)],
+            [202, snapshot(202)],
+        ]);
+        const first = new MutationLeaseCoordinator({
+            stateDir: path.join(tempDir, "state"),
+            currentProcess: snapshot(101),
+            processInspector: inspector(processes),
+            ownerId: "owner-a",
+            now: () => 1_000,
+        });
+        const second = new MutationLeaseCoordinator({
+            stateDir: path.join(tempDir, "state"),
+            currentProcess: snapshot(202),
+            processInspector: inspector(processes),
+            ownerId: "owner-b",
+            now: () => 1_000_000_000,
+        });
+
+        assert.equal(first.acquire(root, "sync").acquired, true);
+        const blocked = second.acquire(root, "clear");
+        assert.equal(blocked.acquired, false);
+    });
+});
+
 test("separate processes contend and a reaped owner can be replaced", { timeout: 10_000 }, async () => {
     await withTempDir(async (tempDir) => {
         const root = path.join(tempDir, "repo");

@@ -52,7 +52,7 @@ export function collapseRegistryDuplicateKeyWarnings(warnings: readonly string[]
 type RelationshipBackedCallGraphHost = {
     navigationStore: NavigationStore;
     callGraphManager: CallGraphSidecarManager;
-    snapshotManager: Pick<SnapshotManager, "setCodebaseCallGraphSidecar">;
+    snapshotManager: Pick<SnapshotManager, "setCodebaseCallGraphSidecar" | "commitCodebaseCallGraphSidecar" | "saveCodebaseSnapshot">;
     saveSnapshotIfSupported(): void;
     getContextActiveIgnorePatterns(codebasePath: string): string[];
 };
@@ -550,8 +550,7 @@ export class RelationshipBackedCallGraph {
                 assertMutationCurrent,
             );
             assertMutationCurrent?.();
-            this.host.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
-            this.host.saveSnapshotIfSupported();
+            this.commitCallGraphSidecar(codebasePath, sidecar, assertMutationCurrent);
             console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
         } catch (error) {
             assertMutationCurrent?.();
@@ -575,8 +574,7 @@ export class RelationshipBackedCallGraph {
                 return false;
             }
             assertMutationCurrent?.();
-            this.host.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
-            this.host.saveSnapshotIfSupported();
+            this.commitCallGraphSidecar(codebasePath, sidecar, assertMutationCurrent);
             console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync delta (${sidecar.nodeCount} nodes, ${sidecar.edgeCount} edges).`);
             return true;
         } catch (error) {
@@ -584,5 +582,31 @@ export class RelationshipBackedCallGraph {
             console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after sync '${codebasePath}': ${formatUnknownError(error)}`);
             return false;
         }
+    }
+
+    private commitCallGraphSidecar(
+        codebasePath: string,
+        sidecar: Parameters<SnapshotManager["setCodebaseCallGraphSidecar"]>[1],
+        assertMutationCurrent?: () => void,
+    ): void {
+        if (typeof this.host.snapshotManager.commitCodebaseCallGraphSidecar === "function") {
+            const committed = this.host.snapshotManager.commitCodebaseCallGraphSidecar(
+                codebasePath,
+                sidecar,
+                assertMutationCurrent,
+            );
+            if (!committed) {
+                throw new Error(`Failed to persist call-graph sidecar for '${codebasePath}'.`);
+            }
+            return;
+        }
+        this.host.snapshotManager.setCodebaseCallGraphSidecar(codebasePath, sidecar);
+        if (typeof this.host.snapshotManager.saveCodebaseSnapshot === "function") {
+            if (this.host.snapshotManager.saveCodebaseSnapshot(false, assertMutationCurrent) === false) {
+                throw new Error(`Failed to persist call-graph sidecar for '${codebasePath}'.`);
+            }
+            return;
+        }
+        this.host.saveSnapshotIfSupported();
     }
 }

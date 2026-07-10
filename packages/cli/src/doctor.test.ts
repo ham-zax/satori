@@ -352,7 +352,6 @@ test("runDoctor reports active and abandoned mutation leases without age expiry"
                 pid,
                 processStartTime,
                 acquiredAt: "2000-01-01T00:00:00.000Z",
-                lastHeartbeatAt: "2000-01-01T00:00:00.000Z",
             },
         });
         fs.writeFileSync(path.join(tempDir, "a.json"), JSON.stringify(lease("/repo/active", 111, "start-111")));

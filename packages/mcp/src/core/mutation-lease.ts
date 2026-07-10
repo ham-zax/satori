@@ -21,7 +21,6 @@ export interface RootMutationLease {
     pid: number;
     processStartTime?: string;
     acquiredAt: string;
-    lastHeartbeatAt: string;
 }
 
 export type MutationLeaseAcquireResult =
@@ -142,7 +141,6 @@ export class MutationLeaseCoordinator {
                 pid: this.currentProcess.pid,
                 processStartTime: this.currentProcess.processStartTime,
                 acquiredAt: now,
-                lastHeartbeatAt: now,
             };
             this.writeState({
                 formatVersion: "v1",
@@ -194,6 +192,16 @@ export class MutationLeaseCoordinator {
         });
     }
 
+    /**
+     * Liveness is process identity, not lease age.
+     * - Dead PID => not live.
+     * - When both sides have processStartTime and they differ => PID reuse, not live.
+     * - When start-time evidence is missing, a live PID is treated as the owner
+     *   (fail-closed for writer safety). On non-Linux systems start-time is often
+     *   unavailable; operators may need to stop the listed PID or clear an abandoned
+     *   lease file after confirming no Satori writer holds the root.
+     * - acquiredAt is diagnostic only; wall-clock age never evicts a live owner.
+     */
     private isOwnerLive(lease: RootMutationLease): boolean {
         const current = this.processInspector.inspect(lease.pid);
         if (!current) {
@@ -255,8 +263,7 @@ export class MutationLeaseCoordinator {
             && typeof value.ownerId === "string"
             && typeof value.pid === "number"
             && (value.processStartTime === undefined || typeof value.processStartTime === "string")
-            && typeof value.acquiredAt === "string"
-            && typeof value.lastHeartbeatAt === "string";
+            && typeof value.acquiredAt === "string";
     }
 
     private writeState(state: MutationLeaseState): void {

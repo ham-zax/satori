@@ -1,6 +1,6 @@
 # Operational Trust Product Plan
 
-Status: P0 operational trust complete; P1/P2 implementation remains
+Status: P0 operational trust implemented with residual hardening closed for startup recovery, exclusive-lease supersede, repair recovery, and call-graph commit fencing; P1/P2 implementation remains
 
 ## Capability
 
@@ -29,14 +29,16 @@ The mutation-ownership, durable-receipt, repair-evidence, and verified-installat
 
 - A machine-local `MutationLeaseCoordinator` persists one fenced generation and optional active lease per canonical root.
 - Lease takeover requires a dead PID or process-start mismatch; elapsed wall-clock time alone is not eviction proof.
+- When process-start evidence is unavailable, a live PID is treated as the owner (fail-closed). That is deliberate writer safety; PID reuse can block operators until the listed PID exits. Lease age is diagnostic only and is never eviction authority.
 - One coordinator instance is shared across local and provider-backed runtimes.
 - Create/reindex transfers its lease into background indexing and releases it only after a terminal path.
-- Repair, clear, manual sync, periodic sync, watcher sync, search-on-read sync, ignore reconciliation, and missing-root cleanup enter through the same ownership mechanism.
+- Repair, clear, manual sync, periodic sync, watcher sync, search-on-read sync, ignore reconciliation, missing-root cleanup, and startup interrupted-index recovery enter through the same ownership mechanism.
 - Explicit Zilliz eviction holds both the create target lease and the proven mapped-root lease; deletion is refused when collection ownership cannot be proven.
-- Stale-index recovery is fenced by the current mutation lease, and read readiness no longer clears snapshot or watcher state when a collection probe reports missing.
+- Stale-index recovery is fenced by the current mutation lease. Wall-clock grace applies only before exclusive ownership is proven; exclusive lease holders (create/reindex/repair/clear/startup) supersede abandoned `indexing` rows immediately. Read readiness no longer clears snapshot or watcher state when a collection probe reports missing.
+- Startup recovery acquires a mutation lease per root, skips roots with a live writer, and reuses the fenced recovery helper rather than writing lifecycle state without a lease.
 - `manage_index status` exposes a live `hints.activeMutation` record. It does not report an expiry because ownership is based on process liveness, not elapsed lease age.
 - Lost generations refuse stale background terminal publication.
-- The durable-transition audit now fences vector inserts and deletes, completion-marker publication, symbol and relationship sidecars, SQLite navigation publication, call-graph publication, Merkle checkpoint commits, snapshot lifecycle publication, and staged-failure cleanup.
+- The durable-transition audit fences vector inserts and deletes, completion-marker publication, symbol and relationship sidecars, SQLite navigation publication, call-graph publication (including fenced snapshot commit with in-memory sidecar rollback on fence failure), Merkle checkpoint commits, snapshot lifecycle publication, and staged-failure cleanup.
 - Snapshot v3 persists the latest operation receipt independently from lifecycle entries, including completed clear receipts.
 - Create, reindex, sync, repair, clear, stale recovery, and cross-root eviction publish receipts through the same transactional snapshot commit.
 - Receipt commits roll back in-memory receipt and lifecycle mutations when persistence fails, reject stale local or disk authority, and return only the post-save authoritative receipt.
@@ -49,9 +51,8 @@ The mutation-ownership, durable-receipt, repair-evidence, and verified-installat
 - Postflight uses a dedicated non-mutating MCP run mode. It skips recovery, watchers, background sync, lifecycle tools, search, and provider-backed work; incomplete static provider/backend configuration is warning-only, while wiring or runtime proof failure returns a non-zero install exit without rolling back installed artifacts.
 - Managed launchers retain the five-second signal grace for cooperative cleanup. They proxy stdin, trigger graceful MCP shutdown and owner unregister on EOF, and use a separate 1.5-second EOF fallback to reap non-cooperative children inside the MCP SDK shutdown window.
 - Doctor now compares live owner versions and stable identities with the installed runtime, uses process-start evidence when available, reports lease state without age expiry or mutation, validates the managed launcher target/version, and reuses installer-owned parsers to verify configured Codex, Claude, and OpenCode entries.
-- Latest focused verification passed the complete MCP suite (652 tests), complete CLI suite (96 tests), CLI/MCP lint and typecheck, generated-document checks, launcher-generator tests, and `git diff --check`. The repository-wide integration gate was not rerun after the final installer/doctor changes and is not claimed here.
 
-Verified installation and expanded doctor diagnostics are implemented. The P0 operational-trust sequence is complete.
+Verified installation and expanded doctor diagnostics are implemented. Residual P0 fencing gaps for startup recovery, exclusive-lease supersede of abandoned indexing, repair recovery entry, and call-graph commit fencing are closed in the same ownership model.
 
 ## Remaining Roadmap
 
@@ -105,7 +106,6 @@ interface RootMutationLease {
     pid: number;
     processStartTime?: string;
     acquiredAt: string;
-    lastHeartbeatAt: string;
 }
 ```
 
@@ -121,8 +121,9 @@ The canonical root is the real repository path. The on-disk lease name uses a st
 6. A dead or PID-reused owner may be replaced; replacement increments the generation.
 7. Release only when owner identity and generation still match the current record.
 8. A competing mutation returns a deterministic blocked response instead of waiting indefinitely.
+9. When process-start evidence is missing, a live PID is fail-closed treated as the owner (operator may need to stop the PID).
 
-Heartbeat age is diagnostic evidence, not authority to evict a live owner.
+`acquiredAt` is diagnostic metadata only. It is not authority to evict a live owner.
 
 ### Lease Scope
 

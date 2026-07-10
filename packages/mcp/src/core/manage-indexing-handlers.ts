@@ -917,6 +917,9 @@ export class ManageIndexingHandlers {
                 lastDurableOperation = operation;
             }
 
+            // Exclusive lease holders may supersede abandoned indexing immediately.
+            await this.host.recoverStaleIndexingStateIfNeeded(absolutePath, mutationLease);
+
             if (this.host.getSnapshotIndexingCodebases().includes(absolutePath)) {
                 const operation = persistOperation("blocked");
                 return this.host.manageResponse(

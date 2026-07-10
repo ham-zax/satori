@@ -170,6 +170,9 @@ function createRepairReceiptHarness(
             content: [{ type: "text", text: JSON.stringify({ action, path: responsePath, status, message, ...responseOptions }) }],
         }),
         buildRuntimeOwnerConflictResponseIfBlocked: async () => null,
+        recoverStaleIndexingStateIfNeeded: async () => {
+            events.push("recover-stale-indexing");
+        },
         getSnapshotIndexingCodebases: () => [],
         getSnapshotCodebaseInfo: () => ({
             status: "indexed",
@@ -502,6 +505,81 @@ test("handleRepairIndex saves the manifest paths verified by repair", async () =
     });
 });
 
+test("handleRepairIndex recovers abandoned indexing before the indexing gate", async () => {
+    await withTempRepo(async (repoPath) => {
+        let recoverCalls = 0;
+        let indexingProbeCalls = 0;
+        let stillIndexing = true;
+        const handler = new ManageIndexingHandlers({
+            context: {
+                repairIndex: async () => ({
+                    status: "ok",
+                    message: "repaired",
+                    indexedFiles: 1,
+                    totalChunks: 2,
+                    warnings: [],
+                    trackedRelativePaths: ["src/repaired.ts"],
+                    proof: {
+                        collection: { status: "matched" },
+                        snapshot: { status: "matched" },
+                        marker: { status: "matched" },
+                        fingerprint: { status: "matched" },
+                        payload: { status: "matched" },
+                        staleRemoteChunks: { status: "matched" },
+                        navigation: { status: "not_checked" },
+                    },
+                }),
+            },
+            snapshotManager: {
+                setCodebaseIndexed: () => undefined,
+                setCodebaseIndexManifest: () => undefined,
+            },
+            syncManager: {},
+            runtimeFingerprint: RUNTIME_FINGERPRINT,
+            manageResponse: (action: string, responsePath: string, status: string, message: string, options?: Record<string, unknown>) => ({
+                content: [{ type: "text", text: JSON.stringify({ action, path: responsePath, status, message, ...options }) }],
+            }),
+            buildRuntimeOwnerConflictResponseIfBlocked: async () => null,
+            recoverStaleIndexingStateIfNeeded: async () => {
+                recoverCalls += 1;
+                stillIndexing = false;
+            },
+            getSnapshotIndexingCodebases: () => {
+                indexingProbeCalls += 1;
+                return stillIndexing ? [repoPath] : [];
+            },
+            getSnapshotCodebaseInfo: () => ({
+                status: "indexed",
+                collectionName: "snapshot-selected-collection",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+            }),
+            buildStatusHint: (codebasePath: string) => ({ tool: "manage_index", args: { action: "status", path: codebasePath } }),
+            getManageRetryAfterMs: () => 2000,
+            buildIndexingMetadata: () => undefined,
+            buildManageActionBlockedMessage: () => "blocked-by-indexing",
+            buildReindexInstruction: () => "reindex",
+            buildManageRequiresReindexHints: () => ({}),
+            buildCreateHint: (codebasePath: string) => ({ tool: "manage_index", args: { action: "create", path: codebasePath } }),
+            getContextTrackedRelativePaths: () => [],
+            setIndexingStats: () => undefined,
+            rebuildCallGraphForIndex: async () => undefined,
+            touchWatchedCodebase: async () => undefined,
+            saveSnapshotIfSupported: () => undefined,
+            getSnapshotIndexingProgress: () => undefined,
+            clearIndexCompletionMarker: async () => undefined,
+        } as unknown as ConstructorParameters<typeof ManageIndexingHandlers>[0]);
+
+        const response = await handler.handleRepairIndex({ path: repoPath });
+        const payload = JSON.parse(response.content[0].text);
+
+        assert.equal(recoverCalls, 1);
+        assert.ok(indexingProbeCalls >= 1);
+        assert.equal(payload.status, "ok");
+        assert.notEqual(payload.reason, "indexing");
+    });
+});
+
 test("handleRepairIndex does not publish success after lease loss during call-graph rebuild", async () => {
     await withTempRepo(async (repoPath) => {
         const coordinator = new MutationLeaseCoordinator({
@@ -531,6 +609,7 @@ test("handleRepairIndex does not publish success after lease loss during call-gr
                 content: [{ type: "text", text: JSON.stringify({ action, path: responsePath, status, message }) }],
             }),
             buildRuntimeOwnerConflictResponseIfBlocked: async () => null,
+            recoverStaleIndexingStateIfNeeded: async () => undefined,
             getSnapshotIndexingCodebases: () => [],
             getSnapshotCodebaseInfo: () => ({
                 status: "indexed",

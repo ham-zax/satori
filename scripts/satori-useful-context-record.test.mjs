@@ -291,7 +291,8 @@ test("recording rejects cache-warming setup calls", () => {
     try {
         const repoRoot = path.join(temp, "repo");
         const tasksFile = path.join(temp, "tasks.json");
-        const fakeMcp = path.join(temp, "fake-mcp.mjs");
+        const fakeMcp = path.join(temp, "must-not-start.mjs");
+        const markerFile = path.join(temp, "started");
         initializeRepo(repoRoot);
         const suite = taskSuite(repoRoot);
         suite.tasks = [suite.tasks[0]];
@@ -300,7 +301,7 @@ test("recording rejects cache-warming setup calls", () => {
             args: { path: "$REPO_ROOT", query: "find owner" },
         }];
         writeJson(tasksFile, suite);
-        writeFakeMcp(fakeMcp);
+        fs.writeFileSync(fakeMcp, `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(markerFile)}, "started");`);
 
         const run = spawnSync(process.execPath, [
             SCRIPT_PATH, "--tasks", tasksFile, "--repo", repoRoot,
@@ -308,6 +309,7 @@ test("recording rejects cache-warming setup calls", () => {
         ], { encoding: "utf8" });
         assert.equal(run.status, 1);
         assert.match(run.stderr, /setup may only use manage_index status/i);
+        assert.equal(fs.existsSync(markerFile), false);
     } finally {
         fs.rmSync(temp, { recursive: true, force: true });
     }

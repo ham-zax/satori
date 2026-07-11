@@ -497,12 +497,17 @@ export async function callAndDecode(session, invocation) {
     return { result, payload: decodeToolResponse(result) };
 }
 
-async function proveReady(session, task) {
-    let readinessPayload;
+function validateSetupProtocol(task) {
     for (const invocation of task.workload.setup) {
         if (invocation.tool !== "manage_index" || invocation.args.action !== "status") {
             throw new Error(`Task '${task.id}' setup may only use manage_index status.`);
         }
+    }
+}
+
+async function proveReady(session, task) {
+    let readinessPayload;
+    for (const invocation of task.workload.setup) {
         const called = await callAndDecode(session, invocation);
         readinessPayload = called.payload;
     }
@@ -609,6 +614,7 @@ export async function recordSuite(taskSuite, options) {
     const validated = validateTaskSuite(taskSuite);
     const repoRoot = fs.realpathSync(options.repoRoot);
     const expanded = replaceRepoRoot(validated, repoRoot);
+    for (const task of expanded.tasks) validateSetupProtocol(task);
     if (options.dryRun) {
         return { version: 1, dryRun: true, repoRoot, tasks: expanded.tasks };
     }

@@ -20,8 +20,13 @@ export interface CodeChunk {
     };
 }
 
-export type LanguageAnalysisBackend = 'oxc' | 'tree_sitter_wasm' | 'recursive_text';
+export type LanguageAnalysisBackend = 'oxc' | 'tree_sitter_wasm' | 'bounded_text';
 export type StructuralStatus = 'complete' | 'recovered' | 'unsupported';
+export type StructuralReason =
+    | 'syntax_error'
+    | 'parser_unavailable'
+    | 'analysis_failure'
+    | 'unsupported_language';
 
 export interface SourceSpan {
     readonly startLine: number;
@@ -53,19 +58,25 @@ export interface LanguageAnalysisInput {
     readonly relativePath: string;
 }
 
-export interface LanguageAnalysisResult {
+interface LanguageAnalysisEvidence {
     readonly backend: LanguageAnalysisBackend;
-    readonly structuralStatus: StructuralStatus;
     readonly symbols: readonly ExtractedSymbol[];
     readonly moduleBindings: readonly ModuleBinding[];
     readonly callSites: readonly CallSite[];
     readonly chunks: readonly CodeChunk[];
 }
 
+export type LanguageAnalysisResult = LanguageAnalysisEvidence & (
+    | { readonly structuralStatus: 'complete'; readonly structuralReason?: never }
+    | {
+        readonly structuralStatus: 'recovered';
+        readonly structuralReason: Exclude<StructuralReason, 'unsupported_language'>;
+    }
+    | { readonly structuralStatus: 'unsupported'; readonly structuralReason: 'unsupported_language' }
+);
+
 export interface LanguageAnalysisPort {
     analyze(input: LanguageAnalysisInput): Promise<LanguageAnalysisResult>;
-    setChunkSize(chunkSize: number): void;
-    setChunkOverlap(chunkOverlap: number): void;
     getDescription(): string;
     getStrategyForLanguage(language: string): {
         backend: LanguageAnalysisBackend;

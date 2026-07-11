@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { Language, Parser, type Node } from 'web-tree-sitter';
 
 import type { ExtractedSymbol, ExtractedSymbolKind } from '../languages';
+import { Utf8SourceMap } from './source-map';
 import type { CallSite, LanguageAnalysisInput, ModuleBinding } from './types';
 
 const localRequire = createRequire(__filename);
@@ -82,15 +83,30 @@ function languageAssetPath(language: string, assetRoot?: string): string {
 }
 
 async function loadLanguage(language: string, assetRoot?: string): Promise<Language> {
-    parserInitialization ??= Parser.init();
-    await parserInitialization;
-    const cacheKey = `${assetRoot ?? '<default>'}:${language}`;
-    let loaded = languages.get(cacheKey);
-    if (!loaded) {
-        loaded = Language.load(languageAssetPath(language, assetRoot));
-        languages.set(cacheKey, loaded);
+    const initialization = parserInitialization ??= Parser.init();
+    try {
+        await initialization;
+    } catch (error) {
+        if (parserInitialization === initialization) {
+            parserInitialization = undefined;
+        }
+        throw error;
     }
-    return loaded;
+    const cacheKey = `${assetRoot ?? '<default>'}:${language}`;
+    const existing = languages.get(cacheKey);
+    if (existing) {
+        return existing;
+    }
+    const loading = Language.load(languageAssetPath(language, assetRoot));
+    languages.set(cacheKey, loading);
+    try {
+        return await loading;
+    } catch (error) {
+        if (languages.get(cacheKey) === loading) {
+            languages.delete(cacheKey);
+        }
+        throw error;
+    }
 }
 
 function nameForNode(node: Node): string | undefined {
@@ -134,7 +150,7 @@ function rustImplOwner(node: Node): string | undefined {
         || undefined;
 }
 
-function extractSymbols(root: Node, language: string): ExtractedSymbol[] {
+function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap): ExtractedSymbol[] {
     const declarations = SYMBOL_NODES[language] ?? {};
     const symbols: ExtractedSymbol[] = [];
     const visit = (
@@ -181,6 +197,7 @@ function extractSymbols(root: Node, language: string): ExtractedSymbol[] {
                     && parentNode?.type === 'decorated_definition'
                         ? parentNode
                         : node,
+                    sourceMap,
                 ),
             });
         }
@@ -216,23 +233,16 @@ function callableName(node: Node): string | undefined {
     return leaf.text.trim() || undefined;
 }
 
-function nodeSpan(node: Node) {
-    return {
-        startLine: node.startPosition.row + 1,
-        endLine: node.endPosition.row + 1,
-        startByte: node.startIndex,
-        endByte: node.endIndex,
-        startColumn: node.startPosition.column,
-        endColumn: node.endPosition.column,
-    };
+function nodeSpan(node: Node, sourceMap: Utf8SourceMap) {
+    return sourceMap.spanFromUtf16(node.startIndex, node.endIndex);
 }
 
-function extractCallSites(root: Node): CallSite[] {
+function extractCallSites(root: Node, sourceMap: Utf8SourceMap): CallSite[] {
     const calls: CallSite[] = [];
     const visit = (node: Node): void => {
         if (CALL_NODE_TYPES.has(node.type)) {
             const name = callableName(node);
-            if (name) calls.push({ calleeName: name, span: nodeSpan(node) });
+            if (name) calls.push({ calleeName: name, span: nodeSpan(node, sourceMap) });
         }
         for (const child of node.namedChildren) visit(child);
     };
@@ -240,7 +250,11 @@ function extractCallSites(root: Node): CallSite[] {
     return calls;
 }
 
-function extractPythonModuleBindings(root: Node, symbols: readonly ExtractedSymbol[]): ModuleBinding[] {
+function extractPythonModuleBindings(
+    root: Node,
+    symbols: readonly ExtractedSymbol[],
+    sourceMap: Utf8SourceMap,
+): ModuleBinding[] {
     const bindings: ModuleBinding[] = symbols
         .filter((symbol) => symbol.parentQualifiedNamePath?.length === 0)
         .map((symbol) => ({
@@ -264,7 +278,7 @@ function extractPythonModuleBindings(root: Node, symbols: readonly ExtractedSymb
                 kind: 'import',
                 moduleSpecifier: moduleName,
                 typeOnly: false,
-                span: nodeSpan(node),
+                span: nodeSpan(node, sourceMap),
             });
         }
     }
@@ -275,34 +289,96 @@ export async function analyzeWithTreeSitter(
     input: LanguageAnalysisInput,
     assetRoot?: string,
 ): Promise<{
-    complete: boolean;
+    complete: true;
     symbols: readonly ExtractedSymbol[];
     moduleBindings: readonly ModuleBinding[];
     callSites: readonly CallSite[];
+} | {
+    complete: false;
+    reason: 'syntax_error' | 'parser_unavailable' | 'analysis_failure';
+    symbols: readonly [];
+    moduleBindings: readonly [];
+    callSites: readonly [];
 }> {
-    const language = await loadLanguage(input.language, assetRoot);
-    const parser = new Parser();
+    let language: Language;
     try {
+        language = await loadLanguage(input.language, assetRoot);
+    } catch {
+        return {
+            complete: false,
+            reason: 'parser_unavailable',
+            symbols: [],
+            moduleBindings: [],
+            callSites: [],
+        };
+    }
+    let parser: Parser | undefined;
+    let tree: ReturnType<Parser['parse']>;
+    try {
+        parser = new Parser();
         parser.setLanguage(language);
-        const tree = parser.parse(input.content);
-        if (!tree) return { complete: false, symbols: [], moduleBindings: [], callSites: [] };
+        tree = parser.parse(input.content);
+    } catch {
+        parser?.delete();
+        return {
+            complete: false,
+            reason: 'parser_unavailable',
+            symbols: [],
+            moduleBindings: [],
+            callSites: [],
+        };
+    }
+    if (!parser) {
+        return {
+            complete: false,
+            reason: 'parser_unavailable',
+            symbols: [],
+            moduleBindings: [],
+            callSites: [],
+        };
+    }
+    if (!tree) {
+        parser.delete();
+        return {
+            complete: false,
+            reason: 'analysis_failure',
+            symbols: [],
+            moduleBindings: [],
+            callSites: [],
+        };
+    }
+    try {
         try {
             if (tree.rootNode.hasError) {
-                return { complete: false, symbols: [], moduleBindings: [], callSites: [] };
+                return {
+                    complete: false,
+                    reason: 'syntax_error',
+                    symbols: [],
+                    moduleBindings: [],
+                    callSites: [],
+                };
             }
-            const symbols = extractSymbols(tree.rootNode, input.language);
+            const sourceMap = new Utf8SourceMap(input.content);
+            const symbols = extractSymbols(tree.rootNode, input.language, sourceMap);
             return {
                 complete: true,
                 symbols,
                 moduleBindings: input.language === 'python'
-                    ? extractPythonModuleBindings(tree.rootNode, symbols)
+                    ? extractPythonModuleBindings(tree.rootNode, symbols, sourceMap)
                     : [],
-                callSites: extractCallSites(tree.rootNode),
+                callSites: extractCallSites(tree.rootNode, sourceMap),
             };
-        } finally {
-            tree.delete();
+        } catch {
+            return {
+                complete: false,
+                reason: 'analysis_failure',
+                symbols: [],
+                moduleBindings: [],
+                callSites: [],
+            };
         }
     } finally {
+        tree.delete();
         parser.delete();
     }
 }

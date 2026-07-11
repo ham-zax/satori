@@ -122,7 +122,11 @@ flowchart LR
     
     K -.-> L[search_codebase Result]
 ```
-*Explanation:* Satori prioritizes structural chunking through one normalized port. Oxc analyzes the JavaScript/TypeScript family and Tree-sitter WASM analyzes the other symbol-capable languages. If structural analysis is unavailable or invalid, indexing keeps bounded searchable text but publishes no authoritative symbols. Oversized structural units are sub-split while retaining scope breadcrumbs (for example, `class UserService > method updateUserProfile`).
+*Explanation:* Satori prioritizes structural chunking through one immutable, construction-configured port. Oxc analyzes the JavaScript/TypeScript family and Tree-sitter WASM analyzes the other symbol-capable languages. Results from `createLanguageAnalysisService()` distinguish complete analysis from typed recovery (`syntax_error`, `parser_unavailable`, or `analysis_failure`) and unsupported languages (`unsupported_language`). Its recovery keeps bounded searchable text but publishes no authoritative symbols and does not expose raw parser failures. Injected `LanguageAnalysisPort` implementations remain responsible for that no-throw contract. Normalized spans use UTF-8 byte offsets for slicing and UTF-16 code-unit columns for editor navigation. Oversized structural units are sub-split while retaining scope breadcrumbs (for example, `class UserService > method updateUserProfile`).
+
+Relationship sidecars retain normalized per-file module-binding and call-site evidence alongside resolved edges. Incremental indexing reuses that evidence only for unchanged manifest entries, overlays changed-file analysis, and resolves the complete relationship set against the newly published symbol registry without reparsing unrelated source files.
+
+The normalized extractor and relationship identities are `language-analysis-v4+<parser identity>` and `relationship-v3+utf8-normalized-analysis`. Existing v3/relationship-v2 indexes fail the compatibility gate and require `manage_index:reindex`; `sync` cannot rewrite incompatible navigation evidence. This changes the exported Core 2.0 analyzer API, while the six public MCP tool schemas remain unchanged.
 
 ---
 
@@ -145,7 +149,7 @@ MCP Client
 +---------------------------------------------------------------+
 | Core Engine (`packages/core`)                                |
 |  - Context orchestrator                                      |
-|  - Splitter (AST + recursive fallback)                       |
+|  - Splitter (AST + bounded fixed-size text fallback)         |
 |  - Embedding providers                                       |
 |  - Vector DB adapters (Milvus gRPC / REST)                   |
 +---------------------+----------------------+------------------+

@@ -44,7 +44,7 @@ npx -y @zokizuan/satori-cli@latest install --client all
 npx -y @zokizuan/satori-cli@latest doctor
 ```
 
-Satori requires Node.js 22.12 or newer. This release changes the durable parser, symbol-extractor, and relationship-builder fingerprints; existing indexes return `requires_reindex` and must be rebuilt once. `sync` does not migrate an incompatible index.
+Satori requires Node.js 22.12 or newer. This release uses UTF-8-normalized `language-analysis-v4` and `relationship-v3` evidence; indexes built with `language-analysis-v3` or `relationship-v2` return `requires_reindex` and must be rebuilt once. `sync` does not migrate an incompatible index.
 
 Supported installers: `codex`, `claude`, `opencode`, and `all`.
 

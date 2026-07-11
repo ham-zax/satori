@@ -1,7 +1,28 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 
 import { createLanguageAnalysisService } from './service';
+import { getLanguageCapabilityDeclarations } from '../languages/capabilities';
+
+const localRequire = createRequire(__filename);
+
+test('production-ready parser capabilities resolve to structural analysis backends', () => {
+    const analyzer = createLanguageAnalysisService();
+    const productionReady = getLanguageCapabilityDeclarations()
+        .filter((declaration) => declaration.parserCapability === 'production_ready');
+
+    for (const declaration of productionReady) {
+        assert.equal(
+            analyzer.getStrategyForLanguage(declaration.languageId).structural,
+            true,
+            declaration.languageId,
+        );
+    }
+});
 
 test('language analysis routes TypeScript through Oxc with structural evidence', async () => {
     const analyzer = createLanguageAnalysisService({ chunkSize: 2500, chunkOverlap: 300 });
@@ -21,6 +42,7 @@ test('language analysis routes TypeScript through Oxc with structural evidence',
 
     assert.equal(result.backend, 'oxc');
     assert.equal(result.structuralStatus, 'complete');
+    assert.ok(!('structuralReason' in result));
     assert.ok(result.symbols.some((symbol) => symbol.kind === 'function' && symbol.name === 'run'));
     assert.ok(result.moduleBindings.some((binding) => (
         binding.kind === 'import'
@@ -75,6 +97,7 @@ test('Oxc infrastructure exceptions degrade to searchable recovered text', async
 
     assert.equal(result.backend, 'oxc');
     assert.equal(result.structuralStatus, 'recovered');
+    assert.equal(result.structuralReason, 'analysis_failure');
     assert.deepEqual(result.symbols, []);
     assert.ok(result.chunks.some((chunk) => chunk.content.includes('function run')));
 });
@@ -290,8 +313,36 @@ test('missing Tree-sitter assets degrade to searchable recovered text', async ()
 
     assert.equal(result.backend, 'tree_sitter_wasm');
     assert.equal(result.structuralStatus, 'recovered');
+    assert.equal(result.structuralReason, 'parser_unavailable');
     assert.deepEqual(result.symbols, []);
     assert.ok(result.chunks.some((chunk) => chunk.content.includes('def run')));
+});
+
+test('Tree-sitter retries a language load after a transient asset failure', async () => {
+    const assetRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-tree-sitter-retry-'));
+    const analyzer = createLanguageAnalysisService({ assetRoot });
+    const input = {
+        content: 'def run():\n    return 1\n',
+        language: 'python',
+        relativePath: 'src/service.py',
+    };
+
+    try {
+        const unavailable = await analyzer.analyze(input);
+        assert.equal(unavailable.structuralStatus, 'recovered');
+        assert.equal(unavailable.structuralReason, 'parser_unavailable');
+
+        fs.copyFileSync(
+            localRequire.resolve('@vscode/tree-sitter-wasm/wasm/tree-sitter-python.wasm'),
+            path.join(assetRoot, 'tree-sitter-python.wasm'),
+        );
+
+        const recovered = await analyzer.analyze(input);
+        assert.equal(recovered.structuralStatus, 'complete');
+        assert.ok(recovered.symbols.some((symbol) => symbol.name === 'run'));
+    } finally {
+        fs.rmSync(assetRoot, { recursive: true, force: true });
+    }
 });
 
 const wasmLanguageFixtures = [
@@ -333,6 +384,117 @@ const wasmLanguageFixtures = [
     },
 ] as const;
 
+const wasmUnicodeSpanFixtures = [
+    {
+        language: 'python',
+        relativePath: 'src/unicode.py',
+        content: '# café 你好 😀\r\ndef run():\r\n    helper("你好😀")\r\n',
+        symbolName: 'run',
+        expectedSlice: 'def run():\r\n    helper("你好😀")',
+        callName: 'helper',
+        expectedCallSlice: 'helper("你好😀")',
+        expectedStartColumn: 0,
+    },
+    {
+        language: 'go',
+        relativePath: 'unicode.go',
+        content: '// café 你好 😀\r\npackage main\r\nfunc run() { helper() }\r\n',
+        symbolName: 'run',
+        expectedSlice: 'func run() { helper() }',
+        callName: 'helper',
+        expectedCallSlice: 'helper()',
+        expectedStartColumn: 0,
+    },
+    {
+        language: 'rust',
+        relativePath: 'src/unicode.rs',
+        content: '// café 你好 😀\r\nfn run() { helper(); }\r\n',
+        symbolName: 'run',
+        expectedSlice: 'fn run() { helper(); }',
+        callName: 'helper',
+        expectedCallSlice: 'helper()',
+        expectedStartColumn: 0,
+    },
+    {
+        language: 'java',
+        relativePath: 'src/Unicode.java',
+        content: '// café 你好 😀\r\nclass Unicode { void run() { helper(); } }\r\n',
+        symbolName: 'run',
+        expectedSlice: 'void run() { helper(); }',
+        callName: 'helper',
+        expectedCallSlice: 'helper()',
+        expectedStartColumn: 16,
+    },
+    {
+        language: 'csharp',
+        relativePath: 'src/Unicode.cs',
+        content: '// café 你好 😀\r\nclass Unicode { void Run() { Helper(); } }\r\n',
+        symbolName: 'Run',
+        expectedSlice: 'void Run() { Helper(); }',
+        callName: 'Helper',
+        expectedCallSlice: 'Helper()',
+        expectedStartColumn: 16,
+    },
+    {
+        language: 'cpp',
+        relativePath: 'src/unicode.cpp',
+        content: '// café 你好 😀\r\nvoid run() { helper(); }\r\n',
+        symbolName: 'run',
+        expectedSlice: 'void run() { helper(); }',
+        callName: 'helper',
+        expectedCallSlice: 'helper()',
+        expectedStartColumn: 0,
+    },
+    {
+        language: 'scala',
+        relativePath: 'src/Unicode.scala',
+        content: '// café 你好 😀\r\ndef run(): Unit = helper()\r\n',
+        symbolName: 'run',
+        expectedSlice: 'def run(): Unit = helper()',
+        callName: 'helper',
+        expectedCallSlice: 'helper()',
+        expectedStartColumn: 0,
+    },
+] as const;
+
+for (const fixture of wasmUnicodeSpanFixtures) {
+    test(`Tree-sitter ${fixture.language} spans use UTF-8 bytes and UTF-16 columns`, async () => {
+        const result = await createLanguageAnalysisService().analyze(fixture);
+        const symbol = result.symbols.find((candidate) => candidate.name === fixture.symbolName);
+        const call = result.callSites.find((candidate) => candidate.calleeName === fixture.callName);
+        assert.ok(symbol?.span.startByte !== undefined);
+        assert.ok(symbol?.span.endByte !== undefined);
+        assert.ok(call);
+
+        const bytes = Buffer.from(fixture.content);
+        assert.equal(
+            bytes.subarray(symbol.span.startByte, symbol.span.endByte).toString('utf8'),
+            fixture.expectedSlice,
+        );
+        assert.equal(
+            bytes.subarray(call.span.startByte, call.span.endByte).toString('utf8'),
+            fixture.expectedCallSlice,
+        );
+        assert.equal(symbol.span.startColumn, fixture.expectedStartColumn);
+        assert.ok(result.chunks.some((chunk) => chunk.content === fixture.expectedSlice));
+    });
+}
+
+test('Tree-sitter Python module-binding spans remain exact after Unicode', async () => {
+    const source = '# 😀 café\r\nfrom naïve import helper\r\n';
+    const result = await createLanguageAnalysisService().analyze({
+        content: source,
+        language: 'python',
+        relativePath: 'src/imports.py',
+    });
+    const binding = result.moduleBindings.find((candidate) => candidate.kind === 'import');
+    assert.ok(binding);
+    assert.equal(
+        Buffer.from(source).subarray(binding.span.startByte, binding.span.endByte).toString('utf8'),
+        'from naïve import helper',
+    );
+});
+
 for (const fixture of wasmLanguageFixtures) {
     test(`language analysis extracts ${fixture.language} symbols through Tree-sitter WASM`, async () => {
         const analyzer = createLanguageAnalysisService();
@@ -355,6 +517,7 @@ test('malformed structural source remains searchable without authoritative symbo
     });
 
     assert.equal(result.structuralStatus, 'recovered');
+    assert.equal(result.structuralReason, 'syntax_error');
     assert.deepEqual(result.symbols, []);
     assert.ok(result.chunks.length > 0);
 });
@@ -367,8 +530,9 @@ test('unsupported languages use bounded search-only fallback', async () => {
         relativePath: 'README.md',
     });
 
-    assert.equal(result.backend, 'recursive_text');
+    assert.equal(result.backend, 'bounded_text');
     assert.equal(result.structuralStatus, 'unsupported');
+    assert.equal(result.structuralReason, 'unsupported_language');
     assert.deepEqual(result.symbols, []);
     assert.ok(result.chunks.length > 0);
 });

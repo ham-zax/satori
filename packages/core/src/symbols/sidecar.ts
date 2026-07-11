@@ -19,6 +19,7 @@ import type {
     SymbolRegistryManifestFile,
 } from './contracts';
 import type { SymbolRegistry } from './registry';
+import type { RelationshipAnalysisEvidence } from '../relationships';
 
 const NAVIGATION_DIR_NAME = 'navigation';
 const SYMBOLS_DIR_NAME = 'symbols';
@@ -60,6 +61,7 @@ export interface WriteRelationshipSidecarInput {
     relationshipVersion: string;
     builtAt: string;
     records: RelationshipRecord[];
+    analysisByFile?: Map<string, RelationshipAnalysisEvidence> | Record<string, RelationshipAnalysisEvidence>;
     files?: SymbolRegistryManifestFile[];
     stateRoot?: string;
     beforePublish?: () => void;
@@ -110,6 +112,7 @@ export type ReadRelationshipSidecarResult =
         rootPath: string;
         manifest: RelationshipManifest;
         records: RelationshipRecord[];
+        analysisByFile: Map<string, RelationshipAnalysisEvidence>;
         warnings: string[];
         reason?: undefined;
     }
@@ -119,6 +122,7 @@ export type ReadRelationshipSidecarResult =
         reason: string;
         manifest?: undefined;
         records?: undefined;
+        analysisByFile?: undefined;
         warnings?: undefined;
     };
 
@@ -278,6 +282,23 @@ function groupRelationshipsByFile(records: RelationshipRecord[]): Map<string, Re
     return grouped;
 }
 
+function getRelationshipAnalysisEvidence(
+    analysisByFile: WriteRelationshipSidecarInput['analysisByFile'],
+    filePath: string,
+): RelationshipAnalysisEvidence | undefined {
+    if (!analysisByFile) return undefined;
+    return analysisByFile instanceof Map ? analysisByFile.get(filePath) : analysisByFile[filePath];
+}
+
+function getRelationshipAnalysisEvidencePaths(
+    analysisByFile: WriteRelationshipSidecarInput['analysisByFile'],
+): string[] {
+    if (!analysisByFile) return [];
+    return analysisByFile instanceof Map
+        ? [...analysisByFile.keys()]
+        : Object.keys(analysisByFile);
+}
+
 export async function writeSymbolRegistrySidecar(input: WriteSymbolRegistrySidecarInput): Promise<WriteSymbolRegistrySidecarResult> {
     const rootPath = resolveNavigationSidecarRoot(input.stateRoot, input.registry.manifest.normalizedRootPath);
     const symbolsDir = path.join(rootPath, SYMBOLS_DIR_NAME);
@@ -344,6 +365,13 @@ export async function writeRelationshipSidecar(input: WriteRelationshipSidecarIn
     const relationshipByFileDir = path.join(temporaryRelationshipsDir, 'by-file');
     const groupedRelationships = groupRelationshipsByFile([...input.records].sort(compareRelationshipRecords));
     const filesByPath = new Map((input.files || []).map((file) => [file.path, file.hash]));
+    const allowedEvidencePaths = input.files ? new Set(filesByPath.keys()) : undefined;
+    const shardPaths = new Set(groupedRelationships.keys());
+    for (const filePath of getRelationshipAnalysisEvidencePaths(input.analysisByFile)) {
+        if (!allowedEvidencePaths || allowedEvidencePaths.has(filePath)) {
+            shardPaths.add(filePath);
+        }
+    }
 
     try {
         await fs.promises.mkdir(rootPath, { recursive: true });
@@ -353,12 +381,17 @@ export async function writeRelationshipSidecar(input: WriteRelationshipSidecarIn
             buildRelationshipManifest(input.symbolRegistryManifestHash, input.relationshipVersion, input.builtAt)
         );
 
-        for (const [filePath, records] of [...groupedRelationships.entries()].sort((a, b) => compareStrings(a[0], b[0]))) {
+        for (const filePath of [...shardPaths].sort(compareStrings)) {
+            const records = groupedRelationships.get(filePath) ?? [];
             const shardHash = filesByPath.get(filePath) || input.symbolRegistryManifestHash;
+            const analysisEvidence = !allowedEvidencePaths || allowedEvidencePaths.has(filePath)
+                ? getRelationshipAnalysisEvidence(input.analysisByFile, filePath)
+                : undefined;
             await writeJson(path.join(relationshipByFileDir, fileShardName(filePath, shardHash)), {
                 manifestHash: input.symbolRegistryManifestHash,
                 path: filePath,
                 relationships: records,
+                analysisEvidence,
             });
         }
 
@@ -370,7 +403,7 @@ export async function writeRelationshipSidecar(input: WriteRelationshipSidecarIn
 
     return {
         rootPath,
-        fileShardCount: groupedRelationships.size,
+        fileShardCount: shardPaths.size,
         relationshipCount: input.records.length,
     };
 }
@@ -648,6 +681,31 @@ function isRelationshipRecord(value: unknown): value is RelationshipRecord {
         && (value.confidence === 'high' || value.confidence === 'medium' || value.confidence === 'low');
 }
 
+function isSourceSpan(value: unknown): boolean {
+    if (!isSymbolSpan(value) || !isRecord(value)) return false;
+    return ['startByte', 'endByte', 'startColumn', 'endColumn']
+        .every((field) => isNonNegativeInteger(value[field]));
+}
+
+function isRelationshipAnalysisEvidence(value: unknown): value is RelationshipAnalysisEvidence {
+    if (!isRecord(value) || !Array.isArray(value.moduleBindings) || !Array.isArray(value.callSites)) {
+        return false;
+    }
+    const bindingsValid = value.moduleBindings.every((binding) => {
+        if (!isRecord(binding)) return false;
+        if (binding.kind !== 'import' && binding.kind !== 'reexport' && binding.kind !== 'export') return false;
+        if (typeof binding.typeOnly !== 'boolean' || !isSourceSpan(binding.span)) return false;
+        return ['moduleSpecifier', 'importedName', 'localName', 'exportedName']
+            .every((field) => isOptionalNonEmptyString(binding[field]));
+    });
+    const callsValid = value.callSites.every((call) => (
+        isRecord(call)
+        && isNonEmptyString(call.calleeName)
+        && isSourceSpan(call.span)
+    ));
+    return bindingsValid && callsValid;
+}
+
 export async function readRelationshipSidecar(input: ReadRelationshipSidecarInput): Promise<ReadRelationshipSidecarResult> {
     const rootPath = resolveNavigationSidecarRoot(input.stateRoot, input.normalizedRootPath);
     const relationshipsRoot = path.join(rootPath, RELATIONSHIPS_DIR_NAME);
@@ -692,6 +750,8 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
     }
 
     const records: RelationshipRecord[] = [];
+    const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
+    const seenShardPaths = new Set<string>();
     const warnings: string[] = [];
     try {
         const entries = await fs.promises.readdir(byFileDir, { withFileTypes: true });
@@ -705,7 +765,13 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                     reason: `relationship shard is invalid for ${entry.name}`,
                 };
             }
-            const shard = rawShard as { manifestHash?: unknown; path?: unknown; relationships?: unknown; records?: unknown };
+            const shard = rawShard as {
+                manifestHash?: unknown;
+                path?: unknown;
+                relationships?: unknown;
+                records?: unknown;
+                analysisEvidence?: unknown;
+            };
             if (shard.manifestHash !== input.expectedSymbolRegistryManifestHash) {
                 return {
                     status: 'incompatible',
@@ -720,6 +786,14 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                     reason: `relationship shard metadata is invalid for ${entry.name}`,
                 };
             }
+            if (seenShardPaths.has(shard.path)) {
+                return {
+                    status: 'incompatible',
+                    rootPath,
+                    reason: `duplicate relationship shard path '${shard.path}'`,
+                };
+            }
+            seenShardPaths.add(shard.path);
             const shardRecords = Array.isArray(shard.relationships) ? shard.relationships : shard.records;
             if (!Array.isArray(shardRecords)) {
                 return {
@@ -738,6 +812,16 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                 }
                 records.push(record);
             }
+            if (shard.analysisEvidence !== undefined) {
+                if (!isRelationshipAnalysisEvidence(shard.analysisEvidence)) {
+                    return {
+                        status: 'incompatible',
+                        rootPath,
+                        reason: `relationship analysis evidence is invalid for ${entry.name}`,
+                    };
+                }
+                analysisByFile.set(shard.path, shard.analysisEvidence);
+            }
         }
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -754,6 +838,7 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
         rootPath,
         manifest,
         records: records.sort(compareRelationshipRecords),
+        analysisByFile,
         warnings: [...new Set(warnings)].sort(compareStrings),
     };
 }

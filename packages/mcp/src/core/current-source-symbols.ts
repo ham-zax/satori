@@ -11,17 +11,6 @@ import {
 } from "@zokizuan/satori-core";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 
-const CURRENT_SOURCE_LANGUAGES = new Set([
-    "typescript",
-    "javascript",
-    "python",
-    "go",
-    "rust",
-    "java",
-    "csharp",
-    "cpp",
-    "scala",
-]);
 const CURRENT_SOURCE_MAX_BYTES = 256 * 1024;
 
 export type CurrentSourceSymbolValidation = PythonSourceBackedSpanRepair & {
@@ -137,7 +126,11 @@ export async function validateCurrentSourceSymbolSpans(input: {
     }
 
     const language = normalizeLanguageId(input.symbols[0].language);
-    if (!CURRENT_SOURCE_LANGUAGES.has(language)) {
+    const languageAnalyzer = input.languageAnalyzer ?? createLanguageAnalysisService({
+        chunkSize: CURRENT_SOURCE_MAX_BYTES,
+        chunkOverlap: 0,
+    });
+    if (!languageAnalyzer.getStrategyForLanguage(language).structural) {
         return input.symbols.map((symbol) => unchangedValidation(symbol, "not_applicable"));
     }
 
@@ -152,10 +145,7 @@ export async function validateCurrentSourceSymbolSpans(input: {
     }
 
     try {
-        const analysis = await (input.languageAnalyzer ?? createLanguageAnalysisService({
-            chunkSize: CURRENT_SOURCE_MAX_BYTES,
-            chunkOverlap: 0,
-        })).analyze({ content: source, language, relativePath: relativeFile });
+        const analysis = await languageAnalyzer.analyze({ content: source, language, relativePath: relativeFile });
         if (analysis.structuralStatus !== "complete") {
             return input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable"));
         }

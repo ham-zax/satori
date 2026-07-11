@@ -11,12 +11,18 @@ type AstNode = {
     [key: string]: unknown;
 };
 
-export interface OxcEvidence {
-    readonly complete: boolean;
+export type OxcEvidence = {
+    readonly complete: true;
     readonly symbols: readonly ExtractedSymbol[];
     readonly moduleBindings: readonly ModuleBinding[];
     readonly callSites: readonly CallSite[];
-}
+} | {
+    readonly complete: false;
+    readonly reason: 'syntax_error';
+    readonly symbols: readonly [];
+    readonly moduleBindings: readonly [];
+    readonly callSites: readonly [];
+};
 
 function isAstNode(value: unknown): value is AstNode {
     return Boolean(
@@ -117,7 +123,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         sourceType: 'unambiguous',
     });
     if (parsed.errors.some((error) => error.severity === 'Error')) {
-        return { complete: false, symbols: [], moduleBindings: [], callSites: [] };
+        return { complete: false, reason: 'syntax_error', symbols: [], moduleBindings: [], callSites: [] };
     }
 
     const sourceMap = new Utf8SourceMap(input.content);

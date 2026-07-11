@@ -333,6 +333,22 @@ test('writeRelationshipSidecar writes deterministic per-file relationship shards
             builtAt: '2026-06-17T00:00:00.000Z',
             files: registry.manifest.files,
             records,
+            analysisByFile: new Map([
+                ['src/routes.ts', {
+                    moduleBindings: [],
+                    callSites: [{
+                        calleeName: 'auth',
+                        span: {
+                            startLine: 1,
+                            endLine: 1,
+                            startByte: 0,
+                            endByte: 6,
+                            startColumn: 0,
+                            endColumn: 6,
+                        },
+                    }],
+                }],
+            ]),
         });
 
         assert.equal(relationshipResult.relationshipCount, 2);
@@ -350,6 +366,102 @@ test('writeRelationshipSidecar writes deterministic per-file relationship shards
             'src/routes.ts:CALLS',
         ]);
         assert.deepEqual(loaded.warnings, []);
+        assert.deepEqual(loaded.analysisByFile?.get('src/routes.ts')?.callSites, [{
+            calleeName: 'auth',
+            span: {
+                startLine: 1,
+                endLine: 1,
+                startByte: 0,
+                endByte: 6,
+                startColumn: 0,
+                endColumn: 6,
+            },
+        }]);
+    });
+});
+
+test('writeRelationshipSidecar preserves evidence-only files when manifest files are omitted', async () => {
+    await withTempDir(async (stateRoot) => {
+        const analysisEvidence = {
+            moduleBindings: [],
+            callSites: [],
+        };
+        await writeRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolRegistryManifestHash: 'manifest-hash',
+            relationshipVersion: 'relationship-v1',
+            builtAt: '2026-06-17T00:00:00.000Z',
+            records: [],
+            analysisByFile: new Map([['src/unrelated.ts', analysisEvidence]]),
+        });
+
+        const loaded = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: 'manifest-hash',
+        });
+
+        assert.equal(loaded.status, 'ok');
+        assert.deepEqual(loaded.analysisByFile?.get('src/unrelated.ts'), analysisEvidence);
+    });
+});
+
+test('writeRelationshipSidecar filters evidence to supplied manifest files', async () => {
+    await withTempDir(async (stateRoot) => {
+        await writeRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolRegistryManifestHash: 'manifest-hash',
+            relationshipVersion: 'relationship-v1',
+            builtAt: '2026-06-17T00:00:00.000Z',
+            records: [],
+            files: [{ path: 'src/tracked.ts', hash: 'file-hash', language: 'typescript', symbolCount: 0 }],
+            analysisByFile: new Map([
+                ['src/tracked.ts', { moduleBindings: [], callSites: [] }],
+                ['src/untracked.ts', { moduleBindings: [], callSites: [] }],
+            ]),
+        });
+
+        const loaded = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: 'manifest-hash',
+        });
+
+        assert.equal(loaded.status, 'ok');
+        assert.deepEqual([...loaded.analysisByFile?.keys() ?? []], ['src/tracked.ts']);
+    });
+});
+
+test('readRelationshipSidecar rejects duplicate shard paths', async () => {
+    await withTempDir(async (stateRoot) => {
+        const result = await writeRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            symbolRegistryManifestHash: 'manifest-hash',
+            relationshipVersion: 'relationship-v1',
+            builtAt: '2026-06-17T00:00:00.000Z',
+            records: [],
+            files: [{ path: 'src/unrelated.ts', hash: 'file-hash', language: 'typescript', symbolCount: 0 }],
+            analysisByFile: new Map([['src/unrelated.ts', { moduleBindings: [], callSites: [] }]]),
+        });
+        const byFileDir = path.join(result.rootPath, 'relationships', 'by-file');
+        const [shardName] = await fs.promises.readdir(byFileDir);
+        assert.ok(shardName);
+        await fs.promises.copyFile(
+            path.join(byFileDir, shardName),
+            path.join(byFileDir, `duplicate-${shardName}`),
+        );
+
+        const loaded = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: 'manifest-hash',
+        });
+
+        assert.equal(loaded.status, 'incompatible');
+        assert.match(loaded.reason || '', /duplicate relationship shard path/);
     });
 });
 

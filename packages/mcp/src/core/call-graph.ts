@@ -9,7 +9,7 @@ import {
     getSupportedExtensionsForCapability,
     getSupportedLanguageIdsForCapability,
     type LanguageAnalysisPort,
-    type LanguageAnalysisResult,
+    type CallSite,
 } from '@zokizuan/satori-core';
 import { CallGraphSidecarInfo, IndexFingerprint } from '../config.js';
 
@@ -460,7 +460,7 @@ export class CallGraphSidecarManager {
     private async buildGraph(codebaseRoot: string, files: string[]): Promise<{ nodes: CallGraphNode[]; edges: CallGraphEdge[]; notes: CallGraphNote[] }> {
         const nodeById = new Map<string, MutableNode>();
         const sourceSpanByNodeId = new Map<string, { startByte?: number; endByte?: number }>();
-        const analysisByFile = new Map<string, LanguageAnalysisResult>();
+        const callSitesByFile = new Map<string, readonly CallSite[]>();
         const noteByKey = new Map<string, CallGraphNote>();
 
         for (const absoluteFile of files) {
@@ -472,7 +472,6 @@ export class CallGraphSidecarManager {
 
             const content = await fs.promises.readFile(absoluteFile, 'utf8');
             const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath: relativeFile });
-            analysisByFile.set(relativeFile, analysis);
 
             for (const symbol of analysis.symbols) {
                 const symbolLabel = symbol.label;
@@ -493,6 +492,7 @@ export class CallGraphSidecarManager {
                     span: { startLine, endLine },
                 });
             }
+            callSitesByFile.set(relativeFile, analysis.callSites);
         }
 
         const nodes = this.sortNodes(Array.from(nodeById.values()));
@@ -500,9 +500,9 @@ export class CallGraphSidecarManager {
 
         const edgeByKey = new Map<string, CallGraphEdge>();
 
-        for (const [relativeFile, analysis] of analysisByFile) {
+        for (const [relativeFile, callSites] of callSitesByFile) {
             const fileNodes = nodes.filter((node) => node.file === relativeFile && this.shouldScanNodeAsSource(node.symbolLabel));
-            for (const callSite of analysis.callSites) {
+            for (const callSite of callSites) {
                 if (CALL_KEYWORDS.has(callSite.calleeName.toLowerCase())) continue;
                 const lineOwners = fileNodes
                     .filter((node) => (

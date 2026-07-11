@@ -41,6 +41,7 @@ import {
     buildSymbolRecordsForFile,
     buildSymbolRegistry,
     clearSymbolRegistrySidecar,
+    computeSymbolRegistryManifestHash,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
@@ -114,6 +115,16 @@ type MutationGuardOptions = {
     assertMutationCurrent?: () => void;
 };
 
+function chunksWithTrustedRelativePath(
+    chunks: readonly CodeChunk[],
+    relativePath: string,
+): CodeChunk[] {
+    return chunks.map((chunk) => ({
+        ...chunk,
+        metadata: { ...chunk.metadata, filePath: relativePath },
+    }));
+}
+
 type ReindexByChangeResult = {
     added: number;
     removed: number;
@@ -140,7 +151,7 @@ type CollectionPayloadVerification =
 export class Context {
     private embedding: Embedding;
     private vectorDatabase: VectorDatabase;
-    private languageAnalyzer: LanguageAnalysisPort;
+    private readonly languageAnalyzer: LanguageAnalysisPort;
     private supportedExtensions: string[];
     private configuredExtensionOverlays: string[];
     private runtimeCustomExtensions: string[];
@@ -1667,14 +1678,6 @@ export class Context {
     }
 
     /**
-     * Replace the normalized language-analysis boundary.
-     */
-    updateLanguageAnalyzer(languageAnalyzer: LanguageAnalysisPort): void {
-        this.languageAnalyzer = languageAnalyzer;
-        console.log(`[Context] 🔄 Updated language analyzer`);
-    }
-
-    /**
      * Prepare vector collection
      */
     private async prepareCollection(
@@ -1786,7 +1789,7 @@ export class Context {
         const CHUNK_LIMIT = 450000;
         console.log(`[Context] 🔧 Using EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE}`);
 
-        let chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string }> = [];
+        let chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string; relativePath: string }> = [];
         let processedFiles = 0;
         let totalChunks = 0;
         let limitReached = false;
@@ -1806,11 +1809,11 @@ export class Context {
                     throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
                 }
                 const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
-                const chunks = [...analysis.chunks];
-                for (const chunk of chunks) {
-                    chunk.metadata.filePath = filePath;
-                }
-                analysisByFile.set(relativePath, analysis);
+                const chunks = chunksWithTrustedRelativePath(analysis.chunks, relativePath);
+                analysisByFile.set(relativePath, {
+                    moduleBindings: analysis.moduleBindings,
+                    callSites: analysis.callSites,
+                });
                 const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
                 const fileSymbols = buildSymbolRecordsForFile({
                     relativePath,
@@ -1844,7 +1847,7 @@ export class Context {
 
                 // Add chunks to buffer
                 for (const chunk of chunks) {
-                    chunkBuffer.push({ chunk, codebasePath });
+                    chunkBuffer.push({ chunk, codebasePath, relativePath });
                     totalChunks++;
 
                     // Process batch when buffer reaches EMBEDDING_BATCH_SIZE
@@ -1934,8 +1937,11 @@ export class Context {
                 throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
             }
             const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
-            const chunks = [...analysis.chunks];
-            analysisByFile.set(relativePath, analysis);
+            const chunks = chunksWithTrustedRelativePath(analysis.chunks, relativePath);
+            analysisByFile.set(relativePath, {
+                moduleBindings: analysis.moduleBindings,
+                callSites: analysis.callSites,
+            });
             const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
             const fileSymbols = buildSymbolRecordsForFile({
                 relativePath,
@@ -2590,8 +2596,11 @@ export class Context {
 
             const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
             const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
-            const chunks = [...analysis.chunks];
-            analysisByFile.set(relativePath, analysis);
+            const chunks = chunksWithTrustedRelativePath(analysis.chunks, relativePath);
+            analysisByFile.set(relativePath, {
+                moduleBindings: analysis.moduleBindings,
+                callSites: analysis.callSites,
+            });
             const fileSymbols = buildSymbolRecordsForFile({
                 relativePath,
                 language,
@@ -2651,6 +2660,22 @@ export class Context {
             ...changedRelativePaths.map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, '')),
             ...rebuiltManifestFiles.map((file) => file.path),
         ]);
+        const retainedAnalysisByFile = new Map<string, RelationshipAnalysisEvidence>();
+        const existingRelationships = await readRelationshipSidecar({
+            stateRoot: this.symbolRegistryStateRoot,
+            normalizedRootPath: this.canonicalizeCodebasePath(codebasePath),
+            expectedSymbolRegistryManifestHash: computeSymbolRegistryManifestHash(existingRegistry.manifest),
+        });
+        if (existingRelationships.status === 'ok') {
+            for (const file of existingRegistry.manifest.files) {
+                if (replacedPaths.has(file.path)) continue;
+                const evidence = existingRelationships.analysisByFile.get(file.path);
+                if (evidence) retainedAnalysisByFile.set(file.path, evidence);
+            }
+        }
+        for (const [filePath, evidence] of analysisByFile ?? []) {
+            retainedAnalysisByFile.set(filePath, evidence);
+        }
 
         const mergedManifestFiles = [
             ...existingRegistry.manifest.files.filter((file) => !replacedPaths.has(file.path)),
@@ -2672,7 +2697,7 @@ export class Context {
             mergedSymbolRecords,
             mergedManifestFiles,
             assertMutationCurrent,
-            analysisByFile,
+            retainedAnalysisByFile,
         );
     }
 
@@ -2713,11 +2738,15 @@ export class Context {
             }
             try {
                 const content = await fs.promises.readFile(path.join(canonicalRoot, file.path), 'utf8');
-                analysisByFile.set(file.path, await this.languageAnalyzer.analyze({
+                const analysis = await this.languageAnalyzer.analyze({
                     content,
                     language: file.language,
                     relativePath: file.path,
-                }));
+                });
+                analysisByFile.set(file.path, {
+                    moduleBindings: analysis.moduleBindings,
+                    callSites: analysis.callSites,
+                });
             } catch (error) {
                 console.warn(`[Context] ⚠️  Skipping relationship extraction for ${file.path}: ${error instanceof Error ? error.message : String(error)}`);
             }
@@ -2732,6 +2761,7 @@ export class Context {
             builtAt: registry.manifest.builtAt,
             files: manifestFiles,
             records: relationshipRecords,
+            analysisByFile,
             beforePublish: assertMutationCurrent,
         });
         console.log(`[Context] 🧭 Wrote symbol registry sidecar with ${result.symbolCount} symbols across ${result.fileShardCount} file shards`);
@@ -2771,7 +2801,7 @@ export class Context {
  * Process accumulated chunk buffer
  */
     private async processChunkBuffer(
-        chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string }>,
+        chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string; relativePath: string }>,
         collectionName: string,
         assertMutationCurrent?: () => void,
     ): Promise<void> {
@@ -2787,20 +2817,21 @@ export class Context {
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid' : 'regular';
         console.log(`[Context] 🔄 Processing batch of ${chunks.length} chunks (~${estimatedTokens} tokens) for ${searchType}`);
-        await this.processChunkBatch(chunks, codebasePath, collectionName, assertMutationCurrent);
+        await this.processChunkBatch(chunkBuffer, codebasePath, collectionName, assertMutationCurrent);
     }
 
     /**
      * Process a batch of chunks
      */
     private async processChunkBatch(
-        chunks: CodeChunk[],
+        chunkEntries: Array<{ chunk: CodeChunk; relativePath: string }>,
         codebasePath: string,
         collectionName: string,
         assertMutationCurrent?: () => void,
     ): Promise<void> {
         const isHybrid = this.getIsHybrid();
         const indexedAt = new Date().toISOString();
+        const chunks = chunkEntries.map(({ chunk }) => chunk);
 
         // Generate embedding vectors
         const chunkContents = chunks.map(chunk => chunk.content);
@@ -2809,12 +2840,8 @@ export class Context {
         if (isHybrid === true) {
             // Create hybrid vector documents
             const documents: VectorDocument[] = chunks.map((chunk, index) => {
-                if (!chunk.metadata.filePath) {
-                    throw new Error(`Missing filePath in chunk metadata at index ${index}`);
-                }
-
-                const relativePath = path.relative(codebasePath, chunk.metadata.filePath);
-                const fileExtension = path.extname(chunk.metadata.filePath);
+                const relativePath = chunkEntries[index].relativePath;
+                const fileExtension = path.extname(relativePath);
                 const { filePath: omittedFilePath, startLine: omittedStartLine, endLine: omittedEndLine, ...restMetadata } = chunk.metadata;
                 void omittedFilePath;
                 void omittedStartLine;
@@ -2844,12 +2871,8 @@ export class Context {
         } else {
             // Create regular vector documents
             const documents: VectorDocument[] = chunks.map((chunk, index) => {
-                if (!chunk.metadata.filePath) {
-                    throw new Error(`Missing filePath in chunk metadata at index ${index}`);
-                }
-
-                const relativePath = path.relative(codebasePath, chunk.metadata.filePath);
-                const fileExtension = path.extname(chunk.metadata.filePath);
+                const relativePath = chunkEntries[index].relativePath;
+                const fileExtension = path.extname(relativePath);
                 const { filePath: omittedFilePath, startLine: omittedStartLine, endLine: omittedEndLine, ...restMetadata } = chunk.metadata;
                 void omittedFilePath;
                 void omittedStartLine;

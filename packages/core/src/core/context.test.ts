@@ -79,14 +79,6 @@ class RecordingAnalyzer implements LanguageAnalysisPort {
         return this.delegate.analyze(input);
     }
 
-    setChunkSize(chunkSize: number): void {
-        this.delegate.setChunkSize(chunkSize);
-    }
-
-    setChunkOverlap(chunkOverlap: number): void {
-        this.delegate.setChunkOverlap(chunkOverlap);
-    }
-
     reset(): void {
         this.analyzeCalls.length = 0;
     }
@@ -101,13 +93,9 @@ class ThrowingAnalyzer implements LanguageAnalysisPort {
         throw new Error('analysis failed after marker cleanup');
     }
 
-    setChunkSize(): void {}
-
-    setChunkOverlap(): void {}
-
     getDescription(): string { return 'throwing analyzer'; }
 
-    getStrategyForLanguage() { return { backend: 'recursive_text' as const, structural: false }; }
+    getStrategyForLanguage() { return { backend: 'bounded_text' as const, structural: false }; }
 }
 
 type ProcessFileListResult = {
@@ -130,9 +118,15 @@ type ContextWithExpectedChunks = {
     getExpectedChunksAndSymbols: (...args: unknown[]) => Promise<unknown>;
 };
 
+type ContextWithNavigationArtifactBuilder = {
+    buildNavigationArtifactsForFiles: (...args: unknown[]) => Promise<{
+        symbolManifestFiles: SymbolRegistryManifestFile[];
+    }>;
+};
+
 type ContextWithProcessChunkBatch = {
     processChunkBatch(
-        chunks: CodeChunk[],
+        chunks: Array<{ chunk: CodeChunk; relativePath: string }>,
         codebasePath: string,
         collectionName: string,
         assertMutationCurrent?: () => void,
@@ -264,7 +258,7 @@ test('Context blocks vector insertion when the mutation guard fails after embedd
     };
 
     await assert.rejects(
-        () => context.processChunkBatch([chunk], '/repo', 'chunks', () => {
+        () => context.processChunkBatch([{ chunk, relativePath: 'value.ts' }], '/repo', 'chunks', () => {
             throw new Error('mutation lease lost');
         }),
         /mutation lease lost/,
@@ -681,6 +675,79 @@ test('Context.processFileList returns symbol records, manifest files, and comple
         assert.ok(result.symbolRecords.length > 0);
         assert.equal(result.symbolManifestFiles.length, 1);
         assert.equal(result.symbolManifestFiles[0]?.path, 'src/auth.ts');
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context persists its canonical relative path instead of analyzer chunk metadata', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-trusted-chunk-path-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'owned.ts');
+    const maliciousAnalyzer: LanguageAnalysisPort = {
+        async analyze() {
+            return {
+                backend: 'oxc' as const,
+                structuralStatus: 'complete' as const,
+                symbols: [],
+                moduleBindings: [],
+                callSites: [],
+                chunks: [
+                    {
+                        content: 'export const owned = true;',
+                        metadata: Object.freeze({
+                            startLine: 1,
+                            endLine: 1,
+                            language: 'typescript',
+                            filePath: '../../redirect.ts',
+                        }),
+                    },
+                    {
+                        content: 'export const second = true;',
+                        metadata: Object.freeze({
+                            startLine: 1,
+                            endLine: 1,
+                            language: 'typescript',
+                            filePath: path.join(tempRoot, 'absolute-redirect.ts'),
+                        }),
+                    },
+                ],
+            };
+        },
+        getDescription: () => 'adversarial metadata analyzer',
+        getStrategyForLanguage: () => ({ backend: 'oxc' as const, structural: true }),
+    };
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const owned = true;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            languageAnalyzer: maliciousAnalyzer,
+        });
+        const collectionName = context.resolveCollectionName(codebasePath);
+        await vectorDatabase.createHybridCollection(collectionName);
+
+        const expected = await context.getExpectedChunksAndSymbols([sourcePath], codebasePath);
+        assert.ok(expected.expectedChunks.length > 0);
+        assert.ok(expected.expectedChunks.every((chunk) => chunk.relativePath === 'src/owned.ts'));
+
+        const navigation = await (context as unknown as ContextWithNavigationArtifactBuilder)
+            .buildNavigationArtifactsForFiles([sourcePath], codebasePath);
+        assert.deepEqual(
+            navigation.symbolManifestFiles.map((file) => file.path),
+            ['src/owned.ts'],
+        );
+
+        await (context as unknown as ContextWithProcessFileList)
+            .processFileList([sourcePath], codebasePath);
+
+        const documents = [...(vectorDatabase.collections.get(collectionName)?.values() ?? [])];
+        assert.ok(documents.length > 0);
+        assert.ok(documents.every((document) => document.relativePath === 'src/owned.ts'));
+        assert.ok(documents.every((document) => document.fileExtension === '.ts'));
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -1274,6 +1341,7 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
     const codebasePath = path.join(tempRoot, 'repo');
     const authPath = path.join(codebasePath, 'src', 'auth.ts');
     const callerPath = path.join(codebasePath, 'src', 'caller.ts');
+    const unrelatedPath = path.join(codebasePath, 'src', 'unrelated.ts');
 
     try {
         fs.mkdirSync(path.dirname(authPath), { recursive: true });
@@ -1283,6 +1351,7 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
             "import { login } from './auth';\nexport function run() { return login(); }\n",
             'utf8',
         );
+        fs.writeFileSync(unrelatedPath, 'export function unrelated() { return true; }\n', 'utf8');
 
         const analyzer = new RecordingAnalyzer();
         const vectorDatabase = new InMemoryVectorDatabase();
@@ -1339,7 +1408,7 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
 
         const analyzedRelativePaths = analyzer.analyzeCalls
             .sort((a, b) => a.localeCompare(b));
-        assert.deepEqual(analyzedRelativePaths, ['src/auth.ts', 'src/caller.ts']);
+        assert.deepEqual(analyzedRelativePaths, ['src/auth.ts']);
 
         const nextRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
         assert.equal(nextRegistry.status, 'ok');

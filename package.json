@@ -73,13 +73,5 @@
     "url": "https://github.com/ham-zax/satori/issues"
   },
   "license": "MIT",
-  "author": "Hamza (@ham-zax)",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs",
-    "example": "examples",
-    "test": "tests"
-  },
-  "keywords": [],
-  "type": "commonjs"
+  "author": "Hamza (@ham-zax)"
 }

@@ -3,24 +3,50 @@ import { normalizeLanguageId } from '../language';
 import { analyzeWithOxc } from './oxc-adapter';
 import { analyzeWithTreeSitter } from './tree-sitter-adapter';
 import type {
+    LanguageAnalysisBackend,
     LanguageAnalysisInput,
     LanguageAnalysisPort,
     LanguageAnalysisResult,
     LanguageAnalysisServiceOptions,
+    StructuralReason,
 } from './types';
 
-const OXC_LANGUAGES = new Set(['javascript', 'jsx', 'typescript', 'tsx']);
-const TREE_SITTER_LANGUAGES = new Set(['python', 'go', 'rust', 'java', 'csharp', 'cpp', 'scala']);
+type AnalysisBackend = 'oxc' | 'tree_sitter_wasm';
+type LanguageStrategy = {
+    readonly backend: LanguageAnalysisBackend;
+    readonly structural: boolean;
+};
+
+const BACKEND_BY_LANGUAGE: Readonly<Record<string, AnalysisBackend>> = {
+    javascript: 'oxc',
+    jsx: 'oxc',
+    typescript: 'oxc',
+    tsx: 'oxc',
+    python: 'tree_sitter_wasm',
+    go: 'tree_sitter_wasm',
+    rust: 'tree_sitter_wasm',
+    java: 'tree_sitter_wasm',
+    csharp: 'tree_sitter_wasm',
+    cpp: 'tree_sitter_wasm',
+    scala: 'tree_sitter_wasm',
+};
+
+function strategyForLanguage(language: string): LanguageStrategy {
+    const backend = BACKEND_BY_LANGUAGE[normalizeLanguageId(language)];
+    return backend
+        ? { backend, structural: true }
+        : { backend: 'bounded_text', structural: false };
+}
 
 function fallbackResult(
     input: LanguageAnalysisInput,
-    backend: LanguageAnalysisResult['backend'],
-    structuralStatus: LanguageAnalysisResult['structuralStatus'],
+    backend: LanguageAnalysisBackend,
+    structuralStatus: 'recovered' | 'unsupported',
+    structuralReason: StructuralReason,
     options: { chunkSize?: number; chunkOverlap?: number },
 ): LanguageAnalysisResult {
-    return {
+    const evidence = {
         backend,
-        structuralStatus,
         symbols: [],
         moduleBindings: [],
         callSites: [],
@@ -32,98 +58,78 @@ function fallbackResult(
             options,
         ),
     };
+    if (structuralStatus === 'unsupported') {
+        return { ...evidence, structuralStatus, structuralReason: 'unsupported_language' };
+    }
+    if (structuralReason === 'unsupported_language') {
+        throw new Error('Recovered language analysis requires a recoverable reason');
+    }
+    return { ...evidence, structuralStatus, structuralReason };
 }
 
 export function createLanguageAnalysisService(
     options: LanguageAnalysisServiceOptions = {},
 ): LanguageAnalysisPort {
-    let chunkSize = options.chunkSize;
-    let chunkOverlap = options.chunkOverlap;
+    const chunkOptions = {
+        chunkSize: options.chunkSize,
+        chunkOverlap: options.chunkOverlap,
+    };
 
     return {
         async analyze(input: LanguageAnalysisInput): Promise<LanguageAnalysisResult> {
             const normalizedLanguage = normalizeLanguageId(input.language);
-            if (OXC_LANGUAGES.has(normalizedLanguage)) {
-                try {
-                    const normalizedInput = { ...input, language: normalizedLanguage };
-                    const evidence = analyzeWithOxc(normalizedInput);
-                    const symbols = evidence.complete ? evidence.symbols : [];
-                    return {
-                        backend: 'oxc',
-                        structuralStatus: evidence.complete ? 'complete' : 'recovered',
-                        symbols,
-                        moduleBindings: evidence.complete ? evidence.moduleBindings : [],
-                        callSites: evidence.complete ? evidence.callSites : [],
-                        chunks: buildAnalysisChunks(
-                            normalizedInput.content,
-                            normalizedInput.relativePath,
-                            normalizedInput.language,
-                            symbols,
-                            { chunkSize, chunkOverlap },
-                        ),
-                    };
-                } catch {
-                    return fallbackResult(
-                        { ...input, language: normalizedLanguage },
-                        'oxc',
-                        'recovered',
-                        { chunkSize, chunkOverlap },
-                    );
-                }
+            const strategy = strategyForLanguage(normalizedLanguage);
+            if (strategy.backend === 'bounded_text') {
+                return fallbackResult(
+                    { ...input, language: normalizedLanguage },
+                    strategy.backend,
+                    'unsupported',
+                    'unsupported_language',
+                    chunkOptions,
+                );
             }
 
-            if (TREE_SITTER_LANGUAGES.has(normalizedLanguage)) {
-                try {
-                    const normalizedInput = { ...input, language: normalizedLanguage };
-                    const evidence = await analyzeWithTreeSitter(normalizedInput, options.assetRoot);
-                    const symbols = evidence.complete ? evidence.symbols : [];
-                    return {
-                        backend: 'tree_sitter_wasm',
-                        structuralStatus: evidence.complete ? 'complete' : 'recovered',
-                        symbols,
-                        moduleBindings: evidence.complete ? evidence.moduleBindings : [],
-                        callSites: evidence.complete ? evidence.callSites : [],
-                        chunks: buildAnalysisChunks(
-                            normalizedInput.content,
-                            normalizedInput.relativePath,
-                            normalizedInput.language,
-                            symbols,
-                            { chunkSize, chunkOverlap },
-                        ),
-                    };
-                } catch {
+            try {
+                const normalizedInput = { ...input, language: normalizedLanguage };
+                const evidence = strategy.backend === 'oxc'
+                    ? analyzeWithOxc(normalizedInput)
+                    : await analyzeWithTreeSitter(normalizedInput, options.assetRoot);
+                if (!evidence.complete) {
                     return fallbackResult(
-                        { ...input, language: normalizedLanguage },
-                        'tree_sitter_wasm',
+                        normalizedInput,
+                        strategy.backend,
                         'recovered',
-                        { chunkSize, chunkOverlap },
+                        evidence.reason,
+                        chunkOptions,
                     );
                 }
+                return {
+                    backend: strategy.backend,
+                    structuralStatus: 'complete',
+                    symbols: evidence.symbols,
+                    moduleBindings: evidence.moduleBindings,
+                    callSites: evidence.callSites,
+                    chunks: buildAnalysisChunks(
+                        normalizedInput.content,
+                        normalizedInput.relativePath,
+                        normalizedInput.language,
+                        evidence.symbols,
+                        chunkOptions,
+                    ),
+                };
+            } catch {
+                return fallbackResult(
+                    { ...input, language: normalizedLanguage },
+                    strategy.backend,
+                    'recovered',
+                    'analysis_failure',
+                    chunkOptions,
+                );
             }
-
-            return fallbackResult(
-                { ...input, language: normalizedLanguage },
-                'recursive_text',
-                'unsupported',
-                { chunkSize, chunkOverlap },
-            );
-        },
-        setChunkSize(value: number): void {
-            chunkSize = value;
-        },
-        setChunkOverlap(value: number): void {
-            chunkOverlap = value;
         },
         getDescription(): string {
-            return 'Oxc (JS/TS), Tree-sitter WASM (polyglot), recursive text fallback';
+            return 'Oxc (JS/TS), Tree-sitter WASM (polyglot), bounded text fallback';
         },
-        getStrategyForLanguage(language: string) {
-            const normalized = normalizeLanguageId(language);
-            if (OXC_LANGUAGES.has(normalized)) return { backend: 'oxc', structural: true };
-            if (TREE_SITTER_LANGUAGES.has(normalized)) {
-                return { backend: 'tree_sitter_wasm', structural: true };
-            }
-            return { backend: 'recursive_text', structural: false };
-        },
+        getStrategyForLanguage: strategyForLanguage,
     };
 }

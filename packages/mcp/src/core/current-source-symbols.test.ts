@@ -77,6 +77,7 @@ test("current-source validation rejects non-throwing parser fallback evidence", 
         analyze: async () => ({
             backend: "oxc",
             structuralStatus: "recovered",
+            structuralReason: "syntax_error",
             symbols: [],
             moduleBindings: [],
             callSites: [],

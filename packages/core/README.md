@@ -7,7 +7,7 @@ Use this package when you want the lower-level engine directly. Most agent workf
 ## What It Owns
 
 - File discovery and ignore filtering (`.satoriignore`, `.gitignore`, hard denylist).
-- One normalized language-analysis boundary for symbols, structural chunks, module bindings, and call evidence. Oxc analyzes JavaScript/JSX/TypeScript/TSX/DTS; Tree-sitter WASM analyzes Python, Go, Rust, Java, C#, C++, and Scala; unsupported or structurally invalid input falls back to bounded recursive text chunks without authoritative symbols.
+- One normalized language-analysis boundary for symbols, structural chunks, module bindings, and call evidence. Oxc analyzes JavaScript/JSX/TypeScript/TSX/DTS; Tree-sitter WASM analyzes Python, Go, Rust, Java, C#, C++, and Scala; unsupported or structurally degraded input falls back to bounded fixed-size text chunks without authoritative symbols.
 - OpenAI, VoyageAI, Gemini, and Ollama embeddings.
 - Milvus/Zilliz vector persistence and search.
 - Dense/BM25 hybrid retrieval and optional reranking.
@@ -17,7 +17,11 @@ Use this package when you want the lower-level engine directly. Most agent workf
 
 Files remain the source of truth. The symbol registry is a deterministic navigation view for a compatible indexed snapshot; grouped search can use owner symbols while chunks remain supporting evidence. Exact navigation uses `symbolInstanceId`, while `symbolKey` stays stable-ish candidate lookup only. Relationship sidecars store conservative `CALLS v0` plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges that back symbol-owned `call_graph` traversal. `CALLS v0` is heuristic/name-based: unique same-file targets can be high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them, or an imported module has a unique same-name target. They are navigation hints, not proof of runtime call coverage.
 
-Parser, symbol-extractor, and relationship-builder identities are durable index fingerprints. Upgrading this parser stack makes older indexes incompatible and requires `manage_index reindex`; incremental `sync` cannot migrate their symbol or relationship evidence.
+Language-analyzer configuration is immutable after construction: set `chunkSize`, `chunkOverlap`, and a custom `languageAnalyzer` through constructor options. `LanguageAnalysisResult` reports `complete`, `recovered`, or `unsupported`; degraded results carry a typed reason (`syntax_error`, `parser_unavailable`, `analysis_failure`, or `unsupported_language`) and never expose raw parser errors. Source spans use UTF-8 byte offsets and UTF-16 code-unit columns.
+
+This is an intentional exported Core 2.0 API change: the mutable analyzer setters and `Context.updateLanguageAnalyzer` are removed. The six MCP tools and their schemas are unchanged.
+
+Parser, symbol-extractor, and relationship-builder identities are durable index fingerprints. The UTF-8-normalized contracts are `language-analysis-v4+<parser identity>` and `relationship-v3+utf8-normalized-analysis`. Indexes carrying `language-analysis-v3` and/or `relationship-v2` are incompatible and require `manage_index reindex`; incremental `sync` cannot migrate their symbol or relationship evidence.
 
 Completed full indexes write canonical JSON navigation sidecars and then import an additive `navigation.sqlite` cache. JSON remains the canonical navigation source; SQLite is optional for parity checks or explicit experimental reads.
 

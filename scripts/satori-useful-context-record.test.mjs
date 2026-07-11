@@ -286,6 +286,33 @@ test("dry-run validates and expands tasks without starting the command", () => {
     }
 });
 
+test("recording rejects cache-warming setup calls", () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "satori-useful-context-setup-"));
+    try {
+        const repoRoot = path.join(temp, "repo");
+        const tasksFile = path.join(temp, "tasks.json");
+        const fakeMcp = path.join(temp, "fake-mcp.mjs");
+        initializeRepo(repoRoot);
+        const suite = taskSuite(repoRoot);
+        suite.tasks = [suite.tasks[0]];
+        suite.tasks[0].workload.setup = [{
+            tool: "search_codebase",
+            args: { path: "$REPO_ROOT", query: "find owner" },
+        }];
+        writeJson(tasksFile, suite);
+        writeFakeMcp(fakeMcp);
+
+        const run = spawnSync(process.execPath, [
+            SCRIPT_PATH, "--tasks", tasksFile, "--repo", repoRoot,
+            "--command", process.execPath, "--command-arg", fakeMcp,
+        ], { encoding: "utf8" });
+        assert.equal(run.status, 1);
+        assert.match(run.stderr, /setup may only use manage_index status/i);
+    } finally {
+        fs.rmSync(temp, { recursive: true, force: true });
+    }
+});
+
 test("recording refuses a dirty worktree before starting MCP", () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), "satori-useful-context-dirty-"));
     try {

@@ -500,13 +500,11 @@ export async function callAndDecode(session, invocation) {
 async function proveReady(session, task) {
     let readinessPayload;
     for (const invocation of task.workload.setup) {
-        if (invocation.tool === "manage_index" && invocation.args.action !== "status") {
-            throw new Error(`Task '${task.id}' setup may only use non-mutating manage_index status.`);
+        if (invocation.tool !== "manage_index" || invocation.args.action !== "status") {
+            throw new Error(`Task '${task.id}' setup may only use manage_index status.`);
         }
         const called = await callAndDecode(session, invocation);
-        if (invocation.tool === "manage_index" && invocation.args.action === "status") {
-            readinessPayload = called.payload;
-        }
+        readinessPayload = called.payload;
     }
     if (!readinessPayload || readinessPayload.status !== "ok") {
         throw new Error(`Task '${task.id}' readiness status is not searchable/indexed (status: ${readinessPayload?.status || "missing"}).`);

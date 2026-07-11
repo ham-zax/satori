@@ -5,6 +5,11 @@ import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import { buildRuntimeIndexFingerprint, ContextMcpConfig } from "../config.js";
 import { ProviderRuntime, resolveConfiguredEmbeddingDimension } from "./provider-runtime.js";
+import {
+    LANGUAGE_PARSER_VERSION,
+    RELATIONSHIP_BUILDER_VERSION,
+    SYMBOL_EXTRACTOR_VERSION,
+} from "@zokizuan/satori-core";
 
 function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig {
     return {
@@ -46,6 +51,13 @@ test("embedding/vector operations require provider key and MILVUS_ADDRESS", () =
         const issue = createRuntime(item.config).validate("embedding_vector");
         assert.deepEqual(issue?.missingEnv, item.expected);
     }
+});
+
+test("runtime fingerprint seals parser, extractor, and relationship versions", () => {
+    const fingerprint = buildRuntimeIndexFingerprint(baseConfig(), 1024);
+    assert.equal(fingerprint.parserVersion, LANGUAGE_PARSER_VERSION);
+    assert.equal(fingerprint.extractorVersion, SYMBOL_EXTRACTOR_VERSION);
+    assert.equal(fingerprint.relationshipVersion, RELATIONSHIP_BUILDER_VERSION);
 });
 
 test("MILVUS_TOKEN is not a substitute for MILVUS_ADDRESS", () => {

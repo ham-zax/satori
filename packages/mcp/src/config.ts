@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { envManager } from "@zokizuan/satori-core";
+import {
+    envManager,
+    LANGUAGE_PARSER_VERSION,
+    RELATIONSHIP_BUILDER_VERSION,
+    SYMBOL_EXTRACTOR_VERSION,
+} from "@zokizuan/satori-core";
 
 export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama';
 export type VectorStoreProvider = 'Milvus';
@@ -30,6 +35,25 @@ export interface IndexFingerprint {
     embeddingDimension: number;
     vectorStoreProvider: VectorStoreProvider;
     schemaVersion: 'dense_v3' | 'hybrid_v3';
+    /** Absent only on legacy persisted fingerprints. */
+    parserVersion?: string;
+    extractorVersion?: string;
+    relationshipVersion?: string;
+}
+
+export function indexFingerprintsEqual(left: IndexFingerprint, right: IndexFingerprint): boolean {
+    return left.embeddingProvider === right.embeddingProvider
+        && left.embeddingModel === right.embeddingModel
+        && Number(left.embeddingDimension) === Number(right.embeddingDimension)
+        && left.vectorStoreProvider === right.vectorStoreProvider
+        && left.schemaVersion === right.schemaVersion
+        && left.parserVersion === right.parserVersion
+        && left.extractorVersion === right.extractorVersion
+        && left.relationshipVersion === right.relationshipVersion;
+}
+
+export function summarizeIndexFingerprint(fingerprint: IndexFingerprint): string {
+    return `${fingerprint.embeddingProvider}/${fingerprint.embeddingModel}/${fingerprint.embeddingDimension}/${fingerprint.vectorStoreProvider}/${fingerprint.schemaVersion}`;
 }
 
 export type IndexOperationAction = 'create' | 'reindex' | 'sync' | 'repair' | 'clear';
@@ -230,7 +254,10 @@ export function buildRuntimeIndexFingerprint(config: ContextMcpConfig, embedding
         embeddingModel: config.encoderModel,
         embeddingDimension,
         vectorStoreProvider: 'Milvus',
-        schemaVersion: getSchemaVersionFromEnv()
+        schemaVersion: getSchemaVersionFromEnv(),
+        parserVersion: LANGUAGE_PARSER_VERSION,
+        extractorVersion: SYMBOL_EXTRACTOR_VERSION,
+        relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
     };
 }
 

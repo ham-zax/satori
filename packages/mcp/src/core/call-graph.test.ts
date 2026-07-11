@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AstCodeSplitter } from '@zokizuan/satori-core';
 import { CallGraphSidecarManager, SupportedSourceDeltaPolicy } from './call-graph.js';
 import { IndexFingerprint } from '../config.js';
 
@@ -115,6 +114,35 @@ test('call graph sidecar builds and query traversal is deterministic on TS fixtu
     });
 });
 
+test('call graph sidecar assigns same-line calls to byte-containing symbols', async () => {
+    await withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), [
+            'function targetA() {}',
+            'function targetB() {}',
+            'function first() { targetA(); } function second() { targetB(); }',
+        ].join('\n'));
+
+        const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
+        await manager.rebuildForCodebase(repoPath);
+        const sidecar = manager.loadSidecar(repoPath);
+        assert.ok(sidecar);
+
+        const idByName = new Map(sidecar!.nodes.map((node) => [
+            node.symbolLabel?.replace(/^function /, ''),
+            node.symbolId,
+        ]));
+        assert.notEqual(idByName.get('first'), idByName.get('second'));
+        const actualEdges = sidecar!.edges
+            .map((edge) => [edge.srcSymbolId, edge.dstSymbolId])
+            .sort((left, right) => (left[0] ?? '').localeCompare(right[0] ?? ''));
+        const expectedEdges = [
+            [idByName.get('first'), idByName.get('targetA')],
+            [idByName.get('second'), idByName.get('targetB')],
+        ].sort((left, right) => (left[0] ?? '').localeCompare(right[0] ?? ''));
+        assert.deepEqual(actualEdges, expectedEdges);
+    });
+});
+
 test('call graph query returns structured unsupported response for unsupported language', async () => {
     const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
     const response = manager.queryGraph('/tmp/repo', {
@@ -150,9 +178,8 @@ test('call graph query accepts JavaScript symbols for query routing', async () =
     }
 });
 
-test('call graph sidecar emits missing_symbol_metadata notes without synthetic node ids', async () => {
+test('call graph sidecar does not synthesize nodes for structurally invalid source', async () => {
     await withTempRepo(async (repoPath) => {
-        const splitter = new AstCodeSplitter();
         const filePath = path.join(repoPath, 'src', 'broken.ts');
         const content = [
             'export const handler = () => {',
@@ -164,24 +191,13 @@ test('call graph sidecar emits missing_symbol_metadata notes without synthetic n
         ].join('\n');
         fs.writeFileSync(filePath, content);
 
-        const chunks = await splitter.split(content, 'typescript', filePath);
-        const metadataSymbolIds = new Set(
-            chunks
-                .map((chunk) => chunk.metadata.symbolId)
-                .filter((symbolId): symbolId is string => typeof symbolId === 'string')
-        );
-
         const manager = new CallGraphSidecarManager(RUNTIME_FINGERPRINT);
         await manager.rebuildForCodebase(repoPath);
         const sidecar = manager.loadSidecar(repoPath);
         assert.ok(sidecar);
 
-        const missingMetadataNotes = sidecar!.notes.filter((note) => note.type === 'missing_symbol_metadata');
-        assert.ok(missingMetadataNotes.length >= 1);
         assert.equal(sidecar!.edges.length, 0);
-        for (const node of sidecar!.nodes) {
-            assert.ok(metadataSymbolIds.has(node.symbolId), `Unexpected node symbolId without splitter metadata: ${node.symbolId}`);
-        }
+        assert.equal(sidecar!.nodes.length, 0);
     });
 });
 

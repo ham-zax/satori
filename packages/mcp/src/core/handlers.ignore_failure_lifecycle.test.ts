@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-    AstCodeSplitter,
     Context,
+    createLanguageAnalysisService,
     resetSharedRuntimeNavigationStoreForTests,
 } from '@zokizuan/satori-core';
 import type {
@@ -16,7 +16,6 @@ import type {
     HybridSearchRequest,
     HybridSearchResult,
     SearchOptions,
-    Splitter,
     VectorDatabase,
     VectorDocument,
     VectorSearchResult,
@@ -84,22 +83,6 @@ class TestEmbedding implements Embedding {
 
     getProvider(): string {
         return 'TestEmbedding';
-    }
-}
-
-class TestSplitter implements Splitter {
-    private readonly delegate = new AstCodeSplitter(2500, 300);
-
-    async split(code: string, language: string, filePath?: string) {
-        return this.delegate.split(code, language, filePath);
-    }
-
-    setChunkSize(chunkSize: number): void {
-        this.delegate.setChunkSize(chunkSize);
-    }
-
-    setChunkOverlap(chunkOverlap: number): void {
-        this.delegate.setChunkOverlap(chunkOverlap);
     }
 }
 
@@ -318,7 +301,7 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
         const context = new Context({
             embedding: new TestEmbedding(),
             vectorDatabase: new InMemoryVectorDatabase(),
-            codeSplitter: new TestSplitter(),
+            languageAnalyzer: createLanguageAnalysisService(),
             symbolRegistryStateRoot: stateRoot,
         });
         await context.recreateSynchronizerForCodebase(repoPath);

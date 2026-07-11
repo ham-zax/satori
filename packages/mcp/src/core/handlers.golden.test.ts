@@ -723,7 +723,7 @@ test('golden MCP file_outline unsupported language shape', async () => {
             file: 'src/notes.txt',
             outline: null,
             hasMore: false,
-            message: "File 'src/notes.txt' is not supported for sidecar outline. Supported extensions: .cjs, .cts, .go, .js, .jsx, .mjs, .mts, .py, .rs, .ts, .tsx.",
+            message: "File 'src/notes.txt' is not supported for sidecar outline. Supported extensions: .c, .cc, .ccm, .cjs, .cpp, .cppm, .cs, .cts, .cxx, .go, .h, .hh, .hpp, .hxx, .ixx, .java, .js, .jsx, .mjs, .mts, .py, .rs, .scala, .ts, .tsx.",
         });
     }));
 });

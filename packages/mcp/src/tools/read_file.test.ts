@@ -969,6 +969,96 @@ test('read_file open_symbol opens a Rust symbol by symbolInstanceId through exac
     });
 });
 
+test('read_file open_symbol opens Java, C#, C++, and Scala symbol-only spans', async () => {
+    const fixtures = [
+        {
+            file: 'Service.java',
+            symbolId: 'java_run_instance',
+            source: 'class Service {\n  int run() {\n    return 1;\n  }\n}\n',
+            startLine: 2,
+            endLine: 4,
+            expected: '  int run() {\n    return 1;\n  }',
+        },
+        {
+            file: 'Service.cs',
+            symbolId: 'csharp_run_instance',
+            source: 'class Service {\n  int Run() {\n    return 1;\n  }\n}\n',
+            startLine: 2,
+            endLine: 4,
+            expected: '  int Run() {\n    return 1;\n  }',
+        },
+        {
+            file: 'service.cpp',
+            symbolId: 'cpp_run_instance',
+            source: 'class Service {\n};\nint run() {\n  return 1;\n}\n',
+            startLine: 3,
+            endLine: 5,
+            expected: 'int run() {\n  return 1;\n}',
+        },
+        {
+            file: 'Service.scala',
+            symbolId: 'scala_run_instance',
+            source: 'class Service {\n  def run(): Int = {\n    1\n  }\n}\n',
+            startLine: 2,
+            endLine: 4,
+            expected: '  def run(): Int = {\n    1\n  }',
+        },
+    ] as const;
+
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        fs.mkdirSync(repoPath, { recursive: true });
+
+        for (const fixture of fixtures) {
+            const filePath = path.join(repoPath, fixture.file);
+            fs.writeFileSync(filePath, fixture.source, 'utf8');
+
+            const response = await runReadFile({
+                path: filePath,
+                open_symbol: { symbolId: fixture.symbolId },
+            }, 1000, {
+                snapshotManager: {
+                    getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+                } as unknown as SnapshotManagerLike,
+                toolHandlers: {
+                    handleFileOutline: async (args: FileOutlineInput) => {
+                        assert.equal(args.resolveMode, 'exact');
+                        assert.equal(args.symbolIdExact, fixture.symbolId);
+                        return {
+                            content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    status: 'ok',
+                                    path: repoPath,
+                                    file: fixture.file,
+                                    outline: {
+                                        symbols: [{
+                                            symbolId: fixture.symbolId,
+                                            symbolLabel: 'target',
+                                            span: {
+                                                startLine: fixture.startLine,
+                                                endLine: fixture.endLine,
+                                            },
+                                            callGraphHint: {
+                                                supported: false,
+                                                reason: 'unsupported_language',
+                                            },
+                                        }],
+                                    },
+                                    hasMore: false,
+                                }),
+                            }],
+                        };
+                    },
+                } as unknown as ToolHandlersLike,
+            });
+
+            assert.equal(response.isError, undefined, fixture.file);
+            assert.equal(response.content[0].text, fixture.expected, fixture.file);
+        }
+    });
+});
+
 test('read_file open_symbol returns not_found for a stale symbolInstanceId without span fallback', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');

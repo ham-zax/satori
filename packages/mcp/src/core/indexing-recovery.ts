@@ -1,5 +1,5 @@
 import { IndexCompletionMarkerDocument } from '@zokizuan/satori-core';
-import { IndexFingerprint } from '../config.js';
+import { IndexFingerprint, indexFingerprintsEqual } from '../config.js';
 
 export type InterruptedIndexingRecoveryDecision =
     | {
@@ -26,11 +26,7 @@ function resolveMarkerIndexStatus(
 }
 
 function fingerprintsMatch(a: IndexCompletionMarkerDocument['fingerprint'], b: IndexFingerprint): boolean {
-    return a.embeddingProvider === b.embeddingProvider
-        && a.embeddingModel === b.embeddingModel
-        && Number(a.embeddingDimension) === Number(b.embeddingDimension)
-        && a.vectorStoreProvider === b.vectorStoreProvider
-        && a.schemaVersion === b.schemaVersion;
+    return indexFingerprintsEqual(a as IndexFingerprint, b);
 }
 
 function hasValidMarkerPayload(marker: IndexCompletionMarkerDocument): boolean {
@@ -56,6 +52,9 @@ function normalizeMarkerFingerprint(
         embeddingDimension: Number(fingerprint.embeddingDimension),
         vectorStoreProvider: fingerprint.vectorStoreProvider as IndexFingerprint['vectorStoreProvider'],
         schemaVersion: fingerprint.schemaVersion as IndexFingerprint['schemaVersion'],
+        ...(fingerprint.parserVersion ? { parserVersion: fingerprint.parserVersion } : {}),
+        ...(fingerprint.extractorVersion ? { extractorVersion: fingerprint.extractorVersion } : {}),
+        ...(fingerprint.relationshipVersion ? { relationshipVersion: fingerprint.relationshipVersion } : {}),
     };
 }
 

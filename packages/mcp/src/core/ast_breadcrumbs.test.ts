@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AstCodeSplitter } from '@zokizuan/satori-core';
+import { createLanguageAnalysisService } from '@zokizuan/satori-core';
 
-test('AstCodeSplitter emits TS class/method breadcrumbs', async () => {
-    const splitter = new AstCodeSplitter();
+test('language analysis emits TS class/method breadcrumbs', async () => {
+    const analyzer = createLanguageAnalysisService();
     const code = [
         'export class AuthManager {',
         '  async validateSession(token: string) {',
@@ -12,19 +12,19 @@ test('AstCodeSplitter emits TS class/method breadcrumbs', async () => {
         '}'
     ].join('\n');
 
-    const chunks = await splitter.split(code, 'typescript', '/tmp/auth.ts');
+    const { chunks } = await analyzer.analyze({ content: code, language: 'typescript', relativePath: 'auth.ts' });
     const target = chunks.find(
         (chunk) =>
             chunk.content.includes('return token.length > 0;')
             && Array.isArray(chunk.metadata.breadcrumbs)
-            && chunk.metadata.breadcrumbs.length === 2
+            && chunk.metadata.symbolLabel === 'method validateSession'
     );
     assert.ok(target);
-    assert.deepEqual(target?.metadata.breadcrumbs, ['class AuthManager', 'async method validateSession(token: string)']);
+    assert.deepEqual(target?.metadata.breadcrumbs, ['AuthManager']);
 });
 
-test('AstCodeSplitter emits Python class/function breadcrumbs', async () => {
-    const splitter = new AstCodeSplitter();
+test('language analysis emits Python class/function breadcrumbs', async () => {
+    const analyzer = createLanguageAnalysisService();
     const code = [
         'class SessionManager:',
         '    async def validate(self, token: str):',
@@ -32,19 +32,19 @@ test('AstCodeSplitter emits Python class/function breadcrumbs', async () => {
         ''
     ].join('\n');
 
-    const chunks = await splitter.split(code, 'python', '/tmp/auth.py');
+    const { chunks } = await analyzer.analyze({ content: code, language: 'python', relativePath: 'auth.py' });
     const target = chunks.find(
         (chunk) =>
             chunk.content.includes('return token')
             && Array.isArray(chunk.metadata.breadcrumbs)
-            && chunk.metadata.breadcrumbs.length === 2
+            && chunk.metadata.symbolLabel === 'method validate'
     );
     assert.ok(target);
-    assert.deepEqual(target?.metadata.breadcrumbs, ['class SessionManager', 'async function validate(self, token: str)']);
+    assert.deepEqual(target?.metadata.breadcrumbs, ['SessionManager']);
 });
 
-test('AstCodeSplitter caps breadcrumb depth at 2', async () => {
-    const splitter = new AstCodeSplitter();
+test('language analysis emits bounded declaration ancestry', async () => {
+    const analyzer = createLanguageAnalysisService();
     const code = [
         'class A {',
         '  outer() {',
@@ -56,7 +56,7 @@ test('AstCodeSplitter caps breadcrumb depth at 2', async () => {
         '}'
     ].join('\n');
 
-    const chunks = await splitter.split(code, 'typescript', '/tmp/depth.ts');
+    const { chunks } = await analyzer.analyze({ content: code, language: 'typescript', relativePath: 'depth.ts' });
     for (const chunk of chunks) {
         if (Array.isArray(chunk.metadata.breadcrumbs)) {
             assert.ok(chunk.metadata.breadcrumbs.length <= 2);
@@ -64,8 +64,8 @@ test('AstCodeSplitter caps breadcrumb depth at 2', async () => {
     }
 });
 
-test('AstCodeSplitter preserves breadcrumbs when splitting large chunks', async () => {
-    const splitter = new AstCodeSplitter(80, 0);
+test('language analysis preserves breadcrumbs when splitting large chunks', async () => {
+    const analyzer = createLanguageAnalysisService({ chunkSize: 80, chunkOverlap: 0 });
     const repeatedBody = Array.from({ length: 30 }, (_, i) => `    const v${i} = token + ${i};`).join('\n');
     const code = [
         'class LargeAuth {',
@@ -76,10 +76,10 @@ test('AstCodeSplitter preserves breadcrumbs when splitting large chunks', async 
         '}'
     ].join('\n');
 
-    const chunks = await splitter.split(code, 'typescript', '/tmp/large.ts');
-    const methodChunks = chunks.filter((chunk) => Array.isArray(chunk.metadata.breadcrumbs) && chunk.metadata.breadcrumbs.includes('method validate(token: string)'));
+    const { chunks } = await analyzer.analyze({ content: code, language: 'typescript', relativePath: 'large.ts' });
+    const methodChunks = chunks.filter((chunk) => chunk.metadata.symbolLabel === 'method validate');
     assert.ok(methodChunks.length > 1);
     for (const chunk of methodChunks) {
-        assert.deepEqual(chunk.metadata.breadcrumbs, ['class LargeAuth', 'method validate(token: string)']);
+        assert.deepEqual(chunk.metadata.breadcrumbs, ['LargeAuth']);
     }
 });

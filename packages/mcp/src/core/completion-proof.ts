@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { IndexFingerprint } from "../config.js";
+import { indexFingerprintsEqual, type IndexFingerprint } from "../config.js";
 
 export type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mismatch" | "probe_failed";
 
@@ -75,11 +75,7 @@ function markerMatchesRuntimeFingerprint(marker: unknown, runtimeFingerprint?: I
         return false;
     }
     const record = fingerprint as Record<string, unknown>;
-    return record.embeddingProvider === runtimeFingerprint.embeddingProvider
-        && record.embeddingModel === runtimeFingerprint.embeddingModel
-        && Number(record.embeddingDimension) === Number(runtimeFingerprint.embeddingDimension)
-        && record.vectorStoreProvider === runtimeFingerprint.vectorStoreProvider
-        && record.schemaVersion === runtimeFingerprint.schemaVersion;
+    return indexFingerprintsEqual(record as unknown as IndexFingerprint, runtimeFingerprint);
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

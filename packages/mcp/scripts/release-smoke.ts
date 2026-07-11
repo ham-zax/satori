@@ -178,6 +178,37 @@ async function runDirectRuntimeInitializeSmoke(coreTarballPath: string, tarballP
     await runInitializeSmoke(process.execPath, [serverEntry], smokeExecDir, 30000);
 }
 
+function runPackedCoreParserSmoke(coreTarballPath: string, smokeExecDir: string): void {
+    const script = [
+        "const { createLanguageAnalysisService } = require('@zokizuan/satori-core');",
+        "const analyzer = createLanguageAnalysisService();",
+        "Promise.all([",
+        "  analyzer.analyze({ content: 'export function run() { return 1; }', language: 'typescript', relativePath: 'src/run.ts' }),",
+        "  analyzer.analyze({ content: 'class Service:\\n    def run(self):\\n        return 1', language: 'python', relativePath: 'src/service.py' }),",
+        "  analyzer.analyze({ content: 'class Service { int run() { return 1; } }', language: 'java', relativePath: 'src/Service.java' }),",
+        "  analyzer.analyze({ content: 'class Service { def run(): Int = 1 }', language: 'scala', relativePath: 'src/Service.scala' }),",
+        "]).then(([typescript, python, java, scala]) => {",
+        "  if (typescript.backend !== 'oxc' || typescript.structuralStatus !== 'complete') process.exit(2);",
+        "  if (python.backend !== 'tree_sitter_wasm' || python.structuralStatus !== 'complete') process.exit(3);",
+        "  if (!python.symbols.some((symbol) => symbol.name === 'run')) process.exit(4);",
+        "  if (java.backend !== 'tree_sitter_wasm' || java.structuralStatus !== 'complete') process.exit(5);",
+        "  if (!java.symbols.some((symbol) => symbol.name === 'Service')) process.exit(6);",
+        "  if (scala.backend !== 'tree_sitter_wasm' || scala.structuralStatus !== 'complete') process.exit(7);",
+        "  if (!scala.symbols.some((symbol) => symbol.name === 'Service')) process.exit(8);",
+        "}).catch((error) => { console.error(error); process.exit(9); });",
+    ].join("\n");
+    execFileSync("npm", ["exec", "--yes", "--package", coreTarballPath, "--", "node", "-e", script], {
+        cwd: smokeExecDir,
+        encoding: "utf8",
+        env: {
+            ...process.env,
+            npm_config_package_lock: "false",
+            npm_config_cache: path.join(smokeExecDir, ".npm-cache"),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+}
+
 async function main(): Promise<void> {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
@@ -188,6 +219,7 @@ async function main(): Promise<void> {
     try {
         const coreTarballPath = packPackage(corePackageRoot, smokePackDir);
         const tarballPath = packPackage(packageRoot, smokePackDir);
+        runPackedCoreParserSmoke(coreTarballPath, smokeExecDir);
         execFileSync("npm", ["exec", "--yes", "--package", coreTarballPath, "--package", tarballPath, "--", "satori", "--help"], {
             cwd: smokeExecDir,
             encoding: "utf8",
@@ -199,7 +231,7 @@ async function main(): Promise<void> {
         });
         await runNpmExecInitializeSmoke(coreTarballPath, tarballPath, smokeExecDir);
         await runDirectRuntimeInitializeSmoke(coreTarballPath, tarballPath, smokeExecDir);
-        console.log("[release:smoke] MCP tarball starts via npm exec and direct runtime node entry with empty provider env.");
+        console.log("[release:smoke] Packed core runs Oxc plus dependency-provided and vendored WASM grammars; MCP starts via npm exec and direct runtime node entry with empty provider env.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";

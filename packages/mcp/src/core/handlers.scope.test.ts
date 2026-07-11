@@ -3920,7 +3920,7 @@ test('handleSearchCode replaces stale dirty-file candidates with current identif
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
         assert.equal(payload.results[0].file, relativePath);
-        assert.equal(payload.results[0].symbolLabel, 'function FreshCurrentIdentifier(value: string)');
+        assert.equal(payload.results[0].symbolLabel, 'function FreshCurrentIdentifier');
         assert.deepEqual(payload.results[0].span, { startLine: 1, endLine: 3 });
         assert.doesNotMatch(payload.results[0].preview, /RemovedStaleIdentifier/);
         assert.ok(payload.results[0].debug.provenance.retrievalPasses.includes('dirty_overlay'));

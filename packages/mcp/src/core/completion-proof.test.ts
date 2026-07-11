@@ -55,3 +55,19 @@ test('validateCompletionProof accepts non-negative integer marker counts', async
 
     assert.equal(result.outcome, 'valid');
 });
+
+test('validateCompletionProof requires reindex when a legacy marker lacks parser identity', async () => {
+    const currentFingerprint: IndexFingerprint = {
+        ...RUNTIME_FINGERPRINT,
+        parserVersion: 'oxc-0.139.0+web-tree-sitter-0.26.10+vscode-grammars-0.3.1+scala-0.24.0-sha256-b7ec2bb29c19827abcefd18ed5cb5a43596009f96a5d53c5b9d1f9676d7521c3',
+        extractorVersion: 'language-analysis-v2+oxc-0.139.0+web-tree-sitter-0.26.10+vscode-grammars-0.3.1+scala-0.24.0-sha256-b7ec2bb29c19827abcefd18ed5cb5a43596009f96a5d53c5b9d1f9676d7521c3',
+        relationshipVersion: 'relationship-v2+normalized-language-analysis',
+    };
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: currentFingerprint,
+        getIndexCompletionMarker: async () => marker(),
+    });
+
+    assert.equal(result.outcome, 'fingerprint_mismatch');
+});

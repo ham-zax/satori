@@ -4,7 +4,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AstCodeSplitter, buildSymbolRecordsForFile, type SymbolRecord } from "@zokizuan/satori-core";
+import {
+    buildSymbolRecordsForFile,
+    createLanguageAnalysisService,
+    type LanguageAnalysisPort,
+    type SymbolRecord,
+} from "@zokizuan/satori-core";
 import { validateCurrentSourceSymbolSpans } from "./current-source-symbols.js";
 
 function testSymbol(file = "src/runtime.ts"): SymbolRecord {
@@ -42,19 +47,22 @@ test("current-source validation fails closed when parsing throws", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-parser-"));
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "src", "runtime.ts"), "function currentOwner() { return true; }\n");
-    const originalSplit = AstCodeSplitter.prototype.splitWithEvidence;
-    AstCodeSplitter.prototype.splitWithEvidence = async () => {
-        throw new Error("forced parser failure");
+    const delegate = createLanguageAnalysisService();
+    const languageAnalyzer: LanguageAnalysisPort = {
+        ...delegate,
+        analyze: async () => {
+            throw new Error("forced parser failure");
+        },
     };
     try {
         const [result] = await validateCurrentSourceSymbolSpans({
             codebaseRoot: root,
             symbols: [testSymbol()],
+            languageAnalyzer,
         });
         assert.equal(result.match, "unavailable");
         assert.equal(result.validated, false);
     } finally {
-        AstCodeSplitter.prototype.splitWithEvidence = originalSplit;
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
@@ -63,18 +71,27 @@ test("current-source validation rejects non-throwing parser fallback evidence", 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-fallback-"));
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "src", "runtime.ts"), "function currentOwner() { return true; }\n");
-    const originalSplit = AstCodeSplitter.prototype.splitWithEvidence;
-    AstCodeSplitter.prototype.splitWithEvidence = async () => ({
-        chunks: [],
-        structuralParseCompleted: false,
-        reason: "parser_failure",
-    });
+    const delegate = createLanguageAnalysisService();
+    const languageAnalyzer: LanguageAnalysisPort = {
+        ...delegate,
+        analyze: async () => ({
+            backend: "oxc",
+            structuralStatus: "recovered",
+            symbols: [],
+            moduleBindings: [],
+            callSites: [],
+            chunks: [],
+        }),
+    };
     try {
-        const [result] = await validateCurrentSourceSymbolSpans({ codebaseRoot: root, symbols: [testSymbol()] });
+        const [result] = await validateCurrentSourceSymbolSpans({
+            codebaseRoot: root,
+            symbols: [testSymbol()],
+            languageAnalyzer,
+        });
         assert.equal(result.match, "unavailable");
         assert.equal(result.validated, false);
     } finally {
-        AstCodeSplitter.prototype.splitWithEvidence = originalSplit;
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
@@ -99,18 +116,20 @@ test("current-source validation preserves same-key declarations on one line", as
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, relativeFile), source);
     try {
-        const splitter = new AstCodeSplitter(Number.MAX_SAFE_INTEGER);
-        splitter.setChunkOverlap(0);
-        const chunks = await splitter.split(source, "typescript", relativeFile);
+        const analysis = await createLanguageAnalysisService({
+            chunkSize: Number.MAX_SAFE_INTEGER,
+            chunkOverlap: 0,
+        }).analyze({ content: source, language: "typescript", relativePath: relativeFile });
         const fileHash = crypto.createHash("sha256").update(source).digest("hex");
-        const persisted = chunks.flatMap((chunk) => buildSymbolRecordsForFile({
+        const persisted = buildSymbolRecordsForFile({
             relativePath: relativeFile,
             language: "typescript",
             content: source,
             fileHash,
             extractorVersion: "test-extractor-v1",
-            chunks: [chunk],
-        })).filter((symbol) => symbol.kind !== "file" && symbol.name === "duplicate");
+            chunks: [...analysis.chunks],
+            extractedSymbols: analysis.symbols,
+        }).filter((symbol) => symbol.kind !== "file" && symbol.name === "duplicate");
         assert.equal(persisted.length, 2);
 
         const expectedStartById = new Map(persisted.map((symbol) => [symbol.symbolInstanceId, symbol.span.startByte]));

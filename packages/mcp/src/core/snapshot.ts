@@ -17,7 +17,9 @@ import {
     IndexFingerprint,
     IndexOperationReceipt,
     IndexOperationPhase,
+    indexFingerprintsEqual,
     resolveMcpPackageVersion,
+    summarizeIndexFingerprint,
 } from "../config.js";
 import type { RootMutationLease } from "./mutation-lease.js";
 
@@ -101,15 +103,11 @@ function stableSerialize(value: unknown): string {
 }
 
 function fingerprintsEqual(a: IndexFingerprint, b: IndexFingerprint): boolean {
-    return a.embeddingProvider === b.embeddingProvider
-        && a.embeddingModel === b.embeddingModel
-        && a.embeddingDimension === b.embeddingDimension
-        && a.vectorStoreProvider === b.vectorStoreProvider
-        && a.schemaVersion === b.schemaVersion;
+    return indexFingerprintsEqual(a, b);
 }
 
 function fingerprintSummary(fp: IndexFingerprint): string {
-    return `${fp.embeddingProvider}/${fp.embeddingModel}/${fp.embeddingDimension}/${fp.vectorStoreProvider}/${fp.schemaVersion}`;
+    return summarizeIndexFingerprint(fp);
 }
 
 export interface AccessGateResult {

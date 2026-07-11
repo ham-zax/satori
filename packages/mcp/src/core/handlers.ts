@@ -19,7 +19,14 @@ import { CapabilityResolver } from "./capabilities.js";
 import { AccessGateReason, SnapshotManager } from "./snapshot.js";
 import { absolutePathOrRaw, requireAbsoluteFilesystemPath } from "../utils.js";
 import { SyncManager, type FreshnessDecision } from "./sync.js";
-import { DEFAULT_MANAGE_RETRY_AFTER_MS, DEFAULT_WATCH_DEBOUNCE_MS, IndexFingerprint, type CodebaseInfo } from "../config.js";
+import {
+    DEFAULT_MANAGE_RETRY_AFTER_MS,
+    DEFAULT_WATCH_DEBOUNCE_MS,
+    IndexFingerprint,
+    indexFingerprintsEqual,
+    summarizeIndexFingerprint,
+    type CodebaseInfo,
+} from "../config.js";
 import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
@@ -1613,15 +1620,11 @@ export class ToolHandlers {
     }
 
     private summarizeFingerprint(fingerprint: IndexFingerprint): string {
-        return `${fingerprint.embeddingProvider}/${fingerprint.embeddingModel}/${fingerprint.embeddingDimension}/${fingerprint.vectorStoreProvider}/${fingerprint.schemaVersion}`;
+        return summarizeIndexFingerprint(fingerprint);
     }
 
     private fingerprintsEqual(left: IndexFingerprint, right: IndexFingerprint): boolean {
-        return left.embeddingProvider === right.embeddingProvider
-            && left.embeddingModel === right.embeddingModel
-            && left.embeddingDimension === right.embeddingDimension
-            && left.vectorStoreProvider === right.vectorStoreProvider
-            && left.schemaVersion === right.schemaVersion;
+        return indexFingerprintsEqual(left, right);
     }
 
     private isRuntimeFingerprintMismatch(diagnostics: FingerprintCompatibilityDiagnostics): boolean {

@@ -2,8 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import ignore from "ignore";
 import {
-    AstCodeSplitter,
     compareContractStrings,
+    createLanguageAnalysisService,
     getLanguageIdFromFilename,
     isLanguageCapabilitySupportedForFilename,
     openRegularFileInsideRoot,
@@ -360,8 +360,10 @@ export class SearchQuerySupport {
             return [];
         }
         const activeIgnoreMatcher = this.buildActiveIgnoreMatcher(input.effectiveRoot);
-        const splitter = new AstCodeSplitter(SEARCH_DIRTY_OVERLAY_MAX_BYTES + 1);
-        splitter.setChunkOverlap(0);
+        const analyzer = createLanguageAnalysisService({
+            chunkSize: SEARCH_DIRTY_OVERLAY_MAX_BYTES + 1,
+            chunkOverlap: 0,
+        });
         const results: SearchResultLike[] = [];
         const seen = new Set<string>();
         let bytesRead = 0;
@@ -403,9 +405,9 @@ export class SearchQuerySupport {
             }
             bytesRead += stat.size;
             const language = getLanguageIdFromFilename(relativePath, "text");
-            let chunks: Awaited<ReturnType<AstCodeSplitter["split"]>> = [];
+            let chunks: Awaited<ReturnType<typeof analyzer.analyze>>["chunks"] = [];
             try {
-                chunks = await splitter.split(content, language, relativePath);
+                chunks = (await analyzer.analyze({ content, language, relativePath })).chunks;
             } catch {
                 chunks = [];
             }

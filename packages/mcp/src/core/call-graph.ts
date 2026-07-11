@@ -4,10 +4,12 @@ import * as path from 'node:path';
 import crypto from 'node:crypto';
 import ignore from 'ignore';
 import {
-    AstCodeSplitter,
+    createLanguageAnalysisService,
     getLanguageIdFromExtension,
     getSupportedExtensionsForCapability,
     getSupportedLanguageIdsForCapability,
+    type LanguageAnalysisPort,
+    type LanguageAnalysisResult,
 } from '@zokizuan/satori-core';
 import { CallGraphSidecarInfo, IndexFingerprint } from '../config.js';
 
@@ -147,7 +149,7 @@ type MutableNode = {
 
 export class CallGraphSidecarManager {
     private readonly runtimeFingerprint: IndexFingerprint;
-    private readonly splitter: AstCodeSplitter;
+    private readonly languageAnalyzer: LanguageAnalysisPort;
     private readonly now: () => number;
     private readonly deltaPolicy: CallGraphDeltaPolicy;
     private readonly noteLimit: number;
@@ -161,7 +163,7 @@ export class CallGraphSidecarManager {
         }
     ) {
         this.runtimeFingerprint = runtimeFingerprint;
-        this.splitter = new AstCodeSplitter();
+        this.languageAnalyzer = createLanguageAnalysisService();
         this.now = options?.now || (() => Date.now());
         this.deltaPolicy = options?.deltaPolicy || new SupportedSourceDeltaPolicy();
         this.noteLimit = Number.isFinite(options?.noteLimit)
@@ -457,7 +459,8 @@ export class CallGraphSidecarManager {
 
     private async buildGraph(codebaseRoot: string, files: string[]): Promise<{ nodes: CallGraphNode[]; edges: CallGraphEdge[]; notes: CallGraphNote[] }> {
         const nodeById = new Map<string, MutableNode>();
-        const fileCache = new Map<string, { lines: string[]; language: string }>();
+        const sourceSpanByNodeId = new Map<string, { startByte?: number; endByte?: number }>();
+        const analysisByFile = new Map<string, LanguageAnalysisResult>();
         const noteByKey = new Map<string, CallGraphNote>();
 
         for (const absoluteFile of files) {
@@ -468,25 +471,20 @@ export class CallGraphSidecarManager {
             }
 
             const content = await fs.promises.readFile(absoluteFile, 'utf8');
-            const lines = content.split(/\r?\n/);
-            fileCache.set(relativeFile, { lines, language });
+            const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath: relativeFile });
+            analysisByFile.set(relativeFile, analysis);
 
-            const chunks = await this.splitter.split(content, language, absoluteFile);
-            for (const chunk of chunks) {
-                const symbolLabel = typeof chunk.metadata.symbolLabel === 'string' ? chunk.metadata.symbolLabel : undefined;
-                const startLine = Number.isFinite(chunk.metadata.startLine) ? Math.max(1, Number(chunk.metadata.startLine)) : 1;
-                const endLine = Number.isFinite(chunk.metadata.endLine) ? Math.max(startLine, Number(chunk.metadata.endLine)) : startLine;
-                const symbolId = typeof chunk.metadata.symbolId === 'string' ? chunk.metadata.symbolId : undefined;
-                if (!symbolId) {
-                    const note: CallGraphNote = {
-                        type: 'missing_symbol_metadata',
-                        file: relativeFile,
-                        startLine,
-                        detail: `Skipped chunk without symbol metadata at ${relativeFile}:${startLine}-${endLine}.`
-                    };
-                    noteByKey.set(`missing_symbol_metadata:${relativeFile}:${startLine}:${endLine}`, note);
-                    continue;
-                }
+            for (const symbol of analysis.symbols) {
+                const symbolLabel = symbol.label;
+                const startLine = symbol.span.startLine;
+                const endLine = symbol.span.endLine;
+                const startByte = symbol.span.startByte;
+                const endByte = symbol.span.endByte;
+                const symbolId = crypto.createHash('sha256')
+                    .update(`${relativeFile}:${startLine}:${endLine}:${startByte ?? ''}:${endByte ?? ''}:${symbolLabel}`, 'utf8')
+                    .digest('hex')
+                    .slice(0, 16);
+                sourceSpanByNodeId.set(symbolId, { startByte, endByte });
                 this.upsertNode(nodeById, {
                     symbolId,
                     symbolLabel,
@@ -502,77 +500,64 @@ export class CallGraphSidecarManager {
 
         const edgeByKey = new Map<string, CallGraphEdge>();
 
-        for (const node of nodes) {
-            if (!this.shouldScanNodeAsSource(node.symbolLabel)) {
-                continue;
-            }
-
-            const fileData = fileCache.get(node.file);
-            if (!fileData) {
-                continue;
-            }
-
-            for (let lineNo = node.span.startLine; lineNo <= Math.min(node.span.endLine, fileData.lines.length); lineNo++) {
-                const rawLine = fileData.lines[lineNo - 1] || '';
-                const line = this.stripInlineComments(rawLine, fileData.language);
-                if (line.trim().length === 0) {
-                    continue;
-                }
-
-                const importNames = this.extractImportNames(line, fileData.language);
-                for (const importName of importNames) {
-                    const target = this.resolveTargetNode(symbolIndex, node, importName, lineNo);
-                    if (!target) {
-                        continue;
-                    }
-
-                    const edge: CallGraphEdge = {
-                        srcSymbolId: node.symbolId,
-                        dstSymbolId: target.symbolId,
-                        kind: 'import',
-                        site: {
-                            file: node.file,
-                            startLine: lineNo,
-                        },
-                        confidence: target.file === node.file ? 0.65 : 0.55,
-                    };
-                    edgeByKey.set(this.getEdgeKey(edge), edge);
-                }
-
-                const callSites = this.extractCallSites(line);
-                for (const callSite of callSites) {
-                    if (CALL_KEYWORDS.has(callSite.name)) {
-                        continue;
-                    }
-                    if (this.looksLikeDefinition(line, callSite.name)) {
-                        continue;
-                    }
-
-                    const target = this.resolveTargetNode(symbolIndex, node, callSite.name, lineNo);
+        for (const [relativeFile, analysis] of analysisByFile) {
+            const fileNodes = nodes.filter((node) => node.file === relativeFile && this.shouldScanNodeAsSource(node.symbolLabel));
+            for (const callSite of analysis.callSites) {
+                if (CALL_KEYWORDS.has(callSite.calleeName.toLowerCase())) continue;
+                const lineOwners = fileNodes
+                    .filter((node) => (
+                        node.span.startLine <= callSite.span.startLine
+                        && node.span.endLine >= callSite.span.endLine
+                    ));
+                const byteOwners = lineOwners.filter((node) => {
+                    const span = sourceSpanByNodeId.get(node.symbolId);
+                    return span?.startByte !== undefined
+                        && span.endByte !== undefined
+                        && span.startByte <= callSite.span.startByte
+                        && span.endByte >= callSite.span.endByte;
+                });
+                const owners = (byteOwners.length > 0
+                    ? byteOwners
+                    : lineOwners.filter((node) => {
+                        const span = sourceSpanByNodeId.get(node.symbolId);
+                        return span?.startByte === undefined || span.endByte === undefined;
+                    }))
+                    .sort((left, right) => (
+                        this.compareSourceSpanSize(left, right, sourceSpanByNodeId)
+                        || (left.symbolId < right.symbolId ? -1 : left.symbolId > right.symbolId ? 1 : 0)
+                    ));
+                const node = owners[0];
+                if (!node) continue;
+                const target = this.resolveTargetNode(
+                    symbolIndex,
+                    node,
+                    callSite.calleeName,
+                    callSite.span.startLine,
+                );
                     if (!target) {
                         const note: CallGraphNote = {
-                            type: callSite.kind === 'dynamic' ? 'dynamic_edge' : 'unresolved_edge',
+                            type: 'unresolved_edge',
                             file: node.file,
-                            startLine: lineNo,
+                            startLine: callSite.span.startLine,
                             symbolId: node.symbolId,
-                            detail: `Could not resolve '${callSite.name}()' from ${node.symbolId}`,
+                            detail: `Could not resolve '${callSite.calleeName}()' from ${node.symbolId}`,
                         };
-                        noteByKey.set(`${note.type}:${note.file}:${note.startLine}:${note.symbolId}:${callSite.name}`, note);
+                        noteByKey.set(`${note.type}:${note.file}:${note.startLine}:${note.symbolId}:${callSite.calleeName}`, note);
                         continue;
                     }
 
                     const edge: CallGraphEdge = {
                         srcSymbolId: node.symbolId,
                         dstSymbolId: target.symbolId,
-                        kind: callSite.kind,
+                        kind: 'call',
                         site: {
                             file: node.file,
-                            startLine: lineNo,
+                            startLine: callSite.span.startLine,
+                            endLine: callSite.span.endLine,
                         },
-                        confidence: this.resolveConfidence(callSite.kind, node, target),
+                        confidence: this.resolveConfidence('call', node, target),
                     };
                     edgeByKey.set(this.getEdgeKey(edge), edge);
-                }
             }
         }
 
@@ -580,6 +565,27 @@ export class CallGraphSidecarManager {
         const notes = this.sortNotes(Array.from(noteByKey.values()));
 
         return { nodes, edges, notes };
+    }
+
+    private compareSourceSpanSize(
+        left: CallGraphNode,
+        right: CallGraphNode,
+        sourceSpanByNodeId: ReadonlyMap<string, { startByte?: number; endByte?: number }>,
+    ): number {
+        const leftSpan = sourceSpanByNodeId.get(left.symbolId);
+        const rightSpan = sourceSpanByNodeId.get(right.symbolId);
+        if (
+            leftSpan?.startByte !== undefined
+            && leftSpan.endByte !== undefined
+            && rightSpan?.startByte !== undefined
+            && rightSpan.endByte !== undefined
+        ) {
+            const byteSize = (leftSpan.endByte - leftSpan.startByte)
+                - (rightSpan.endByte - rightSpan.startByte);
+            if (byteSize !== 0) return byteSize;
+        }
+        return (left.span.endLine - left.span.startLine)
+            - (right.span.endLine - right.span.startLine);
     }
 
     private buildSymbolIndex(nodes: CallGraphNode[]): Map<string, CallGraphNode[]> {
@@ -630,82 +636,6 @@ export class CallGraphSidecarManager {
         return sortedPool[0];
     }
 
-    private extractImportNames(line: string, language: string): string[] {
-        const names = new Set<string>();
-
-        if (language === 'python') {
-            const fromMatch = line.match(/^\s*from\s+[^\s]+\s+import\s+(.+)$/);
-            if (fromMatch && fromMatch[1]) {
-                for (const token of fromMatch[1].split(',')) {
-                    const normalized = token.trim().split(/\s+as\s+/i)[0]?.trim();
-                    if (normalized) {
-                        names.add(normalized.toLowerCase());
-                    }
-                }
-            }
-        } else {
-            const fromMatch = line.match(/^\s*import\s+(.+)\s+from\s+['"][^'"]+['"]/);
-            if (fromMatch && fromMatch[1]) {
-                const clause = fromMatch[1]
-                    .replace(/[{}]/g, ' ')
-                    .replace(/\bas\b/gi, ' ')
-                    .replace(/\*/g, ' ');
-                for (const token of clause.split(/[\s,]+/)) {
-                    const normalized = token.trim();
-                    if (normalized.length > 0) {
-                        names.add(normalized.toLowerCase());
-                    }
-                }
-            }
-        }
-
-        return Array.from(names);
-    }
-
-    private extractCallSites(line: string): Array<{ name: string; kind: 'call' | 'dynamic' }> {
-        const sites: Array<{ name: string; kind: 'call' | 'dynamic' }> = [];
-        const seen = new Set<string>();
-
-        const memberCallRegex = /(?:\b[A-Za-z_$][\w$]*\.)+([A-Za-z_$][\w$]*)\s*\(/g;
-        for (const match of line.matchAll(memberCallRegex)) {
-            const name = (match[1] || '').toLowerCase();
-            if (!name) continue;
-            const key = `dynamic:${name}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                sites.push({ name, kind: 'dynamic' });
-            }
-        }
-
-        const directCallRegex = /\b([A-Za-z_$][\w$]*)\s*\(/g;
-        for (const match of line.matchAll(directCallRegex)) {
-            const name = (match[1] || '').toLowerCase();
-            if (!name) continue;
-            const key = `call:${name}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                sites.push({ name, kind: 'call' });
-            }
-        }
-
-        if (/\bgetattr\s*\(/.test(line)) {
-            sites.push({ name: 'getattr', kind: 'dynamic' });
-        }
-
-        return sites;
-    }
-
-    private looksLikeDefinition(line: string, name: string): boolean {
-        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const pattern = new RegExp(`\\b(function|class|def)\\s+${escaped}\\b`, 'i');
-        if (pattern.test(line)) {
-            return true;
-        }
-
-        const methodPattern = new RegExp(`\\b${escaped}\\s*\\([^)]*\\)\\s*(=>|\\{)`, 'i');
-        return methodPattern.test(line);
-    }
-
     private shouldScanNodeAsSource(symbolLabel?: string): boolean {
         if (!symbolLabel) {
             return false;
@@ -723,12 +653,12 @@ export class CallGraphSidecarManager {
         const names: string[] = [];
         const normalized = symbolLabel.trim();
 
-        const methodMatch = normalized.match(/^(?:async\s+)?method\s+([A-Za-z_$][\w$]*)\s*\(/i);
+        const methodMatch = normalized.match(/^(?:async\s+)?method\s+([A-Za-z_$][\w$]*)(?:\s*\(|$)/i);
         if (methodMatch?.[1]) {
             names.push(methodMatch[1].toLowerCase());
         }
 
-        const functionMatch = normalized.match(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/i);
+        const functionMatch = normalized.match(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)(?:\s*\(|$)/i);
         if (functionMatch?.[1]) {
             names.push(functionMatch[1].toLowerCase());
         }
@@ -760,13 +690,6 @@ export class CallGraphSidecarManager {
         if (!existing.symbolLabel && node.symbolLabel) {
             existing.symbolLabel = node.symbolLabel;
         }
-    }
-
-    private stripInlineComments(line: string, language: string): string {
-        if (language === 'python') {
-            return line.replace(/#.*$/, '');
-        }
-        return line.replace(/\/\/.*$/, '');
     }
 
     private getSplitLanguage(relativePath: string): string {

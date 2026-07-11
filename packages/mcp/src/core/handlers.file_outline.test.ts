@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-    AstCodeSplitter,
     importNavigationToSqlite,
     RuntimeNavigationStore,
     SYMBOL_REGISTRY_SCHEMA_VERSION,
@@ -127,11 +126,12 @@ function createTestSymbol(input: {
     fileHash?: string;
     language?: string;
     kind?: SymbolRecord['kind'];
+    parentQualifiedNamePath?: string[];
 }): SymbolRecord {
     const fileHash = input.fileHash || 'hash_runtime';
     const language = input.language || 'typescript';
     const kind = input.kind || 'function';
-    const parentQualifiedNamePath: string[] = [];
+    const parentQualifiedNamePath = input.parentQualifiedNamePath || [];
     const symbolKey = createSymbolKey({
         relativePath: input.file,
         language,
@@ -948,49 +948,6 @@ test('handleFileOutline exact mode reports unverified current-source validation'
     }));
 });
 
-test('handleFileOutline exact mode returns not_ready when current-source parsing fails', async () => {
-    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
-        const source = 'function parserOwner() { return true; }\n';
-        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source);
-        const owner = createTestSymbol({
-            file: 'src/runtime.ts',
-            label: 'function parserOwner()',
-            name: 'parserOwner',
-            qualifiedName: 'parserOwner',
-            startLine: 1,
-            endLine: 1,
-            fileHash: sha256Content(source),
-        });
-        await writeTestSymbolRegistry(repoPath, [owner]);
-        const originalSplit = AstCodeSplitter.prototype.splitWithEvidence;
-        AstCodeSplitter.prototype.splitWithEvidence = async () => {
-            throw new Error('forced parser failure');
-        };
-        try {
-            const handlers = new ToolHandlers(
-                baseContext(),
-                baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
-                {} as unknown as HandlerSyncManager,
-                RUNTIME_FINGERPRINT,
-                CAPABILITIES,
-            );
-            const response = await handlers.handleFileOutline({
-                path: repoPath,
-                file: 'src/runtime.ts',
-                resolveMode: 'exact',
-                symbolIdExact: owner.symbolInstanceId,
-            });
-
-            const payload = JSON.parse(response.content[0]?.text || '{}');
-            assert.equal(payload.status, 'not_ready');
-            assert.equal(payload.reason, undefined);
-            assert.equal(payload.warnings?.includes('OUTLINE_SYMBOL_SPAN_UNVERIFIED'), true);
-        } finally {
-            AstCodeSplitter.prototype.splitWithEvidence = originalSplit;
-        }
-    }));
-});
-
 test('handleFileOutline returns relationship-backed call graph hints when legacy sidecar is absent but navigation sidecars are compatible', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const alpha = createTestSymbol({
@@ -1163,6 +1120,106 @@ test('handleFileOutline returns Rust symbols without enabling call_graph even wh
         assert.equal(callGraphPayload.supported, false);
         assert.equal(callGraphPayload.reason, 'unsupported_language');
     }));
+});
+
+test('handleFileOutline exactly resolves Java, C#, C++, and Scala symbols without enabling call_graph', async () => {
+    const fixtures = [
+        {
+            language: 'java',
+            file: 'src/Service.java',
+            source: 'class Service {\n  int run() {\n    return 1;\n  }\n}\n',
+            label: 'method run',
+            name: 'run',
+            qualifiedName: 'Service.run',
+            kind: 'method',
+            startLine: 2,
+            endLine: 4,
+            parentQualifiedNamePath: ['Service'],
+        },
+        {
+            language: 'csharp',
+            file: 'src/Service.cs',
+            source: 'class Service {\n  int Run() {\n    return 1;\n  }\n}\n',
+            label: 'method Run',
+            name: 'Run',
+            qualifiedName: 'Service.Run',
+            kind: 'method',
+            startLine: 2,
+            endLine: 4,
+            parentQualifiedNamePath: ['Service'],
+        },
+        {
+            language: 'cpp',
+            file: 'src/service.cpp',
+            source: 'class Service {\n};\nint run() {\n  return 1;\n}\n',
+            label: 'function run',
+            name: 'run',
+            qualifiedName: 'run',
+            kind: 'function',
+            startLine: 3,
+            endLine: 5,
+            parentQualifiedNamePath: [],
+        },
+        {
+            language: 'scala',
+            file: 'src/Service.scala',
+            source: 'class Service {\n  def run(): Int = {\n    1\n  }\n}\n',
+            label: 'function run',
+            name: 'run',
+            qualifiedName: 'Service.run',
+            kind: 'function',
+            startLine: 2,
+            endLine: 4,
+            parentQualifiedNamePath: ['Service'],
+        },
+    ] as const;
+
+    await withTempStateRoot(async () => {
+        for (const fixture of fixtures) {
+            await withTempRepo(async (repoPath) => {
+                const absoluteFile = path.join(repoPath, fixture.file);
+                fs.mkdirSync(path.dirname(absoluteFile), { recursive: true });
+                fs.writeFileSync(absoluteFile, fixture.source);
+                const symbol = createTestSymbol({
+                    file: fixture.file,
+                    label: fixture.label,
+                    name: fixture.name,
+                    qualifiedName: fixture.qualifiedName,
+                    startLine: fixture.startLine,
+                    endLine: fixture.endLine,
+                    language: fixture.language,
+                    kind: fixture.kind,
+                    parentQualifiedNamePath: fixture.parentQualifiedNamePath,
+                });
+                await writeTestSymbolRegistry(repoPath, [symbol]);
+
+                const handlers = new ToolHandlers(
+                    baseContext(),
+                    baseSnapshotManager(repoPath),
+                    {} as unknown as HandlerSyncManager,
+                    RUNTIME_FINGERPRINT,
+                    CAPABILITIES,
+                );
+                const response = await handlers.handleFileOutline({
+                    path: repoPath,
+                    file: fixture.file,
+                    resolveMode: 'exact',
+                    symbolIdExact: symbol.symbolInstanceId,
+                });
+                const payload = JSON.parse(response.content[0]?.text || '{}');
+
+                assert.equal(payload.status, 'ok', fixture.language);
+                assert.equal(payload.outline.symbols.length, 1, fixture.language);
+                assert.equal(payload.outline.symbols[0].symbolId, symbol.symbolInstanceId, fixture.language);
+                assert.deepEqual(payload.outline.symbols[0].span, {
+                    startLine: fixture.startLine,
+                    endLine: fixture.endLine,
+                }, fixture.language);
+                assert.equal(payload.outline.symbols[0].callGraphHint.supported, false, fixture.language);
+                assert.equal(payload.outline.symbols[0].callGraphHint.reason, 'unsupported_language', fixture.language);
+            });
+        }
+    });
 });
 
 test('handleFileOutline relationship-backed callGraphHint works end to end with call_graph without a legacy sidecar', async () => {

@@ -2,15 +2,26 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
-    AstCodeSplitter,
     buildSymbolRecordsForFile,
+    createLanguageAnalysisService,
     normalizeLanguageId,
     openRegularFileInsideRoot,
     type SymbolRecord,
+    type LanguageAnalysisPort,
 } from "@zokizuan/satori-core";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 
-const CURRENT_SOURCE_LANGUAGES = new Set(["typescript", "javascript", "python"]);
+const CURRENT_SOURCE_LANGUAGES = new Set([
+    "typescript",
+    "javascript",
+    "python",
+    "go",
+    "rust",
+    "java",
+    "csharp",
+    "cpp",
+    "scala",
+]);
 const CURRENT_SOURCE_MAX_BYTES = 256 * 1024;
 
 export type CurrentSourceSymbolValidation = PythonSourceBackedSpanRepair & {
@@ -113,12 +124,13 @@ function hasDistinctSourcePositions(symbols: readonly SymbolRecord[]): boolean {
 
 /**
  * Rebuild exact-navigation identities from the current file using the same
- * splitter and registry builder as indexing. Persisted IDs remain handles;
+ * language analyzer and registry builder as indexing. Persisted IDs remain handles;
  * only source-proven spans are substituted.
  */
 export async function validateCurrentSourceSymbolSpans(input: {
     codebaseRoot: string;
     symbols: SymbolRecord[];
+    languageAnalyzer?: LanguageAnalysisPort;
 }): Promise<CurrentSourceSymbolValidation[]> {
     if (input.symbols.length === 0) {
         return [];
@@ -140,40 +152,33 @@ export async function validateCurrentSourceSymbolSpans(input: {
     }
 
     try {
-        const splitter = new AstCodeSplitter(Number.MAX_SAFE_INTEGER);
-        splitter.setChunkOverlap(0);
-        const split = await splitter.splitWithEvidence(source, language, relativeFile);
-        if (!split.structuralParseCompleted) {
+        const analysis = await (input.languageAnalyzer ?? createLanguageAnalysisService({
+            chunkSize: CURRENT_SOURCE_MAX_BYTES,
+            chunkOverlap: 0,
+        })).analyze({ content: source, language, relativePath: relativeFile });
+        if (analysis.structuralStatus !== "complete") {
             return input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable"));
         }
-        const chunks = split.chunks;
         const fileHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
         const extractorVersion = input.symbols[0].extractorVersion;
         const currentByIdentityAndSpan = new Map<string, SymbolRecord>();
-        const currentFileOwner = buildSymbolRecordsForFile({
+        const currentRecords = buildSymbolRecordsForFile({
             relativePath: relativeFile,
             language,
             content: source,
             fileHash,
             extractorVersion,
-            chunks: [],
-        })[0];
+            chunks: [...analysis.chunks],
+            extractedSymbols: analysis.symbols,
+        });
+        const currentFileOwner = currentRecords.find((symbol) => symbol.kind === "file");
         if (currentFileOwner) {
             currentByIdentityAndSpan.set(
                 currentDeclarationKey(currentFileOwner),
                 currentFileOwner,
             );
         }
-        for (const chunk of chunks) {
-            const chunkSymbols = buildSymbolRecordsForFile({
-                relativePath: relativeFile,
-                language,
-                content: source,
-                fileHash,
-                extractorVersion,
-                chunks: [chunk],
-            });
-            for (const current of chunkSymbols.filter((symbol) => symbol.kind !== "file")) {
+        for (const current of currentRecords.filter((symbol) => symbol.kind !== "file")) {
                 const declarationKey = currentDeclarationKey(current);
                 const existing = currentByIdentityAndSpan.get(declarationKey);
                 if (!existing) {
@@ -192,7 +197,6 @@ export async function validateCurrentSourceSymbolSpans(input: {
                         endColumn: maxOptional(existing.span.endColumn, current.span.endColumn),
                     },
                 });
-            }
         }
         const currentSymbols = [...currentByIdentityAndSpan.values()];
         const currentByKey = new Map<string, SymbolRecord[]>();

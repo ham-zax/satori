@@ -14,9 +14,9 @@ import {
 const successfulExecFileSync = (() => "0.0.0") as NonNullable<DoctorOptions["execFileSyncImpl"]>;
 
 const fixedPackageVersions = (): DoctorPackageVersion[] => [
-    { name: "@zokizuan/satori-cli", version: "0.4.14", source: "test" },
-    { name: "@zokizuan/satori-mcp", version: "4.11.16", source: "test" },
-    { name: "@zokizuan/satori-core", version: "1.6.11", source: "test" },
+    { name: "@zokizuan/satori-cli", version: "0.4.15", source: "test" },
+    { name: "@zokizuan/satori-mcp", version: "4.11.17", source: "test" },
+    { name: "@zokizuan/satori-core", version: "1.6.12", source: "test" },
 ];
 
 /** Isolate doctor from the operator machine's ~/.satori/runtime/owners.json. */
@@ -52,7 +52,7 @@ function runtimeOwner(overrides: Record<string, unknown>): Record<string, unknow
     return {
         ownerId: "owner",
         pid: 111,
-        satoriVersion: "4.11.16",
+        satoriVersion: "4.11.17",
         runtimeFingerprint: { schemaVersion: "hybrid_v3" },
         runtimeOwnerIdentityHash: "same-hash",
         configSource: "env",
@@ -199,15 +199,15 @@ test("runDoctor reports Satori package version set and independent-version polic
     assert.deepEqual(
         result.packageVersions.map((entry) => `${entry.name}@${entry.version}`),
         [
-            "@zokizuan/satori-cli@0.4.14",
-            "@zokizuan/satori-mcp@4.11.16",
-            "@zokizuan/satori-core@1.6.11",
+            "@zokizuan/satori-cli@0.4.15",
+            "@zokizuan/satori-mcp@4.11.17",
+            "@zokizuan/satori-core@1.6.12",
         ],
     );
     assert.match(result.packageVersionNote, /independent package versions/i);
-    assert.equal(result.checks.find((check) => check.name === "package_version_cli")?.message, "@zokizuan/satori-cli@0.4.14");
-    assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.message, "@zokizuan/satori-mcp@4.11.16");
-    assert.equal(result.checks.find((check) => check.name === "package_version_core")?.message, "@zokizuan/satori-core@1.6.11");
+    assert.equal(result.checks.find((check) => check.name === "package_version_cli")?.message, "@zokizuan/satori-cli@0.4.15");
+    assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.message, "@zokizuan/satori-mcp@4.11.17");
+    assert.equal(result.checks.find((check) => check.name === "package_version_core")?.message, "@zokizuan/satori-core@1.6.12");
     assert.equal(result.checks.find((check) => check.name === "package_version_policy")?.status, "ok");
 });
 
@@ -219,9 +219,9 @@ test("runDoctor warns when a package version cannot be resolved", () => {
             MILVUS_ADDRESS: "localhost:19530",
         },
         resolvePackageVersions: () => [
-            { name: "@zokizuan/satori-cli", version: "0.4.14", source: "test" },
+            { name: "@zokizuan/satori-cli", version: "0.4.15", source: "test" },
             { name: "@zokizuan/satori-mcp", version: null, source: "unresolved" },
-            { name: "@zokizuan/satori-core", version: "1.6.11", source: "test" },
+            { name: "@zokizuan/satori-core", version: "1.6.12", source: "test" },
         ],
     }));
 
@@ -302,7 +302,7 @@ test("runDoctor errors when a live runtime version differs from the installed MC
 
         const check = result.checks.find((entry) => entry.name === "runtime_owners");
         assert.equal(check?.status, "error");
-        assert.match(check?.message || "", /installed MCP version 4\.11\.16/);
+        assert.match(check?.message || "", /installed MCP version 4\.11\.17/);
         assert.match(check?.message || "", /pid=111.*4\.11\.15/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -470,7 +470,7 @@ test("runDoctor diagnoses a managed launcher targeting a stale MCP package versi
         const check = result.checks.find((entry) => entry.name === "managed_launcher");
         assert.equal(check?.status, "error");
         assert.match(check?.message || "", /4\.11\.15/);
-        assert.match(check?.message || "", /installed MCP version 4\.11\.16/);
+        assert.match(check?.message || "", /installed MCP version 4\.11\.17/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -486,7 +486,7 @@ test("runDoctor accepts a managed launcher targeting the installed MCP package",
         fs.writeFileSync(target, "// runtime");
         fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
             name: "@zokizuan/satori-mcp",
-            version: "4.11.16",
+            version: "4.11.17",
         }));
         fs.writeFileSync(launcherPath, [
             "#!/usr/bin/env node",
@@ -501,7 +501,7 @@ test("runDoctor accepts a managed launcher targeting the installed MCP package",
 
         const check = result.checks.find((entry) => entry.name === "managed_launcher");
         assert.equal(check?.status, "ok");
-        assert.match(check?.message || "", /satori-mcp@4\.11\.16/);
+        assert.match(check?.message || "", /satori-mcp@4\.11\.17/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

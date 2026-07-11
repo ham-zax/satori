@@ -25,7 +25,7 @@ function writeOwnerRegistry(homeDir: string, owners: unknown[]): void {
 function installFixture(homeDir: string) {
     return executeInstallCommand({ kind: "install", client: "all", dryRun: false }, {
         homeDir,
-        packageSpecifier: "@zokizuan/satori-mcp@4.11.16",
+        packageSpecifier: "@zokizuan/satori-mcp@4.11.17",
         runtimeCommand: { command: process.execPath, args: [path.join(homeDir, "runtime.js")] },
     });
 }
@@ -35,11 +35,11 @@ function createSession(homeDir: string, names = TOOL_NAMES): InstallPostflightSe
         ownerId: "postflight-owner",
         pid: 202,
         ppid: 101,
-        satoriVersion: "4.11.16",
+        satoriVersion: "4.11.17",
     }]);
     return {
         launcherPid: 101,
-        serverVersion: { name: "satori", version: "4.11.16" },
+        serverVersion: { name: "satori", version: "4.11.17" },
         listTools: async () => ({ tools: names.map((name) => ({ name })) }) as never,
         close: async () => writeOwnerRegistry(homeDir, []),
     };

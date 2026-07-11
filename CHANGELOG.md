@@ -4,6 +4,26 @@ All notable changes to this repository are documented in this file.
 
 ## Unreleased
 
+## [2026-07-11] Operational Trust Evidence And Useful-Context Evaluation
+
+### Release Versions
+- Repository version: `0.5.15`
+- `@zokizuan/satori-core`: `1.6.12`
+- `@zokizuan/satori-mcp`: `4.11.17`
+- `@zokizuan/satori-cli`: `0.4.15`
+
+### Added
+- `manage_index` status reports declared and observed per-language capability evidence, while successful sync responses expose structured added, removed, and modified counts.
+- CLI-mediated tool calls can record privacy-safe local diagnostics with bounded locking, atomic publication, and doctor aggregation.
+- Useful-context recorders provide prepared-cold freshness proof, durable operation provenance, mutation-isolated fixtures, and deterministic regression inputs.
+
+### Changed
+- Product documentation is organized around install, navigation, recovery, diagnosis, and agent evidence workflows.
+
+### Fixed
+- Exact navigation validates persisted TypeScript, JavaScript, and Python spans against current source and fails closed for ambiguous or unavailable proof.
+- Dirty-file search suppresses stale indexed evidence, uses a bounded current-source overlay, and reports uncovered dirty paths explicitly.
+
 ## [2026-07-09] Call Graph, Search Latency, Runtime Owners, Contract SSOT
 
 ### Release Versions

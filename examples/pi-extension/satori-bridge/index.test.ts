@@ -49,7 +49,7 @@ test("bridge manage_index schema includes repair", () => {
 });
 
 test("bridge npm fallback matches the current CLI package version", () => {
-	assert.equal(__testInternals.defaultNpmPackage, "@zokizuan/satori-cli@0.4.14");
+	assert.equal(__testInternals.defaultNpmPackage, "@zokizuan/satori-cli@0.4.15");
 });
 
 test("resolveCliInvocationConfig prefers project-local config over global fallback", () => {

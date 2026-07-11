@@ -51,7 +51,7 @@ function operationReceipt(
         writer: {
             ownerId: 'test-owner',
             pid: process.pid,
-            satoriVersion: '4.11.16',
+            satoriVersion: '4.11.17',
         },
     };
 }

@@ -294,9 +294,9 @@ Use `pnpm run dev:install-local-mcp:no-build` after a previous build when you on
 
 Current release versions:
 
-- `@zokizuan/satori-core@1.6.11`
-- `@zokizuan/satori-mcp@4.11.16`
-- `@zokizuan/satori-cli@0.4.14` (install examples may use `@latest`)
+- `@zokizuan/satori-core@1.6.12`
+- `@zokizuan/satori-mcp@4.11.17`
+- `@zokizuan/satori-cli@0.4.15` (install examples may use `@latest`)
 
 Preflight before publishing:
 
@@ -315,8 +315,8 @@ pnpm run release:smoke:cli
 Recommended public release path (tag matches the monorepo version in root `package.json`):
 
 ```bash
-git tag v0.5.14
-git push origin v0.5.14
+git tag v0.5.15
+git push origin v0.5.15
 ```
 
 The GitHub Actions release uses npm provenance and requires the `NPM_TOKEN` secret. Use the manual fallback only when you intentionally want to publish from a local authenticated shell without CI provenance:

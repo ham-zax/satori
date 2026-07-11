@@ -22,7 +22,7 @@ import {
 	type CliCommandType,
 } from "./recovery.js";
 
-const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-cli@0.4.14";
+const DEFAULT_NPM_PACKAGE = "@zokizuan/satori-cli@0.4.15";
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_CALL_TIMEOUT_MS = 600_000;
 const HEALTHCHECK_TIMEOUT_MS = 15_000;

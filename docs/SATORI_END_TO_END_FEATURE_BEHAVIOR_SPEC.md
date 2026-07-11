@@ -595,7 +595,7 @@ Recent vs legacy:
 5) Fingerprint/reindex gate
 - Trigger: incompatible/missing/legacy fingerprint on access.
 - Effect: status transitions/blocked responses with `requires_reindex` envelopes and explicit reindex hints.
-- Observability: compatibility diagnostics (`runtimeFingerprint`, `indexedFingerprint`, source/reason/statusAtCheck`).
+- Observability: compatibility diagnostics (`runtimeFingerprint`, `indexedFingerprint`, source/reason/statusAtCheck`). Fingerprint summaries include deterministic 12-hex hashes for parser, extractor, and relationship identities; absent legacy identities are rendered as `legacy` so analysis-only mismatches remain visible.
 - Determinism: deterministic gate in snapshot manager + handler enforcement.
 - Performance: avoids unsafe mixed-runtime read/search behavior.
 

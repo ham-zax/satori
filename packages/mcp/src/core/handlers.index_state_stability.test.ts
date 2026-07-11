@@ -993,7 +993,7 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
         assert.equal(payload.status, 'requires_reindex');
         assert.equal(payload.reason, 'requires_reindex');
         assert.match(payload.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
-        assert.equal((payload.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3');
+        assert.equal((payload.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3/parser=legacy/extractor=legacy/relationship=legacy');
         assert.equal(startedBackgroundIndexing, false);
         assert.equal(collectionLimitCalls, 0);
         assert.equal(setIndexedCalls, 1);

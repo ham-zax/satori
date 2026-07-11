@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 import {
     envManager,
     LANGUAGE_PARSER_VERSION,
@@ -53,7 +54,19 @@ export function indexFingerprintsEqual(left: IndexFingerprint, right: IndexFinge
 }
 
 export function summarizeIndexFingerprint(fingerprint: IndexFingerprint): string {
-    return `${fingerprint.embeddingProvider}/${fingerprint.embeddingModel}/${fingerprint.embeddingDimension}/${fingerprint.vectorStoreProvider}/${fingerprint.schemaVersion}`;
+    const summarizeIdentity = (identity: string | undefined): string => identity
+        ? crypto.createHash('sha256').update(identity, 'utf8').digest('hex').slice(0, 12)
+        : 'legacy';
+    return [
+        fingerprint.embeddingProvider,
+        fingerprint.embeddingModel,
+        fingerprint.embeddingDimension,
+        fingerprint.vectorStoreProvider,
+        fingerprint.schemaVersion,
+        `parser=${summarizeIdentity(fingerprint.parserVersion)}`,
+        `extractor=${summarizeIdentity(fingerprint.extractorVersion)}`,
+        `relationship=${summarizeIdentity(fingerprint.relationshipVersion)}`,
+    ].join('/');
 }
 
 export type IndexOperationAction = 'create' | 'reindex' | 'sync' | 'repair' | 'clear';

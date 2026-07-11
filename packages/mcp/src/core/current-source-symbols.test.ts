@@ -113,9 +113,12 @@ test("current-source validation preserves same-key declarations on one line", as
         })).filter((symbol) => symbol.kind !== "file" && symbol.name === "duplicate");
         assert.equal(persisted.length, 2);
 
-        const results = await validateCurrentSourceSymbolSpans({ codebaseRoot: root, symbols: persisted });
+        const expectedStartById = new Map(persisted.map((symbol) => [symbol.symbolInstanceId, symbol.span.startByte]));
+        const results = await validateCurrentSourceSymbolSpans({ codebaseRoot: root, symbols: [...persisted].reverse() });
         assert.deepEqual(results.map((result) => result.match), ["matched", "matched"]);
-        assert.notEqual(results[0].symbol.span.startByte, results[1].symbol.span.startByte);
+        for (const result of results) {
+            assert.equal(result.symbol.span.startByte, expectedStartById.get(result.symbol.symbolInstanceId));
+        }
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

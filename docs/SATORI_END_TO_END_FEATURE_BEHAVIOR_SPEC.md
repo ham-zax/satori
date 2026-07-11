@@ -265,7 +265,7 @@ Outputs:
 - JSON envelope: `status`, `path`, `file`, `outline|null`, `hasMore`, optional `message`, `warnings`, `hints`, and `indexingFailure` when the tracked root is in `indexfailed`.
 - Status variants: `ok|not_found|requires_reindex|not_indexed|not_ready|unsupported|ambiguous`.
 - Failed index snapshots return `status:"not_indexed"` with `reason:"index_failed"` and `manage_index {action:"create"}` hints rather than hiding the failed-state cause behind generic `not_indexed`.
-- For TypeScript, JavaScript, and Python, exact mode validates persisted identities against current source. A current-source count mismatch returns `ambiguous`; unreadable or unparseable source returns `not_ready` with `OUTLINE_SYMBOL_SPAN_UNVERIFIED`. `not_found/missing_symbol` is reserved for a completed current-source parse that proves the identity is absent.
+- For TypeScript, JavaScript, and Python, exact mode validates persisted identities against current source. This validation reads at most 256 KiB from the opened file descriptor; larger files return `not_ready` with `OUTLINE_SYMBOL_SPAN_UNVERIFIED`. This is an exact-navigation proof limit, not an indexing-file limit. A current-source count mismatch returns `ambiguous`; unreadable or unparseable source returns `not_ready` with the same warning. `not_found/missing_symbol` is reserved for a completed current-source parse that proves the identity is absent.
 
 Warnings/hints:
 - `OUTLINE_MISSING_SYMBOL_METADATA:<count>`.

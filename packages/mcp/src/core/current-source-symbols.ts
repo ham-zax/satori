@@ -35,7 +35,17 @@ async function readCurrentSource(codebaseRoot: string, relativeFile: string): Pr
         if (stat.size > CURRENT_SOURCE_MAX_BYTES) {
             return undefined;
         }
-        return await handle.readFile("utf8");
+        const buffer = Buffer.allocUnsafe(CURRENT_SOURCE_MAX_BYTES + 1);
+        let offset = 0;
+        while (offset < buffer.length) {
+            const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+            if (bytesRead === 0) break;
+            offset += bytesRead;
+        }
+        if (offset > CURRENT_SOURCE_MAX_BYTES) {
+            return undefined;
+        }
+        return buffer.subarray(0, offset).toString("utf8");
     } catch {
         return undefined;
     } finally {
@@ -79,6 +89,26 @@ function maxOptional(left: number | undefined, right: number | undefined): numbe
     if (left === undefined) return right;
     if (right === undefined) return left;
     return Math.max(left, right);
+}
+
+function compareOptionalPosition(left: number | undefined, right: number | undefined): number {
+    if (left === right) return 0;
+    if (left === undefined) return 1;
+    if (right === undefined) return -1;
+    return left - right;
+}
+
+function compareSourcePosition(left: SymbolRecord, right: SymbolRecord): number {
+    return left.span.startLine - right.span.startLine
+        || compareOptionalPosition(left.span.startByte, right.span.startByte)
+        || compareOptionalPosition(left.span.startColumn, right.span.startColumn)
+        || left.span.endLine - right.span.endLine
+        || compareOptionalPosition(left.span.endByte, right.span.endByte)
+        || compareOptionalPosition(left.span.endColumn, right.span.endColumn);
+}
+
+function hasDistinctSourcePositions(symbols: readonly SymbolRecord[]): boolean {
+    return symbols.every((symbol, index) => index === 0 || compareSourcePosition(symbols[index - 1], symbol) !== 0);
 }
 
 /**
@@ -187,8 +217,12 @@ export async function validateCurrentSourceSymbolSpans(input: {
             if (persisted.length > 1 && persisted.some((symbol) => symbol.fileHash !== fileHash)) {
                 continue;
             }
-            const sortedPersisted = [...persisted].sort((a, b) => a.span.startLine - b.span.startLine || a.span.endLine - b.span.endLine);
-            const sortedCurrent = [...current].sort((a, b) => a.span.startLine - b.span.startLine || a.span.endLine - b.span.endLine);
+            const sortedPersisted = [...persisted].sort(compareSourcePosition);
+            const sortedCurrent = [...current].sort(compareSourcePosition);
+            if (persisted.length > 1
+                && (!hasDistinctSourcePositions(sortedPersisted) || !hasDistinctSourcePositions(sortedCurrent))) {
+                continue;
+            }
             for (let index = 0; index < sortedPersisted.length; index += 1) {
                 assignedCurrentByPersistedId.set(sortedPersisted[index].symbolInstanceId, sortedCurrent[index]);
             }

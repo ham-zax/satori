@@ -71,7 +71,7 @@ packages/
   core/
     src/
       core/context.ts           orchestrator
-      splitter/                  AstCodeSplitter + LangChain fallback
+      language-analysis/        Oxc + Tree-sitter WASM normalized analysis
       embedding/                 OpenAI, VoyageAI, Gemini, Ollama
       vectordb/                  Milvus gRPC + REST adapters
       sync/                      FileSynchronizer (Merkle DAG)
@@ -101,7 +101,7 @@ tests/
 ```
 Context (core/context.ts)
   -> build effective config (defaults + constructor + env)
-  -> indexCodebase: scan -> split -> embed -> insert
+  -> indexCodebase: scan -> analyze/chunk -> embed -> insert
   -> semanticSearch: embed query -> dense/hybrid search -> filter -> merge
   -> reindexByChange: delete old chunks -> re-embed changed files
   -> manage per-collection synchronizers
@@ -132,12 +132,13 @@ Ignore rules are merged in five additive layers:
 4. Repo-root ignore files (`.gitignore`, `.satoriignore`)
 5. Global ignore (`~/.satori/.satoriignore`)
 
-### 3.4 Splitter + Embedding + Vector Abstractions
+### 3.4 Language Analysis + Embedding + Vector Abstractions
 
 ```
-Splitter:
-  AstCodeSplitter       tree-sitter (TS, JS, PY, Java, Go, C++, Rust, C#, Scala)
-  LangChainCodeSplitter fallback for unsupported languages
+LanguageAnalysisPort:
+  Oxc                    JavaScript, JSX, TypeScript, TSX, DTS
+  Tree-sitter WASM       Python, Go, Rust, Java, C#, C++, Scala
+  Recursive text         unsupported or structurally invalid source, without authoritative symbols
 
 Embedding providers:
   OpenAI, VoyageAI, Gemini, Ollama
@@ -150,7 +151,7 @@ VectorDatabase adapters:
 
 ### 3.5 Breadcrumb Metadata
 
-`AstCodeSplitter` writes `metadata.breadcrumbs` at index time:
+The normalized language analyzer writes `metadata.breadcrumbs` at index time:
 - Scope depth capped at 2 (`outer > inner`)
 - Each label truncated to max length
 - Label extraction is signature-focused for TS/JS/PY scopes
@@ -545,7 +546,7 @@ New embedding provider  -> implement Embedding interface
 New vector backend      -> implement VectorDatabase interface
 New tool                -> add to tools/* + register in core/handlers.ts
 Search policy tuning    -> CapabilityResolver + rerank decision
-New language support    -> add tree-sitter grammar to AstCodeSplitter
+New language support    -> implement and qualify a LanguageAnalysisPort adapter
 ```
 
 Key files:

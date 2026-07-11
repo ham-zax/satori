@@ -29,7 +29,7 @@ Satori indexes a repo and gives MCP-compatible agents a fixed investigation path
 
 | Package | Purpose |
 |---|---|
-| `@zokizuan/satori-core` | Indexing, AST chunking, embeddings, Milvus/Zilliz storage, retrieval, incremental sync |
+| `@zokizuan/satori-core` | Oxc/Tree-sitter-WASM language analysis, indexing, embeddings, Milvus/Zilliz storage, retrieval, incremental sync |
 | `@zokizuan/satori-mcp` | MCP server with the six agent-facing tools and lifecycle gates |
 | `@zokizuan/satori-cli` | Installer, doctor command, and shell access to MCP tools |
 
@@ -43,6 +43,8 @@ Install managed MCP config for every supported local client:
 npx -y @zokizuan/satori-cli@latest install --client all
 npx -y @zokizuan/satori-cli@latest doctor
 ```
+
+Satori requires Node.js 22.12 or newer. This release changes the durable parser, symbol-extractor, and relationship-builder fingerprints; existing indexes return `requires_reindex` and must be rebuilt once. `sync` does not migrate an incompatible index.
 
 Supported installers: `codex`, `claude`, `opencode`, and `all`.
 
@@ -212,11 +214,11 @@ Completed full indexes write navigation sidecars:
 
 Current relationship limits are intentional. `CALLS v0` is heuristic/name-based (not a compiler-grade call graph): unique same-file targets can be high confidence; cross-file edges stay low unless `IMPORTS`/`EXPORTS` evidence upgrades them, or an imported module has a unique same-name target (for example class methods without a top-level `EXPORTS` record). Generic names like `push`/`get` stay suppressed without `EXPORTS`. Ambiguous same-name targets are skipped. Empty or short edge lists are not proof of “no callers.” Prefer `inboundRecovery` / `must:` search, tests, and direct references before blast-radius edits. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
 
-Language capability is explicit. TypeScript, JavaScript, and Python are the only production-ready `call_graph` languages. Go and Rust are `symbol_only`: `file_outline` can return compatible sidecar symbols, but `call_graph` returns `unsupported_language`. Broader catalog/parser support does not imply graph-ready navigation.
+Language capability is explicit. TypeScript, JavaScript, and Python are the only production-ready `call_graph` languages. Go, Rust, Java, C#, C++, and Scala are `symbol_only`: `file_outline` and `read_file(open_symbol)` use compatible sidecar symbols and current-source validation, while `call_graph` returns `unsupported_language`. Broader catalog/parser support does not imply graph-ready navigation.
 
 Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish across small edits, but it is candidate lookup only and is not exact identity.
 
-`call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and recompute relationships against the merged registry without re-splitting unchanged files. If changed-file indexing stops early, recovery fails, or a partial full index hits a limit, Satori clears or withholds navigation state instead of publishing a mixed generation. Public reasons prefer precise values such as `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `stale_symbol_ref`, `navigation_recovery_failed`, and `partial_index_navigation_unavailable`.
+`call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and avoid re-embedding or rewriting unchanged vector chunks. Current source may still be reparsed to recompute deterministic cross-file relationship evidence against the merged registry. If changed-file indexing stops early, recovery fails, or a partial full index hits a limit, Satori clears or withholds navigation state instead of publishing a mixed generation. Public reasons prefer precise values such as `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `stale_symbol_ref`, `navigation_recovery_failed`, and `partial_index_navigation_unavailable`.
 
 ## Six MCP Tools
 
@@ -294,9 +296,9 @@ Use `pnpm run dev:install-local-mcp:no-build` after a previous build when you on
 
 Current release versions:
 
-- `@zokizuan/satori-core@1.6.12`
-- `@zokizuan/satori-mcp@4.11.17`
-- `@zokizuan/satori-cli@0.4.15` (install examples may use `@latest`)
+- `@zokizuan/satori-core@2.0.0`
+- `@zokizuan/satori-mcp@5.0.0`
+- `@zokizuan/satori-cli@0.5.0` (install examples may use `@latest`)
 
 Preflight before publishing:
 

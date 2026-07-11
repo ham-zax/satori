@@ -48,7 +48,7 @@ A fixed, stable MCP tool surface agents can reliably learn — no knob sprawl, n
 |---|---|
 | **search_codebase** | Semantic + BM25 hybrid search. Runtime-first defaults. Operators parsed from query prefix: `lang:`, `path:`, `-path:`, `must:`, `exclude:`. Grouped by symbol or file. |
 | **file_outline** | Sidecar-backed symbol extraction per file. Exact mode returns `ok`, `ambiguous`, or `not_found` without guessing. |
-| **call_graph** | Bounded caller/callee traversal from `symbolRef`. TS/JS/Python production-ready. Go/Rust return `unsupported_language` with a navigation fallback. |
+| **call_graph** | Bounded caller/callee traversal from `symbolRef`. TS/JS/Python production-ready. Go/Rust/Java/C#/C++/Scala return `unsupported_language` with a navigation fallback. |
 | **read_file** | Plain text or annotated mode. 1-based line ranges, safe truncation, deterministic `open_symbol` resolution. |
 | **manage_index** | `create` / `reindex` / `sync` / `status` / `clear`. `clear` is destructive and requires explicit user request. Fingerprint gates block mismatched access. |
 | **list_codebases** | Plain-text readiness buckets: Ready, Indexing, Requires Reindex, Failed. Deterministic sort. |
@@ -406,7 +406,7 @@ This pitch deck was fact-checked against the codebase by three independent subag
 | **No hosted SaaS today** | All deployments are self-hosted per developer. |
 | **No multi-repo search** | Each root is its own index. |
 | **No team `.satoriignore`** | `.satoriignore` is per-repo only. |
-| **No Go/Rust call_graph** | `symbol_only` only; returns `unsupported_language` with navigation fallback. |
+| **No call_graph for symbol-only languages** | Go/Rust/Java/C#/C++/Scala return `unsupported_language` with navigation fallback. |
 | **No cross-file import/export tracking** | `importExportCapability` is `NONE` for all native languages today. |
 | **No published benchmark numbers** | Harness exists; no leaderboard, no win-rate, no per-task scores in repo. |
 | **No CI gating of behavioral regressions** | `pnpm test`, `pnpm lint`, and the comparison harness are **not** in CI. Lint is commented out in `.github/workflows/ci.yml:79-80`. |

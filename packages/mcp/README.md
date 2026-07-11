@@ -45,7 +45,7 @@ For Codex, add `--install-guidance-hook` only when you want an installer-managed
 Advanced direct execution is available through the package bin:
 
 ```bash
-npx -y @zokizuan/satori-mcp@4.11.17 --help
+npx -y @zokizuan/satori-mcp@5.0.0 --help
 ```
 
 Use direct package execution for inspection, smoke tests, or unsupported harnesses. For supported clients, prefer `satori-cli install` so startup does not depend on package-manager resolution.
@@ -91,9 +91,11 @@ Completed full indexes write a derived symbol registry and relationship sidecar.
 - `CALLS v0` is heuristic/name-based. Same-file unique targets can be high confidence; cross-file name-only targets start low and are upgraded when IMPORTS/EXPORTS evidence supports them, or when the imported file has a unique same-name target (class methods without top-level EXPORTS). Generic names like `push`/`get` stay suppressed without EXPORTS. Ambiguous same-name targets are skipped.
 - `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations. Package imports, unresolved paths, ambiguous exports, and multiline module syntax are skipped.
 - `call_graph` uses compatible relationship sidecars as the canonical source for symbol-owned traversal.
-- Successful incremental sync reuses changed-file symbol output, preserves unchanged registry state, and recomputes relationships against the merged registry without re-splitting unchanged files. If changed-file indexing stops early, navigation state is cleared instead of publishing a mixed generation.
+- Successful incremental sync reuses changed-file symbol output, preserves unchanged registry state, and avoids re-embedding or rewriting unchanged vector chunks. It may reparse unchanged source to recompute deterministic cross-file relationship evidence against the merged registry. If changed-file indexing stops early, navigation state is cleared instead of publishing a mixed generation.
 
 ## Runtime Requirements
+
+Node.js 22.12 or newer is required. Parser, symbol-extractor, and relationship-builder identities are part of durable index compatibility; indexes built by the previous parser stack return `requires_reindex` and require one full rebuild.
 
 Configure an embedding provider and Milvus-compatible backend before indexing. Supported embedding providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model, dimension, vector store, or schema requires a reindex because those values are part of the index fingerprint.
 

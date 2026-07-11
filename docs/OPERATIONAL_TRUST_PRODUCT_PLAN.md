@@ -1,6 +1,6 @@
 # Operational Trust Product Plan
 
-Status: P0 operational trust is complete. The mutation-safe fixtures, current-source navigation hardening, language-capability evidence, workflow documentation, and privacy-safe local diagnostics are implemented. One active task remains: record a clean useful-context baseline and set regression budgets. Embedded zvec storage is intentionally deferred and requires explicit user approval before implementation.
+Status: P0 operational trust is complete. The mutation-safe fixtures, current-source navigation hardening, language-capability evidence, workflow documentation, privacy-safe local diagnostics, and parser modernization are implemented. One active task remains: record a clean useful-context baseline and set regression budgets after rebuilding a searchable index with the new parser fingerprint. Embedded zvec storage is intentionally deferred and requires explicit user approval before implementation.
 
 ## Capability
 
@@ -77,9 +77,9 @@ One product decision is explicitly deferred and is not active implementation wor
 
 ## Verified Navigation And Retrieval Findings
 
-- Exact navigation lacks a generic current-source span authority. Index-time Tree-sitter spans may be accurate when written, but runtime repair in `packages/mcp/src/core/registry-file-outline.ts` is Python-specific; TypeScript and JavaScript exact navigation can still trust a stale persisted span.
+- Exact navigation now has one current-source span authority for TypeScript, JavaScript, Python, Go, Rust, Java, C#, C++, and Scala. It reparses bounded current source through the same language-analysis contract as indexing and fails closed when structural evidence is unavailable, ambiguous, oversized, or stale.
 - `read_file(open_symbol)` already resolves one exact symbol and reads only the resolved span. Adjacent functions in its output are therefore evidence of a stale or incorrect registry span, not a separate read-window defect.
-- Dirty-worktree recovery is partial. Exact path-scoped searches can supplement results from the current file, and bounded tracked lexical recovery exists, but natural-language semantic searches do not have a general current-AST overlay for dirty files.
+- Dirty-worktree recovery uses a bounded current-source structural and lexical overlay. Stale indexed candidates from dirty paths are suppressed; unavailable replacement evidence is reported explicitly instead of silently omitting the file.
 - The exact-identifier registry fast path already bypasses semantic search and reranking for an unambiguous match. Work should benchmark and optimize that path rather than reimplement it.
 - Runtime scope intentionally includes tests and demotes them unless the query expresses test intent. The runtime contract remains unchanged; stale external guidance that says runtime excludes tests is not authoritative.
 - Grouped responses duplicate navigation and recommendation data across top-level actions, results, fallbacks, capabilities, spans, and previews. This is a payload-budget problem first; it does not justify a new public mode by itself.
@@ -297,7 +297,7 @@ Current implementation state:
 
 ### Navigation Correctness Work
 
-1. Replace the Python-specific runtime repair path with generic current-source span validation covering TypeScript, JavaScript, and Python exact navigation.
+1. Replace the Python-specific runtime repair path with generic current-source span validation covering every symbol-capable language.
 2. Require an exact open to match parser-derived current-source boundaries. Neighboring declarations are classified and tested as span-authority failures.
 3. Add a bounded dirty-file AST and lexical overlay for semantic searches, with deterministic ranking above stale indexed content and explicit fallback behavior when parsing is unavailable.
 4. Benchmark the existing exact-identifier fast path before changing its implementation.
@@ -306,7 +306,7 @@ Current implementation state:
 
 Runtime scope does not change as part of this work. Hybrid Satori discovery followed by bounded native exact lookup remains workflow guidance, not a new runtime feature.
 
-Implementation state: TypeScript, JavaScript, and Python exact navigation now reparses current source and fails closed when the persisted symbol cannot be proven. Dirty overlay work is bounded to 16 files, 256 KiB per file, 2 MiB total, and 16 results; stale indexed candidates from dirty paths are suppressed. The public MCP input surface is unchanged.
+Implementation state: TypeScript, JavaScript, Python, Go, Rust, Java, C#, C++, and Scala exact navigation now reparses current source and fails closed when the persisted symbol cannot be proven. Dirty overlay work is bounded to 16 files, 256 KiB per file, 2 MiB total, and 16 results; stale indexed candidates from dirty paths are suppressed. The public MCP input surface is unchanged.
 
 ## P1: Language Capability Evidence
 
@@ -358,7 +358,7 @@ Required release gates are:
 - zero-match filtered hybrid searches return zero results;
 - every successfully acknowledged batch survives process termination without a later write;
 - reader/writer contention is bounded and deterministic;
-- supported Node 20 and 22 targets pass on every supported platform;
+- supported Node 22, 24, and 26 targets pass on every supported platform;
 - completion-marker, repair, deletion, retry, payload-equality, and fingerprint contract tests pass;
 - cosine distance is normalized to Satori's higher-is-better score contract;
 - backend-neutral filters are parsed and translated rather than forwarded as Milvus expressions;
@@ -395,6 +395,7 @@ Any upload mechanism requires explicit consent, a versioned schema, documented r
 9. Completed: declared plus observed language-capability evidence is exposed by `manage_index status`.
 10. Intentionally deferred: zvec passed basic local persistence/retrieval research, but no implementation is approved. Reopening adapter, concurrency, crash, score, filter, Node-platform, installer, or packaging work requires explicit user approval.
 11. Completed: workflow-oriented documentation plus privacy-safe local diagnostics.
+12. Completed: one language-analysis port replaces the native Tree-sitter splitter/extractor paths. Oxc handles JS/TS-family syntax, Tree-sitter WASM handles seven additional symbol languages, packed Scala assets are qualified, and durable parser/extractor/relationship fingerprints force a one-time reindex instead of accepting legacy navigation evidence.
 
 Do not release the lease feature while any mutation path bypasses it.
 

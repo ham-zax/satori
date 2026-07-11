@@ -111,6 +111,8 @@ After changing embedding/vector runtime config or the installed Satori package v
 
 ## Runtime Requirements
 
+Node.js 22.12 or newer is required.
+
 Indexing and search require an embedding provider plus a Milvus-compatible backend. MCP startup and `tools list` do not require those credentials; provider-backed tool calls return `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 
 Common local setup:

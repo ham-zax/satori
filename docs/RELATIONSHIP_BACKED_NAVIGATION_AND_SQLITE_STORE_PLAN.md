@@ -30,7 +30,7 @@ Current live-tree state:
 - `read_file(open_symbol)` routes through registry-aware `file_outline exact`.
 - Relationship sidecars exist and write `CALLS`, `IMPORTS`, and `EXPORTS`.
 - `call_graph` uses relationship-backed traversal for compatible symbol-owned indexes and promotes low-confidence cross-file `CALLS v0` edges only when current `IMPORTS`/`EXPORTS` evidence supports the target symbol.
-- Incremental sync now reuses changed-file symbol output plus the previous compatible registry to rebuild canonical JSON navigation state after chunk updates, refreshes `navigation.sqlite`, and avoids re-splitting unchanged files. Relationship records are still recomputed against the merged registry for correctness, and incomplete changed-file indexing clears navigation state instead of publishing a mixed generation.
+- Incremental sync now reuses changed-file symbol output plus the previous compatible registry to rebuild canonical JSON navigation state after chunk updates, refreshes `navigation.sqlite`, and avoids re-embedding or rewriting unchanged vector chunks. Relationship records are still recomputed against the merged registry for correctness, which currently reparses unchanged source, and incomplete changed-file indexing clears navigation state instead of publishing a mixed generation.
 - `packages/core/src/navigation/store.ts` now defines `NavigationStore`, and `packages/core/src/navigation/runtime.ts` now serves canonical JSON navigation state while offering opt-in SQLite parity checks through the same wrapper.
 - `search_codebase`, `file_outline`, `read_file(open_symbol)` via `file_outline exact`, and the registry/compatibility portions of `call_graph` now read through the runtime `NavigationStore` wrapper instead of direct sidecar calls in `handlers.ts`.
 - Relationship query helpers now also route through `NavigationStore`, so relationship-backed traversal and compatibility checks can switch backends without changing MCP handlers.
@@ -131,7 +131,7 @@ Do not add new MCP tools, raw SQL/Cypher surfaces, or graph-query UX.
 - Do not make `CALLS v0` look stronger than it is.
 - Do not remove JSON sidecars yet.
 - Do not make SQLite the first patch.
-- Do not claim fully file-local relationship sidecar rewrites yet; the current implementation avoids re-splitting unchanged files but still recomputes relationship artifacts against the merged registry for correctness.
+- Do not claim fully file-local relationship sidecar rewrites yet; the current implementation avoids re-embedding or rewriting unchanged vector chunks but reparses unchanged source while recomputing relationship artifacts against the merged registry for correctness.
 
 ## Plan 2A Freeze
 
@@ -230,7 +230,7 @@ Tasks:
 
 Acceptance:
 
-- Successful sync keeps relationship-backed `file_outline`, `call_graph`, and `read_file(open_symbol)` runnable without full reindex while avoiding unchanged-file symbol extraction.
+- Successful sync keeps relationship-backed `file_outline`, `call_graph`, and `read_file(open_symbol)` runnable without full reindex or unchanged-vector rewrites; deterministic relationship recomputation may still reparse unchanged source.
 - Failed incremental updates do not leave partially updated navigation state.
 - Incremental navigation rebuilds respect the same profile, denylist, ignore, and partial-index rules as full indexing.
 

@@ -97,9 +97,12 @@ This diagram traces how a file on disk becomes searchable chunks in Milvus.
 
 ```mermaid
 flowchart LR
-    A[Raw File on Disk] --> B{Tree-sitter Parser}
+    A[Raw File on Disk] --> B{Language Analysis Port}
     
-    B -->|Language Supported| C[AST Node Extraction<br/>Functions/Classes]
+    B -->|JS/TS family| B1[Oxc]
+    B -->|Python/Go/Rust/Java/C#/C++/Scala| B2[Tree-sitter WASM]
+    B1 --> C[Normalized Symbols, Chunks,<br/>Bindings, and Calls]
+    B2 --> C
     B -->|Fallback| D[Recursive Text Splitter]
     
     C --> E{Size Check}
@@ -119,7 +122,7 @@ flowchart LR
     
     K -.-> L[search_codebase Result]
 ```
-*Explanation:* Satori prioritizes structural chunking. Tree-sitter extracts methods/classes first. If a unit is too large, it is sub-split while retaining scope breadcrumbs (for example, `class UserService > method updateUserProfile`) so results stay anchored.
+*Explanation:* Satori prioritizes structural chunking through one normalized port. Oxc analyzes the JavaScript/TypeScript family and Tree-sitter WASM analyzes the other symbol-capable languages. If structural analysis is unavailable or invalid, indexing keeps bounded searchable text but publishes no authoritative symbols. Oversized structural units are sub-split while retaining scope breadcrumbs (for example, `class UserService > method updateUserProfile`).
 
 ---
 

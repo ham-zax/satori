@@ -7,7 +7,7 @@ Use this package when you want the lower-level engine directly. Most agent workf
 ## What It Owns
 
 - File discovery and ignore filtering (`.satoriignore`, `.gitignore`, hard denylist).
-- AST-aware chunking with an in-package recursive fallback splitter. The legacy `LangChainCodeSplitter` class name remains for API compatibility, but `langchain` is no longer a runtime dependency.
+- One normalized language-analysis boundary for symbols, structural chunks, module bindings, and call evidence. Oxc analyzes JavaScript/JSX/TypeScript/TSX/DTS; Tree-sitter WASM analyzes Python, Go, Rust, Java, C#, C++, and Scala; unsupported or structurally invalid input falls back to bounded recursive text chunks without authoritative symbols.
 - OpenAI, VoyageAI, Gemini, and Ollama embeddings.
 - Milvus/Zilliz vector persistence and search.
 - Dense/BM25 hybrid retrieval and optional reranking.
@@ -17,9 +17,11 @@ Use this package when you want the lower-level engine directly. Most agent workf
 
 Files remain the source of truth. The symbol registry is a deterministic navigation view for a compatible indexed snapshot; grouped search can use owner symbols while chunks remain supporting evidence. Exact navigation uses `symbolInstanceId`, while `symbolKey` stays stable-ish candidate lookup only. Relationship sidecars store conservative `CALLS v0` plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges that back symbol-owned `call_graph` traversal. `CALLS v0` is heuristic/name-based: unique same-file targets can be high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them, or an imported module has a unique same-name target. They are navigation hints, not proof of runtime call coverage.
 
+Parser, symbol-extractor, and relationship-builder identities are durable index fingerprints. Upgrading this parser stack makes older indexes incompatible and requires `manage_index reindex`; incremental `sync` cannot migrate their symbol or relationship evidence.
+
 Completed full indexes write canonical JSON navigation sidecars and then import an additive `navigation.sqlite` cache. JSON remains the canonical navigation source; SQLite is optional for parity checks or explicit experimental reads.
 
-Incremental sync now reuses changed-file symbol output, preserves unchanged registry state, and recomputes relationships against the merged registry without re-splitting unchanged files. If changed-file indexing stops early, core clears navigation state instead of publishing a mixed generation.
+Incremental sync now reuses changed-file symbol output, preserves unchanged registry state, and avoids re-embedding or rewriting unchanged vector chunks. It may reparse unchanged source to recompute deterministic cross-file relationship evidence against the merged registry. If changed-file indexing stops early, core clears navigation state instead of publishing a mixed generation.
 
 Repo config is intentionally small:
 
@@ -42,7 +44,7 @@ Profiles:
 npm install @zokizuan/satori-core
 ```
 
-Runtime requirements depend on the embedding/vector-store implementation you choose. The MCP distribution defaults to embeddings plus a Milvus-compatible backend; direct users can wire the same components explicitly.
+Node.js 22.12 or newer is required. Runtime provider requirements depend on the embedding/vector-store implementation you choose. The MCP distribution defaults to embeddings plus a Milvus-compatible backend; direct users can wire the same components explicitly.
 
 Filesystem indexing binds traversal and file opens to the canonical codebase root via realpath containment and post-open descriptor identity checks (with `/proc/self/fd` preferred on Linux). Paths that resolve outside the root are refused.
 

@@ -79,6 +79,10 @@ test("manage_index tool description lists actions and durable receipt semantics"
     assert.match(description, /No related collection routes to create/);
     assert.match(description, /generation routes to reindex/);
     assert.match(description, /does not re-embed or rewrite source chunks/);
+    assert.match(description, /syncStats/);
+    assert.match(description, /added/);
+    assert.match(description, /removed/);
+    assert.match(description, /modified/);
 });
 
 test("manage_index status envelope includes symbolQuality observed registry field", async () => {
@@ -139,6 +143,73 @@ test("manage_index status envelope includes symbolQuality observed registry fiel
     assert.equal(payload.symbolQuality.basis, "symbol_registry");
     assert.equal(payload.symbolQuality.status, "symbol_sparse");
     assert.equal(typeof payload.symbolQuality.message, "string");
+});
+
+test("manage_index status envelope preserves additive languageCapabilities evidence", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const statusHandlers = {
+        handleGetIndexingStatus: async () => ({
+            content: [{
+                type: "text",
+                text: JSON.stringify({
+                    tool: "manage_index",
+                    version: 1,
+                    action: "status",
+                    path: "/repo",
+                    status: "ok",
+                    message: "indexed",
+                    humanText: "indexed",
+                    languageCapabilities: {
+                        basis: "language_declarations_and_navigation_sidecars",
+                        registryEvidence: "compatible",
+                        relationshipEvidence: "compatible",
+                        languages: [{
+                            language: "typescript",
+                            declaredClaim: "calls_v0",
+                            indexedFileCount: 1,
+                            symbolEvidence: {
+                                eligibleFiles: 1,
+                                filesWithNonFileSymbols: 1,
+                                status: "symbol_rich",
+                            },
+                            relationshipEvidence: "compatible",
+                            capabilities: {
+                                semanticSearch: "ready",
+                                exactSymbol: "ready",
+                                outline: "ready",
+                                callGraph: "ready",
+                            },
+                            degradationReasons: [],
+                        }],
+                    },
+                }),
+            }],
+        }),
+    };
+    const ctx = {
+        capabilities,
+        providerRuntime: {
+            requireToolContext: async () => ({
+                capabilities,
+                runtimeFingerprint: {
+                    embeddingProvider: "VoyageAI",
+                    embeddingModel: "voyage-4-large",
+                    embeddingDimension: 1024,
+                    vectorStoreProvider: "Milvus",
+                    schemaVersion: "hybrid_v3",
+                },
+                toolHandlers: statusHandlers,
+                context: {},
+            }),
+        },
+        toolHandlers: statusHandlers,
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({ action: "status", path: "/repo" }, ctx);
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.languageCapabilities.basis, "language_declarations_and_navigation_sidecars");
+    assert.equal(payload.languageCapabilities.languages[0].language, "typescript");
+    assert.equal(payload.languageCapabilities.languages[0].capabilities.callGraph, "ready");
 });
 
 test("manage_index response shape is a JSON envelope in MCP text content", async () => {

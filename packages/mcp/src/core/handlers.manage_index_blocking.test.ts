@@ -1190,6 +1190,7 @@ test('handleSyncCodebase routes through ensureFreshness and does not call raw re
         assert.match(text, /Incremental sync completed/i);
         assert.match(text, /\+ 1 file\(s\) added/i);
         assert.match(text, /~ 1 file\(s\) modified/i);
+        assert.deepEqual(envelope.syncStats, { added: 1, removed: 0, modified: 1 });
     });
 });
 

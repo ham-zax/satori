@@ -1,4 +1,8 @@
-import type { RepairProof, SymbolQualitySummary } from "@zokizuan/satori-core";
+import type {
+    LanguageCapabilityEvidenceSummary,
+    RepairProof,
+    SymbolQualitySummary,
+} from "@zokizuan/satori-core";
 import type { IndexOperationReceipt } from "../config.js";
 import { WarningCode } from "./warnings.js";
 
@@ -75,4 +79,8 @@ export interface ManageIndexResponseEnvelope {
     repairProof?: RepairProof;
     /** Observed symbol quality from registry (F9); not parser-cause diagnosis. */
     symbolQuality?: SymbolQualitySummary;
+    /** Declared claims combined with compatible per-language navigation evidence. */
+    languageCapabilities?: LanguageCapabilityEvidenceSummary;
+    /** Deterministic filesystem changes observed by a completed sync. */
+    syncStats?: { added: number; removed: number; modified: number };
 }

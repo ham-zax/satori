@@ -6,6 +6,7 @@ import { getLanguageCapabilityDeclaration } from '../languages/capabilities';
 import type { SymbolKind, SymbolRecord, SymbolRegistryManifestFile } from './contracts';
 import type { SymbolRegistry } from './registry';
 import { readSymbolRegistrySidecar } from './sidecar';
+import type { ReadSymbolRegistrySidecarResult } from './sidecar';
 
 export type SymbolQualityStatus =
     | 'symbol_rich'
@@ -259,6 +260,22 @@ export function unknownSymbolQualitySummary(message?: string): SymbolQualitySumm
     };
 }
 
+export function computeSymbolQualitySummaryFromSidecarRead(
+    read: ReadSymbolRegistrySidecarResult,
+): SymbolQualitySummary {
+    if (read.status !== 'ok' || !read.registry) {
+        return unknownSymbolQualitySummary(
+            read.status === 'missing'
+                ? 'Observed symbol quality unavailable (symbol registry missing).'
+                : `Observed symbol quality unavailable (${read.reason || 'registry unreadable'}).`,
+        );
+    }
+    if (read.registry.manifest.files.length === 0) {
+        return unknownSymbolQualitySummary('Observed symbol quality unavailable (empty registry).');
+    }
+    return computeSymbolQualitySummaryFromRegistry(read.registry);
+}
+
 /**
  * Load registry from navigation sidecars and compute observed quality.
  * Never throws for missing/incompatible registry.
@@ -271,17 +288,7 @@ export async function resolveSymbolQualitySummary(input: {
         stateRoot: input.stateRoot,
         normalizedRootPath: input.normalizedRootPath,
     });
-    if (read.status !== 'ok' || !read.registry) {
-        return unknownSymbolQualitySummary(
-            read.status === 'missing'
-                ? 'Observed symbol quality unavailable (symbol registry missing).'
-                : `Observed symbol quality unavailable (${read.reason || 'registry unreadable'}).`,
-        );
-    }
-    if (read.registry.manifest.files.length === 0) {
-        return unknownSymbolQualitySummary('Observed symbol quality unavailable (empty registry).');
-    }
-    return computeSymbolQualitySummaryFromRegistry(read.registry);
+    return computeSymbolQualitySummaryFromSidecarRead(read);
 }
 
 /** Compact marker for list_codebases / log lines. */

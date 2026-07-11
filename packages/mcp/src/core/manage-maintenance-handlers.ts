@@ -2,9 +2,12 @@ import * as fs from "fs";
 import {
     COLLECTION_LIMIT_MESSAGE,
     RemoteCollectionDeletePendingError,
+    computeSymbolQualitySummaryFromSidecarRead,
     formatSymbolQualityMarker,
-    resolveSymbolQualitySummary,
+    readSymbolRegistrySidecar,
+    resolveLanguageCapabilityEvidence,
     type Context,
+    type LanguageCapabilityEvidenceSummary,
     type SymbolQualitySummary,
 } from "@zokizuan/satori-core";
 import type { SnapshotCorruptionWarning, SnapshotManager } from "./snapshot.js";
@@ -609,10 +612,17 @@ export class ManageMaintenanceHandlers {
 
             // F9: observed symbol quality from registry (not parser-cause diagnosis).
             let symbolQuality: SymbolQualitySummary | undefined;
+            let languageCapabilities: LanguageCapabilityEvidenceSummary | undefined;
             // Attach observed quality for lifecycle statuses that refer to a real root path.
             if (envelopeStatus === "ok" || envelopeStatus === "not_ready" || envelopeStatus === "not_indexed") {
-                symbolQuality = await resolveSymbolQualitySummary({
+                const registryRead = await readSymbolRegistrySidecar({
                     normalizedRootPath: envelopePath,
+                });
+                symbolQuality = computeSymbolQualitySummaryFromSidecarRead(registryRead);
+                languageCapabilities = await resolveLanguageCapabilityEvidence({
+                    normalizedRootPath: envelopePath,
+                    searchable: envelopeStatus === "ok",
+                    registryRead,
                 });
                 if (envelopeStatus === "ok") {
                     statusMessage += `\n🧭 ${formatSymbolQualityMarker(symbolQuality)}: ${symbolQuality.message}`;
@@ -675,6 +685,7 @@ export class ManageMaintenanceHandlers {
                     hints: envelopeHints,
                     warnings,
                     ...(symbolQuality ? { symbolQuality } : {}),
+                    ...(languageCapabilities ? { languageCapabilities } : {}),
                     ...(operation ? { operation } : {}),
                 },
             );
@@ -837,6 +848,7 @@ export class ManageMaintenanceHandlers {
             const added = decision.stats?.added ?? 0;
             const removed = decision.stats?.removed ?? 0;
             const modified = decision.stats?.modified ?? 0;
+            const syncStats = { added, removed, modified };
             const ignoredDeletes = decision.deletedFiles ?? 0;
             const totalChanges = added + removed + modified;
 
@@ -854,13 +866,19 @@ export class ManageMaintenanceHandlers {
                     );
                 }
                 await this.host.touchWatchedCodebase(absolutePath);
-                return this.host.manageResponse("sync", absolutePath, "ok", `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`, operationOptions);
+                return this.host.manageResponse("sync", absolutePath, "ok", `🔄 Sync request coalesced for '${absolutePath}'. Reused in-flight sync result.`, {
+                    ...operationOptions,
+                    syncStats,
+                });
             }
 
             if (decision.mode === "reconciled_ignore_change") {
                 if (totalChanges === 0 && ignoredDeletes === 0) {
                     await this.host.touchWatchedCodebase(absolutePath);
-                    return this.host.manageResponse("sync", absolutePath, "ok", `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`, operationOptions);
+                    return this.host.manageResponse("sync", absolutePath, "ok", `✅ Ignore-rule reconciliation completed for '${absolutePath}'. No additional index changes were required.`, {
+                        ...operationOptions,
+                        syncStats,
+                    });
                 }
 
                 const resultMessage =
@@ -870,18 +888,27 @@ export class ManageMaintenanceHandlers {
                     `\nTotal changes: ${totalChanges + ignoredDeletes}`;
                 console.log(`[SYNC] ✅ Sync+ignore reconcile completed: +${added}, -${removed}, ~${modified}, ignoredDeleted=${ignoredDeletes}`);
                 await this.host.touchWatchedCodebase(absolutePath);
-                return this.host.manageResponse("sync", absolutePath, "ok", resultMessage, operationOptions);
+                return this.host.manageResponse("sync", absolutePath, "ok", resultMessage, {
+                    ...operationOptions,
+                    syncStats,
+                });
             }
 
             if (totalChanges === 0) {
                 await this.host.touchWatchedCodebase(absolutePath);
-                return this.host.manageResponse("sync", absolutePath, "ok", `✅ No changes detected for codebase '${absolutePath}'. Index is up to date.`, operationOptions);
+                return this.host.manageResponse("sync", absolutePath, "ok", `✅ No changes detected for codebase '${absolutePath}'. Index is up to date.`, {
+                    ...operationOptions,
+                    syncStats,
+                });
             }
 
             const resultMessage = `🔄 Incremental sync completed for '${absolutePath}'.\n\n📊 Changes:\n+ ${added} file(s) added\n- ${removed} file(s) removed\n~ ${modified} file(s) modified\n\nTotal changes: ${totalChanges}`;
             console.log(`[SYNC] ✅ Sync completed: +${added}, -${removed}, ~${modified}`);
             await this.host.touchWatchedCodebase(absolutePath);
-            return this.host.manageResponse("sync", absolutePath, "ok", resultMessage, operationOptions);
+            return this.host.manageResponse("sync", absolutePath, "ok", resultMessage, {
+                ...operationOptions,
+                syncStats,
+            });
         } catch (error: unknown) {
             console.error("[SYNC] Error during sync:", error);
             const operation = error instanceof SyncOperationError ? error.operation : undefined;

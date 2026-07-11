@@ -92,6 +92,8 @@ export class ToolResponseBuilders {
             preflight?: ReindexPreflightResult;
             message?: string;
             symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
+            languageCapabilities?: ManageIndexResponseEnvelope["languageCapabilities"];
+            syncStats?: ManageIndexResponseEnvelope["syncStats"];
             operation?: ManageIndexResponseEnvelope["operation"];
             repairProof?: ManageIndexResponseEnvelope["repairProof"];
         } = {},
@@ -127,6 +129,12 @@ export class ToolResponseBuilders {
         if (options.symbolQuality) {
             envelope.symbolQuality = options.symbolQuality;
         }
+        if (options.languageCapabilities) {
+            envelope.languageCapabilities = options.languageCapabilities;
+        }
+        if (action === "sync" && options.syncStats) {
+            envelope.syncStats = options.syncStats;
+        }
         if (options.operation) {
             envelope.operation = options.operation;
         }
@@ -160,6 +168,8 @@ export class ToolResponseBuilders {
             preflight?: ReindexPreflightResult;
             message?: string;
             symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
+            languageCapabilities?: ManageIndexResponseEnvelope["languageCapabilities"];
+            syncStats?: ManageIndexResponseEnvelope["syncStats"];
             operation?: ManageIndexResponseEnvelope["operation"];
             repairProof?: ManageIndexResponseEnvelope["repairProof"];
         } = {},

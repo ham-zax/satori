@@ -5,6 +5,7 @@ import path from "node:path";
 const SCHEMA_VERSION = "v1" as const;
 const MAX_RESULT_COUNT = 10_000;
 const DEFAULT_MAX_EVENTS = 1_000;
+const MAX_DIAGNOSTICS_READ_BYTES = 1024 * 1024;
 const DEFAULT_LOCK_TIMEOUT_MS = 50;
 const LOCK_RETRY_MS = 5;
 // Keep this privacy boundary explicit: arbitrary uppercase response text is not safe diagnostic metadata.
@@ -15,6 +16,7 @@ const SAFE_WARNING_CODES = new Set([
     "FILTER_MUST_UNSATISFIED",
     "RERANKER_FAILED",
     "SEARCH_DIRTY_WORKTREE_NOT_SYNCED",
+    "SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE",
     "SEARCH_CHANGED_FILES_BOOST_SKIPPED",
 ]);
 const TOOLS = new Set([
@@ -132,16 +134,27 @@ function assertNoSymlinkComponents(targetPath: string): void {
     }
 }
 
-function readRegularFileNoFollow(filePath: string): string {
+function readRegularFileNoFollow(filePath: string): { text: string; truncated: boolean } {
     assertNoSymlinkComponents(filePath);
     const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollowFlag());
     try {
-        if (!fs.fstatSync(fd).isFile()) {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) {
             const error = new Error(`Diagnostics path is not a regular file: ${filePath}`) as NodeJS.ErrnoException;
             error.code = "EINVAL";
             throw error;
         }
-        return fs.readFileSync(fd, "utf8");
+        const bytesToRead = Math.min(stat.size, MAX_DIAGNOSTICS_READ_BYTES);
+        const buffer = Buffer.alloc(bytesToRead);
+        const start = Math.max(0, stat.size - bytesToRead);
+        const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, start);
+        let text = buffer.subarray(0, bytesRead).toString("utf8");
+        const truncated = start > 0;
+        if (truncated) {
+            const firstNewline = text.indexOf("\n");
+            text = firstNewline >= 0 ? text.slice(firstNewline + 1) : "";
+        }
+        return { text, truncated };
     } finally {
         fs.closeSync(fd);
     }
@@ -265,7 +278,7 @@ export function buildLocalDiagnosticEvent(input: {
     const tool = TOOLS.has(input.toolName) ? input.toolName as LocalDiagnosticTool : "unknown";
     const envelope = firstTextEnvelope(input.result);
     const warningCodes = normalizeWarningCodes(envelope);
-    const resultCount = Array.isArray(envelope?.results)
+    const resultCount = tool === "search_codebase" && Array.isArray(envelope?.results)
         ? Math.min(MAX_RESULT_COUNT, envelope.results.length)
         : undefined;
     const lifecycleAction = tool === "manage_index"
@@ -317,7 +330,10 @@ function parseEvent(value: unknown): LocalDiagnosticEvent | null {
         tool: value.tool as LocalDiagnosticTool,
         durationMs: value.durationMs,
         outcome: value.outcome as LocalDiagnosticOutcome,
-        ...(typeof value.resultCount === "number" && Number.isSafeInteger(value.resultCount) && value.resultCount >= 0
+        ...(value.tool === "search_codebase"
+            && typeof value.resultCount === "number"
+            && Number.isSafeInteger(value.resultCount)
+            && value.resultCount >= 0
             ? { resultCount: Math.min(MAX_RESULT_COUNT, value.resultCount) }
             : {}),
         ...(warningCodes && warningCodes.length > 0 ? { warningCodes } : {}),
@@ -353,7 +369,7 @@ export function recordLocalDiagnosticEvent(
 
         let existingText = "";
         try {
-            existingText = readRegularFileNoFollow(diagnosticsPath);
+            existingText = readRegularFileNoFollow(diagnosticsPath).text;
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
@@ -407,7 +423,9 @@ export function readLocalDiagnosticsSummary(diagnosticsPath: string): LocalDiagn
     const events: LocalDiagnosticEvent[] = [];
     let malformedEventsSkipped = 0;
     try {
-        for (const line of readRegularFileNoFollow(diagnosticsPath).split("\n")) {
+        const bounded = readRegularFileNoFollow(diagnosticsPath);
+        malformedEventsSkipped += bounded.truncated ? 1 : 0;
+        for (const line of bounded.text.split("\n")) {
             if (!line) continue;
             try {
                 const event = parseEvent(JSON.parse(line));
@@ -421,6 +439,9 @@ export function readLocalDiagnosticsSummary(diagnosticsPath: string): LocalDiagn
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
             malformedEventsSkipped += 1;
         }
+    }
+    if (events.length > DEFAULT_MAX_EVENTS) {
+        events.splice(0, events.length - DEFAULT_MAX_EVENTS);
     }
 
     const tools = new Map<LocalDiagnosticTool, {

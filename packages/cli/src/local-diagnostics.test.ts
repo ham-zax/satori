@@ -25,6 +25,7 @@ test("buildLocalDiagnosticEvent extracts only bounded privacy-safe search measur
             results: [{ file: "src/private.ts" }, { file: "src/secret.ts" }],
             warnings: [
                 { code: "SEARCH_DIRTY_WORKTREE_NOT_SYNCED", action: "Open /secret/repo" },
+                { code: "SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE" },
                 { code: "invalid code with spaces" },
             ],
             fallbackUsed: true,
@@ -39,7 +40,7 @@ test("buildLocalDiagnosticEvent extracts only bounded privacy-safe search measur
         durationMs: 18,
         outcome: "ok",
         resultCount: 2,
-        warningCodes: ["SEARCH_DIRTY_WORKTREE_NOT_SYNCED"],
+        warningCodes: ["SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE", "SEARCH_DIRTY_WORKTREE_NOT_SYNCED"],
         fallbackUsed: true,
     });
     const serialized = JSON.stringify(event);
@@ -114,10 +115,53 @@ test("buildLocalDiagnosticEvent bounds untrusted values and unknown tools", () =
         tool: "unknown",
         durationMs: 0,
         outcome: "unknown",
-        resultCount: 10_000,
         warningCodes: ["RERANKER_FAILED"],
         fallbackUsed: true,
     });
+});
+
+test("parseEvent discards resultCount from non-search tools", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-local-diagnostics-result-contract-"));
+    const diagnosticsPath = path.join(tempDir, "events.jsonl");
+    try {
+        fs.writeFileSync(diagnosticsPath, `${JSON.stringify({
+            schemaVersion: "v1",
+            kind: "tool_call",
+            tool: "file_outline",
+            durationMs: 1,
+            outcome: "ok",
+            resultCount: 12,
+        })}\n`);
+        const summary = readLocalDiagnosticsSummary(diagnosticsPath);
+        assert.equal(summary.toolCalls[0].resultBearingCalls, 0);
+        assert.equal(summary.toolCalls[0].resultCount, 0);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("diagnostics reads a bounded tail and retains at most 1000 events", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-local-diagnostics-bounded-"));
+    const diagnosticsPath = path.join(tempDir, "events.jsonl");
+    try {
+        const oversizedPrefix = `${"x".repeat(1024 * 1024 + 32)}\n`;
+        const valid = Array.from({ length: 1_100 }, (_, index) => JSON.stringify({
+            schemaVersion: "v1",
+            kind: "tool_call",
+            tool: "search_codebase",
+            durationMs: index,
+            outcome: "ok",
+            resultCount: 1,
+        })).join("\n");
+        fs.writeFileSync(diagnosticsPath, `${oversizedPrefix}${valid}\n`);
+
+        const summary = readLocalDiagnosticsSummary(diagnosticsPath);
+        assert.equal(summary.eventsRead, 1_000);
+        assert.equal(summary.malformedEventsSkipped >= 1, true);
+        assert.equal(summary.toolCalls[0].count, 1_000);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test("recordLocalDiagnosticEvent caps the local log and readLocalDiagnosticsSummary is deterministic", () => {

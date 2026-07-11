@@ -31,7 +31,45 @@ function packPackage(packageRoot: string, smokePackDir: string): string {
     return path.join(smokePackDir, tarballName);
 }
 
-function runCliSmoke(commandArgs: string[], coreTarballPath: string, mcpTarballPath: string, cliTarballPath: string, smokeExecDir: string): void {
+const PNPM_ONLY_NPM_ENV_KEYS = new Set([
+    "NPM_CONFIG__JSR_REGISTRY",
+    "NPM_CONFIG_AUTO_INSTALL_PEERS",
+    "NPM_CONFIG_CACHE_DIR",
+    "NPM_CONFIG_CHILD_CONCURRENCY",
+    "NPM_CONFIG_DEDUPE_PEER_DEPENDENTS",
+    "NPM_CONFIG_DIR",
+    "NPM_CONFIG_IGNORE_WORKSPACE_ROOT_CHECK",
+    "NPM_CONFIG_NPM_GLOBALCONFIG",
+    "NPM_CONFIG_PREFER_FROZEN_LOCKFILE",
+    "NPM_CONFIG_SHELL_EMULATOR",
+    "NPM_CONFIG_STORE_DIR",
+    "NPM_CONFIG_VERIFY_DEPS_BEFORE_RUN",
+]);
+
+function isolatedSmokeEnv(smokeHomeDir: string): NodeJS.ProcessEnv {
+    const env = Object.fromEntries(Object.entries(process.env).filter(
+        ([key]) => !PNPM_ONLY_NPM_ENV_KEYS.has(key.toUpperCase()),
+    ));
+    return {
+        ...env,
+        HOME: smokeHomeDir,
+        USERPROFILE: smokeHomeDir,
+        XDG_CONFIG_HOME: path.join(smokeHomeDir, ".config"),
+        EMBEDDING_PROVIDER: "Ollama",
+        MILVUS_ADDRESS: "localhost:19530",
+        npm_config_cache: path.join(smokeHomeDir, ".npm"),
+        npm_config_package_lock: "false",
+    };
+}
+
+function runCliSmoke(
+    commandArgs: string[],
+    coreTarballPath: string,
+    mcpTarballPath: string,
+    cliTarballPath: string,
+    smokeExecDir: string,
+    smokeHomeDir: string,
+): void {
     execFileSync("npm", [
         "exec",
         "--yes",
@@ -47,12 +85,7 @@ function runCliSmoke(commandArgs: string[], coreTarballPath: string, mcpTarballP
     ], {
         cwd: smokeExecDir,
         encoding: "utf8",
-        env: {
-            ...process.env,
-            EMBEDDING_PROVIDER: "Ollama",
-            MILVUS_ADDRESS: "localhost:19530",
-            npm_config_package_lock: "false",
-        },
+        env: isolatedSmokeEnv(smokeHomeDir),
         stdio: ["ignore", "pipe", "pipe"],
     });
 }
@@ -64,13 +97,14 @@ function main(): void {
     const mcpPackageRoot = path.resolve(packageRoot, "..", "mcp");
     const smokePackDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-smoke-"));
     const smokeExecDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-exec-"));
+    const smokeHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-home-"));
 
     try {
         const coreTarballPath = packPackage(corePackageRoot, smokePackDir);
         const mcpTarballPath = packPackage(mcpPackageRoot, smokePackDir);
         const cliTarballPath = packPackage(packageRoot, smokePackDir);
-        runCliSmoke(["--help"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir);
-        runCliSmoke(["doctor"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir);
+        runCliSmoke(["--help"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir, smokeHomeDir);
+        runCliSmoke(["doctor"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir, smokeHomeDir);
         console.log("[release:smoke] CLI tarball starts and runs doctor via npm exec.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -80,6 +114,7 @@ function main(): void {
     } finally {
         fs.rmSync(smokePackDir, { recursive: true, force: true });
         fs.rmSync(smokeExecDir, { recursive: true, force: true });
+        fs.rmSync(smokeHomeDir, { recursive: true, force: true });
     }
 }
 

@@ -1013,6 +1013,45 @@ test('read_file open_symbol returns not_found for a stale symbolInstanceId witho
     });
 });
 
+test('read_file open_symbol preserves unverified current-source outcome', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const srcPath = path.join(repoPath, 'src');
+        fs.mkdirSync(srcPath, { recursive: true });
+        const filePath = path.join(srcPath, 'runtime.ts');
+        fs.writeFileSync(filePath, 'export function runtimeOwner() {}\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            open_symbol: { symbolId: 'sym_runtime_owner' }
+        }, 1000, {
+            snapshotManager: indexedSnapshot(repoPath),
+            toolHandlers: {
+                handleFileOutline: async () => ({
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'not_ready',
+                            path: repoPath,
+                            file: 'src/runtime.ts',
+                            outline: null,
+                            hasMore: false,
+                            message: 'The exact symbol span could not be verified against current source.',
+                            warnings: ['OUTLINE_SYMBOL_SPAN_UNVERIFIED']
+                        })
+                    }]
+                })
+            } as unknown as ToolHandlersLike
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, undefined);
+        assert.deepEqual(payload.warnings, ['OUTLINE_SYMBOL_SPAN_UNVERIFIED']);
+    });
+});
+
 test('read_file open_symbol returns json envelope for unsupported outline file', async () => {
     await withTempDir(async (dir) => {
         const filePath = path.join(dir, 'notes.txt');

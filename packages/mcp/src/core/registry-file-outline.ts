@@ -5,6 +5,7 @@ import {
     repairSourceBackedPythonSpans,
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
+import { validateCurrentSourceSymbolSpans } from "./current-source-symbols.js";
 
 function compareNullableNumbersAsc(a?: number | null, b?: number | null): number {
     const left = a ?? Number.POSITIVE_INFINITY;
@@ -89,7 +90,7 @@ export function findExactRegistrySymbols(input: {
     return sortRegistrySymbols(exactMatches);
 }
 
-export function buildRegistryFileOutlinePayload(input: {
+export async function buildRegistryFileOutlinePayload(input: {
     codebaseRoot: string;
     file: string;
     symbols: SymbolRecord[];
@@ -102,7 +103,105 @@ export function buildRegistryFileOutlinePayload(input: {
     warnings?: string[];
     buildCallGraphHint: (symbol: SymbolRecord) => CallGraphHint;
     buildOutlineSpanWarningCodes: (repair: PythonSourceBackedSpanRepair | undefined) => string[];
-}): FileOutlineResponseEnvelope {
+}): Promise<FileOutlineResponseEnvelope> {
+    if (input.resolveMode === "exact") {
+        const persistedExactMatches = findExactRegistrySymbols({
+            symbols: input.symbols,
+            symbolIdExact: input.symbolIdExact,
+            symbolLabelExact: input.symbolLabelExact,
+        });
+        const exactSymbolIds = new Set(persistedExactMatches.map((symbol) => symbol.symbolInstanceId));
+        const exactSymbolKeys = new Set(persistedExactMatches.map((symbol) => symbol.symbolKey));
+        const validationCohort = input.symbols.filter((symbol) => exactSymbolKeys.has(symbol.symbolKey));
+        const cohortValidations = await validateCurrentSourceSymbolSpans({
+            codebaseRoot: input.codebaseRoot,
+            symbols: validationCohort,
+        });
+        const validations = cohortValidations.filter((validation) => exactSymbolIds.has(validation.symbol.symbolInstanceId));
+        const validatedExactMatches = validations
+            .filter((validation) => validation.match === "matched" || validation.match === "not_applicable")
+            .map((validation) => validation.symbol)
+            .filter((symbol) => {
+                const startsBeforeWindowEnd = input.windowEnd === undefined || symbol.span.startLine <= input.windowEnd;
+                const endsAfterWindowStart = input.windowStart === undefined || symbol.span.endLine >= input.windowStart;
+                return startsBeforeWindowEnd && endsAfterWindowStart;
+            });
+        const exactRepairBySymbolId = new Map(validations.map((validation) => [validation.symbol.symbolInstanceId, validation]));
+        const exactMapped = sortFileOutlineSymbols(validatedExactMatches.map((symbol) => ({
+            symbolId: symbol.symbolInstanceId,
+            symbolLabel: symbol.label,
+            span: {
+                startLine: symbol.span.startLine,
+                endLine: symbol.span.endLine,
+            },
+            callGraphHint: input.buildCallGraphHint(symbol),
+        } satisfies FileOutlineSymbolResult)));
+        const exactWarningSet = new Set(input.warnings || []);
+        for (const symbol of exactMapped) {
+            for (const warning of input.buildOutlineSpanWarningCodes(exactRepairBySymbolId.get(symbol.symbolId))) {
+                exactWarningSet.add(warning);
+            }
+        }
+        if (exactMapped.some((symbol) => !symbol.callGraphHint.supported)) {
+            const firstUnsupported = exactMapped.find((symbol) => !symbol.callGraphHint.supported)?.callGraphHint;
+            if (firstUnsupported && !firstUnsupported.supported) {
+                exactWarningSet.add(`OUTLINE_CALL_GRAPH_UNAVAILABLE:${firstUnsupported.reason}`);
+            }
+        }
+        const hasAmbiguousValidation = validations.some((validation) => validation.match === "ambiguous");
+        const hasUnavailableValidation = validations.some((validation) => validation.match === "unavailable");
+        if (hasUnavailableValidation) {
+            exactWarningSet.add("OUTLINE_SYMBOL_SPAN_UNVERIFIED");
+        }
+        const exactWarnings = [...exactWarningSet].sort(compareContractStrings);
+        if (hasAmbiguousValidation) {
+            return {
+                status: "ambiguous",
+                path: input.codebaseRoot,
+                file: input.file,
+                outline: null,
+                hasMore: false,
+                message: "The persisted symbol identity matches multiple current source symbols; narrow after synchronizing the index.",
+                ...(exactWarnings.length > 0 ? { warnings: exactWarnings } : {}),
+            };
+        }
+        if (hasUnavailableValidation) {
+            return {
+                status: "not_ready",
+                path: input.codebaseRoot,
+                file: input.file,
+                outline: null,
+                hasMore: false,
+                message: "The exact symbol span could not be verified against current source.",
+                warnings: exactWarnings,
+            };
+        }
+        if (exactMapped.length === 0) {
+            return {
+                status: "not_found",
+                reason: "missing_symbol",
+                path: input.codebaseRoot,
+                file: input.file,
+                outline: null,
+                hasMore: false,
+                message: "No exact symbol match found in file outline.",
+                ...(exactWarnings.length > 0 ? { warnings: exactWarnings } : {}),
+            };
+        }
+        const hasMoreExact = exactMapped.length > input.limitSymbols;
+        return {
+            status: exactMapped.length > 1 ? "ambiguous" : "ok",
+            path: input.codebaseRoot,
+            file: input.file,
+            outline: { symbols: exactMapped.slice(0, input.limitSymbols) },
+            hasMore: hasMoreExact,
+            ...(exactMapped.length > 1
+                ? { message: `Multiple exact symbol matches found (${exactMapped.length}). Narrow with symbolIdExact for deterministic selection.` }
+                : {}),
+            ...(exactWarnings.length > 0 ? { warnings: exactWarnings } : {}),
+        };
+    }
+
     const repairs = repairSourceBackedPythonSpans({
         codebaseRoot: input.codebaseRoot,
         symbols: input.symbols,
@@ -144,49 +243,6 @@ export function buildRegistryFileOutlinePayload(input: {
         }
         return [...warningSet].sort(compareContractStrings);
     };
-
-    if (input.resolveMode === "exact") {
-        const exactMatchIds = new Set(findExactRegistrySymbols({
-            symbols: repairedSymbols,
-            symbolIdExact: input.symbolIdExact,
-            symbolLabelExact: input.symbolLabelExact,
-            windowStart: input.windowStart,
-            windowEnd: input.windowEnd,
-        }).map((symbol) => symbol.symbolInstanceId));
-        const exactMatches = sortFileOutlineSymbols(
-            mappedSymbols.filter((symbol) => exactMatchIds.has(symbol.symbolId)),
-        );
-
-        if (exactMatches.length === 0) {
-            const warnings = collectWarnings(mappedSymbols);
-            return {
-                status: "not_found",
-                reason: "missing_symbol",
-                path: input.codebaseRoot,
-                file: input.file,
-                outline: null,
-                hasMore: false,
-                message: "No exact symbol match found in file outline.",
-                ...(warnings.length > 0 ? { warnings } : {}),
-            };
-        }
-
-        const hasMoreExact = exactMatches.length > input.limitSymbols;
-        const exactWarnings = collectWarnings(exactMatches);
-        return {
-            status: exactMatches.length > 1 ? "ambiguous" : "ok",
-            path: input.codebaseRoot,
-            file: input.file,
-            outline: {
-                symbols: exactMatches.slice(0, input.limitSymbols),
-            },
-            hasMore: hasMoreExact,
-            ...(exactMatches.length > 1
-                ? { message: `Multiple exact symbol matches found (${exactMatches.length}). Narrow with symbolIdExact for deterministic selection.` }
-                : {}),
-            ...(exactWarnings.length > 0 ? { warnings: exactWarnings } : {}),
-        };
-    }
 
     const hasMore = mappedSymbols.length > input.limitSymbols;
     const warnings = collectWarnings(mappedSymbols);

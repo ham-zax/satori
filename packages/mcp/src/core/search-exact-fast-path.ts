@@ -15,6 +15,7 @@ import { buildExactRegistryHitEnvelope } from "./search-exact-registry-hit.js";
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
 import type { ParsedSearchOperators } from "./search-query-planning.js";
 import type { SearchQuerySupport } from "./search-query-support.js";
+import { validateCurrentSourceSymbolSpans } from "./current-source-symbols.js";
 import type {
     SearchDebugHint,
     SearchFreshnessSummary,
@@ -76,6 +77,7 @@ type SearchExactFastPathInput = {
     operatorSummary: SearchDebugHint["operatorSummary"];
     filterSummary: SearchDebugHint["filterSummary"];
     changedFilesState: ChangedFilesState;
+    observedChangedFilesState: ChangedFilesState;
     debugChangedFilesState?: ChangedFilesState;
     changedFilesCount: number;
     changedFilesBoostSkippedForLargeChangeSet: boolean;
@@ -198,6 +200,31 @@ export async function runExactRegistryFastPath(
         };
     }
 
+    let exactRegistrySymbol = exactRegistryMatch.symbol;
+    const normalizedExactPath = exactRegistrySymbol.file.replace(/\\/g, "/").replace(/^\/+/, "");
+    if (
+        input.dirtyFilesNotFreshened
+        && input.observedChangedFilesState.files.has(normalizedExactPath)
+    ) {
+        const [validation] = await host.measureSearchPhase(
+            "navigationValidation",
+            () => validateCurrentSourceSymbolSpans({
+                codebaseRoot: input.effectiveRoot,
+                symbols: [exactRegistrySymbol],
+            }),
+        );
+        if (!validation || (validation.match !== "matched" && validation.match !== "not_applicable")) {
+            return {
+                kind: "continue",
+                exactRegistryDebug,
+                searchSymbolRegistry: registryState.registry,
+                searchSymbolRegistryManifestHash: registryState.manifestHash,
+                exactRegistryFallbackForTrackedLexical: true,
+            };
+        }
+        exactRegistrySymbol = validation.symbol;
+    }
+
     const rerankDecision = host.searchQuerySupport.resolveRerankDecision(input.scope, input.queryPlan);
     const callGraphNavigationState = await host.measureSearchPhase(
         "navigationValidation",
@@ -217,7 +244,7 @@ export async function runExactRegistryFastPath(
         freshnessDecision: input.freshnessDecision,
         freshnessSummary: input.freshnessSummary,
         proofDebugHint: input.proofDebugHint,
-        symbol: exactRegistryMatch.symbol,
+        symbol: exactRegistrySymbol,
         indexedAt: registryState.registry.manifest.builtAt || null,
         navigationState: callGraphNavigationState,
         navigationWarning: callGraphNavigationState.warning,

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+    AstCodeSplitter,
     importNavigationToSqlite,
     RuntimeNavigationStore,
     SYMBOL_REGISTRY_SCHEMA_VERSION,
@@ -18,6 +19,7 @@ import {
 } from '@zokizuan/satori-core';
 import type { SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
 import { ToolHandlers } from './handlers.js';
+import { buildRegistryFileOutlinePayload } from './registry-file-outline.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 
@@ -649,6 +651,346 @@ test('handleFileOutline repairs stale Python multiline-signature spans from sour
     }));
 });
 
+test('handleFileOutline exact mode repairs stale TypeScript spans from current source', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = [
+            'const before = true;',
+            '',
+            'export function currentOwner(value: string) {',
+            '    const normalized = value.trim();',
+            '    return normalized;',
+            '}',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source);
+        const owner = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function currentOwner(value: string)',
+            name: 'currentOwner',
+            qualifiedName: 'currentOwner',
+            startLine: 1,
+            endLine: 4,
+            fileHash: sha256Content(source),
+        });
+        await writeTestSymbolRegistry(repoPath, [owner]);
+
+        const handlers = new ToolHandlers(
+            baseContext(),
+            baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolIdExact: owner.symbolInstanceId,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.outline.symbols[0].symbolId, owner.symbolInstanceId);
+        assert.deepEqual(payload.outline.symbols[0].span, { startLine: 3, endLine: 6 });
+        assert.deepEqual(payload.outline.symbols[0].callGraphHint.symbolRef.span, { startLine: 3, endLine: 6 });
+    }));
+});
+
+test('handleFileOutline exact mode repairs stale JavaScript spans from current source', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = [
+            'const before = true;',
+            '',
+            'export function currentOwner(value) {',
+            '    return value.trim();',
+            '}',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.js'), source);
+        const owner = createTestSymbol({
+            file: 'src/runtime.js',
+            label: 'function currentOwner(value)',
+            name: 'currentOwner',
+            qualifiedName: 'currentOwner',
+            startLine: 1,
+            endLine: 3,
+            fileHash: sha256Content(source),
+            language: 'javascript',
+        });
+        await writeTestSymbolRegistry(repoPath, [owner]);
+
+        const handlers = new ToolHandlers(
+            baseContext(),
+            baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.js',
+            resolveMode: 'exact',
+            symbolIdExact: owner.symbolInstanceId,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.outline.symbols[0].symbolId, owner.symbolInstanceId);
+        assert.deepEqual(payload.outline.symbols[0].span, { startLine: 3, endLine: 5 });
+    }));
+});
+
+test('handleFileOutline exact mode fails closed when the persisted symbol is absent from current source', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = 'export function replacementOwner() { return true; }\n';
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source);
+        const removed = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function removedOwner()',
+            name: 'removedOwner',
+            qualifiedName: 'removedOwner',
+            startLine: 1,
+            endLine: 1,
+            fileHash: sha256Content(source),
+        });
+        await writeTestSymbolRegistry(repoPath, [removed]);
+
+        const handlers = new ToolHandlers(
+            baseContext(),
+            baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolIdExact: removed.symbolInstanceId,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_found');
+        assert.equal(payload.reason, 'missing_symbol');
+        assert.equal(payload.outline, null);
+    }));
+});
+
+test('handleFileOutline exact mode preserves ambiguous current-source validation', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const currentSource = [
+            'export function duplicateOwner() { return true; }',
+            'export function duplicateOwner() { return false; }',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), currentSource);
+        const owner = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function duplicateOwner()',
+            name: 'duplicateOwner',
+            qualifiedName: 'duplicateOwner',
+            startLine: 1,
+            endLine: 1,
+            fileHash: sha256Content(currentSource),
+        });
+        await writeTestSymbolRegistry(repoPath, [owner]);
+
+        const handlers = new ToolHandlers(
+            baseContext(),
+            baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolIdExact: owner.symbolInstanceId,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ambiguous');
+        assert.equal(payload.outline, null);
+        assert.match(payload.message, /current source|ambiguous/i);
+    }));
+});
+
+test('handleFileOutline exact symbol id validates its full duplicate-key cohort before selecting', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = [
+            'function duplicateOwner() { return 1; }',
+            '',
+            'function duplicateOwner() { return 2; }',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source);
+        const fileHash = sha256Content(source);
+        const first = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function duplicateOwner()',
+            name: 'duplicateOwner',
+            qualifiedName: 'duplicateOwner',
+            startLine: 10,
+            endLine: 10,
+            fileHash,
+        });
+        const second = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function duplicateOwner()',
+            name: 'duplicateOwner',
+            qualifiedName: 'duplicateOwner',
+            startLine: 20,
+            endLine: 20,
+            fileHash,
+        });
+        await writeTestSymbolRegistry(repoPath, [first, second]);
+
+        const handlers = new ToolHandlers(
+            baseContext(),
+            baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolIdExact: second.symbolInstanceId,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.outline.symbols[0].symbolId, second.symbolInstanceId);
+        assert.deepEqual(payload.outline.symbols[0].span, { startLine: 3, endLine: 3 });
+    }));
+});
+
+test('handleFileOutline exact symbol id rejects duplicate ordinal pairing without current file proof', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = [
+            'function duplicateOwner() { return 1; }',
+            '',
+            'function duplicateOwner() { return 2; }',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source);
+        const first = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function duplicateOwner()',
+            name: 'duplicateOwner',
+            qualifiedName: 'duplicateOwner',
+            startLine: 10,
+            endLine: 10,
+            fileHash: 'stale-file-hash',
+        });
+        const second = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function duplicateOwner()',
+            name: 'duplicateOwner',
+            qualifiedName: 'duplicateOwner',
+            startLine: 20,
+            endLine: 20,
+            fileHash: 'stale-file-hash',
+        });
+        await writeTestSymbolRegistry(repoPath, [first, second]);
+
+        const handlers = new ToolHandlers(
+            baseContext(),
+            baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+        const response = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+            resolveMode: 'exact',
+            symbolIdExact: second.symbolInstanceId,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ambiguous');
+        assert.equal(payload.outline, null);
+    }));
+});
+
+test('handleFileOutline exact mode reports unverified current-source validation', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = 'export function unavailableOwner() { return true; }\n';
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source);
+        const owner = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function unavailableOwner()',
+            name: 'unavailableOwner',
+            qualifiedName: 'unavailableOwner',
+            startLine: 1,
+            endLine: 1,
+            fileHash: sha256Content(source),
+        });
+        fs.rmSync(path.join(repoPath, 'src', 'runtime.ts'));
+
+        const payload = await buildRegistryFileOutlinePayload({
+            codebaseRoot: repoPath,
+            file: 'src/runtime.ts',
+            symbols: [owner],
+            limitSymbols: 20,
+            resolveMode: 'exact',
+            symbolIdExact: owner.symbolInstanceId,
+            buildCallGraphHint: () => ({ supported: false, reason: 'missing_relationship_sidecar' }),
+            buildOutlineSpanWarningCodes: () => [],
+        });
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, undefined);
+        assert.equal(payload.warnings?.includes('OUTLINE_SYMBOL_SPAN_UNVERIFIED'), true);
+        assert.match(payload.message, /could not be verified/i);
+    }));
+});
+
+test('handleFileOutline exact mode returns not_ready when current-source parsing fails', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = 'function parserOwner() { return true; }\n';
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source);
+        const owner = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function parserOwner()',
+            name: 'parserOwner',
+            qualifiedName: 'parserOwner',
+            startLine: 1,
+            endLine: 1,
+            fileHash: sha256Content(source),
+        });
+        await writeTestSymbolRegistry(repoPath, [owner]);
+        const originalSplit = AstCodeSplitter.prototype.split;
+        AstCodeSplitter.prototype.split = async () => {
+            throw new Error('forced parser failure');
+        };
+        try {
+            const handlers = new ToolHandlers(
+                baseContext(),
+                baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
+                {} as unknown as HandlerSyncManager,
+                RUNTIME_FINGERPRINT,
+                CAPABILITIES,
+            );
+            const response = await handlers.handleFileOutline({
+                path: repoPath,
+                file: 'src/runtime.ts',
+                resolveMode: 'exact',
+                symbolIdExact: owner.symbolInstanceId,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'not_ready');
+            assert.equal(payload.reason, undefined);
+            assert.equal(payload.warnings?.includes('OUTLINE_SYMBOL_SPAN_UNVERIFIED'), true);
+        } finally {
+            AstCodeSplitter.prototype.split = originalSplit;
+        }
+    }));
+});
+
 test('handleFileOutline returns relationship-backed call graph hints when legacy sidecar is absent but navigation sidecars are compatible', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const alpha = createTestSymbol({
@@ -1196,6 +1538,21 @@ test('handleFileOutline can read registry-backed outline from an injected naviga
 
 test('handleFileOutline registry exact mode resolves a unique symbolInstanceId', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), [
+            'const before = true;',
+            '',
+            '',
+            'function alpha() { return true; }',
+            '',
+            '',
+            '',
+            '',
+            '',
+            'function beta() {',
+            '    return true;',
+            '}',
+            '',
+        ].join('\n'));
         const alpha = createTestSymbol({
             file: 'src/runtime.ts',
             label: 'function alpha()',
@@ -1237,6 +1594,23 @@ test('handleFileOutline registry exact mode resolves a unique symbolInstanceId',
 
 test('handleFileOutline registry exact mode returns ambiguous for duplicate exact labels', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const source = [
+            '',
+            '',
+            '',
+            'function same() { return 1; }',
+            '',
+            '',
+            '',
+            '',
+            '',
+            'function same() {',
+            '    return 2;',
+            '}',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(repoPath, 'src', 'runtime.ts'), source);
+        const fileHash = sha256Content(source);
         const first = createTestSymbol({
             file: 'src/runtime.ts',
             label: 'function same()',
@@ -1244,6 +1618,7 @@ test('handleFileOutline registry exact mode returns ambiguous for duplicate exac
             qualifiedName: 'same',
             startLine: 4,
             endLine: 7,
+            fileHash,
         });
         const second = createTestSymbol({
             file: 'src/runtime.ts',
@@ -1252,6 +1627,7 @@ test('handleFileOutline registry exact mode returns ambiguous for duplicate exac
             qualifiedName: 'same',
             startLine: 10,
             endLine: 13,
+            fileHash,
         });
         await writeTestSymbolRegistry(repoPath, [second, first]);
 

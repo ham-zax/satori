@@ -237,6 +237,9 @@ export async function runSearchExecution(
     const debugChangedFilesState = input.debug ? observedChangedFilesState : undefined;
     const changedFilesCount = changedFilesState.files.size;
     const observedChangedFilesCount = observedChangedFilesState.files.size;
+    const normalizedObservedChangedFiles = new Set(
+        [...observedChangedFilesState.files].map((relativePath) => relativePath.replace(/\\/g, "/").replace(/^\/+/, "")),
+    );
     const changedFilesBoostWithinThreshold = changedFilesCount > 0 && changedFilesCount <= SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES;
     const changedFilesBoostEnabled = input.rankingMode === "auto_changed_first"
         && changedFilesState.available
@@ -263,6 +266,8 @@ export async function runSearchExecution(
     let boostedCandidates = 0;
     let attemptsUsed = 0;
     const searchWarningsSet = new Set<string>();
+    const suppressedDirtyPaths = new Set<string>();
+    const representedDirtyPaths = new Set<string>();
     const passesUsed = new Set<string>();
     const backendScoreKinds = new Set<BackendScoreKind>();
     let scored: SearchCandidate[] = [];
@@ -345,6 +350,18 @@ export async function runSearchExecution(
             for (let i = 0; i < results.length; i++) {
                 const result = results[i];
                 if (!result || typeof result.relativePath !== "string") continue;
+                const normalizedResultPath = result.relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+                if (
+                    dirtyFilesNotFreshened
+                    && passId !== "dirty_overlay"
+                    && normalizedObservedChangedFiles.has(normalizedResultPath)
+                ) {
+                    suppressedDirtyPaths.add(normalizedResultPath);
+                    continue;
+                }
+                if (passId === "dirty_overlay") {
+                    representedDirtyPaths.add(normalizedResultPath);
+                }
                 const key = `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || "unknown"}`;
                 const rank = i + 1;
                 const rrf = passWeight * (1 / (SEARCH_RRF_K + rank));
@@ -402,6 +419,23 @@ export async function runSearchExecution(
 
         for (const pass of successfulPasses) {
             addPass(pass.results, pass.id, 1);
+        }
+
+        if (dirtyFilesNotFreshened) {
+            const dirtyOverlayResults = await host.measureSearchPhase(
+                "trackedLexical",
+                () => host.searchQuerySupport.buildDirtyFileSearchResults({
+                    effectiveRoot: input.effectiveRoot,
+                    queryPlan: input.queryPlan,
+                    changedFiles: observedChangedFilesState.files,
+                }),
+            );
+            if (dirtyOverlayResults.length > 0) {
+                // This pass replaces every stale semantic pass for the dirty path,
+                // so retain equivalent fusion weight instead of penalizing freshness.
+                addPass(dirtyOverlayResults, "dirty_overlay", successfulPasses.length);
+                passesUsed.add("dirty_overlay");
+            }
         }
 
         const trackedLexical = await host.measureSearchPhase(
@@ -540,6 +574,9 @@ export async function runSearchExecution(
     if (dirtyFilesNotFreshened) {
         searchWarnings.push(WARNING_CODES.SEARCH_DIRTY_WORKTREE_NOT_SYNCED);
     }
+    if ([...suppressedDirtyPaths].some((relativePath) => !representedDirtyPaths.has(relativePath))) {
+        searchWarnings.push(WARNING_CODES.SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE);
+    }
     if (changedFilesBoostSkippedForLargeChangeSet) {
         searchWarnings.push(WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED);
     }
@@ -633,7 +670,7 @@ export async function runSearchExecution(
     searchDiagnostics.rerankerAttempted = rerankerAttempted;
     searchDiagnostics.rerankerUsed = rerankerApplied;
     rankingProvenance.semanticPassesUsed = Array.from(passesUsed).filter((passId) => passId === "primary" || passId === "expanded").sort();
-    rankingProvenance.lexicalPassesUsed = Array.from(passesUsed).filter((passId) => passId === "lexical_files" || passId === "live_path").sort();
+    rankingProvenance.lexicalPassesUsed = Array.from(passesUsed).filter((passId) => passId === "lexical_files" || passId === "live_path" || passId === "dirty_overlay").sort();
     rankingProvenance.livePathSupplementUsed = passesUsed.has("live_path");
     rankingProvenance.lexicalFileScanUsed = passesUsed.has("lexical_files");
     rankingProvenance.rerankApplied = rerankerApplied;

@@ -2,8 +2,11 @@ import * as fs from "fs";
 import * as path from "path";
 import ignore from "ignore";
 import {
+    AstCodeSplitter,
+    compareContractStrings,
     getLanguageIdFromFilename,
     isLanguageCapabilitySupportedForFilename,
+    openRegularFileInsideRoot,
     type SymbolRecord,
     type VoyageAIReranker,
 } from "@zokizuan/satori-core";
@@ -38,6 +41,10 @@ const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES = 256 * 1024;
 const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_FILES = 8;
 const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_RESULTS = 8;
 const SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES = 2;
+const SEARCH_DIRTY_OVERLAY_MAX_BYTES = 256 * 1024;
+const SEARCH_DIRTY_OVERLAY_MAX_FILES = 16;
+const SEARCH_DIRTY_OVERLAY_MAX_RESULTS = 16;
+const SEARCH_DIRTY_OVERLAY_TOTAL_BYTES = 2 * 1024 * 1024;
 const SEARCH_TRACKED_LEXICAL_MAX_BYTES = 192 * 1024;
 const SEARCH_TRACKED_LEXICAL_MAX_FILES = 128;
 const SEARCH_TRACKED_LEXICAL_MAX_RESULTS = 16;
@@ -67,6 +74,37 @@ type TrackedLexicalSearchDebug = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPathInsideRoot(candidate: string, root: string): boolean {
+    const relative = path.relative(root, candidate);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function selectBoundedContractPaths(
+    paths: Iterable<string>,
+    normalize: (relativePath: string) => string | null,
+    limit: number,
+): string[] {
+    const selected: string[] = [];
+    for (const candidate of paths) {
+        const normalized = normalize(candidate);
+        if (!normalized || selected.includes(normalized)) {
+            continue;
+        }
+        let insertionIndex = selected.findIndex((existing) => compareContractStrings(normalized, existing) < 0);
+        if (insertionIndex < 0) {
+            insertionIndex = selected.length;
+        }
+        if (insertionIndex >= limit) {
+            continue;
+        }
+        selected.splice(insertionIndex, 0, normalized);
+        if (selected.length > limit) {
+            selected.pop();
+        }
+    }
+    return selected;
 }
 
 export type SearchQuerySupportHost = {
@@ -301,6 +339,136 @@ export class SearchQuerySupport {
                 score: 1,
                 backendScore: 1,
                 backendScoreKind: 'lexical_rank',
+            });
+        }
+
+        return results;
+    }
+    public async buildDirtyFileSearchResults(input: {
+        effectiveRoot: string;
+        queryPlan: SearchQueryPlan;
+        changedFiles: Set<string>;
+    }): Promise<SearchResultLike[]> {
+        if (input.changedFiles.size === 0 || input.queryPlan.lexicalTerms.length === 0) {
+            return [];
+        }
+
+        let canonicalRoot: string;
+        try {
+            canonicalRoot = fs.realpathSync(input.effectiveRoot);
+        } catch {
+            return [];
+        }
+        const activeIgnoreMatcher = this.buildActiveIgnoreMatcher(input.effectiveRoot);
+        const splitter = new AstCodeSplitter(SEARCH_DIRTY_OVERLAY_MAX_BYTES + 1);
+        splitter.setChunkOverlap(0);
+        const results: SearchResultLike[] = [];
+        const seen = new Set<string>();
+        let bytesRead = 0;
+
+        const changedPaths = selectBoundedContractPaths(
+            input.changedFiles,
+            (relativePath) => this.normalizeRelativePathForIgnoreCheck(relativePath),
+            SEARCH_DIRTY_OVERLAY_MAX_FILES,
+        );
+        for (const relativePath of changedPaths) {
+            if (
+                bytesRead >= SEARCH_DIRTY_OVERLAY_TOTAL_BYTES
+                || results.length >= SEARCH_DIRTY_OVERLAY_MAX_RESULTS
+            ) {
+                break;
+            }
+            if (!isLanguageCapabilitySupportedForFilename(relativePath, "search") || activeIgnoreMatcher?.(relativePath)) {
+                continue;
+            }
+            const logicalPath = path.resolve(canonicalRoot, relativePath);
+            if (!isPathInsideRoot(logicalPath, canonicalRoot)) {
+                continue;
+            }
+
+            let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
+            let stat: fs.Stats;
+            let content: string;
+            try {
+                handle = await openRegularFileInsideRoot(logicalPath, canonicalRoot);
+                stat = await handle.stat();
+                if (!stat.isFile() || stat.size > SEARCH_DIRTY_OVERLAY_MAX_BYTES || bytesRead + stat.size > SEARCH_DIRTY_OVERLAY_TOTAL_BYTES) {
+                    continue;
+                }
+                content = await handle.readFile("utf8");
+            } catch {
+                continue;
+            } finally {
+                await handle?.close().catch(() => undefined);
+            }
+            bytesRead += stat.size;
+            const language = getLanguageIdFromFilename(relativePath, "text");
+            let chunks: Awaited<ReturnType<AstCodeSplitter["split"]>> = [];
+            try {
+                chunks = await splitter.split(content, language, relativePath);
+            } catch {
+                chunks = [];
+            }
+
+            for (const chunk of chunks) {
+                if (results.length >= SEARCH_DIRTY_OVERLAY_MAX_RESULTS) {
+                    break;
+                }
+                const candidate: SearchResultLike = {
+                    content: chunk.content,
+                    relativePath,
+                    startLine: chunk.metadata.startLine,
+                    endLine: chunk.metadata.endLine,
+                    language,
+                    ...(chunk.metadata.symbolLabel ? { symbolLabel: chunk.metadata.symbolLabel } : {}),
+                    score: 1,
+                    backendScore: 1,
+                    backendScoreKind: "lexical_rank",
+                };
+                if (this.scoreCandidateLexicalEvidence(input.queryPlan, candidate).score <= 0) {
+                    continue;
+                }
+                const key = `${relativePath}:${candidate.startLine}:${candidate.endLine}:${candidate.symbolLabel || ""}`;
+                if (seen.has(key)) {
+                    continue;
+                }
+                seen.add(key);
+                results.push(candidate);
+            }
+
+            if (results.some((result) => result.relativePath === relativePath)) {
+                continue;
+            }
+            const exactWindow = this.findExactTrackedLexicalWindowMatch(relativePath, content, input.queryPlan);
+            if (exactWindow) {
+                results.push({
+                    content: exactWindow.windowContent,
+                    relativePath,
+                    startLine: exactWindow.startLine,
+                    endLine: exactWindow.endLine,
+                    language,
+                    score: 1,
+                    backendScore: 1,
+                    backendScoreKind: "lexical_rank",
+                });
+                continue;
+            }
+            const lines = content.split(/\r?\n/);
+            const lineIndex = this.findBestLivePathLexicalLineIndex(lines, input.queryPlan.lexicalTerms);
+            if (lineIndex < 0) {
+                continue;
+            }
+            const startLine = Math.max(1, lineIndex + 1 - SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES);
+            const endLine = Math.min(lines.length, lineIndex + 1 + SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES);
+            results.push({
+                content: lines.slice(startLine - 1, endLine).join("\n"),
+                relativePath,
+                startLine,
+                endLine,
+                language,
+                score: 1,
+                backendScore: 1,
+                backendScoreKind: "lexical_rank",
             });
         }
 

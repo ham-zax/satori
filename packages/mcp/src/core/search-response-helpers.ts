@@ -76,6 +76,15 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
             action: "Run manage_index sync only if those dirty or untracked files are relevant to the query, then retry the search.",
         };
     }
+    if (code === WARNING_CODES.SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE) {
+        return {
+            code,
+            severity: "degraded",
+            blocksUse: false,
+            message: "A stale result from a dirty file was suppressed, but bounded current-source search could not replace it.",
+            action: "Narrow the query and inspect the file with read_file, or run manage_index sync before relying on results for that file.",
+        };
+    }
     if (code === WARNING_CODES.SEARCH_CHANGED_FILES_BOOST_SKIPPED) {
         return {
             code,

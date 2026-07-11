@@ -2556,6 +2556,7 @@ export class ToolHandlers {
                 operatorSummary: initialOperatorSummary,
                 filterSummary: initialFilterSummary,
                 changedFilesState: initialChangedFilesState,
+                observedChangedFilesState: initialObservedChangedFilesState,
                 debugChangedFilesState: initialDebugChangedFilesState,
                 changedFilesCount: initialChangedFilesCount,
                 changedFilesBoostSkippedForLargeChangeSet: initialChangedFilesBoostSkippedForLargeChangeSet,

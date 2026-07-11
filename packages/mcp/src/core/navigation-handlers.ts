@@ -498,7 +498,7 @@ export class NavigationHandlers {
                     if (relationshipGraph.warning) {
                         outlineWarnings.push(`OUTLINE_${relationshipGraph.warning}`);
                     }
-                    const payload = buildRegistryFileOutlinePayload({
+                    const payload = await buildRegistryFileOutlinePayload({
                         codebaseRoot: effectiveRoot,
                         file: normalizedFile,
                         symbols: registrySymbols,

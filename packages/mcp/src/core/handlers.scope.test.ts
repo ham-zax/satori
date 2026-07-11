@@ -1325,6 +1325,110 @@ test('handleSearchCode exact registry fast path returns a grouped symbol without
     });
 });
 
+test('handleSearchCode exact registry fast path repairs a dirty symbol span from current source', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/dirty-exact.ts';
+            const indexedContent = [
+                'export function exactDirtyOwner() {',
+                '  return true;',
+                '}',
+            ].join('\n');
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), indexedContent, 'utf8');
+            const symbols = await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content: indexedContent,
+                chunks: [{
+                    content: indexedContent,
+                    startLine: 1,
+                    endLine: 3,
+                    symbolLabel: 'function exactDirtyOwner()',
+                }],
+            });
+            const owner = symbols.find((symbol) => symbol.name === 'exactDirtyOwner');
+            assert.ok(owner);
+
+            fs.writeFileSync(path.join(repoPath, relativePath), [
+                'const inserted = true;',
+                '',
+                indexedContent,
+            ].join('\n'), 'utf8');
+            const handlers = createHandlers(repoPath, []);
+            (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+                available: true,
+                files: new Set([relativePath]),
+            });
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
+                throw new Error('semanticSearch should not run for a validated dirty exact registry hit');
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'exactDirtyOwner',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.deepEqual(payload.results[0].span, { startLine: 3, endLine: 5 });
+        });
+    });
+});
+
+test('handleSearchCode exact registry fast path rejects a dirty symbol missing from current source', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/removed-exact.ts';
+            const indexedContent = 'export function removedExactOwner() { return true; }\n';
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), indexedContent, 'utf8');
+            await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content: indexedContent,
+                chunks: [{
+                    content: indexedContent,
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function removedExactOwner()',
+                }],
+            });
+            fs.writeFileSync(path.join(repoPath, relativePath), 'export const replacement = true;\n', 'utf8');
+
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+                available: true,
+                files: new Set([relativePath]),
+            });
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                return [];
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'removedExactOwner',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls > 0, true);
+            assert.equal(payload.results.some((result: { symbolLabel?: string }) => result.symbolLabel?.includes('removedExactOwner')), false);
+        });
+    });
+});
+
 test('handleSearchCode does not shortcut vague one-word semantic queries through exact registry', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {
@@ -3502,6 +3606,8 @@ test('handleSearchCode grouped diversity keeps distinct symbol instances that sh
 
 test('handleSearchCode applies changed-files boost in auto mode and skips boost in default mode', async () => {
     await withTempRepo(async (repoPath) => {
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, 'src', 'changed.ts'), 'export const changed = true;\n');
         const handlers = createHandlers(repoPath, [
             {
                 content: 'export const unchanged = true;',
@@ -3538,7 +3644,8 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
             scope: 'runtime',
             resultMode: 'grouped',
             groupBy: 'symbol',
-            limit: 2
+            limit: 2,
+            debug: true
         });
         const autoPayload = JSON.parse(autoResponse.content[0]?.text || '{}');
         assert.equal(autoPayload.results[0].file, 'src/changed.ts');
@@ -3553,10 +3660,12 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
             resultMode: 'grouped',
             groupBy: 'symbol',
             rankingMode: 'default',
-            limit: 2
+            limit: 2,
+            debug: true
         });
         const defaultPayload = JSON.parse(defaultResponse.content[0]?.text || '{}');
-        assert.equal(defaultPayload.results[0].file, 'src/unchanged.ts');
+        const defaultChanged = defaultPayload.results.find((result: SearchPayloadResultView) => result.file === 'src/changed.ts');
+        assert.equal(defaultChanged?.debug?.changedFilesMultiplier, 1);
         assert.equal(defaultPayload.freshnessSummary.changedFileCount, 1);
         assert.equal(defaultPayload.freshnessSummary.gitDirtyFilesConsidered, true);
         assert.equal(defaultPayload.freshnessSummary.changedFilesBoostApplied, false);
@@ -3658,6 +3767,8 @@ test('handleSearchCode freshness summary only marks changed-files boost applied 
 
 test('handleSearchCode exposes freshness summary and warns when dirty files were not synced', async () => {
     await withTempRepo(async (repoPath) => {
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, 'src', 'changed.ts'), 'export const changed = true;\n');
         const handlers = createHandlers(repoPath, [
             {
                 content: 'export const changed = true;',
@@ -3765,6 +3876,138 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence when in
         assert.equal(payload.results[0].file, relativePath);
         assert.match(payload.results[0].preview, /endColumn/);
         assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
+    });
+});
+
+test('handleSearchCode replaces stale dirty-file candidates with current identifier evidence', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/dirty-owner.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, relativePath), [
+            'export function FreshCurrentIdentifier(value: string) {',
+            '    return value.trim();',
+            '}',
+            '',
+        ].join('\n'));
+
+        const handlers = createHandlers(repoPath, [{
+            content: 'export function RemovedStaleIdentifier() { return false; }',
+            relativePath,
+            startLine: 20,
+            endLine: 22,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_removed_stale',
+            symbolLabel: 'function RemovedStaleIdentifier()',
+        }]);
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set([relativePath]),
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'FreshCurrentIdentifier',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, relativePath);
+        assert.equal(payload.results[0].symbolLabel, 'function FreshCurrentIdentifier(value: string)');
+        assert.deepEqual(payload.results[0].span, { startLine: 1, endLine: 3 });
+        assert.doesNotMatch(payload.results[0].preview, /RemovedStaleIdentifier/);
+        assert.ok(payload.results[0].debug.provenance.retrievalPasses.includes('dirty_overlay'));
+    });
+});
+
+test('handleSearchCode caps dirty path attempts before probing a later valid file', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/zz-current.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, relativePath), [
+            'export function BoundedCurrentIdentifier() {',
+            '    return true;',
+            '}',
+            '',
+        ].join('\n'));
+        const changedFiles = new Set<string>();
+        for (let index = 0; index < 16; index += 1) {
+            changedFiles.add(`src/${String(index).padStart(2, '0')}-missing.ts`);
+        }
+        changedFiles.add(relativePath);
+
+        const handlers = createHandlers(repoPath, [{
+            content: 'export function StaleIndexedIdentifier() { return false; }',
+            relativePath,
+            startLine: 20,
+            endLine: 22,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+        }]);
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: changedFiles,
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'BoundedCurrentIdentifier',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 0);
+        assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
+    });
+});
+
+test('handleSearchCode warns when a suppressed dirty result has no current-source replacement', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/oversized-dirty.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoPath, relativePath), `${'x'.repeat(300 * 1024)}\n`, 'utf8');
+        const handlers = createHandlers(repoPath, [{
+            content: 'export function staleDirtyOwner() { return true; }',
+            relativePath,
+            startLine: 1,
+            endLine: 1,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_stale_dirty_owner',
+            symbolLabel: 'function staleDirtyOwner()',
+        }]);
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set([relativePath]),
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'staleDirtyOwner',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.some((result: { file?: string }) => result.file === relativePath), false);
+        assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE'), true);
+        const warning = payload.warnings.find((item: { code?: string }) => item.code === 'SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE');
+        assert.match(warning?.action || '', /manage_index sync|read_file|narrow/i);
     });
 });
 
@@ -5226,6 +5469,11 @@ test('handleSearchCode ranks implementation chunks above type-only results for o
 
 test('handleSearchCode does not boost dirty tests for non-test implementation queries', async () => {
     await withTempRepo(async (repoPath) => {
+        fs.mkdirSync(path.join(repoPath, 'packages', 'cli', 'src'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, 'packages', 'cli', 'src', 'install.test.ts'),
+            'test("installs the hook", () => expect(block).toContain("SessionStart"));\n',
+        );
         const handlers = createHandlers(repoPath, [
             {
                 content: 'test("installs the hook", () => expect(block).toContain("SessionStart"));',

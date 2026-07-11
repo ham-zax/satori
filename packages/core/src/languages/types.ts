@@ -70,14 +70,3 @@ export interface ExtractedSymbol {
         readonly endColumn?: number;
     };
 }
-
-export interface SymbolExtractorInput {
-    readonly content: string;
-    readonly relativePath: string;
-}
-
-export interface SymbolExtractor {
-    readonly languageId: string;
-    readonly extractorVersion: string;
-    extract(input: SymbolExtractorInput): readonly ExtractedSymbol[];
-}

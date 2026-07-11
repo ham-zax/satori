@@ -34,26 +34,6 @@ function fullNavigationLanguage(input: {
     });
 }
 
-function astSearchOnlyLanguage(input: {
-    readonly languageId: string;
-    readonly aliases: readonly string[];
-    readonly extensions: readonly string[];
-    readonly fixtures?: Pick<LanguageCapabilityDeclaration['fixtures'], 'parser'>;
-}): LanguageCapabilityDeclaration {
-    return declaration({
-        ...input,
-        searchEligibility: PRODUCTION_READY,
-        parserCapability: PRODUCTION_READY,
-        symbolExtractionCapability: NONE,
-        ownerExtractionCapability: NONE,
-        importExportCapability: NONE,
-        callsCapability: NONE,
-        typeReceiverAwareCapability: NONE,
-        testReferenceCapability: NONE,
-        publicClaim: 'search_only',
-    });
-}
-
 function parserDeclaredSearchOnlyLanguage(input: {
     readonly languageId: string;
     readonly aliases?: readonly string[];
@@ -129,7 +109,7 @@ const CMM_DERIVED_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclarati
     parserDeclaredSearchOnlyLanguage({ languageId: 'bibtex', extensions: ['.bib'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'bicep', extensions: ['.bicep'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'bitbake', extensions: ['.bb', '.bbappend', '.bbclass', '.inc'] }),
-    // Keep `.c` routed through the existing C/C++ AST splitter until C has Satori-native parser proof.
+    // Keep `.c` routed through the C++ analyzer until C has separate Satori-native parser proof.
     parserDeclaredSearchOnlyLanguage({ languageId: 'c', extensions: [] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'cairo', extensions: ['.cairo'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'capnp', extensions: ['.capnp'] }),
@@ -263,20 +243,34 @@ const CMM_DERIVED_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclarati
 ];
 
 const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
-    astSearchOnlyLanguage({
+    symbolOnlyLanguage({
         languageId: 'cpp',
         aliases: ['c++'],
         extensions: ['.cpp', '.c', '.h', '.hpp', '.cc', '.ccm', '.cppm', '.cxx', '.hh', '.hxx', '.ixx'],
         fixtures: {
-            parser: ['packages/core/src/splitter/ast-splitter.test.ts'],
+            navigation: [
+                'fixtures/navigation/cpp-basic-symbols/expected_symbols.json',
+                'fixtures/navigation/cpp-basic-symbols/expected_tool_outputs.json',
+            ],
+            symbols: ['packages/core/src/language-analysis/service.test.ts'],
+            ownerMetadata: ['packages/core/src/core/context.test.ts'],
+            fileOutline: ['packages/mcp/src/core/handlers.file_outline.test.ts'],
+            readFileOpenSymbol: ['packages/mcp/src/tools/read_file.test.ts'],
         },
     }),
-    astSearchOnlyLanguage({
+    symbolOnlyLanguage({
         languageId: 'csharp',
         aliases: ['cs'],
         extensions: ['.cs'],
         fixtures: {
-            parser: ['packages/core/src/splitter/ast-splitter.test.ts'],
+            navigation: [
+                'fixtures/navigation/csharp-basic-symbols/expected_symbols.json',
+                'fixtures/navigation/csharp-basic-symbols/expected_tool_outputs.json',
+            ],
+            symbols: ['packages/core/src/language-analysis/service.test.ts'],
+            ownerMetadata: ['packages/core/src/core/context.test.ts'],
+            fileOutline: ['packages/mcp/src/core/handlers.file_outline.test.ts'],
+            readFileOpenSymbol: ['packages/mcp/src/tools/read_file.test.ts'],
         },
     }),
     symbolOnlyLanguage({
@@ -288,18 +282,25 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
                 'fixtures/navigation/go-basic-symbols/expected_symbols.json',
                 'fixtures/navigation/go-basic-symbols/expected_tool_outputs.json',
             ],
-            symbols: ['packages/core/src/languages/extractors/go-rust.test.ts'],
-            ownerMetadata: ['packages/core/src/languages/extractors/go-rust.test.ts', 'packages/core/src/core/context.test.ts'],
+            symbols: ['packages/core/src/language-analysis/service.test.ts'],
+            ownerMetadata: ['packages/core/src/core/context.test.ts'],
             fileOutline: ['packages/mcp/src/core/handlers.file_outline.test.ts'],
             readFileOpenSymbol: ['packages/mcp/src/tools/read_file.test.ts'],
         },
     }),
-    astSearchOnlyLanguage({
+    symbolOnlyLanguage({
         languageId: 'java',
         aliases: [],
         extensions: ['.java'],
         fixtures: {
-            parser: ['packages/core/src/splitter/ast-splitter.test.ts'],
+            navigation: [
+                'fixtures/navigation/java-basic-symbols/expected_symbols.json',
+                'fixtures/navigation/java-basic-symbols/expected_tool_outputs.json',
+            ],
+            symbols: ['packages/core/src/language-analysis/service.test.ts'],
+            ownerMetadata: ['packages/core/src/core/context.test.ts'],
+            fileOutline: ['packages/mcp/src/core/handlers.file_outline.test.ts'],
+            readFileOpenSymbol: ['packages/mcp/src/tools/read_file.test.ts'],
         },
     }),
     fullNavigationLanguage({
@@ -337,18 +338,25 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
                 'fixtures/navigation/rust-basic-symbols/expected_symbols.json',
                 'fixtures/navigation/rust-basic-symbols/expected_tool_outputs.json',
             ],
-            symbols: ['packages/core/src/languages/extractors/go-rust.test.ts'],
-            ownerMetadata: ['packages/core/src/languages/extractors/go-rust.test.ts', 'packages/core/src/core/context.test.ts'],
+            symbols: ['packages/core/src/language-analysis/service.test.ts'],
+            ownerMetadata: ['packages/core/src/core/context.test.ts'],
             fileOutline: ['packages/mcp/src/core/handlers.file_outline.test.ts'],
             readFileOpenSymbol: ['packages/mcp/src/tools/read_file.test.ts'],
         },
     }),
-    astSearchOnlyLanguage({
+    symbolOnlyLanguage({
         languageId: 'scala',
         aliases: [],
         extensions: ['.scala'],
         fixtures: {
-            parser: ['packages/core/src/splitter/ast-splitter.test.ts'],
+            navigation: [
+                'fixtures/navigation/scala-basic-symbols/expected_symbols.json',
+                'fixtures/navigation/scala-basic-symbols/expected_tool_outputs.json',
+            ],
+            symbols: ['packages/core/src/language-analysis/service.test.ts'],
+            ownerMetadata: ['packages/core/src/core/context.test.ts'],
+            fileOutline: ['packages/mcp/src/core/handlers.file_outline.test.ts'],
+            readFileOpenSymbol: ['packages/mcp/src/tools/read_file.test.ts'],
         },
     }),
     parserDeclaredSearchOnlyLanguage({

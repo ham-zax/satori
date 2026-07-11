@@ -1,71 +1,15 @@
-import type { RelationshipRecord, SymbolRecord } from '../symbols';
-import type { SymbolRegistry } from '../symbols';
+import type { CallSite, LanguageAnalysisResult, ModuleBinding } from '../language-analysis';
 import { isLanguageCapabilitySupportedForLanguage } from '../language';
+import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from '../symbols';
+
+export type RelationshipAnalysisEvidence = Pick<LanguageAnalysisResult, 'moduleBindings' | 'callSites'>;
 
 export interface BuildCallRelationshipsForRegistryInput {
     registry: SymbolRegistry;
-    contentByFile: Map<string, string> | Record<string, string>;
+    analysisByFile: Map<string, RelationshipAnalysisEvidence> | Record<string, RelationshipAnalysisEvidence>;
 }
 
 export type BuildRelationshipsForRegistryInput = BuildCallRelationshipsForRegistryInput;
-
-const CALL_KEYWORDS = new Set([
-    'if',
-    'for',
-    'while',
-    'switch',
-    'catch',
-    'function',
-    'class',
-    'return',
-    'typeof',
-    'sizeof',
-    'new',
-]);
-
-function getContent(contentByFile: BuildCallRelationshipsForRegistryInput['contentByFile'], file: string): string | undefined {
-    if (contentByFile instanceof Map) {
-        return contentByFile.get(file);
-    }
-    return contentByFile[file];
-}
-
-function isSourceOwner(symbol: SymbolRecord): boolean {
-    return symbol.kind === 'function' || symbol.kind === 'method';
-}
-
-function stripInlineComments(line: string, language: string): string {
-    if (language === 'python') {
-        return line.replace(/#.*$/, '');
-    }
-    return line.replace(/\/\/.*$/, '');
-}
-
-function extractCallNames(line: string): string[] {
-    const names: string[] = [];
-    const seen = new Set<string>();
-    const directCallRegex = /\b([A-Za-z_$][\w$]*)\s*\(/g;
-    for (const match of line.matchAll(directCallRegex)) {
-        const name = (match[1] || '').toLowerCase();
-        if (!name || CALL_KEYWORDS.has(name) || seen.has(name)) {
-            continue;
-        }
-        seen.add(name);
-        names.push(name);
-    }
-    return names;
-}
-
-function looksLikeDefinition(line: string, name: string): boolean {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = new RegExp(`\\b(function|class|def)\\s+${escaped}\\b`, 'i');
-    if (pattern.test(line)) {
-        return true;
-    }
-
-    const methodPattern = new RegExp(`\\b${escaped}\\s*\\([^)]*\\)\\s*(=>|\\{)`, 'i');
-    return methodPattern.test(line);
-}
 
 function compareStrings(a: string, b: string): number {
     return a < b ? -1 : a > b ? 1 : 0;
@@ -90,28 +34,98 @@ function relationshipKey(record: RelationshipRecord): string {
     ].join('\0');
 }
 
-function getFileOwners(symbols: SymbolRecord[]): Map<string, SymbolRecord> {
-    const owners = new Map<string, SymbolRecord>();
-    for (const symbol of symbols) {
-        if (symbol.kind === 'file') {
-            owners.set(symbol.file, symbol);
+function getEvidence(
+    evidenceByFile: BuildRelationshipsForRegistryInput['analysisByFile'],
+    file: string,
+): RelationshipAnalysisEvidence | undefined {
+    return evidenceByFile instanceof Map ? evidenceByFile.get(file) : evidenceByFile[file];
+}
+
+function getFileOwners(symbols: readonly SymbolRecord[]): Map<string, SymbolRecord> {
+    return new Map(
+        symbols
+            .filter((symbol) => symbol.kind === 'file')
+            .map((symbol) => [symbol.file, symbol]),
+    );
+}
+
+function resolveUniqueLocalSymbol(
+    file: string,
+    name: string,
+    symbols: readonly SymbolRecord[],
+): SymbolRecord | undefined {
+    const matches = symbols.filter((symbol) => (
+        symbol.file === file
+        && symbol.kind !== 'file'
+        && symbol.name === name
+        && symbol.parentQualifiedNamePath.length === 0
+    ));
+    return matches.length === 1 ? matches[0] : undefined;
+}
+
+function resolveUnambiguousTarget(source: SymbolRecord, candidates: readonly SymbolRecord[]): SymbolRecord | undefined {
+    const nonSelfCandidates = candidates.filter((candidate) => candidate.symbolInstanceId !== source.symbolInstanceId);
+    const sameFileCandidates = nonSelfCandidates.filter((candidate) => candidate.file === source.file);
+    if (sameFileCandidates.length === 1) return sameFileCandidates[0];
+    if (sameFileCandidates.length > 1) return undefined;
+    return nonSelfCandidates.length === 1 ? nonSelfCandidates[0] : undefined;
+}
+
+function buildTargetIndex(symbols: readonly SymbolRecord[]): Map<string, SymbolRecord[]> {
+    const targets = new Map<string, SymbolRecord[]>();
+    for (const symbol of symbols.filter((candidate) => candidate.kind !== 'file')) {
+        const key = symbol.name.toLowerCase();
+        targets.set(key, [...(targets.get(key) ?? []), symbol]);
+    }
+    return targets;
+}
+
+function isSourceOwner(symbol: SymbolRecord): boolean {
+    return symbol.kind === 'function' || symbol.kind === 'method';
+}
+
+function ownerForCall(fileSymbols: readonly SymbolRecord[], call: CallSite): SymbolRecord | undefined {
+    const lineCandidates = fileSymbols.filter((symbol) => (
+        isSourceOwner(symbol)
+        && symbol.span.startLine <= call.span.startLine
+        && symbol.span.endLine >= call.span.endLine
+    ));
+    const byteCandidates = lineCandidates.filter((symbol) => (
+        symbol.span.startByte !== undefined
+        && symbol.span.endByte !== undefined
+        && symbol.span.startByte <= call.span.startByte
+        && symbol.span.endByte >= call.span.endByte
+    ));
+    const candidates = byteCandidates.length > 0
+        ? byteCandidates
+        : lineCandidates.filter((symbol) => (
+            symbol.span.startByte === undefined || symbol.span.endByte === undefined
+        ));
+    candidates.sort((a, b) => {
+        if (
+            a.span.startByte !== undefined
+            && a.span.endByte !== undefined
+            && b.span.startByte !== undefined
+            && b.span.endByte !== undefined
+        ) {
+            const byteSize = (a.span.endByte - a.span.startByte) - (b.span.endByte - b.span.startByte);
+            if (byteSize !== 0) return byteSize;
         }
-    }
-    return owners;
+        const aSize = a.span.endLine - a.span.startLine;
+        const bSize = b.span.endLine - b.span.startLine;
+        if (aSize !== bSize) return aSize - bSize;
+        return compareStrings(a.symbolInstanceId, b.symbolInstanceId);
+    });
+    return candidates[0];
 }
 
-function isImportExportLanguage(language: string): boolean {
-    return language === 'typescript'
-        || language === 'javascript'
-        || language === 'tsx'
-        || language === 'jsx'
-        || language === 'python';
-}
-
-function resolveRelativeModulePath(sourceFile: string, specifier: string, registry: SymbolRegistry, language: string): string | undefined {
-    if (!specifier.startsWith('.')) {
-        return undefined;
-    }
+function resolveRelativeModulePath(
+    sourceFile: string,
+    specifier: string,
+    registry: SymbolRegistry,
+    language: string,
+): string | undefined {
+    if (!specifier.startsWith('.')) return undefined;
     const candidates = language === 'python'
         ? resolvePythonRelativeModuleCandidates(sourceFile, specifier)
         : resolveJsRelativeModuleCandidates(sourceFile, specifier);
@@ -119,171 +133,72 @@ function resolveRelativeModulePath(sourceFile: string, specifier: string, regist
     return candidates.find((candidate) => files.has(candidate));
 }
 
+function pathJoinPosix(...parts: string[]): string {
+    const segments: string[] = [];
+    for (const segment of parts.filter(Boolean).join('/').split('/')) {
+        if (!segment || segment === '.') continue;
+        if (segment === '..') {
+            segments.pop();
+        } else {
+            segments.push(segment);
+        }
+    }
+    return segments.join('/');
+}
+
 function resolveJsRelativeModuleCandidates(sourceFile: string, specifier: string): string[] {
     const sourceDir = sourceFile.includes('/') ? sourceFile.slice(0, sourceFile.lastIndexOf('/')) : '';
     const basePath = pathJoinPosix(sourceDir, specifier);
     return [
         basePath,
-        `${basePath}.ts`,
-        `${basePath}.tsx`,
-        `${basePath}.js`,
-        `${basePath}.jsx`,
-        `${basePath}.mjs`,
-        `${basePath}.cjs`,
-        pathJoinPosix(basePath, 'index.ts'),
-        pathJoinPosix(basePath, 'index.tsx'),
-        pathJoinPosix(basePath, 'index.js'),
-        pathJoinPosix(basePath, 'index.jsx'),
-        pathJoinPosix(basePath, 'index.mjs'),
-        pathJoinPosix(basePath, 'index.cjs'),
+        ...['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].map((extension) => `${basePath}.${extension}`),
+        ...['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].map((extension) => pathJoinPosix(basePath, `index.${extension}`)),
     ];
 }
 
 function resolvePythonRelativeModuleCandidates(sourceFile: string, specifier: string): string[] {
     let leadingDots = 0;
-    while (leadingDots < specifier.length && specifier[leadingDots] === '.') {
-        leadingDots += 1;
-    }
-    if (leadingDots === 0) {
-        return [];
-    }
+    while (specifier[leadingDots] === '.') leadingDots += 1;
+    if (leadingDots === 0) return [];
     const sourceDir = sourceFile.includes('/') ? sourceFile.slice(0, sourceFile.lastIndexOf('/')) : '';
-    const parentSteps = Math.max(0, leadingDots - 1);
-    const relativeModule = specifier.slice(leadingDots).replace(/\./g, '/');
-    const baseParts = sourceDir.length > 0 ? sourceDir.split('/') : [];
-    const keptParts = baseParts.slice(0, Math.max(0, baseParts.length - parentSteps));
-    const moduleBase = relativeModule.length > 0
-        ? pathJoinPosix(...keptParts, relativeModule)
-        : pathJoinPosix(...keptParts);
-    return [
-        `${moduleBase}.py`,
-        pathJoinPosix(moduleBase, '__init__.py'),
-    ];
+    const baseParts = sourceDir ? sourceDir.split('/') : [];
+    const keptParts = baseParts.slice(0, Math.max(0, baseParts.length - Math.max(0, leadingDots - 1)));
+    const modulePath = specifier.slice(leadingDots).replace(/\./g, '/');
+    const moduleBase = pathJoinPosix(...keptParts, modulePath);
+    return [`${moduleBase}.py`, pathJoinPosix(moduleBase, '__init__.py')];
 }
 
-function pathJoinPosix(...parts: string[]): string {
-    const joined = parts
-        .filter((part) => part.length > 0)
-        .join('/');
-    const segments: string[] = [];
-    for (const segment of joined.split('/')) {
-        if (!segment || segment === '.') {
-            continue;
-        }
-        if (segment === '..') {
-            segments.pop();
-            continue;
-        }
-        segments.push(segment);
-    }
-    return segments.join('/');
-}
-
-function extractImportSpecifier(line: string, language: string): string | undefined {
-    if (language === 'python') {
-        const match = line.match(/^\s*from\s+([.\w]+)\s+import\s+.+$/);
-        return match?.[1];
-    }
-    const match = line.match(/^\s*import(?:\s+type)?(?:\s+[^'"]*?\s+from)?\s*['"]([^'"]+)['"]\s*;?\s*$/);
-    return match?.[1];
-}
-
-function extractExportFromSpecifier(line: string, language: string): string | undefined {
-    if (language === 'python') {
-        return undefined;
-    }
-    const match = line.match(/^\s*export(?:\s+type)?\s+(?:\*|{[^}]*}|[A-Za-z_$][\w$]*)(?:\s+as\s+[A-Za-z_$][\w$]*)?\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
-    return match?.[1];
-}
-
-function extractLocalExportName(line: string, language: string): string | undefined {
-    if (language === 'python') {
-        const match = line.match(/^\s*(?:async\s+def|def|class)\s+([A-Za-z_][\w]*)\b/);
-        return match?.[1];
-    }
-    const match = line.match(/^\s*export\s+(?:async\s+)?(?:function|class|interface|type|enum|const|let|var)\s+([A-Za-z_$][\w$]*)\b/);
-    return match?.[1];
-}
-
-function resolveUniqueLocalSymbol(file: string, name: string, symbols: SymbolRecord[], topLevelOnly = false): SymbolRecord | undefined {
-    const matches = symbols.filter((symbol) => (
-        symbol.file === file
-        && symbol.kind !== 'file'
-        && symbol.name === name
-        && (!topLevelOnly || symbol.parentQualifiedNamePath.length === 0)
-    ));
-    return matches.length === 1 ? matches[0] : undefined;
-}
-
-function resolveUnambiguousTarget(source: SymbolRecord, candidates: SymbolRecord[]): SymbolRecord | undefined {
-    const nonSelfCandidates = candidates.filter((candidate) => candidate.symbolInstanceId !== source.symbolInstanceId);
-    const sameFileCandidates = nonSelfCandidates.filter((candidate) => candidate.file === source.file);
-    if (sameFileCandidates.length === 1) {
-        return sameFileCandidates[0];
-    }
-    if (sameFileCandidates.length > 1) {
-        return undefined;
-    }
-    return nonSelfCandidates.length === 1 ? nonSelfCandidates[0] : undefined;
-}
-
-function buildTargetIndex(symbols: SymbolRecord[]): Map<string, SymbolRecord[]> {
-    const targets = new Map<string, SymbolRecord[]>();
-    for (const symbol of symbols.filter((candidate) => candidate.kind !== 'file')) {
-        const key = symbol.name.toLowerCase();
-        const existing = targets.get(key);
-        if (existing) {
-            existing.push(symbol);
-        } else {
-            targets.set(key, [symbol]);
-        }
-    }
-    return targets;
+function relationshipSpan(binding: ModuleBinding | CallSite): { startLine: number; endLine: number } {
+    return { startLine: binding.span.startLine, endLine: binding.span.endLine };
 }
 
 export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsForRegistryInput): RelationshipRecord[] {
     const targetIndex = buildTargetIndex(input.registry.symbols);
+    const symbolsByFile = input.registry.symbolsByFile;
     const recordsByKey = new Map<string, RelationshipRecord>();
 
-    for (const source of input.registry.symbols.filter(isSourceOwner)) {
-        if (!isLanguageCapabilitySupportedForLanguage(source.language, 'callGraphBuild')) {
-            continue;
-        }
-        const content = getContent(input.contentByFile, source.file);
-        if (content === undefined) {
-            continue;
-        }
-        const lines = content.split(/\r?\n/);
-        const maxLine = Math.min(source.span.endLine, lines.length);
-        for (let lineNo = source.span.startLine; lineNo <= maxLine; lineNo++) {
-            const line = stripInlineComments(lines[lineNo - 1] || '', source.language);
-            if (line.trim().length === 0) {
-                continue;
-            }
-            for (const callName of extractCallNames(line)) {
-                if (looksLikeDefinition(line, callName)) {
-                    continue;
-                }
-                const candidates = targetIndex.get(callName);
-                if (!candidates || candidates.length === 0) {
-                    continue;
-                }
-                const target = resolveUnambiguousTarget(source, candidates);
-                if (!target) {
-                    continue;
-                }
-                const record: RelationshipRecord = {
-                    sourceKey: source.symbolKey,
-                    sourceInstanceId: source.symbolInstanceId,
-                    targetKey: target.symbolKey,
-                    targetInstanceId: target.symbolInstanceId,
-                    type: 'CALLS',
-                    file: source.file,
-                    span: { startLine: lineNo, endLine: lineNo },
-                    confidence: target.file === source.file ? 'high' : 'low',
-                };
-                recordsByKey.set(relationshipKey(record), record);
-            }
+    for (const file of input.registry.manifest.files) {
+        if (!isLanguageCapabilitySupportedForLanguage(file.language, 'callGraphBuild')) continue;
+        const evidence = getEvidence(input.analysisByFile, file.path);
+        if (!evidence) continue;
+        for (const call of evidence.callSites) {
+            const source = ownerForCall(symbolsByFile.get(file.path) ?? [], call);
+            if (!source) continue;
+            const candidates = targetIndex.get(call.calleeName.toLowerCase());
+            if (!candidates) continue;
+            const target = resolveUnambiguousTarget(source, candidates);
+            if (!target) continue;
+            const record: RelationshipRecord = {
+                sourceKey: source.symbolKey,
+                sourceInstanceId: source.symbolInstanceId,
+                targetKey: target.symbolKey,
+                targetInstanceId: target.symbolInstanceId,
+                type: 'CALLS',
+                file: source.file,
+                span: relationshipSpan(call),
+                confidence: target.file === source.file ? 'high' : 'low',
+            };
+            recordsByKey.set(relationshipKey(record), record);
         }
     }
 
@@ -294,78 +209,48 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
     const fileOwners = getFileOwners(input.registry.symbols);
     const recordsByKey = new Map<string, RelationshipRecord>();
 
-    for (const source of input.registry.symbols.filter((symbol) => symbol.kind === 'file' && isImportExportLanguage(symbol.language))) {
-        const content = getContent(input.contentByFile, source.file);
-        if (content === undefined) {
-            continue;
-        }
-        const lines = content.split(/\r?\n/);
-        for (let index = 0; index < lines.length; index++) {
-            const lineNo = index + 1;
-            const line = stripInlineComments(lines[index] || '', source.language).trim();
-            if (line.length === 0) {
-                continue;
-            }
-
-            const importSpecifier = extractImportSpecifier(line, source.language);
-            if (importSpecifier) {
-                const targetPath = resolveRelativeModulePath(source.file, importSpecifier, input.registry, source.language);
+    for (const source of input.registry.symbols.filter((symbol) => symbol.kind === 'file')) {
+        const evidence = getEvidence(input.analysisByFile, source.file);
+        if (!evidence) continue;
+        for (const binding of evidence.moduleBindings) {
+            if (binding.kind === 'import' || binding.kind === 'reexport') {
+                const specifier = binding.moduleSpecifier;
+                const targetPath = specifier
+                    ? resolveRelativeModulePath(source.file, specifier, input.registry, source.language)
+                    : undefined;
                 const target = targetPath ? fileOwners.get(targetPath) : undefined;
-                if (target) {
-                    const record: RelationshipRecord = {
-                        sourceKey: source.symbolKey,
-                        sourceInstanceId: source.symbolInstanceId,
-                        targetKey: target.symbolKey,
-                        targetInstanceId: target.symbolInstanceId,
-                        targetPath: target.file,
-                        type: 'IMPORTS',
-                        file: source.file,
-                        span: { startLine: lineNo, endLine: lineNo },
-                        confidence: 'high',
-                    };
-                    recordsByKey.set(relationshipKey(record), record);
-                }
-                continue;
-            }
-
-            const exportFromSpecifier = extractExportFromSpecifier(line, source.language);
-            if (exportFromSpecifier) {
-                const targetPath = resolveRelativeModulePath(source.file, exportFromSpecifier, input.registry, source.language);
-                const target = targetPath ? fileOwners.get(targetPath) : undefined;
-                if (target) {
-                    const record: RelationshipRecord = {
-                        sourceKey: source.symbolKey,
-                        sourceInstanceId: source.symbolInstanceId,
-                        targetKey: target.symbolKey,
-                        targetInstanceId: target.symbolInstanceId,
-                        targetPath: target.file,
-                        type: 'EXPORTS',
-                        file: source.file,
-                        span: { startLine: lineNo, endLine: lineNo },
-                        confidence: 'high',
-                    };
-                    recordsByKey.set(relationshipKey(record), record);
-                }
-                continue;
-            }
-
-            const localExportName = extractLocalExportName(line, source.language);
-            const target = localExportName
-                ? resolveUniqueLocalSymbol(source.file, localExportName, input.registry.symbols, source.language === 'python')
-                : undefined;
-            if (target) {
+                if (!target) continue;
                 const record: RelationshipRecord = {
                     sourceKey: source.symbolKey,
                     sourceInstanceId: source.symbolInstanceId,
                     targetKey: target.symbolKey,
                     targetInstanceId: target.symbolInstanceId,
-                    type: 'EXPORTS',
+                    targetPath: target.file,
+                    type: binding.kind === 'import' ? 'IMPORTS' : 'EXPORTS',
                     file: source.file,
-                    span: { startLine: lineNo, endLine: lineNo },
+                    span: relationshipSpan(binding),
                     confidence: 'high',
                 };
                 recordsByKey.set(relationshipKey(record), record);
+                continue;
             }
+
+            const localName = binding.localName ?? binding.exportedName;
+            const target = localName
+                ? resolveUniqueLocalSymbol(source.file, localName, input.registry.symbols)
+                : undefined;
+            if (!target) continue;
+            const record: RelationshipRecord = {
+                sourceKey: source.symbolKey,
+                sourceInstanceId: source.symbolInstanceId,
+                targetKey: target.symbolKey,
+                targetInstanceId: target.symbolInstanceId,
+                type: 'EXPORTS',
+                file: source.file,
+                span: relationshipSpan(binding),
+                confidence: 'high',
+            };
+            recordsByKey.set(relationshipKey(record), record);
         }
     }
 

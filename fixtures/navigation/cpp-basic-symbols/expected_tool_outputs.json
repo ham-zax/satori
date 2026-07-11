@@ -1,0 +1,12 @@
+{
+  "language": "cpp",
+  "tier": "symbol_only",
+  "fileOutline": { "status": "ok" },
+  "readFileOpenSymbol": {
+    "targetQualifiedName": "run",
+    "status": "ok",
+    "span": { "startLine": 3, "endLine": 5 }
+  },
+  "searchCodebase": { "nextActionsCallGraph": false },
+  "callGraph": { "supported": false, "reason": "unsupported_language" }
+}

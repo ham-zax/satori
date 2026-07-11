@@ -88,6 +88,10 @@ export interface IndexCompletionFingerprint {
     embeddingDimension: number;
     vectorStoreProvider: string;
     schemaVersion: string;
+    /** Absent only on legacy markers; current runtimes always write all three versions. */
+    parserVersion?: string;
+    extractorVersion?: string;
+    relationshipVersion?: string;
 }
 
 export interface IndexCompletionMarkerDocument extends VectorDocumentMetadata {

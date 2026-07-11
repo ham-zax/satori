@@ -1,0 +1,17 @@
+[
+  {
+    "kind": "class",
+    "name": "Service",
+    "label": "class Service",
+    "qualifiedName": "Service",
+    "span": { "startLine": 1, "endLine": 5 }
+  },
+  {
+    "kind": "method",
+    "name": "Run",
+    "label": "method Run",
+    "qualifiedName": "Service.Run",
+    "parentQualifiedNamePath": ["Service"],
+    "span": { "startLine": 2, "endLine": 4 }
+  }
+]

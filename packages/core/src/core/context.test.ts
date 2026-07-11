@@ -11,8 +11,12 @@ import { clearSymbolRegistrySidecar, readRelationshipSidecar, readSymbolRegistry
 import type { SymbolRecord, SymbolRegistryManifestFile } from '../symbols';
 import { Embedding } from '../embedding';
 import type { EmbeddingVector } from '../embedding';
-import { AstCodeSplitter } from '../splitter';
-import type { CodeChunk, Splitter } from '../splitter';
+import {
+    createLanguageAnalysisService,
+    type CodeChunk,
+    type LanguageAnalysisInput,
+    type LanguageAnalysisPort,
+} from '../language-analysis';
 import type {
     CollectionDetails,
     HybridSearchOptions,
@@ -66,15 +70,13 @@ class NamedTestEmbedding extends TestEmbedding {
     }
 }
 
-class RecordingSplitter implements Splitter {
-    public readonly splitCalls: string[] = [];
-    private readonly delegate = new AstCodeSplitter(2500, 300);
+class RecordingAnalyzer implements LanguageAnalysisPort {
+    public readonly analyzeCalls: string[] = [];
+    private readonly delegate = createLanguageAnalysisService({ chunkSize: 2500, chunkOverlap: 300 });
 
-    async split(code: string, language: string, filePath?: string) {
-        if (filePath) {
-            this.splitCalls.push(filePath);
-        }
-        return this.delegate.split(code, language, filePath);
+    async analyze(input: LanguageAnalysisInput) {
+        this.analyzeCalls.push(input.relativePath);
+        return this.delegate.analyze(input);
     }
 
     setChunkSize(chunkSize: number): void {
@@ -86,18 +88,26 @@ class RecordingSplitter implements Splitter {
     }
 
     reset(): void {
-        this.splitCalls.length = 0;
+        this.analyzeCalls.length = 0;
     }
+
+    getDescription(): string { return this.delegate.getDescription(); }
+
+    getStrategyForLanguage(language: string) { return this.delegate.getStrategyForLanguage(language); }
 }
 
-class ThrowingSplitter implements Splitter {
-    async split(): Promise<never> {
-        throw new Error('split failed after marker cleanup');
+class ThrowingAnalyzer implements LanguageAnalysisPort {
+    async analyze(): Promise<never> {
+        throw new Error('analysis failed after marker cleanup');
     }
 
     setChunkSize(): void {}
 
     setChunkOverlap(): void {}
+
+    getDescription(): string { return 'throwing analyzer'; }
+
+    getStrategyForLanguage() { return { backend: 'recursive_text' as const, structural: false }; }
 }
 
 type ProcessFileListResult = {
@@ -439,7 +449,7 @@ test('Context.indexCodebase clears stale completion marker before rebuilding nav
         const context = new Context({
             embedding: new TestEmbedding(),
             vectorDatabase,
-            codeSplitter: new ThrowingSplitter(),
+            languageAnalyzer: new ThrowingAnalyzer(),
         });
         const collectionName = context.resolveCollectionName(repoPath);
 
@@ -464,7 +474,7 @@ test('Context.indexCodebase clears stale completion marker before rebuilding nav
 
         await assert.rejects(
             () => context.indexCodebase(repoPath),
-            /split failed after marker cleanup/,
+            /analysis failed after marker cleanup/,
         );
         assert.equal(await context.getIndexCompletionMarker(repoPath), null);
     } finally {
@@ -771,8 +781,9 @@ test('Context.indexCodebase attaches Rust extractor owner metadata in production
         assert.ok(push);
         assert.equal(stack?.language, 'rust');
         assert.equal(push?.language, 'rust');
-        assert.equal(stack?.label, 'type Stack');
+        assert.equal(stack?.label, 'struct Stack');
         assert.equal(push?.label, 'method push');
+        assert.equal(push?.qualifiedName, 'Stack.push');
         const rustSymbolInstanceIds = new Set(rustSymbols.map((symbol) => symbol.symbolInstanceId));
 
         const documents = Array.from(vectorDatabase.collections.values())
@@ -791,6 +802,75 @@ test('Context.indexCodebase attaches Rust extractor owner metadata in production
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 });
+
+for (const fixture of [
+    {
+        language: 'java',
+        file: 'Service.java',
+        source: 'class Service {\n  int run() {\n    return 1;\n  }\n}\n',
+        target: { kind: 'method', name: 'run', qualifiedName: 'Service.run' },
+    },
+    {
+        language: 'csharp',
+        file: 'Service.cs',
+        source: 'class Service {\n  int Run() {\n    return 1;\n  }\n}\n',
+        target: { kind: 'method', name: 'Run', qualifiedName: 'Service.Run' },
+    },
+    {
+        language: 'cpp',
+        file: 'service.cpp',
+        source: 'class Service {\n};\nint run() {\n  return 1;\n}\n',
+        target: { kind: 'function', name: 'run', qualifiedName: 'run' },
+    },
+    {
+        language: 'scala',
+        file: 'Service.scala',
+        source: 'class Service {\n  def run(): Int = {\n    1\n  }\n}\n',
+        target: { kind: 'function', name: 'run', qualifiedName: 'Service.run' },
+    },
+] as const) {
+    test(`Context.indexCodebase attaches ${fixture.language} symbol owner metadata`, async () => {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `satori-context-${fixture.language}-symbols-`));
+        const stateRoot = path.join(tempRoot, 'state');
+        const codebasePath = path.join(tempRoot, 'repo');
+        const sourcePath = path.join(codebasePath, fixture.file);
+
+        try {
+            fs.mkdirSync(codebasePath, { recursive: true });
+            fs.writeFileSync(sourcePath, fixture.source, 'utf8');
+
+            const vectorDatabase = new InMemoryVectorDatabase();
+            const context = new Context({
+                embedding: new TestEmbedding(),
+                vectorDatabase,
+                symbolRegistryStateRoot: stateRoot,
+            });
+
+            const result = await context.indexCodebase(codebasePath);
+            const sidecar = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
+
+            assert.equal(result.status, 'completed');
+            assert.equal(sidecar.status, 'ok');
+            if (sidecar.status !== 'ok') return;
+
+            const target = (sidecar.registry.symbolsByFile.get(fixture.file) || []).find((symbol) => (
+                symbol.kind === fixture.target.kind
+                && symbol.name === fixture.target.name
+                && symbol.qualifiedName === fixture.target.qualifiedName
+            ));
+            assert.ok(target);
+            assert.equal(target?.language, fixture.language);
+
+            const documents = Array.from(vectorDatabase.collections.values())
+                .flatMap((collection) => Array.from(collection.values()))
+                .filter((document) => document.fileExtension !== COMPLETION_MARKER_EXTENSION)
+                .filter((document) => document.relativePath === fixture.file);
+            assert.ok(documents.some((document) => document.metadata.ownerSymbolInstanceId === target?.symbolInstanceId));
+        } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+}
 
 test('Context.indexCodebase degrades malformed Go source to synthesized file-owner metadata', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-go-malformed-symbols-'));
@@ -1204,13 +1284,13 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
             'utf8',
         );
 
-        const splitter = new RecordingSplitter();
+        const analyzer = new RecordingAnalyzer();
         const vectorDatabase = new InMemoryVectorDatabase();
         const context = new Context({
             embedding: new TestEmbedding(),
             vectorDatabase,
             symbolRegistryStateRoot: stateRoot,
-            codeSplitter: splitter,
+            languageAnalyzer: analyzer,
         });
 
         await context.recreateSynchronizerForCodebase(codebasePath);
@@ -1252,15 +1332,14 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
         assert.ok(initialCallRecord);
         assert.equal(initialCallRecord?.targetInstanceId, initialAuthSymbol.symbolInstanceId);
 
-        splitter.reset();
+        analyzer.reset();
         fs.writeFileSync(authPath, 'export function login() { return false; }\n', 'utf8');
         const result = await context.reindexByChange(codebasePath);
         assert.equal(result.modified, 1);
 
-        const splitRelativePaths = splitter.splitCalls
-            .map((filePath) => path.relative(codebasePath, filePath).replace(/\\/g, '/'))
+        const analyzedRelativePaths = analyzer.analyzeCalls
             .sort((a, b) => a.localeCompare(b));
-        assert.deepEqual(splitRelativePaths, ['src/auth.ts']);
+        assert.deepEqual(analyzedRelativePaths, ['src/auth.ts', 'src/caller.ts']);
 
         const nextRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
         assert.equal(nextRegistry.status, 'ok');

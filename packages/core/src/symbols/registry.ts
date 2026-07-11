@@ -4,9 +4,7 @@ import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     canonicalizeSymbolSpanForHash,
 } from './contracts';
-import type {
-    CodeChunk,
-} from '../splitter';
+import type { CodeChunk } from '../language-analysis';
 import type { ExtractedSymbol, ExtractedSymbolKind } from '../languages';
 import type {
     SymbolKind,

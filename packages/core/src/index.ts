@@ -1,4 +1,4 @@
-export * from './splitter';
+export * from './language-analysis';
 export * from './embedding';
 export * from './vectordb';
 export * from './types';

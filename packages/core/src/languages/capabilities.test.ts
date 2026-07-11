@@ -147,7 +147,7 @@ test('production_ready symbol extraction requires fixture metadata unless explic
             continue;
         }
         if (GRANDFATHERED_FULL_NAVIGATION_LANGUAGES.has(declaration.languageId)) {
-            // TS/JS/Python predate the L1 matrix and still use the existing splitter/chunk-symbol path.
+            // TS/JS/Python predate the L1 fixture metadata split.
             continue;
         }
 
@@ -220,7 +220,7 @@ test('CMM-derived broad catalog stays tiered instead of becoming symbol or graph
 
     assert.ok(routedLanguages.length > 140, 'broad catalog should expose recognized/routed languages');
     assert.ok(parserCoveredLanguages.length > 140, 'broad catalog should expose parser-declared languages');
-    assert.deepEqual(symbolOnlyLanguages, ['go', 'rust']);
+    assert.deepEqual(symbolOnlyLanguages, ['cpp', 'csharp', 'go', 'java', 'rust', 'scala']);
     assert.deepEqual(callGraphLanguages, ['javascript', 'python', 'typescript']);
 
     for (const language of ['zig', 'solidity', 'gleam', 'kotlin', 'ruby', 'swift']) {

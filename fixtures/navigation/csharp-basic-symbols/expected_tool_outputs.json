@@ -1,0 +1,12 @@
+{
+  "language": "csharp",
+  "tier": "symbol_only",
+  "fileOutline": { "status": "ok" },
+  "readFileOpenSymbol": {
+    "targetQualifiedName": "Service.Run",
+    "status": "ok",
+    "span": { "startLine": 2, "endLine": 4 }
+  },
+  "searchCodebase": { "nextActionsCallGraph": false },
+  "callGraph": { "supported": false, "reason": "unsupported_language" }
+}

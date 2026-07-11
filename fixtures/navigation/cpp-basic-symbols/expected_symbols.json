@@ -1,0 +1,16 @@
+[
+  {
+    "kind": "class",
+    "name": "Service",
+    "label": "class Service",
+    "qualifiedName": "Service",
+    "span": { "startLine": 1, "endLine": 2 }
+  },
+  {
+    "kind": "function",
+    "name": "run",
+    "label": "function run",
+    "qualifiedName": "run",
+    "span": { "startLine": 3, "endLine": 5 }
+  }
+]

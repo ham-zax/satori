@@ -1,0 +1,17 @@
+[
+  {
+    "kind": "class",
+    "name": "Service",
+    "label": "class Service",
+    "qualifiedName": "Service",
+    "span": { "startLine": 1, "endLine": 5 }
+  },
+  {
+    "kind": "function",
+    "name": "run",
+    "label": "function run",
+    "qualifiedName": "Service.run",
+    "parentQualifiedNamePath": ["Service"],
+    "span": { "startLine": 2, "endLine": 4 }
+  }
+]

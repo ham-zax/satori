@@ -9,6 +9,23 @@ import {
 } from '../symbols';
 import { buildCallRelationshipsForRegistry, buildRelationshipsForRegistry } from './builder';
 import type { SymbolKind, SymbolRecord, SymbolRegistryManifest } from '../symbols';
+import { createLanguageAnalysisService } from '../language-analysis';
+import { getLanguageIdFromFilename } from '../language';
+
+async function analyzeFiles(
+    sources: Map<string, string> | Record<string, string>,
+) {
+    const analyzer = createLanguageAnalysisService();
+    const entries = sources instanceof Map ? [...sources.entries()] : Object.entries(sources);
+    return new Map(await Promise.all(entries.map(async ([relativePath, content]) => [
+        relativePath,
+        await analyzer.analyze({
+            content,
+            language: getLanguageIdFromFilename(relativePath, 'text'),
+            relativePath,
+        }),
+    ] as const)));
+}
 
 function createSymbol(input: {
     file: string;
@@ -21,6 +38,8 @@ function createSymbol(input: {
     fileHash: string;
     language?: string;
     parentQualifiedNamePath?: string[];
+    startByte?: number;
+    endByte?: number;
 }): SymbolRecord {
     const parentQualifiedNamePath = input.parentQualifiedNamePath || [];
     const language = input.language || 'typescript';
@@ -31,7 +50,12 @@ function createSymbol(input: {
         qualifiedName: input.qualifiedName,
         parentQualifiedNamePath,
     });
-    const span = { startLine: input.startLine, endLine: input.endLine };
+    const span = {
+        startLine: input.startLine,
+        endLine: input.endLine,
+        ...(input.startByte === undefined ? {} : { startByte: input.startByte }),
+        ...(input.endByte === undefined ? {} : { endByte: input.endByte }),
+    };
     return {
         symbolKey,
         symbolInstanceId: createSymbolInstanceId({
@@ -70,7 +94,7 @@ function manifest(): SymbolRegistryManifest {
     };
 }
 
-test('buildCallRelationshipsForRegistry creates deterministic CALLS records from owned symbols', () => {
+test('buildCallRelationshipsForRegistry creates deterministic CALLS records from owned symbols', async () => {
     const authFile = createSynthesizedFileSymbol({
         relativePath: 'src/auth.ts',
         language: 'typescript',
@@ -122,10 +146,10 @@ test('buildCallRelationshipsForRegistry creates deterministic CALLS records from
 
     const records = buildCallRelationshipsForRegistry({
         registry,
-        contentByFile: new Map([
+        analysisByFile: await analyzeFiles(new Map([
             ['src/auth.ts', 'export function validateToken(token: string) { return true; }\nexport function login(token: string) {\n  return validateToken(token);\n}\n'],
             ['src/routes.ts', 'import { login } from "./auth";\nexport function route(token: string) {\n  return login(token);\n}\n'],
-        ]),
+        ])),
     });
 
     assert.deepEqual(records.map((record) => ({
@@ -152,7 +176,65 @@ test('buildCallRelationshipsForRegistry creates deterministic CALLS records from
     ]);
 });
 
-test('buildCallRelationshipsForRegistry skips definitions, unresolved calls, and non-source owners', () => {
+test('buildCallRelationshipsForRegistry assigns same-line calls by byte containment', async () => {
+    const content = [
+        'function targetA() {}',
+        'function targetB() {}',
+        'function first() { targetA(); } function second() { targetB(); }',
+    ].join('\n');
+    const file = 'src/same-line.ts';
+    const fileHash = 'hash-same-line';
+    const fileOwner = createSynthesizedFileSymbol({
+        relativePath: file,
+        language: 'typescript',
+        content,
+        fileHash,
+        extractorVersion: 'test-extractor-v1',
+    });
+    const symbol = (name: string, startLine: number, startByte: number, endByte: number) => createSymbol({
+        file,
+        kind: 'function',
+        name,
+        qualifiedName: name,
+        label: `function ${name}`,
+        startLine,
+        endLine: startLine,
+        startByte,
+        endByte,
+        fileHash,
+    });
+    const firstStart = content.indexOf('function first');
+    const secondStart = content.indexOf('function second');
+    const symbols = [
+        symbol('targetA', 1, content.indexOf('function targetA'), content.indexOf('function targetA') + 21),
+        symbol('targetB', 2, content.indexOf('function targetB'), content.indexOf('function targetB') + 21),
+        symbol('first', 3, firstStart, secondStart - 1),
+        symbol('second', 3, secondStart, content.length),
+    ];
+    const registry = buildSymbolRegistry({
+        manifest: {
+            ...manifest(),
+            files: [{ path: file, hash: fileHash, language: 'typescript', symbolCount: symbols.length + 1 }],
+        },
+        symbols: [fileOwner, ...symbols],
+    });
+
+    const records = buildCallRelationshipsForRegistry({
+        registry,
+        analysisByFile: await analyzeFiles({ [file]: content }),
+    });
+    const nameById = new Map(symbols.map((entry) => [entry.symbolInstanceId, entry.name]));
+
+    assert.deepEqual(records.map((record) => [
+        nameById.get(record.sourceInstanceId ?? '') ?? '',
+        nameById.get(record.targetInstanceId ?? '') ?? '',
+    ]).sort((left, right) => left[0].localeCompare(right[0])), [
+        ['first', 'targetA'],
+        ['second', 'targetB'],
+    ]);
+});
+
+test('buildCallRelationshipsForRegistry skips definitions, unresolved calls, and non-source owners', async () => {
     const fileOwner = createSynthesizedFileSymbol({
         relativePath: 'src/auth.ts',
         language: 'typescript',
@@ -180,15 +262,15 @@ test('buildCallRelationshipsForRegistry skips definitions, unresolved calls, and
 
     const records = buildCallRelationshipsForRegistry({
         registry,
-        contentByFile: {
+        analysisByFile: await analyzeFiles({
             'src/auth.ts': 'export function login() {\n  missingCall();\n}\n',
-        },
+        }),
     });
 
     assert.deepEqual(records, []);
 });
 
-test('buildCallRelationshipsForRegistry does not emit duplicate container-owned class calls', () => {
+test('buildCallRelationshipsForRegistry does not emit duplicate container-owned class calls', async () => {
     const fileOwner = createSynthesizedFileSymbol({
         relativePath: 'src/auth.ts',
         language: 'typescript',
@@ -247,7 +329,7 @@ test('buildCallRelationshipsForRegistry does not emit duplicate container-owned 
 
     const records = buildCallRelationshipsForRegistry({
         registry,
-        contentByFile: {
+        analysisByFile: await analyzeFiles({
             'src/auth.ts': [
                 'export function normalize(input: string) {',
                 '  return input.trim();',
@@ -259,14 +341,14 @@ test('buildCallRelationshipsForRegistry does not emit duplicate container-owned 
                 '  }',
                 '}',
             ].join('\n'),
-        },
+        }),
     });
 
     assert.deepEqual(records.map((record) => record.sourceInstanceId), [login.symbolInstanceId]);
     assert.deepEqual(records.map((record) => record.targetInstanceId), [normalize.symbolInstanceId]);
 });
 
-test('buildCallRelationshipsForRegistry skips ambiguous same-name targets until receiver resolution exists', () => {
+test('buildCallRelationshipsForRegistry skips ambiguous same-name targets until receiver resolution exists', async () => {
     const content = [
         'export class AuthService {',
         '  login(input: string) {',
@@ -353,13 +435,13 @@ test('buildCallRelationshipsForRegistry skips ambiguous same-name targets until 
 
     const records = buildCallRelationshipsForRegistry({
         registry,
-        contentByFile: { 'src/auth.ts': content },
+        analysisByFile: await analyzeFiles({ 'src/auth.ts': content }),
     });
 
     assert.deepEqual(records, []);
 });
 
-test('buildRelationshipsForRegistry creates conservative IMPORTS and EXPORTS file-owner records', () => {
+test('buildRelationshipsForRegistry creates conservative IMPORTS and EXPORTS file-owner records', async () => {
     const authContent = [
         'export function login(token: string) {',
         '  return token;',
@@ -413,10 +495,10 @@ test('buildRelationshipsForRegistry creates conservative IMPORTS and EXPORTS fil
 
     const records = buildRelationshipsForRegistry({
         registry,
-        contentByFile: new Map([
+        analysisByFile: await analyzeFiles(new Map([
             ['src/auth.ts', authContent],
             ['src/routes.ts', routesContent],
-        ]),
+        ])),
     });
 
     assert.deepEqual(records.map((record) => ({
@@ -476,7 +558,7 @@ test('buildRelationshipsForRegistry creates conservative IMPORTS and EXPORTS fil
     ]);
 });
 
-test('buildRelationshipsForRegistry creates Python IMPORTS and top-level EXPORTS for relative module calls', () => {
+test('buildRelationshipsForRegistry creates Python IMPORTS and top-level EXPORTS for relative module calls', async () => {
     const telemetryContent = [
         'def build_entry_telemetry():',
         '    return None',
@@ -543,10 +625,10 @@ test('buildRelationshipsForRegistry creates Python IMPORTS and top-level EXPORTS
 
     const records = buildRelationshipsForRegistry({
         registry,
-        contentByFile: new Map([
+        analysisByFile: await analyzeFiles(new Map([
             ['src/phases.py', phasesContent],
             ['src/telemetry.py', telemetryContent],
-        ]),
+        ])),
     });
 
     assert.deepEqual(records.map((record) => ({
@@ -597,7 +679,7 @@ test('buildRelationshipsForRegistry creates Python IMPORTS and top-level EXPORTS
     ]);
 });
 
-test('buildRelationshipsForRegistry skips unresolved package imports and ambiguous local exports', () => {
+test('buildRelationshipsForRegistry skips unresolved package imports and ambiguous local exports', async () => {
     const content = [
         'import express from "express";',
         'export { missing } from "./missing";',
@@ -640,7 +722,7 @@ test('buildRelationshipsForRegistry skips unresolved package imports and ambiguo
 
     const records = buildRelationshipsForRegistry({
         registry,
-        contentByFile: { 'src/routes.ts': content },
+        analysisByFile: await analyzeFiles({ 'src/routes.ts': content }),
     });
 
     assert.deepEqual(records, []);

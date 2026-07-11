@@ -1,9 +1,4 @@
 import {
-    Splitter,
-    CodeChunk,
-    AstCodeSplitter
-} from '../splitter';
-import {
     Embedding,
     EmbeddingVector,
     OpenAIEmbedding
@@ -57,9 +52,18 @@ import type {
     SymbolRegistry,
     SymbolRegistryManifestFile,
 } from '../symbols';
-import { getSymbolExtractorForLanguage } from '../languages/extractors';
-import type { ExtractedSymbol } from '../languages';
-import { buildRelationshipsForRegistry } from '../relationships';
+import {
+    createLanguageAnalysisService,
+    LANGUAGE_PARSER_VERSION,
+    RELATIONSHIP_BUILDER_VERSION,
+    SYMBOL_EXTRACTOR_VERSION,
+    type CodeChunk,
+    type LanguageAnalysisPort,
+} from '../language-analysis';
+import {
+    buildRelationshipsForRegistry,
+    type RelationshipAnalysisEvidence,
+} from '../relationships';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -74,7 +78,7 @@ import type {
 export interface ContextConfig {
     embedding?: Embedding;
     vectorDatabase?: VectorDatabase;
-    codeSplitter?: Splitter;
+    languageAnalyzer?: LanguageAnalysisPort;
     supportedExtensions?: string[];
     ignorePatterns?: string[];
     customExtensions?: string[]; // New: custom extensions from MCP
@@ -136,7 +140,7 @@ type CollectionPayloadVerification =
 export class Context {
     private embedding: Embedding;
     private vectorDatabase: VectorDatabase;
-    private codeSplitter: Splitter;
+    private languageAnalyzer: LanguageAnalysisPort;
     private supportedExtensions: string[];
     private configuredExtensionOverlays: string[];
     private runtimeCustomExtensions: string[];
@@ -170,7 +174,10 @@ export class Context {
         }
         this.vectorDatabase = config.vectorDatabase;
 
-        this.codeSplitter = config.codeSplitter || new AstCodeSplitter(2500, 300);
+        this.languageAnalyzer = config.languageAnalyzer || createLanguageAnalysisService({
+            chunkSize: 2500,
+            chunkOverlap: 300,
+        });
 
         // Load custom extensions from environment variables
         const envCustomExtensions = this.getCustomExtensionsFromEnv();
@@ -224,10 +231,10 @@ export class Context {
     }
 
     /**
-     * Get code splitter instance
+     * Get the normalized language-analysis boundary.
      */
-    getChunkSplitter(): Splitter {
-        return this.codeSplitter;
+    getLanguageAnalyzer(): LanguageAnalysisPort {
+        return this.languageAnalyzer;
     }
 
     /**
@@ -559,6 +566,9 @@ export class Context {
             embeddingDimension: this.embedding.getDimension(),
             vectorStoreProvider: 'Milvus',
             schemaVersion: this.getIsHybrid() === true ? 'hybrid_v3' : 'dense_v3',
+            parserVersion: LANGUAGE_PARSER_VERSION,
+            extractorVersion: SYMBOL_EXTRACTOR_VERSION,
+            relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
         };
     }
 
@@ -571,7 +581,10 @@ export class Context {
             && record.embeddingModel === right.embeddingModel
             && Number(record.embeddingDimension) === Number(right.embeddingDimension)
             && record.vectorStoreProvider === right.vectorStoreProvider
-            && record.schemaVersion === right.schemaVersion;
+            && record.schemaVersion === right.schemaVersion
+            && record.parserVersion === right.parserVersion
+            && record.extractorVersion === right.extractorVersion
+            && record.relationshipVersion === right.relationshipVersion;
     }
 
     private async writeCompletedIndexMarker(
@@ -793,7 +806,13 @@ export class Context {
         console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
 
         if (result.status === 'completed') {
-            await this.writeSymbolRegistryForCompletedIndex(codebasePath, result.symbolRecords, result.symbolManifestFiles, options.assertMutationCurrent);
+            await this.writeSymbolRegistryForCompletedIndex(
+                codebasePath,
+                result.symbolRecords,
+                result.symbolManifestFiles,
+                options.assertMutationCurrent,
+                result.analysisByFile,
+            );
             await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed', options.assertMutationCurrent);
         } else {
             // limit_reached: do not publish complete navigation sidecars, but seal partial vector
@@ -986,12 +1005,14 @@ export class Context {
                 status: 'completed' | 'limit_reached';
                 symbolRecords: SymbolRecord[];
                 symbolManifestFiles: SymbolRegistryManifestFile[];
+                analysisByFile: Map<string, RelationshipAnalysisEvidence>;
             } = {
                 processedFiles: 0,
                 totalChunks: 0,
                 status: 'completed',
                 symbolRecords: [],
                 symbolManifestFiles: [],
+                analysisByFile: new Map(),
             };
 
             if (filesToIndex.length > 0) {
@@ -1021,6 +1042,7 @@ export class Context {
                     indexedDelta.symbolRecords,
                     indexedDelta.symbolManifestFiles,
                     options.assertMutationCurrent,
+                    indexedDelta.analysisByFile,
                 );
                 readinessArtifactsComplete = true;
             } else if (!canRebuildNavigationArtifacts && indexedDelta.status === 'completed') {
@@ -1645,12 +1667,11 @@ export class Context {
     }
 
     /**
-     * Update splitter instance
-     * @param splitter New splitter instance
+     * Replace the normalized language-analysis boundary.
      */
-    updateSplitter(splitter: Splitter): void {
-        this.codeSplitter = splitter;
-        console.log(`[Context] 🔄 Updated splitter instance`);
+    updateLanguageAnalyzer(languageAnalyzer: LanguageAnalysisPort): void {
+        this.languageAnalyzer = languageAnalyzer;
+        console.log(`[Context] 🔄 Updated language analyzer`);
     }
 
     /**
@@ -1758,6 +1779,7 @@ export class Context {
         status: 'completed' | 'limit_reached';
         symbolRecords: SymbolRecord[];
         symbolManifestFiles: SymbolRegistryManifestFile[];
+        analysisByFile: Map<string, RelationshipAnalysisEvidence>;
     }> {
         const isHybrid = this.getIsHybrid();
         const EMBEDDING_BATCH_SIZE = Math.max(1, parseInt(envManager.get('EMBEDDING_BATCH_SIZE') || '100', 10));
@@ -1770,6 +1792,7 @@ export class Context {
         let limitReached = false;
         const symbolRecords: SymbolRecord[] = [];
         const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
+        const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
         const describeError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
         for (let i = 0; i < filePaths.length; i++) {
@@ -1778,20 +1801,24 @@ export class Context {
             try {
                 const content = await fs.promises.readFile(filePath, 'utf-8');
                 const language = this.getLanguageFromFilePath(filePath);
-                const chunks = await this.codeSplitter.split(content, language, filePath);
                 const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
                 if (!relativePath) {
                     throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
                 }
+                const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
+                const chunks = [...analysis.chunks];
+                for (const chunk of chunks) {
+                    chunk.metadata.filePath = filePath;
+                }
+                analysisByFile.set(relativePath, analysis);
                 const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-                const extractedSymbols = this.extractSymbolsForFile(language, content, relativePath);
                 const fileSymbols = buildSymbolRecordsForFile({
                     relativePath,
                     language,
                     content,
                     fileHash,
                     extractorVersion: this.getSymbolExtractorVersion(),
-                    ...(extractedSymbols !== undefined ? { extractedSymbols } : {}),
+                    extractedSymbols: analysis.symbols,
                     chunks,
                 });
                 for (const chunk of chunks) {
@@ -1877,7 +1904,8 @@ export class Context {
             totalChunks,
             status: limitReached ? 'limit_reached' : 'completed',
             symbolRecords,
-            symbolManifestFiles
+            symbolManifestFiles,
+            analysisByFile,
         };
     }
 
@@ -1891,28 +1919,31 @@ export class Context {
         expectedChunks: ExpectedIndexedChunk[];
         symbolRecords: SymbolRecord[];
         symbolManifestFiles: SymbolRegistryManifestFile[];
+        analysisByFile: Map<string, RelationshipAnalysisEvidence>;
     }> {
         const expectedChunks: ExpectedIndexedChunk[] = [];
         const symbolRecords: SymbolRecord[] = [];
         const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
+        const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
 
         for (const filePath of filePaths) {
             const content = await fs.promises.readFile(filePath, 'utf-8');
             const language = this.getLanguageFromFilePath(filePath);
-            const chunks = await this.codeSplitter.split(content, language, filePath);
             const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
             if (!relativePath) {
                 throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
             }
+            const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
+            const chunks = [...analysis.chunks];
+            analysisByFile.set(relativePath, analysis);
             const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-            const extractedSymbols = this.extractSymbolsForFile(language, content, relativePath);
             const fileSymbols = buildSymbolRecordsForFile({
                 relativePath,
                 language,
                 content,
                 fileHash,
                 extractorVersion: this.getSymbolExtractorVersion(),
-                ...(extractedSymbols !== undefined ? { extractedSymbols } : {}),
+                extractedSymbols: analysis.symbols,
                 chunks,
             });
             for (let index = 0; index < chunks.length; index++) {
@@ -1949,6 +1980,7 @@ export class Context {
             expectedChunks,
             symbolRecords,
             symbolManifestFiles,
+            analysisByFile,
         };
     }
 
@@ -2317,7 +2349,12 @@ export class Context {
         }
 
         // 4. Split source files and compute expected chunk IDs
-        const { expectedChunks, symbolRecords, symbolManifestFiles } = await this.getExpectedChunksAndSymbols(codeFiles, canonicalPath);
+        const {
+            expectedChunks,
+            symbolRecords,
+            symbolManifestFiles,
+            analysisByFile,
+        } = await this.getExpectedChunksAndSymbols(codeFiles, canonicalPath);
 
         // 5. Query vector backend for expected chunk IDs.
         const existingIds = new Set<string>();
@@ -2481,6 +2518,7 @@ export class Context {
             symbolRecords,
             symbolManifestFiles,
             options.assertMutationCurrent,
+            analysisByFile,
         );
 
         // 7. Write new completion marker
@@ -2506,20 +2544,7 @@ export class Context {
     }
 
     private getSymbolExtractorVersion(): string {
-        return 'splitter-symbol-builder-v1+language-extractors-v1';
-    }
-
-    private extractSymbolsForFile(language: string, content: string, relativePath: string): readonly ExtractedSymbol[] | undefined {
-        const extractor = getSymbolExtractorForLanguage(language);
-        if (!extractor) {
-            return undefined;
-        }
-        try {
-            return extractor.extract({ content, relativePath });
-        } catch (error) {
-            console.warn(`[Context] ⚠️  Symbol extractor failed for ${relativePath}: ${error instanceof Error ? error.message : String(error)}`);
-            return [];
-        }
+        return SYMBOL_EXTRACTOR_VERSION;
     }
 
     private getLanguageRouterVersion(): string {
@@ -2527,7 +2552,7 @@ export class Context {
     }
 
     private getRelationshipVersion(): string {
-        return 'relationship-v1';
+        return RELATIONSHIP_BUILDER_VERSION;
     }
 
     private buildIndexPolicyHash(codebasePath: string): string {
@@ -2549,9 +2574,11 @@ export class Context {
     ): Promise<{
         symbolRecords: SymbolRecord[];
         symbolManifestFiles: SymbolRegistryManifestFile[];
+        analysisByFile: Map<string, RelationshipAnalysisEvidence>;
     }> {
         const symbolRecords: SymbolRecord[] = [];
         const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
+        const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
 
         for (const filePath of [...filePaths].sort((a, b) => a.localeCompare(b))) {
             const content = await fs.promises.readFile(filePath, 'utf-8');
@@ -2562,15 +2589,16 @@ export class Context {
             }
 
             const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-            const chunks = await this.codeSplitter.split(content, language, filePath);
-            const extractedSymbols = this.extractSymbolsForFile(language, content, relativePath);
+            const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
+            const chunks = [...analysis.chunks];
+            analysisByFile.set(relativePath, analysis);
             const fileSymbols = buildSymbolRecordsForFile({
                 relativePath,
                 language,
                 content,
                 fileHash,
                 extractorVersion: this.getSymbolExtractorVersion(),
-                ...(extractedSymbols !== undefined ? { extractedSymbols } : {}),
+                extractedSymbols: analysis.symbols,
                 chunks,
             });
 
@@ -2586,6 +2614,7 @@ export class Context {
         return {
             symbolRecords,
             symbolManifestFiles,
+            analysisByFile,
         };
     }
 
@@ -2605,6 +2634,7 @@ export class Context {
             navigationArtifacts.symbolRecords,
             navigationArtifacts.symbolManifestFiles,
             assertMutationCurrent,
+            navigationArtifacts.analysisByFile,
         );
     }
 
@@ -2615,6 +2645,7 @@ export class Context {
         rebuiltSymbolRecords: SymbolRecord[],
         rebuiltManifestFiles: SymbolRegistryManifestFile[],
         assertMutationCurrent?: () => void,
+        analysisByFile?: Map<string, RelationshipAnalysisEvidence>,
     ): Promise<void> {
         const replacedPaths = new Set<string>([
             ...changedRelativePaths.map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, '')),
@@ -2641,6 +2672,7 @@ export class Context {
             mergedSymbolRecords,
             mergedManifestFiles,
             assertMutationCurrent,
+            analysisByFile,
         );
     }
 
@@ -2649,6 +2681,7 @@ export class Context {
         symbolRecords: SymbolRecord[],
         symbolManifestFiles: SymbolRegistryManifestFile[],
         assertMutationCurrent?: () => void,
+        suppliedAnalysisByFile?: Map<string, RelationshipAnalysisEvidence>,
     ): Promise<void> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const manifestFiles = [...symbolManifestFiles].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -2673,15 +2706,23 @@ export class Context {
             registry,
             beforePublish: assertMutationCurrent,
         });
-        const contentByFile = new Map<string, string>();
+        const analysisByFile = new Map(suppliedAnalysisByFile ?? []);
         for (const file of manifestFiles) {
+            if (analysisByFile.has(file.path)) {
+                continue;
+            }
             try {
-                contentByFile.set(file.path, await fs.promises.readFile(path.join(canonicalRoot, file.path), 'utf8'));
+                const content = await fs.promises.readFile(path.join(canonicalRoot, file.path), 'utf8');
+                analysisByFile.set(file.path, await this.languageAnalyzer.analyze({
+                    content,
+                    language: file.language,
+                    relativePath: file.path,
+                }));
             } catch (error) {
                 console.warn(`[Context] ⚠️  Skipping relationship extraction for ${file.path}: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
-        const relationshipRecords = buildRelationshipsForRegistry({ registry, contentByFile });
+        const relationshipRecords = buildRelationshipsForRegistry({ registry, analysisByFile });
         assertMutationCurrent?.();
         const relationshipResult = await writeRelationshipSidecar({
             stateRoot: this.symbolRegistryStateRoot,
@@ -3059,61 +3100,27 @@ export class Context {
     }
 
     /**
-     * Get current splitter information
+     * Get current language-analysis information.
      */
-    getSplitterInfo(): { type: string; hasBuiltinFallback: boolean; supportedLanguages?: string[] } {
-        const splitterName = this.codeSplitter.constructor.name;
-
-        if (splitterName === 'AstCodeSplitter') {
-            return {
-                type: 'ast',
-                hasBuiltinFallback: true,
-                supportedLanguages: AstCodeSplitter.getSupportedLanguages()
-            };
-        } else {
-            return {
-                type: 'langchain',
-                hasBuiltinFallback: false
-            };
-        }
+    getLanguageAnalyzerInfo(): { description: string; hasTextFallback: boolean } {
+        return {
+            description: this.languageAnalyzer.getDescription(),
+            hasTextFallback: true,
+        };
     }
 
     /**
-     * Check if current splitter supports a specific language
-     * @param language Programming language
+     * Check whether the current analyzer has structural support for a language.
      */
     isLanguageSupported(language: string): boolean {
-        const splitterName = this.codeSplitter.constructor.name;
-
-        if (splitterName === 'AstCodeSplitter') {
-            return AstCodeSplitter.isLanguageSupported(language);
-        }
-
-        // The legacy fallback splitter is language-agnostic.
-        return true;
+        return this.languageAnalyzer.getStrategyForLanguage(language).structural;
     }
 
     /**
      * Get which strategy would be used for a specific language
      * @param language Programming language
      */
-    getSplitterStrategyForLanguage(language: string): { strategy: 'ast' | 'langchain'; reason: string } {
-        const splitterName = this.codeSplitter.constructor.name;
-
-        if (splitterName === 'AstCodeSplitter') {
-            const isSupported = AstCodeSplitter.isLanguageSupported(language);
-
-            return {
-                strategy: isSupported ? 'ast' : 'langchain',
-                reason: isSupported
-                    ? 'Language supported by AST parser'
-                    : 'Language not supported by AST, will use recursive fallback splitter'
-            };
-        } else {
-            return {
-                strategy: 'langchain',
-                reason: 'Using recursive fallback splitter directly'
-            };
-        }
+    getLanguageAnalysisStrategy(language: string): ReturnType<LanguageAnalysisPort['getStrategyForLanguage']> {
+        return this.languageAnalyzer.getStrategyForLanguage(language);
     }
 }

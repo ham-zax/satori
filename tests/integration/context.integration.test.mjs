@@ -157,24 +157,6 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(aNorm) * Math.sqrt(bNorm));
 }
 
-function createTestSplitter() {
-  return {
-    async split(code, language, filePath) {
-      return [{
-        content: code,
-        metadata: {
-          startLine: 1,
-          endLine: code.split('\n').length,
-          language,
-          filePath,
-        },
-      }];
-    },
-    setChunkSize() {},
-    setChunkOverlap() {},
-  };
-}
-
 function createTempCodebase(files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-integration-'));
   for (const [relativePath, content] of Object.entries(files)) {
@@ -192,7 +174,6 @@ function createContext() {
   const context = new Context({
     embedding: new DeterministicEmbedding(),
     vectorDatabase,
-    codeSplitter: createTestSplitter(),
   });
   return { context, vectorDatabase };
 }
@@ -270,7 +251,7 @@ test('integration: index_codebase persists searchable chunks', async () => {
   try {
     const stats = await context.indexCodebase(codebasePath);
     assert.equal(stats.indexedFiles, 1);
-    assert.equal(stats.totalChunks, 1);
+    assert.ok(stats.totalChunks > 0);
     assert.equal(await context.hasIndexedCollection(codebasePath), true);
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });

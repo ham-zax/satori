@@ -33,7 +33,7 @@ test('language registry is backed by canonical capability declarations', () => {
     assert.notEqual(go?.callsCapability, 'production_ready');
 });
 
-test('language registry routes modern module and systems extensions without changing capability honesty', () => {
+test('language registry routes modern module and systems extensions through qualified capability tiers', () => {
     assert.equal(getLanguageIdFromExtension('.mts'), 'typescript');
     assert.equal(getLanguageIdFromExtension('cts'), 'typescript');
     assert.equal(getLanguageIdFromExtension('.c'), 'cpp');
@@ -48,27 +48,27 @@ test('language registry routes modern module and systems extensions without chan
     assert.equal(isLanguageCapabilitySupportedForExtension('.mts', 'owner'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.c', 'search'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.c', 'astSplitter'), true);
-    assert.equal(isLanguageCapabilitySupportedForExtension('.c', 'owner'), false);
+    assert.equal(isLanguageCapabilitySupportedForExtension('.c', 'owner'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'search'), true);
-    assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'owner'), false);
+    assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'owner'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'search'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'owner'), false);
 });
 
 test('L1 candidate languages do not claim graph capabilities by routing alone', () => {
-    for (const language of ['go', 'rust', 'java', 'csharp', 'php', 'ruby', 'kotlin', 'swift']) {
+    for (const language of ['go', 'rust', 'java', 'csharp', 'cpp', 'scala', 'php', 'ruby', 'kotlin', 'swift']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphBuild'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphQuery'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'testLinks'), false, language);
     }
-    for (const language of ['go', 'rust']) {
+    for (const language of ['go', 'rust', 'java', 'csharp', 'cpp', 'scala']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), true, language);
     }
-    for (const language of ['java', 'csharp', 'php', 'ruby', 'kotlin', 'swift']) {
+    for (const language of ['php', 'ruby', 'kotlin', 'swift']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), false, language);

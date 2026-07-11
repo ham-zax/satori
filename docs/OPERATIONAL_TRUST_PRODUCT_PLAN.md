@@ -1,6 +1,6 @@
 # Operational Trust Product Plan
 
-Status: P0 operational trust implemented with residual hardening closed for startup recovery, exclusive-lease supersede, repair recovery, and call-graph commit fencing; P1/P2 implementation remains
+Status: P0 operational trust is complete. The mutation-safe fixtures, current-source navigation hardening, language-capability evidence, workflow documentation, and privacy-safe local diagnostics are implemented. One active task remains: record a clean useful-context baseline and set regression budgets. Embedded zvec storage is intentionally deferred and requires explicit user approval before implementation.
 
 ## Capability
 
@@ -56,12 +56,11 @@ Verified installation and expanded doctor diagnostics are implemented. Residual 
 
 ## Remaining Roadmap
 
-Four roadmap workstreams remain incomplete after the P0 operational-trust sequence:
+One active task remains after the operational-trust implementation:
 
-1. Retrieval benchmark and useful-context measurements (grader and corpus scaffold implemented; measurement and release budgets remain).
-2. Declared plus observed language-capability evidence.
-3. Qualification and implementation of one embedded vector backend.
-4. Workflow-oriented documentation plus privacy-safe local diagnostics.
+1. Record a clean, searchable useful-context baseline and set numeric regression budgets.
+
+One product decision is explicitly deferred and is not active implementation work: do not implement zvec unless the user approves reopening it.
 
 ## Fixed Boundaries
 
@@ -289,8 +288,12 @@ Current implementation state:
 
 - The offline grader validates exact six-tool setup/invocation payloads, language labels, paired cold/warm observations, owner-in-top-three, parser-bounded exact opens, graph-derived callers, UTF-8 payload bytes, context bytes, and optional regression limits.
 - Exact-open success requires `status=ok`, exact owner identity, and exact parser-derived boundaries. Configured limit failures remain in the report and make the CLI exit non-zero.
-- The current corpus contains only non-destructive repeatable owner-discovery, exact-identifier, and exact-open workloads. It has no measured baseline or absolute budgets.
-- Caller, dirty-file, and stale-recovery grading remain available, but those tasks require a dedicated fixture runner before they can enter the committed baseline without mutating a user's source tree or index.
+- A deterministic recorder starts one fresh MCP runtime per task, verifies the canonical six-tool order, performs an unmeasured explicit incremental sync, proves its completed receipt through status, then records prepared-cold and warm calls in the same runtime. Prepared-cold means the workload has not run yet; protocol and freshness setup have run. Measured calls that cause or join sync, or change the operation generation, are rejected.
+- Recording is bound to one canonical root, clean Git revision, normalized task-suite hash, MCP server version, Node platform, preparation sync statistics, and per-task completed operation generation/runtime fingerprint. Output paths inside the measured repository are rejected. The current status envelope does not separately expose the indexed fingerprint, so the completed compatibility-gated sync receipt is the available proof.
+- The current corpus contains source-read-only repeatable owner-discovery, exact-identifier, and exact-open workloads. Preparation sync may update stale index chunks and advances durable receipts before timing. The corpus has no measured baseline or absolute budgets.
+- Caller, dirty-file, and stale-recovery grading use a dedicated fixture runner with a fresh temporary Git root per task. The runner rejects template symlinks, traversal, and output inside the template checkout. Dirty-file setup uses an explicit same-runtime no-change sync because the freshness throttle is process-local; it does not pre-run the exact workload. Dirty searches must return the expected owner with `freshnessDecision.mode=skipped_recent`. Stale recovery requires `syncStats.modified >= 1`, a completed durable sync receipt, and recovered expected-owner evidence.
+- Fixture cleanup calls `clear` before removing a temporary root. It retains the exact root when clear fails and reports primary, clear, and runtime-close failures without hiding the original cause.
+- A real baseline is currently blocked until the recorder changes are committed and this repository has a searchable index. Restore readiness through proven repair or sync evidence where possible; do not use an expensive provider-backed reindex merely to produce benchmark data.
 
 ### Navigation Correctness Work
 
@@ -302,6 +305,8 @@ Current implementation state:
 6. Reduce redundant default response fields only after measuring their decision value and payload cost; do not add a public response-mode parameter in this work.
 
 Runtime scope does not change as part of this work. Hybrid Satori discovery followed by bounded native exact lookup remains workflow guidance, not a new runtime feature.
+
+Implementation state: TypeScript, JavaScript, and Python exact navigation now reparses current source and fails closed when the persisted symbol cannot be proven. Dirty overlay work is bounded to 16 files, 256 KiB per file, 2 MiB total, and 16 results; stale indexed candidates from dirty paths are suppressed. The public MCP input surface is unchanged.
 
 ## P1: Language Capability Evidence
 
@@ -317,6 +322,8 @@ Reuse the existing language capability declarations and combine them with observ
 
 Status owns the per-root summary. Search results retain their existing per-result capability evidence. A compatible relationship sidecar with zero observed edges is distinct from an unsupported language.
 
+Implementation state: `manage_index status` exposes the summary. It reads the symbol registry once and reuses that exact generation for symbol quality and language evidence. Relationship shards are still fully validated before reporting compatible call-graph evidence; this I/O is intentional fail-closed proof rather than a manifest-only capability claim.
+
 ## P1: One Local Stack
 
 Do not select an embedded vector backend from roadmap prose. Candidate adapters must first prove:
@@ -330,6 +337,35 @@ Do not select an embedded vector backend from roadmap prose. Candidate adapters 
 
 Support one embedded backend only after it passes the shared adapter contract. Avoid several partially supported local backends.
 
+### zvec Qualification State
+
+Decision: zvec implementation is intentionally deferred. Research notes may remain in this plan, but no zvec dependency, adapter, catalog, configuration, fingerprint, runtime, installer, doctor, packaging, or migration work may begin without new explicit user approval. Absence of Milvus configuration must not activate zvec implicitly.
+
+Prior research identifies the Apache-2.0-licensed zvec project as the preferred offline vector-store candidate, but `@zvec/zvec` 0.5.0 is not acceptable as a supported backend. It proved in-process persistence, dense and full-text retrieval, local RRF hybrid search, exact-ID fetch, upsert, deletion, scalar filters, metadata round trips, read-only opens, reader/reader concurrency, and native Node 24 loading on WSL. zvec would replace Milvus only; a fully local stack would also use a local embedding provider such as Ollama and would not require VoyageAI, Gemini, OpenAI, a cloud reranker, or a vector-database server.
+
+The 0.5.0 qualification found four release-blocking failures:
+
+1. Full-text matches disappeared after close and reopen in a 3,000-document test. Dense data remained. The upstream core fix is merged in [zvec PR 566](https://github.com/alibaba/zvec/pull/566), but is not present in Node package 0.5.0.
+2. A zero-match scalar filter correctly returned no scalar or dense results, while hybrid search returned forbidden documents. This is tracked in [zvec issue 583](https://github.com/alibaba/zvec/issues/583).
+3. Reader/reader access worked, but reader/writer, writer/reader, and writer/writer combinations failed because readers use a shared collection lock and writers require the exclusive lock. This is tracked in [zvec issue 586](https://github.com/alibaba/zvec/issues/586). Bounded writable opens may shorten interruption but do not prove uninterrupted multi-reader behavior.
+4. A successfully acknowledged upsert did not survive process termination for a read-only reopen. A writable reopen recovered it in memory, but close or optimize did not durably publish it; a later unrelated write made both records persist. That is incompatible with durable Satori operation receipts.
+
+If the user later approves reopening implementation, work must begin only after a Node release contains the full-text restart and zero-match hybrid-filter fixes. The approved sequence would be shared adapter contract tests, a typed filter compiler, the adapter, backend-specific fingerprints and runtime selection, installer/doctor support, then an Ollama plus zvec lifecycle fixture. The adapter boundary remains `VectorDatabase`; it would use installer-owned storage below `~/.satori/vector/zvec/`, FP32 vectors, FTS over `content`, exact fetch for intrinsic-ID marker queries, read-only handles for bounded queries, writable handles only under the mutation lease, `finally`-closed handles, and close-plus-reopen verification as the durability boundary.
+
+Required release gates are:
+
+- full-text matches survive restart with at least 3,000 documents;
+- zero-match filtered hybrid searches return zero results;
+- every successfully acknowledged batch survives process termination without a later write;
+- reader/writer contention is bounded and deterministic;
+- supported Node 20 and 22 targets pass on every supported platform;
+- completion-marker, repair, deletion, retry, payload-equality, and fingerprint contract tests pass;
+- cosine distance is normalized to Satori's higher-is-better score contract;
+- backend-neutral filters are parsed and translated rather than forwarded as Milvus expressions;
+- collection catalog, concurrent-open, event-loop blocking, installer, doctor, and packaging gates pass.
+
+Milvus collections would not be reused when switching to zvec. Moving from a Milvus/Voyage index to zvec/Ollama changes both embedding and vector-backend fingerprints and therefore requires one full reindex. Performance benchmarking starts only after the correctness gates pass.
+
 ## P2: Workflow Documentation
 
 - Replace `SATORI_FEATURES_AND_USE_CASES.md` with short workflows for install, first index, navigate, recover, and diagnose.
@@ -340,7 +376,9 @@ Support one embedded backend only after it passes the shared adapter contract. A
 
 ## P2: Privacy-Safe Diagnostics
 
-Local diagnostics may aggregate durations, warning codes, result counts, fallback use, lifecycle outcomes, and recovery success. They must not persist source, query text, paths, symbol names, or stable repository identifiers by default.
+Local diagnostics may aggregate durations, warning codes, returned `search_codebase` result counts, fallback use, lifecycle outcomes, and recovery success. Outline symbols, graph nodes or edges, listed roots, and read bytes must not be combined into that search-result metric. Diagnostics must not persist source, query text, paths, symbol names, or stable repository identifiers by default.
+
+Implementation state: CLI-mediated calls record the closed public outcome vocabulary and doctor reports per-tool call counts, duration, errors, search-result-bearing calls, total search results, and zero-result searches. The local log retains at most 1,000 revalidated events, refuses symlinked paths, and publishes mode-`0600` replacements atomically behind a bounded interprocess lock. Malformed or extra fields are removed during compaction. Recording remains best-effort and non-authoritative.
 
 Any upload mechanism requires explicit consent, a versioned schema, documented retention, and a local preview of the exact payload.
 
@@ -351,10 +389,12 @@ Any upload mechanism requires explicit consent, a versioned schema, documented r
 3. Completed: latest operation receipts are persisted and exposed.
 4. Completed: structured repair proof and deterministic next actions.
 5. Completed: installer postflight verification and expanded doctor checks.
-6. In progress: retrieval grader and corpus scaffold implemented; measured baseline, absolute budgets, and mutation-safe fixture coverage remain.
-7. Remaining: declared plus observed language-capability evidence.
-8. Remaining: qualification and implementation of one embedded vector backend.
-9. Remaining: workflow-oriented documentation plus privacy-safe local diagnostics.
+6. In progress: retrieval grader, corpus scaffold, and deterministic recorder implemented; measured baseline and absolute budgets remain blocked on a clean committed revision and searchable index.
+7. Completed: mutation-safe caller, dirty-file, and stale-recovery fixtures use disposable indexed roots and clear them before deletion.
+8. Completed: generic current-source span validation and bounded dirty-file AST/lexical overlay.
+9. Completed: declared plus observed language-capability evidence is exposed by `manage_index status`.
+10. Intentionally deferred: zvec passed basic local persistence/retrieval research, but no implementation is approved. Reopening adapter, concurrency, crash, score, filter, Node-platform, installer, or packaging work requires explicit user approval.
+11. Completed: workflow-oriented documentation plus privacy-safe local diagnostics.
 
 Do not release the lease feature while any mutation path bypasses it.
 

@@ -56,7 +56,8 @@ Architecture in words:
 - Every non-dry-run install runs a bounded postflight through the exact installed launcher. The additive `postflight` receipt proves managed client configuration, MCP initialization and installed version, the canonical six-tool list, runtime-owner registration, and child/owner cleanup. Static provider/backend gaps are warnings; runtime or wiring proof failures return a non-zero install exit while preserving installed artifacts.
 - Postflight starts MCP with internal `SATORI_RUN_MODE=postflight`: it registers the runtime owner and serves MCP, but skips interrupted-index recovery, background sync, watchers, lifecycle calls, search, and all provider-backed work.
 - Managed launchers preserve the five-second signal-shutdown grace for cooperative provider/watcher cleanup. On client stdin EOF they proxy EOF to the runtime, which performs the same graceful shutdown and owner unregister; a separate 1.5-second EOF fallback reaps a non-cooperative child before the MCP SDK kills the launcher.
-- Doctor is read-only: it validates static provider/backend configuration, installed packages, managed launcher target/version, configured Codex/Claude/OpenCode launcher wiring, live owner version/fingerprint/config identity, process-start identity when available, and active/abandoned/corrupt mutation leases. It never evicts a lease based on elapsed time.
+- Doctor is read-only: it validates static provider/backend configuration, installed packages, managed launcher target/version, configured Codex/Claude/OpenCode launcher wiring, live owner version/fingerprint/config identity, process-start identity when available, and active/abandoned/corrupt mutation leases. It never evicts a lease based on elapsed time. Its additive `localDiagnostics` field summarizes bounded CLI-mediated activity from a local-only v1 event log.
+- Local CLI diagnostics record only tool name, bounded duration, outcome, returned `search_codebase` result count, allowlisted warning codes, fallback use, lifecycle action/outcome, and repair success. Outline symbols, graph nodes or edges, listed roots, and read bytes are not overloaded into that search-result metric. They never persist source, query text, paths, symbol names, or repository identifiers. The log retains at most 1,000 revalidated events, refuses symlinked parent or final paths, and uses a bounded interprocess lock plus same-directory atomic `0600` replacement. Malformed and extra fields are removed during compaction. Recording remains best-effort and non-authoritative; contention or diagnostics failure never changes a tool result.
 - `packages/mcp/src/cli` is residual non-bin tool-shell glue (list/call wrappers). `install`/`uninstall` there are hard-deprecated and exit with guidance to `satori-cli`; they must not write configs or install managed runtime.
 - Installer runtime cache paths are private implementation details; public setup remains the one-command CLI installer flow.
 - Sidecar/index artifacts are consumed by `search_codebase`, `file_outline`, `call_graph`, `read_file`.
@@ -77,6 +78,7 @@ Language capability contract:
 - Current capability tiers: TypeScript, JavaScript, and Python are the only production-ready `call_graph` languages; Go and Rust are `symbol_only`; broad catalog languages are routed/searchable or parser-declared/parser-covered without graph readiness unless separately fixture-proven.
 - Parser or extractor failure must degrade to synthesized file-owner fallback, must not crash indexing, and must not attach stale extracted-symbol owner metadata.
 - Observed symbol quality (F9 Phase 1): `manage_index status` exposes structured `symbolQuality` derived from the compatible symbol registry (non-file symbol coverage on symbol-eligible languages). `list_codebases` Ready lines include a compact `symbolQuality=<status>` marker. Status values are `symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown` with `basis: "symbol_registry"`. This gauge does **not** claim parser fallback cause; search-only languages are not labeled `symbol_sparse`. Lifecycle `indexed` means searchable/readable, not automatically symbol-rich.
+- Language capability evidence: `manage_index status` may expose additive `languageCapabilities`, sorted by canonical language and limited to languages observed in the compatible registry. It combines the static public declaration with indexed-file and non-file-symbol evidence plus relationship-sidecar compatibility. Effective `semanticSearch`, `exactSymbol`, `outline`, and `callGraph` states are `ready|degraded|unavailable|not_applicable`; deterministic `degradationReasons` explain weaker states. A compatible relationship sidecar is evidence even when it contains zero edges. Missing or generation-incompatible sidecars fail closed and never imply call-graph readiness. This field does not alter `symbolQuality` or per-result search capabilities.
 - L1 symbol-only languages must not claim `callGraphBuild` or `callGraphQuery`, must not emit `nextActions.callGraph`, and must keep `call_graph` unsupported or not-ready even if relationship sidecars exist globally.
 - Adding extensions to the capability matrix must not silently broaden the default indexing profile. Any profile expansion requires an explicit allowlist/profile test.
 - Search-only artifact/container languages such as Vue, Svelte, Astro, CSS/SCSS, Dockerfile, Makefile, CMakeLists, and Justfile must not claim `symbols`, `owner`, `imports`, `fileOutline`, or `callGraph` until deterministic extractors exist.
@@ -156,8 +158,9 @@ Outputs:
   - `status` (`ok|not_ready|not_indexed|requires_reindex|blocked|error`)
   - `reason` (when applicable)
   - `message`, `humanText`
-  - optional `warnings`, `hints`, `preflight`, `operation`, `repairProof`, `symbolQuality`
+  - optional `warnings`, `hints`, `preflight`, `operation`, `repairProof`, `symbolQuality`, `languageCapabilities`, `syncStats`
 - `humanText` remains deterministic operator-facing guidance; structured fields are authoritative for client branching.
+- Successful `sync` responses include additive structured `syncStats` (`added`, `removed`, `modified`). Consumers must use this evidence rather than parsing `humanText` when proving that a sync detected source changes.
 - The additive optional `repairProof` field does not change the version 1 envelope. It contains `collection`, `snapshot`, `marker`, `fingerprint`, `payload`, `staleRemoteChunks`, and `navigation`; each item has `status=matched|failed|missing|unproven|not_checked`, an optional explanatory `basis`, and optional counts. Pre-proof input/provider/owner/lease/indexing refusals may omit it. Once evidence collection begins, backend and publication failures preserve the latest partial proof.
 - `repair` verifies trusted runtime fingerprint provenance, exact remote payload equality, and absence of stale remote chunks before publishing readiness. It may write a fresh completion marker and rebuild navigation, but does not re-embed or rewrite source chunks.
 
@@ -219,7 +222,7 @@ Outputs:
 - Failed index snapshots return `status:"not_indexed"` with `reason:"index_failed"`, `indexingFailure` diagnostics, and `manage_index {action:"create"}` hints. This restarts a failed partial attempt; it is not a fingerprint `reindex` requirement.
 
 Warnings/hints:
-- Search warnings are structured objects with `code`, `severity`, `blocksUse`, `message`, and optional `action`; known codes include `FILTER_MUST_UNSATISFIED`, `SEARCH_PASS_FAILED:*`, `RERANKER_FAILED`, `SEARCH_DIRTY_WORKTREE_NOT_SYNCED`, and `SEARCH_CHANGED_FILES_BOOST_SKIPPED`.
+- Search warnings are structured objects with `code`, `severity`, `blocksUse`, `message`, and optional `action`; known codes include `FILTER_MUST_UNSATISFIED`, `SEARCH_PASS_FAILED:*`, `RERANKER_FAILED`, `SEARCH_DIRTY_WORKTREE_NOT_SYNCED`, `SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE`, and `SEARCH_CHANGED_FILES_BOOST_SKIPPED`. `SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE` means a stale dirty-path candidate was suppressed but bounded current-source evidence did not replace it; callers must narrow/read the file or synchronize before treating that path as covered.
 - `hints.navigation`, `hints.noiseMitigation`, `hints.debugSummary`, `hints.debugSearch`, `hints.reindex`, result `fallbacks`, and `navigationFallback`.
 - Backend failures return structured `not_ready` envelopes with `reason=vector_backend_unavailable`, stable diagnostic codes such as `ZILLIZ_CLUSTER_STOPPED`, and remediation in `hints.backend`.
 
@@ -260,8 +263,9 @@ Inputs/defaults:
 
 Outputs:
 - JSON envelope: `status`, `path`, `file`, `outline|null`, `hasMore`, optional `message`, `warnings`, `hints`, and `indexingFailure` when the tracked root is in `indexfailed`.
-- Status variants: `ok|not_found|requires_reindex|unsupported|ambiguous`.
+- Status variants: `ok|not_found|requires_reindex|not_indexed|not_ready|unsupported|ambiguous`.
 - Failed index snapshots return `status:"not_indexed"` with `reason:"index_failed"` and `manage_index {action:"create"}` hints rather than hiding the failed-state cause behind generic `not_indexed`.
+- For TypeScript, JavaScript, and Python, exact mode validates persisted identities against current source. A current-source count mismatch returns `ambiguous`; unreadable or unparseable source returns `not_ready` with `OUTLINE_SYMBOL_SPAN_UNVERIFIED`. `not_found/missing_symbol` is reserved for a completed current-source parse that proves the identity is absent.
 
 Warnings/hints:
 - `OUTLINE_MISSING_SYMBOL_METADATA:<count>`.
@@ -438,7 +442,7 @@ Behavior:
 - Trigger: `rankingMode=auto_changed_first`.
 - Effect: tracked git-changed files get multiplicative boost when changed-file count is within threshold.
 - Observability: `freshnessSummary.changedFileCount`, `freshnessSummary.gitDirtyFilesConsidered`, `freshnessSummary.changedFilesBoostApplied` (true only when at least one candidate was boosted), `freshnessSummary.changedFilesBoostSkippedForLargeChangeSet`, and `hints.debugSearch.changedFilesBoost` when `debug:true`.
-- Warnings: structured `SEARCH_DIRTY_WORKTREE_NOT_SYNCED` when tracked dirty files are visible but freshness did not sync/reconcile, and structured `SEARCH_CHANGED_FILES_BOOST_SKIPPED` when the dirty set exceeds the boost threshold. Each warning carries an action string for the caller.
+- Warnings: structured `SEARCH_DIRTY_WORKTREE_NOT_SYNCED` when tracked dirty files are visible but freshness did not sync/reconcile, structured `SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE` when stale dirty-path evidence was suppressed without a bounded current-source replacement, and structured `SEARCH_CHANGED_FILES_BOOST_SKIPPED` when the dirty set exceeds the boost threshold. Each warning carries an action string for the caller.
 - Determinism: tracked-only porcelain parse, normalized paths, TTL-cached set, threshold disable path.
 - Performance: one cached git status call per TTL window (5s), fallback to stale cache on git failure.
 

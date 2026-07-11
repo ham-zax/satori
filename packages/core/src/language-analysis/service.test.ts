@@ -92,6 +92,34 @@ test('language analysis preserves same-line duplicate TypeScript declarations by
     assert.notEqual(duplicates[0].span.startByte, duplicates[1].span.startByte);
 });
 
+test('Oxc UTF-16 offsets become exact UTF-8 symbol byte spans', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const source = 'const greeting = "é";\nexport function run() { return "你好"; }\n';
+    const result = await analyzer.analyze({
+        content: source,
+        language: 'typescript',
+        relativePath: 'src/unicode.ts',
+    });
+
+    const run = result.symbols.find((symbol) => symbol.name === 'run');
+    assert.ok(run?.span.startByte !== undefined);
+    assert.ok(run?.span.endByte !== undefined);
+    const expectedStart = Buffer.byteLength(source.slice(0, source.indexOf('function')));
+    const declarationEnd = source.indexOf('\n', source.indexOf('function'));
+    const expectedEnd = Buffer.byteLength(source.slice(0, declarationEnd));
+
+    assert.equal(run.span.startByte, expectedStart);
+    assert.equal(run.span.endByte, expectedEnd);
+    assert.equal(
+        Buffer.from(source).subarray(run.span.startByte, run.span.endByte).toString('utf8'),
+        'function run() { return "你好"; }',
+    );
+    assert.ok(result.chunks.some((chunk) => (
+        chunk.metadata.symbolLabel === 'function run'
+        && chunk.content === 'function run() { return "你好"; }'
+    )));
+});
+
 test('language analysis keeps imports and module-level text searchable beside symbol chunks', async () => {
     const analyzer = createLanguageAnalysisService({ chunkSize: 40, chunkOverlap: 5 });
     const result = await analyzer.analyze({

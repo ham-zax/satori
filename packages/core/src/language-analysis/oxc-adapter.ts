@@ -135,7 +135,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
             ? [...parents, name]
             : parents;
         if (kind && name) {
-            const span = sourceMap.span(node.start, node.end);
+            const span = sourceMap.spanFromUtf16(node.start, node.end);
             symbols.push({
                 kind,
                 name,
@@ -147,7 +147,12 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         }
         if (node.type === 'CallExpression' || node.type === 'NewExpression') {
             const name = calleeName(node);
-            if (name) callSites.push({ calleeName: name, span: sourceMap.span(node.start, node.end) });
+            if (name) {
+                callSites.push({
+                    calleeName: name,
+                    span: sourceMap.spanFromUtf16(node.start, node.end),
+                });
+            }
         }
         const childInsideCallable = insideCallable || (
             node.type === 'FunctionDeclaration'
@@ -162,7 +167,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
 
     const moduleBindings: ModuleBinding[] = [];
     for (const item of parsed.module.staticImports) {
-        const span = sourceMap.span(item.start, item.end);
+        const span = sourceMap.spanFromUtf16(item.start, item.end);
         if (item.entries.length === 0) {
             moduleBindings.push({ kind: 'import', moduleSpecifier: item.moduleRequest.value, typeOnly: false, span });
         }
@@ -178,7 +183,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         }
     }
     for (const item of parsed.module.staticExports) {
-        const span = sourceMap.span(item.start, item.end);
+        const span = sourceMap.spanFromUtf16(item.start, item.end);
         for (const entry of item.entries) {
             moduleBindings.push({
                 kind: entry.moduleRequest ? 'reexport' : 'export',

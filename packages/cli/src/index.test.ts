@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CliError } from "./errors.js";
@@ -225,7 +226,14 @@ test("runCli doctor emits diagnostics without starting an MCP session", async ()
                 { name: "node_version", status: "ok", message: "Node is supported." },
                 { name: "milvus_address", status: "error", message: "MILVUS_ADDRESS is required." }
             ],
-            nextSteps: ["Set MILVUS_ADDRESS."]
+            nextSteps: ["Set MILVUS_ADDRESS."],
+            localDiagnostics: {
+                schemaVersion: "v1", storage: "local_only",
+                privacy: "No source, query text, path, symbol name, or repository identifier is stored.",
+                eventsRead: 0, malformedEventsSkipped: 0, totalDurationMs: 0,
+                toolCalls: [], warningCodes: [], fallbackUses: 0, lifecycleOutcomes: [],
+                recovery: { attempts: 0, successes: 0 },
+            },
         }),
         connectSession: async () => {
             throw new Error("doctor should not connect to MCP");
@@ -237,6 +245,51 @@ test("runCli doctor emits diagnostics without starting an MCP session", async ()
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.status, "error");
     assert.equal(parsed.checks[1].name, "milvus_address");
+});
+
+test("runCli records only privacy-safe local measurements for direct tool calls", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-diagnostics-home-"));
+    const io = captureIo();
+    try {
+        const exitCode = await runCli([
+            "tool",
+            "call",
+            "search_codebase",
+            "--args-json",
+            JSON.stringify({ path: "/private/repository", query: "SecretOwner" }),
+        ], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            env: { HOME: homeDir },
+            diagnosticsPath: path.join(homeDir, ".satori", "diagnostics", "events.jsonl"),
+            nowMs: (() => {
+                const values = [100, 125];
+                return () => values.shift() ?? 125;
+            })(),
+            connectSession: async () => ({
+                async listTools() { return { tools: [] }; },
+                async callTool() {
+                    return {
+                        isError: false,
+                        content: [{ type: "text", text: JSON.stringify({
+                            status: "ok",
+                            results: [{ file: "src/private.ts" }],
+                            warnings: [{ code: "RERANKER_FAILED" }],
+                        }) }],
+                    };
+                },
+                async close() { return; },
+            }),
+        });
+
+        assert.equal(exitCode, 0);
+        const log = fs.readFileSync(path.join(homeDir, ".satori", "diagnostics", "events.jsonl"), "utf8");
+        assert.match(log, /"durationMs":25/);
+        assert.match(log, /RERANKER_FAILED/);
+        assert.doesNotMatch(log, /private|SecretOwner|query|path|symbol/i);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
 });
 
 test("runCli doctor text mode prints next steps to stderr", async () => {
@@ -255,7 +308,14 @@ test("runCli doctor text mode prints next steps to stderr", async () => {
             checks: [
                 { name: "milvus_token", status: "warning", message: "optional token missing" }
             ],
-            nextSteps: ["Verify npm can access @zokizuan/satori-mcp from this machine."]
+            nextSteps: ["Verify npm can access @zokizuan/satori-mcp from this machine."],
+            localDiagnostics: {
+                schemaVersion: "v1", storage: "local_only",
+                privacy: "No source, query text, path, symbol name, or repository identifier is stored.",
+                eventsRead: 0, malformedEventsSkipped: 0, totalDurationMs: 0,
+                toolCalls: [], warningCodes: [], fallbackUses: 0, lifecycleOutcomes: [],
+                recovery: { attempts: 0, successes: 0 },
+            },
         }),
     });
 

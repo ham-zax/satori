@@ -11,6 +11,7 @@ import {
 } from "./managed-package.js";
 import { inspectManagedClientConfigurations } from "./install.js";
 import { evaluateStaticRuntimeConfig } from "./runtime-config.js";
+import { readLocalDiagnosticsSummary, type LocalDiagnosticsSummary } from "./local-diagnostics.js";
 
 type CheckStatus = "ok" | "warning" | "error";
 
@@ -35,6 +36,8 @@ export interface DoctorResult {
     packageVersionNote: string;
     checks: DoctorCheck[];
     nextSteps: string[];
+    /** Aggregated CLI activity stored only on this machine; contains no repository or request identity. */
+    localDiagnostics: LocalDiagnosticsSummary;
 }
 
 export interface DoctorProcessSnapshot {
@@ -60,6 +63,8 @@ export interface DoctorOptions {
     managedLauncherPath?: string | null;
     /** Override installed-client wiring inspection. */
     inspectManagedClients?: (homeDir: string) => ReturnType<typeof inspectManagedClientConfigurations>;
+    /** Override local diagnostics event log path. */
+    diagnosticsPath?: string;
 }
 
 const PACKAGE_VERSION_NOTE =
@@ -359,6 +364,9 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
         packageVersionNote: PACKAGE_VERSION_NOTE,
         checks,
         nextSteps: [...new Set(nextSteps)],
+        localDiagnostics: readLocalDiagnosticsSummary(
+            options.diagnosticsPath || path.join(homeDir, ".satori", "diagnostics", "events.jsonl"),
+        ),
     };
 }
 

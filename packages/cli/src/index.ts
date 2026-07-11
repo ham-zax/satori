@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { parseCliArgs, parseWrapperArgumentsFromSchema, resolveRawArguments } from "./args.js";
 import type { ParsedCommand } from "./args.js";
@@ -19,6 +20,7 @@ import { verifyManagedPackageInstallability } from "./package-installability.js"
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
 import { runDoctor } from "./doctor.js";
 import type { DoctorResult } from "./doctor.js";
+import { buildLocalDiagnosticEvent, recordLocalDiagnosticEvent } from "./local-diagnostics.js";
 
 interface RunCliOptions {
     writeStdout?: (text: string) => void;
@@ -34,6 +36,9 @@ interface RunCliOptions {
     installabilityVerifier?: () => string | Promise<string>;
     installRuntimeCommand?: ManagedRuntimeCommand;
     doctorRunner?: (options: { env: NodeJS.ProcessEnv }) => DoctorResult;
+    nowMs?: () => number;
+    /** Test/embed override; null disables best-effort local recording. */
+    diagnosticsPath?: string | null;
     installPostflightRunner?: (options: InstallPostflightOptions) => Promise<InstallPostflightResult>;
     connectSession?: (options: {
         command: string;
@@ -183,9 +188,32 @@ async function invokeTool(
     session: CliSession,
     _callTimeoutMs: number,
     writers: { writeStdout: (text: string) => void; writeStderr: (text: string) => void; },
-    format: "json" | "text"
+    format: "json" | "text",
+    diagnostics: { path: string; nowMs: () => number } | null,
 ): Promise<number> {
-    let result = await session.callTool(toolName, args);
+    const startedAt = diagnostics?.nowMs() ?? 0;
+    let result: CallToolResult;
+    try {
+        result = await session.callTool(toolName, args);
+    } catch (error) {
+        if (diagnostics) {
+            recordLocalDiagnosticEvent(diagnostics.path, buildLocalDiagnosticEvent({
+                toolName,
+                args,
+                result: { isError: true },
+                durationMs: diagnostics.nowMs() - startedAt,
+            }));
+        }
+        throw error;
+    }
+    if (diagnostics) {
+        recordLocalDiagnosticEvent(diagnostics.path, buildLocalDiagnosticEvent({
+            toolName,
+            args,
+            result,
+            durationMs: diagnostics.nowMs() - startedAt,
+        }));
+    }
 
     const initialErrorExit = evaluateToolResultForError(result, writers);
     if (initialErrorExit !== null) {
@@ -215,6 +243,13 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         writeStderr: options.writeStderr || ((text: string) => process.stderr.write(text)),
     };
     const effectiveEnv = options.env || process.env;
+    const homeDir = effectiveEnv.HOME || os.homedir();
+    const diagnosticsPath = options.diagnosticsPath === null || (options.connectSession && options.diagnosticsPath === undefined)
+        ? null
+        : options.diagnosticsPath || path.join(homeDir, ".satori", "diagnostics", "events.jsonl");
+    const diagnostics = diagnosticsPath
+        ? { path: diagnosticsPath, nowMs: options.nowMs || (() => performance.now()) }
+        : null;
     let parsedFormat: "json" | "text" = "json";
     let parsedCommandKind: ParsedCommand["kind"] | null = null;
 
@@ -260,7 +295,6 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
-            const homeDir = effectiveEnv.HOME || os.homedir();
             let packageSpecifier: string | undefined;
             if (parsed.command.kind === "install") {
                 packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
@@ -319,7 +353,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     stdin: options.stdin,
                     stdinTimeoutMs: callTimeoutMs,
                 });
-                return await invokeTool(parsed.command.toolName, args, session, callTimeoutMs, writers, parsed.globals.format);
+                return await invokeTool(parsed.command.toolName, args, session, callTimeoutMs, writers, parsed.globals.format, diagnostics);
             }
 
             const listToolsResult = await session.listTools();
@@ -330,7 +364,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     stdinTimeoutMs: callTimeoutMs,
                 })
                 : parseWrapperArgumentsFromSchema(parsed.command.toolName, schema, parsed.command.wrapperArgs);
-            return await invokeTool(parsed.command.toolName, args, session, callTimeoutMs, writers, parsed.globals.format);
+            return await invokeTool(parsed.command.toolName, args, session, callTimeoutMs, writers, parsed.globals.format, diagnostics);
         } finally {
             await session.close();
         }

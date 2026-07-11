@@ -39,6 +39,8 @@ npx -y @zokizuan/satori-cli@latest uninstall --client codex
 
 `doctor` is read-only. It checks Node, package visibility, supported provider/model/dimension settings, required provider keys, Milvus configuration, the installed Satori package set, the stable managed launcher target, and every configured Codex/Claude/OpenCode Satori entry. It reads runtime owners with process-start evidence when the platform provides it, errors on stale installed versions or conflicting fingerprints/config identities, and reports active, abandoned, or corrupt mutation leases without expiring or rewriting them by age.
 
+Direct MCP tool calls made through `satori-cli` also write a capped, local-only diagnostics log. `doctor` reports its aggregate under `localDiagnostics`: tool category, duration, outcome, returned `search_codebase` result count, known warning codes, fallback use, lifecycle outcome, and repair success. Outline symbols, graph nodes or edges, listed roots, and read bytes are not combined into the search-result metric. The log stores no source, query text, path, symbol name, or repository identifier, is limited to 1,000 validated events, and is never uploaded. Writes use a bounded interprocess lock and same-directory atomic replacement, refuse symlinked log paths, and remove malformed or extra fields during compaction. Recording is best-effort and cannot change a tool call's result.
+
 `--profile default|minimal|all-text` writes or updates repo-local `satori.toml` for the current working directory. It is repo index policy only; it is not MCP client config and must not contain provider credentials.
 
 Profile behavior:

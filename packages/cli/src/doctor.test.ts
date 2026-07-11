@@ -21,12 +21,14 @@ const fixedPackageVersions = (): DoctorPackageVersion[] => [
 
 /** Isolate doctor from the operator machine's ~/.satori/runtime/owners.json. */
 const noRuntimeOwnersPath = path.join(os.tmpdir(), "satori-doctor-no-owners-registry.json");
+const noDiagnosticsPath = path.join(os.tmpdir(), "satori-doctor-no-diagnostics.jsonl");
 
 function baseDoctorOptions(overrides: DoctorOptions = {}): DoctorOptions {
     return {
         execFileSyncImpl: successfulExecFileSync,
         resolvePackageVersions: fixedPackageVersions,
         runtimeOwnersPath: noRuntimeOwnersPath,
+        diagnosticsPath: noDiagnosticsPath,
         mutationLeasesPath: null,
         managedLauncherPath: null,
         inspectManagedClients: () => [{
@@ -78,6 +80,34 @@ test("runDoctor reports missing default VoyageAI and Milvus env", () => {
         "Set MILVUS_ADDRESS to a Zilliz Cloud public endpoint or local Milvus address such as localhost:19530.",
         "Restart your MCP client after changing Satori environment variables.",
     ]);
+});
+
+test("runDoctor includes a privacy-safe summary of local CLI diagnostics", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-diagnostics-"));
+    const diagnosticsPath = path.join(tempDir, "events.jsonl");
+    try {
+        fs.writeFileSync(diagnosticsPath, `${JSON.stringify({
+            schemaVersion: "v1",
+            kind: "tool_call",
+            tool: "search_codebase",
+            durationMs: 12,
+            outcome: "ok",
+            resultCount: 2,
+            warningCodes: ["RERANKER_FAILED"],
+            fallbackUsed: true,
+        })}\n`);
+        const result = runDoctor(baseDoctorOptions({
+            env: healthyEnv(),
+            diagnosticsPath,
+        }));
+
+        assert.equal(result.localDiagnostics.eventsRead, 1);
+        assert.equal(result.localDiagnostics.totalDurationMs, 12);
+        assert.deepEqual(result.localDiagnostics.warningCodes, [{ code: "RERANKER_FAILED", count: 1 }]);
+        assert.doesNotMatch(JSON.stringify(result.localDiagnostics), /events\.jsonl|satori-doctor-diagnostics/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test("runDoctor treats whitespace-only provider env as incomplete", () => {

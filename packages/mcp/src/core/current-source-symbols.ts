@@ -11,6 +11,7 @@ import {
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 
 const CURRENT_SOURCE_LANGUAGES = new Set(["typescript", "javascript", "python"]);
+const CURRENT_SOURCE_MAX_BYTES = 256 * 1024;
 
 export type CurrentSourceSymbolValidation = PythonSourceBackedSpanRepair & {
     match: "matched" | "missing" | "ambiguous" | "unavailable" | "not_applicable";
@@ -30,6 +31,10 @@ async function readCurrentSource(codebaseRoot: string, relativeFile: string): Pr
             return undefined;
         }
         handle = await openRegularFileInsideRoot(logicalFile, canonicalRoot);
+        const stat = await handle.stat();
+        if (stat.size > CURRENT_SOURCE_MAX_BYTES) {
+            return undefined;
+        }
         return await handle.readFile("utf8");
     } catch {
         return undefined;
@@ -48,6 +53,20 @@ function unchangedValidation(symbol: SymbolRecord, match: CurrentSourceSymbolVal
         endTruncated: false,
         match,
     };
+}
+
+function currentDeclarationKey(symbol: SymbolRecord): string {
+    const span = symbol.span;
+    if (span.endByte !== undefined) {
+        // Export/decorator wrapper nodes and their declaration node share the
+        // same end boundary. Distinct same-line declarations do not.
+        return `${symbol.symbolKey}\0endByte:${span.endByte}`;
+    }
+    return [
+        symbol.symbolKey,
+        span.endLine,
+        span.endColumn ?? "",
+    ].join("\0");
 }
 
 function minOptional(left: number | undefined, right: number | undefined): number | undefined {
@@ -93,7 +112,11 @@ export async function validateCurrentSourceSymbolSpans(input: {
     try {
         const splitter = new AstCodeSplitter(Number.MAX_SAFE_INTEGER);
         splitter.setChunkOverlap(0);
-        const chunks = await splitter.split(source, language, relativeFile);
+        const split = await splitter.splitWithEvidence(source, language, relativeFile);
+        if (!split.structuralParseCompleted) {
+            return input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable"));
+        }
+        const chunks = split.chunks;
         const fileHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
         const extractorVersion = input.symbols[0].extractorVersion;
         const currentByIdentityAndSpan = new Map<string, SymbolRecord>();
@@ -107,7 +130,7 @@ export async function validateCurrentSourceSymbolSpans(input: {
         })[0];
         if (currentFileOwner) {
             currentByIdentityAndSpan.set(
-                `${currentFileOwner.symbolKey}\0${currentFileOwner.span.startLine}\0${currentFileOwner.span.endLine}`,
+                currentDeclarationKey(currentFileOwner),
                 currentFileOwner,
             );
         }
@@ -121,16 +144,18 @@ export async function validateCurrentSourceSymbolSpans(input: {
                 chunks: [chunk],
             });
             for (const current of chunkSymbols.filter((symbol) => symbol.kind !== "file")) {
-                const spanKey = `${current.symbolKey}\0${current.span.startLine}\0${current.span.endLine}`;
-                const existing = currentByIdentityAndSpan.get(spanKey);
+                const declarationKey = currentDeclarationKey(current);
+                const existing = currentByIdentityAndSpan.get(declarationKey);
                 if (!existing) {
-                    currentByIdentityAndSpan.set(spanKey, current);
+                    currentByIdentityAndSpan.set(declarationKey, current);
                     continue;
                 }
-                currentByIdentityAndSpan.set(spanKey, {
+                currentByIdentityAndSpan.set(declarationKey, {
                     ...existing,
                     span: {
                         ...existing.span,
+                        startLine: Math.min(existing.span.startLine, current.span.startLine),
+                        endLine: Math.max(existing.span.endLine, current.span.endLine),
                         startByte: minOptional(existing.span.startByte, current.span.startByte),
                         endByte: maxOptional(existing.span.endByte, current.span.endByte),
                         startColumn: minOptional(existing.span.startColumn, current.span.startColumn),

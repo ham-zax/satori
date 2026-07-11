@@ -962,8 +962,8 @@ test('handleFileOutline exact mode returns not_ready when current-source parsing
             fileHash: sha256Content(source),
         });
         await writeTestSymbolRegistry(repoPath, [owner]);
-        const originalSplit = AstCodeSplitter.prototype.split;
-        AstCodeSplitter.prototype.split = async () => {
+        const originalSplit = AstCodeSplitter.prototype.splitWithEvidence;
+        AstCodeSplitter.prototype.splitWithEvidence = async () => {
             throw new Error('forced parser failure');
         };
         try {
@@ -986,7 +986,7 @@ test('handleFileOutline exact mode returns not_ready when current-source parsing
             assert.equal(payload.reason, undefined);
             assert.equal(payload.warnings?.includes('OUTLINE_SYMBOL_SPAN_UNVERIFIED'), true);
         } finally {
-            AstCodeSplitter.prototype.split = originalSplit;
+            AstCodeSplitter.prototype.splitWithEvidence = originalSplit;
         }
     }));
 });

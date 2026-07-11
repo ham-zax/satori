@@ -77,6 +77,17 @@ test('AstCodeSplitter preserves byte spans for same-line anonymous callbacks', a
     assert.ok(typeof callbacks[1].metadata.endByte === 'number');
 });
 
+test('AstCodeSplitter reports syntax-error recovery as unverified structural evidence', async () => {
+    const splitter = new AstCodeSplitter();
+    const valid = await splitter.splitWithEvidence('function valid() {}\n', 'typescript', 'src/valid.ts');
+    const malformed = await splitter.splitWithEvidence('function invalid( {\n', 'typescript', 'src/invalid.ts');
+
+    assert.equal(valid.structuralParseCompleted, true);
+    assert.equal(valid.reason, 'ast');
+    assert.equal(malformed.structuralParseCompleted, false);
+    assert.equal(malformed.reason, 'parse_error');
+});
+
 test('AstCodeSplitter overlap does not split emoji surrogate pairs', async () => {
     const code = [
         'export function statusText(): string {',

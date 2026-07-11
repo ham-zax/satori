@@ -72,6 +72,12 @@ type LanguageConfig = {
     nodeTypes: string[];
 };
 
+export type AstSplitEvidence = {
+    chunks: CodeChunk[];
+    structuralParseCompleted: boolean;
+    reason: "ast" | "empty" | "unsupported_language" | "parse_error" | "parser_failure";
+};
+
 export class AstCodeSplitter implements Splitter {
     private chunkSize: number = 2500;
     private chunkOverlap: number = 300;
@@ -89,17 +95,29 @@ export class AstCodeSplitter implements Splitter {
     }
 
     async split(code: string, language: string, filePath?: string): Promise<CodeChunk[]> {
+        return (await this.splitWithEvidence(code, language, filePath)).chunks;
+    }
+
+    /**
+     * Exposes whether chunks came from a complete structural parse. Indexing may
+     * still use fallback chunks, while exact navigation must fail closed.
+     */
+    async splitWithEvidence(code: string, language: string, filePath?: string): Promise<AstSplitEvidence> {
         const normalizedLanguage = normalizeLanguageId(language);
         // Empty / non-string input: fail closed to empty chunks (avoid tree-sitter Invalid argument).
         if (typeof code !== "string" || code.length === 0) {
-            return [];
+            return { chunks: [], structuralParseCompleted: true, reason: "empty" };
         }
 
         // Check if language is supported by AST splitter
         const langConfig = this.getLanguageConfig(normalizedLanguage);
         if (!langConfig) {
             console.log(`📝 Language ${language} not supported by AST, using recursive fallback splitter for: ${filePath || 'unknown'}`);
-            return await this.langchainFallback.split(code, language, filePath);
+            return {
+                chunks: await this.langchainFallback.split(code, language, filePath),
+                structuralParseCompleted: false,
+                reason: "unsupported_language",
+            };
         }
 
         try {
@@ -123,7 +141,11 @@ export class AstCodeSplitter implements Splitter {
                     `emptyRoot:${normalizedLanguage}`,
                     `[ASTSplitter] Failed to parse AST for ${normalizedLanguage}, falling back to recursive splitter: ${filePath || 'unknown'}`,
                 );
-                return await this.langchainFallback.split(code, language, filePath);
+                return {
+                    chunks: await this.langchainFallback.split(code, language, filePath),
+                    structuralParseCompleted: false,
+                    reason: "parser_failure",
+                };
             }
 
             // Extract chunks based on AST nodes
@@ -132,7 +154,11 @@ export class AstCodeSplitter implements Splitter {
             // If chunks are too large, split them further
             const refinedChunks = await this.refineChunks(chunks, code);
 
-            return refinedChunks;
+            return {
+                chunks: refinedChunks,
+                structuralParseCompleted: !tree.rootNode.hasError,
+                reason: tree.rootNode.hasError ? "parse_error" : "ast",
+            };
         } catch (error) {
             const textSymbolChunks = this.extractTextSymbolChunks(code, normalizedLanguage, filePath);
             if (textSymbolChunks.length > 0) {
@@ -140,14 +166,22 @@ export class AstCodeSplitter implements Splitter {
                     `textSymbol:${normalizedLanguage}:${String(error)}`,
                     `[ASTSplitter] AST splitter failed for ${normalizedLanguage}, using text-symbol fallback: ${error}`,
                 );
-                return await this.refineChunks(textSymbolChunks, code);
+                return {
+                    chunks: await this.refineChunks(textSymbolChunks, code),
+                    structuralParseCompleted: false,
+                    reason: "parser_failure",
+                };
             }
 
             logAstSplitterFallback(
                 `recursive:${normalizedLanguage}:${String(error)}`,
                 `[ASTSplitter] AST splitter failed for ${normalizedLanguage}, falling back to recursive splitter: ${error}`,
             );
-            return await this.langchainFallback.split(code, language, filePath);
+            return {
+                chunks: await this.langchainFallback.split(code, language, filePath),
+                structuralParseCompleted: false,
+                reason: "parser_failure",
+            };
         }
     }
 

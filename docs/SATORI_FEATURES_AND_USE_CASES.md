@@ -112,7 +112,7 @@ Warnings are degraded evidence unless `blocksUse=true`.
 
 ### Lock The Exact Symbol
 
-Once a candidate file is known, use `file_outline` to resolve the exact symbol and current span. Exact mode returns `ok`, `ambiguous`, or `not_found`; it does not guess.
+Once a candidate file is known, use `file_outline` to resolve the exact symbol and current span. Exact mode returns `ok`, `ambiguous`, `not_found`, or `not_ready`; it does not guess. Treat `not_ready` as unverified current source: synchronize when appropriate, then use a bounded direct read if verification remains unavailable.
 
 ```json
 {

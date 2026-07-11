@@ -31,8 +31,8 @@
           }
         ],
         "phaseProtocol": {
-          "cold": "restart the MCP runtime, verify setup status is indexed, then run the invocation once",
-          "warm": "repeat the identical invocation once in the same runtime without file or index changes"
+          "cold": "start a fresh MCP runtime, complete an unmeasured sync with durable status proof, then run the workload once",
+          "warm": "repeat the identical workload once while the proven index operation remains unchanged"
         }
       }
     },
@@ -65,8 +65,8 @@
           }
         ],
         "phaseProtocol": {
-          "cold": "restart the MCP runtime, verify setup status is indexed, then run the invocation once",
-          "warm": "repeat the identical invocation once in the same runtime without file or index changes"
+          "cold": "start a fresh MCP runtime, complete an unmeasured sync with durable status proof, then run the workload once",
+          "warm": "repeat the identical workload once while the proven index operation remains unchanged"
         }
       }
     },
@@ -91,13 +91,14 @@
             "tool": "read_file",
             "args": {
               "path": "$REPO_ROOT/packages/core/src/core/context.ts",
+              "mode": "annotated",
               "open_symbol": { "symbolLabel": "repairIndex" }
             }
           }
         ],
         "phaseProtocol": {
-          "cold": "restart the MCP runtime, verify setup status is indexed, then run the invocation once",
-          "warm": "repeat the identical invocation once in the same runtime without file or index changes"
+          "cold": "start a fresh MCP runtime, complete an unmeasured sync with durable status proof, then run the workload once",
+          "warm": "repeat the identical workload once while the proven index operation remains unchanged"
         }
       }
     }

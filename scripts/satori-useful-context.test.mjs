@@ -757,6 +757,12 @@ test("committed tasks.json validates as a repeatable multi-class corpus without 
         assert.equal(task.baselineLimits, undefined);
         assert.ok(task.workload.setup.length > 0);
         assert.ok(task.workload.invocations.length > 0);
+        if (task.queryClass === "exact_open") {
+            const invocation = task.workload.invocations.at(-1);
+            assert.equal(invocation.tool, "read_file");
+            assert.equal(invocation.args.mode, "annotated");
+            assert.ok(invocation.args.open_symbol);
+        }
     }
 });
 

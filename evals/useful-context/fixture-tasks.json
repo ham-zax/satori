@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "name": "Satori mutation-isolated useful-context fixtures",
+  "tasks": [
+    {
+      "id": "fixture-caller-recovery",
+      "queryClass": "caller_recovery",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "src/owner.ts",
+        "ownerSymbol": "fixtureOwner",
+        "callerSymbols": [
+          { "file": "src/caller.ts", "symbol": "fixtureCaller" }
+        ]
+      },
+      "workload": {
+        "setup": [
+          { "tool": "manage_index", "args": { "action": "status", "path": "$REPO_ROOT" } }
+        ],
+        "invocations": [
+          {
+            "tool": "call_graph",
+            "args": {
+              "path": "$REPO_ROOT",
+              "symbolRef": { "file": "src/owner.ts", "symbolLabel": "fixtureOwner" },
+              "direction": "inbound",
+              "depth": 1
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "first workload call after indexing the isolated fixture root",
+          "warm": "repeat in the same runtime without another mutation"
+        }
+      },
+      "fixture": { "mutations": [] }
+    },
+    {
+      "id": "fixture-dirty-owner",
+      "queryClass": "dirty_owner",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "src/owner.ts",
+        "ownerSymbol": "dirtyFixtureOwner"
+      },
+      "workload": {
+        "setup": [
+          { "tool": "manage_index", "args": { "action": "status", "path": "$REPO_ROOT" } }
+        ],
+        "invocations": [
+          {
+            "tool": "search_codebase",
+            "args": {
+              "path": "$REPO_ROOT",
+              "query": "dirtyFixtureOwner",
+              "scope": "runtime",
+              "resultMode": "grouped",
+              "groupBy": "symbol",
+              "rankingMode": "auto_changed_first"
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "first workload search after a no-change preparation sync and then a dirty source mutation",
+          "warm": "repeat in the same runtime without another mutation"
+        }
+      },
+      "fixture": {
+        "mutations": [
+          { "type": "replace", "file": "src/owner.ts", "from": "fixtureOwner", "to": "dirtyFixtureOwner" }
+        ]
+      }
+    },
+    {
+      "id": "fixture-stale-recovery",
+      "queryClass": "stale_recovery",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "src/owner.ts",
+        "ownerSymbol": "dirtyFixtureOwner"
+      },
+      "workload": {
+        "setup": [
+          { "tool": "manage_index", "args": { "action": "status", "path": "$REPO_ROOT" } }
+        ],
+        "invocations": [
+          {
+            "tool": "search_codebase",
+            "args": {
+              "path": "$REPO_ROOT",
+              "query": "dirtyFixtureOwner",
+              "scope": "runtime",
+              "resultMode": "grouped",
+              "groupBy": "symbol",
+              "rankingMode": "auto_changed_first"
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "search after the fixture runner records a completed durable sync receipt",
+          "warm": "repeat after the recovered state is durable"
+        }
+      },
+      "fixture": {
+        "mutations": [
+          { "type": "replace", "file": "src/owner.ts", "from": "fixtureOwner", "to": "dirtyFixtureOwner" }
+        ]
+      }
+    }
+  ]
+}

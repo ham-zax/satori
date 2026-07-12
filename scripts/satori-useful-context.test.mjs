@@ -69,6 +69,9 @@ function baseObservation(overrides = {}) {
         results: [
             { file: "packages/mcp/src/core/handlers.ts", symbol: "handleSearchCode" },
         ],
+        sourceReached: false,
+        callsToSource: null,
+        sourceMode: null,
         ...overrides,
     };
 }
@@ -129,6 +132,32 @@ test("validateTaskSuite accepts version-1 suite and returns a normalized copy", 
     });
     // Must not mutate input.
     assert.deepEqual(suite, original);
+});
+
+test("version-1 observations preserve explicit absence of source evidence", () => {
+    const normalized = validateObservationSet(
+        minimalObservations(pairedObservations([baseObservation()]).observations),
+        ["t-owner"],
+    );
+    const grade = gradeObservation(baseTask(), normalized.observations[0]);
+    assert.equal(grade.sourceReached, false);
+    assert.equal(grade.callsToSource, null);
+    assert.equal(grade.sourceMode, null);
+});
+
+test("callsToSource must identify an actual tool call", () => {
+    assert.throws(
+        () => validateObservationSet(minimalObservations(pairedObservations([
+            baseObservation({ toolCalls: 2, callsToSource: 0 }),
+        ]).observations), ["t-owner"]),
+        /callsToSource.*from 1 through toolCalls/,
+    );
+    assert.throws(
+        () => validateObservationSet(minimalObservations(pairedObservations([
+            baseObservation({ toolCalls: 2, callsToSource: 3 }),
+        ]).observations), ["t-owner"]),
+        /callsToSource.*from 1 through toolCalls/,
+    );
 });
 
 test("validateTaskSuite rejects wrong version, empty tasks, and duplicate ids", () => {
@@ -260,6 +289,24 @@ test("validateObservationSet requires one cold and one warm observation per task
         ]), taskIds),
         /duplicate/i
     );
+});
+
+test("validateObservationSet accepts repeated v2 warm samples with stable ordinals", () => {
+    const observations = {
+        version: 2,
+        warmSampleCount: 3,
+        observations: [
+            baseObservation({ taskId: "a", phase: "cold", sample: 0 }),
+            baseObservation({ taskId: "a", phase: "warm", sample: 1 }),
+            baseObservation({ taskId: "a", phase: "warm", sample: 2 }),
+            baseObservation({ taskId: "a", phase: "warm", sample: 3 }),
+        ],
+    };
+
+    const normalized = validateObservationSet(observations, ["a"]);
+    assert.equal(normalized.version, 2);
+    assert.equal(normalized.observations.length, 4);
+    assert.deepEqual(normalized.observations.map((entry) => entry.sample), [0, 1, 2, 3]);
 });
 
 test("validateObservationSet rejects bad spans, non-finite numbers, and non-JSON response", () => {
@@ -629,6 +676,27 @@ test("summarizeUsefulContext grades only in task-suite order even when observati
         "a-first:cold",
         "a-first:warm",
     ]);
+});
+
+test("v2 metrics keep cold and repeated warm distributions separate", () => {
+    const suite = minimalSuite([baseTask({ id: "a" })]);
+    const observations = {
+        version: 2,
+        warmSampleCount: 3,
+        observations: [
+            baseObservation({ taskId: "a", phase: "cold", sample: 0, latencyMs: 100, contextBytes: 1000 }),
+            baseObservation({ taskId: "a", phase: "warm", sample: 1, latencyMs: 10, contextBytes: 100 }),
+            baseObservation({ taskId: "a", phase: "warm", sample: 2, latencyMs: 11, contextBytes: 110 }),
+            baseObservation({ taskId: "a", phase: "warm", sample: 3, latencyMs: 12, contextBytes: 120 }),
+        ],
+    };
+    const report = summarizeUsefulContext(suite, observations);
+    assert.equal(report.metrics.cold.latencyMs.count, 1);
+    assert.equal(report.metrics.cold.latencyMs.p50, 100);
+    assert.equal(report.metrics.warm.latencyMs.count, 3);
+    assert.equal(report.metrics.warm.latencyMs.p50, 11);
+    assert.equal(report.metrics.cold.contextBytes.p50, 1000);
+    assert.equal(report.metrics.warm.contextBytes.p50, 110);
 });
 
 // ---------------------------------------------------------------------------

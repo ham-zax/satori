@@ -232,9 +232,13 @@ export function validateTaskSuite(value) {
 
 export function validateObservationSet(value, taskIds) {
     const set = requireRecord(value, "Observation set");
-    if (set.version !== 1) {
-        throw new Error("Observation set version must be 1.");
+    if (set.version !== 1 && set.version !== 2) {
+        throw new Error("Observation set version must be 1 or 2.");
     }
+    const version = set.version;
+    const warmSampleCount = version === 2
+        ? positiveIntegerForObservation(set.warmSampleCount, "Observation set warmSampleCount")
+        : 1;
     if (!Array.isArray(set.observations)) {
         throw new Error("Observation set observations must be an array.");
     }
@@ -249,7 +253,22 @@ export function validateObservationSet(value, taskIds) {
         if (!PHASES.has(observation.phase)) {
             throw new Error(`observations[${index}].phase must be cold or warm.`);
         }
-        const observationKey = `${taskId}:${observation.phase}`;
+        let sample;
+        if (version === 2) {
+            if (!Number.isSafeInteger(observation.sample) || observation.sample < 0) {
+                throw new Error(`observations[${index}].sample must be a non-negative safe integer.`);
+            }
+            sample = observation.sample;
+            if (observation.phase === "cold" && sample !== 0) {
+                throw new Error(`observations[${index}] cold sample must be 0.`);
+            }
+            if (observation.phase === "warm" && (sample < 1 || sample > warmSampleCount)) {
+                throw new Error(`observations[${index}] warm sample must be from 1 through ${warmSampleCount}.`);
+            }
+        }
+        const observationKey = version === 2
+            ? `${taskId}:${observation.phase}:${sample}`
+            : `${taskId}:${observation.phase}`;
         if (observedKeys.has(observationKey)) {
             throw new Error(`Observation set contains duplicate task phase '${observationKey}'.`);
         }
@@ -279,7 +298,44 @@ export function validateObservationSet(value, taskIds) {
             contextBytes,
             response: jsonClone(observation.response),
             results,
+            ...(version === 2 ? { sample } : {}),
         };
+        for (const key of ["toolCalls", "callsToSource"]) {
+            if (observation[key] !== undefined) {
+                if (observation[key] !== null
+                    && (!Number.isSafeInteger(observation[key]) || observation[key] < 0)) {
+                    throw new Error(`observations[${index}].${key} must be null or a non-negative safe integer.`);
+                }
+                normalized[key] = observation[key];
+            }
+        }
+        const callsToSource = observation.callsToSource ?? null;
+        const toolCalls = observation.toolCalls ?? null;
+        if (callsToSource !== null && (
+            callsToSource < 1
+            || toolCalls === null
+            || callsToSource > toolCalls
+        )) {
+            throw new Error(`observations[${index}].callsToSource must be null or from 1 through toolCalls.`);
+        }
+        const hasExplicitSourceEvidence = observation.sourceReached !== undefined
+            || observation.sourceMode !== undefined;
+        if (version === 2 || hasExplicitSourceEvidence) {
+            if (typeof observation.sourceReached !== "boolean") {
+                throw new Error(`observations[${index}].sourceReached must be a boolean.`);
+            }
+            if (observation.sourceMode !== null
+                && observation.sourceMode !== "search_preview"
+                && observation.sourceMode !== "read_file") {
+                throw new Error(`observations[${index}].sourceMode must be search_preview, read_file, or null.`);
+            }
+            const sourceMode = observation.sourceMode ?? null;
+            if (observation.sourceReached !== (callsToSource !== null && sourceMode !== null)) {
+                throw new Error(`observations[${index}] source evidence fields are inconsistent.`);
+            }
+            normalized.sourceReached = observation.sourceReached;
+            normalized.sourceMode = sourceMode;
+        }
         if (observation.openedSymbol !== undefined) {
             const opened = requireRecord(observation.openedSymbol, `observations[${index}].openedSymbol`);
             normalized.openedSymbol = {
@@ -299,13 +355,28 @@ export function validateObservationSet(value, taskIds) {
         return normalized;
     });
 
-    const missing = [...expectedIds].flatMap((id) => PHASE_ORDER
-        .filter((phase) => !observedKeys.has(`${id}:${phase}`))
-        .map((phase) => `${id}:${phase}`));
+    const expectedKeys = version === 2
+        ? [...expectedIds].flatMap((id) => [
+            `${id}:cold:0`,
+            ...Array.from({ length: warmSampleCount }, (_, index) => `${id}:warm:${index + 1}`),
+        ])
+        : [...expectedIds].flatMap((id) => PHASE_ORDER.map((phase) => `${id}:${phase}`));
+    const missing = expectedKeys.filter((key) => !observedKeys.has(key));
     if (missing.length > 0) {
         throw new Error(`Observation set is missing tasks: ${missing.join(", ")}.`);
     }
-    return { version: 1, observations };
+    return {
+        version,
+        ...(version === 2 ? { warmSampleCount } : {}),
+        observations,
+    };
+}
+
+function positiveIntegerForObservation(value, label) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new Error(`${label} must be a positive safe integer.`);
+    }
+    return value;
 }
 
 export function serializedPayloadBytes(response) {
@@ -394,6 +465,7 @@ export function gradeObservation(task, observation) {
         taskId: task.id,
         queryClass: task.queryClass,
         phase: observation.phase,
+        ...(observation.sample !== undefined ? { sample: observation.sample } : {}),
         status: observation.status,
         ownerFoundTop3,
         exactSymbolOpenSuccess,
@@ -410,6 +482,10 @@ export function gradeObservation(task, observation) {
         latencyMs: observation.latencyMs,
         payloadBytes,
         contextBytes: observation.contextBytes,
+        toolCalls: observation.toolCalls ?? null,
+        callsToSource: observation.callsToSource ?? null,
+        sourceReached: observation.sourceReached ?? (observation.callsToSource != null ? true : null),
+        sourceMode: observation.sourceMode ?? null,
         baselineFailures,
     };
 }
@@ -441,44 +517,69 @@ export function summarizeUsefulContext(taskSuite, observationSet) {
         observationSet,
         suite.tasks.map((task) => task.id)
     );
-    const byTaskPhase = new Map(observations.observations
-        .map((observation) => [`${observation.taskId}:${observation.phase}`, observation]));
-    const grades = suite.tasks.flatMap((task) => PHASE_ORDER.map((phase) =>
-        gradeObservation(task, byTaskPhase.get(`${task.id}:${phase}`))));
+    const grades = observations.version === 2
+        ? observations.observations.map((observation) => {
+            const task = suite.tasks.find((candidate) => candidate.id === observation.taskId);
+            return gradeObservation(task, observation);
+        })
+        : (() => {
+            const byTaskPhase = new Map(observations.observations
+                .map((observation) => [`${observation.taskId}:${observation.phase}`, observation]));
+            return suite.tasks.flatMap((task) => PHASE_ORDER.map((phase) =>
+                gradeObservation(task, byTaskPhase.get(`${task.id}:${phase}`))));
+        })();
 
-    const payloadBytesByQueryClass = {};
-    for (const queryClass of QUERY_CLASSES) {
-        payloadBytesByQueryClass[queryClass] = percentileSummary(
-            grades.filter((grade) => grade.queryClass === queryClass).map((grade) => grade.payloadBytes)
-        );
-    }
+    const summarizeGrades = (selectedGrades) => {
+        const payloadBytesByQueryClass = {};
+        const latencyByQueryClass = {};
+        for (const queryClass of QUERY_CLASSES) {
+            const matching = selectedGrades.filter((grade) => grade.queryClass === queryClass);
+            payloadBytesByQueryClass[queryClass] = percentileSummary(matching.map((grade) => grade.payloadBytes));
+            latencyByQueryClass[queryClass] = percentileSummary(matching.map((grade) => grade.latencyMs));
+        }
+        return {
+            ownerFoundTop3: rateMetric(selectedGrades, "ownerFoundTop3"),
+            exactSymbolOpenSuccess: rateMetric(selectedGrades, "exactSymbolOpenSuccess"),
+            callerRecoverySuccess: rateMetric(selectedGrades, "callerRecoverySuccess"),
+            dirtyOwnerFound: rateMetric(selectedGrades, "dirtyOwnerFound"),
+            staleIndexDetected: rateMetric(selectedGrades, "staleIndexDetected"),
+            recoverySucceeded: rateMetric(selectedGrades, "recoverySucceeded"),
+            zeroResult: rateMetric(selectedGrades, "zeroResult"),
+            fallbackUsed: rateMetric(selectedGrades, "fallbackUsed"),
+            latencyMs: percentileSummary(selectedGrades.map((grade) => grade.latencyMs)),
+            latencyByQueryClass,
+            payloadBytesByQueryClass,
+            contextBytes: percentileSummary(selectedGrades.map((grade) => grade.contextBytes)),
+            toolCalls: percentileSummary(selectedGrades.flatMap((grade) => grade.toolCalls === null ? [] : [grade.toolCalls])),
+            callsToSource: percentileSummary(selectedGrades.flatMap((grade) => grade.callsToSource === null ? [] : [grade.callsToSource])),
+        };
+    };
+    const coldGrades = grades.filter((grade) => grade.phase === "cold");
+    const warmGrades = grades.filter((grade) => grade.phase === "warm");
+    const legacyMetrics = summarizeGrades(grades);
 
     return {
-        version: 1,
+        version: observations.version,
         taskCount: suite.tasks.length,
         observationCount: grades.length,
-        metrics: {
-            ownerFoundTop3: rateMetric(grades, "ownerFoundTop3"),
-            exactSymbolOpenSuccess: rateMetric(grades, "exactSymbolOpenSuccess"),
-            callerRecoverySuccess: rateMetric(grades, "callerRecoverySuccess"),
-            dirtyOwnerFound: rateMetric(grades, "dirtyOwnerFound"),
-            staleIndexDetected: rateMetric(grades, "staleIndexDetected"),
-            recoverySucceeded: rateMetric(grades, "recoverySucceeded"),
-            zeroResult: rateMetric(grades, "zeroResult"),
-            fallbackUsed: rateMetric(grades, "fallbackUsed"),
-            latencyMs: {
-                cold: percentileSummary(grades.filter((grade) => grade.phase === "cold").map((grade) => grade.latencyMs)),
-                warm: percentileSummary(grades.filter((grade) => grade.phase === "warm").map((grade) => grade.latencyMs)),
-                exact_identifier: percentileSummary(
-                    grades.filter((grade) => grade.queryClass === "exact_identifier").map((grade) => grade.latencyMs)
-                ),
+        metrics: observations.version === 2
+            ? { cold: summarizeGrades(coldGrades), warm: summarizeGrades(warmGrades) }
+            : {
+                ...legacyMetrics,
+                latencyMs: {
+                    cold: percentileSummary(coldGrades.map((grade) => grade.latencyMs)),
+                    warm: percentileSummary(warmGrades.map((grade) => grade.latencyMs)),
+                    exact_identifier: legacyMetrics.latencyByQueryClass.exact_identifier,
+                },
             },
-            payloadBytesByQueryClass,
-            contextBytes: percentileSummary(grades.map((grade) => grade.contextBytes)),
-        },
         baselineFailures: grades
             .filter((grade) => grade.baselineFailures.length > 0)
-            .map((grade) => ({ taskId: grade.taskId, phase: grade.phase, failures: grade.baselineFailures })),
+            .map((grade) => ({
+                taskId: grade.taskId,
+                phase: grade.phase,
+                ...(grade.sample !== undefined ? { sample: grade.sample } : {}),
+                failures: grade.baselineFailures,
+            })),
         grades,
     };
 }

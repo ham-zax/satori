@@ -57,6 +57,7 @@ function usage() {
         "  --startup-timeout-ms <ms>",
         "  --call-timeout-ms <ms>",
         "  --close-timeout-ms <ms>",
+        "  --warm-samples <count>         Repeated warm samples in one MCP process (v2 output)",
         "  --dry-run                       Validate and print the expanded task plan",
     ].join("\n");
 }
@@ -71,6 +72,7 @@ export function parseArgs(argv) {
         startupTimeoutMs: DEFAULT_STARTUP_TIMEOUT_MS,
         callTimeoutMs: DEFAULT_CALL_TIMEOUT_MS,
         closeTimeoutMs: DEFAULT_CLOSE_TIMEOUT_MS,
+        warmSampleCount: 1,
         dryRun: false,
         help: false,
     };
@@ -101,6 +103,8 @@ export function parseArgs(argv) {
             options.callTimeoutMs = positiveInteger(next(), arg);
         } else if (arg === "--close-timeout-ms") {
             options.closeTimeoutMs = positiveInteger(next(), arg);
+        } else if (arg === "--warm-samples") {
+            options.warmSampleCount = positiveInteger(next(), arg);
         } else if (arg === "--dry-run") {
             options.dryRun = true;
         } else if (arg === "--help" || arg === "-h") {
@@ -537,7 +541,7 @@ async function prepareMeasurementState(session, task, repoRoot) {
     return { syncStats: structuredClone(syncStats), indexProof: preparedProof };
 }
 
-export async function recordPhase(session, task, phase, repoRoot) {
+export async function recordPhase(session, task, phase, repoRoot, sample) {
     const startedAt = performance.now();
     let finalResult;
     let finalPayload;
@@ -545,7 +549,11 @@ export async function recordPhase(session, task, phase, repoRoot) {
     const identities = [];
     const seen = new Set();
     let ownerReached = false;
+    let toolCalls = 0;
+    let callsToSource = null;
+    let sourceMode = null;
     for (const invocation of task.workload.invocations) {
+        toolCalls += 1;
         if (invocation.tool === "manage_index") {
             throw new Error(`Task '${task.id}' measurement invocations may not mutate lifecycle state.`);
         }
@@ -562,10 +570,23 @@ export async function recordPhase(session, task, phase, repoRoot) {
         }
         finalResult = called.result;
         finalPayload = called.payload;
+        if (callsToSource === null && invocation.tool === "read_file") {
+            callsToSource = toolCalls;
+            sourceMode = "read_file";
+        }
         if (!ownerReached) {
             const measured = contextBytesThroughOwner(called.payload, task, repoRoot);
             bytes += measured.bytes;
             ownerReached = measured.ownerReached;
+            if (
+                callsToSource === null
+                && invocation.tool === "search_codebase"
+                && measured.ownerReached
+                && measured.bytes > 0
+            ) {
+                callsToSource = toolCalls;
+                sourceMode = "search_preview";
+            }
         }
         for (const identity of normalizeResultIdentities(called.payload, task, repoRoot)) {
             const key = `${identity.file}#${identity.symbol}`;
@@ -584,6 +605,11 @@ export async function recordPhase(session, task, phase, repoRoot) {
         contextBytes: bytes,
         response: finalPayload,
         results: identities,
+        toolCalls,
+        sourceReached: callsToSource !== null,
+        callsToSource,
+        sourceMode,
+        ...(sample !== undefined ? { sample } : {}),
     };
     const openedSymbol = extractOpenedSymbol(finalPayload, task, repoRoot);
     if (openedSymbol) observation.openedSymbol = openedSymbol;
@@ -615,8 +641,10 @@ export async function recordSuite(taskSuite, options) {
     const repoRoot = fs.realpathSync(options.repoRoot);
     const expanded = replaceRepoRoot(validated, repoRoot);
     for (const task of expanded.tasks) validateSetupProtocol(task);
+    const warmSampleCount = options.warmSampleCount ?? 1;
+    const outputVersion = warmSampleCount > 1 ? 2 : 1;
     if (options.dryRun) {
-        return { version: 1, dryRun: true, repoRoot, tasks: expanded.tasks };
+        return { version: outputVersion, dryRun: true, repoRoot, warmSampleCount, tasks: expanded.tasks };
     }
     const revision = cleanGitRevision(repoRoot);
     const observations = [];
@@ -631,8 +659,22 @@ export async function recordSuite(taskSuite, options) {
             }
             serverInfo = structuredClone(session.serverInfo);
             const prepared = await prepareMeasurementState(session, task, repoRoot);
-            observations.push(await recordPhase(session, task, "cold", repoRoot));
-            observations.push(await recordPhase(session, task, "warm", repoRoot));
+            observations.push(await recordPhase(
+                session,
+                task,
+                "cold",
+                repoRoot,
+                outputVersion === 2 ? 0 : undefined,
+            ));
+            for (let sample = 1; sample <= warmSampleCount; sample += 1) {
+                observations.push(await recordPhase(
+                    session,
+                    task,
+                    "warm",
+                    repoRoot,
+                    outputVersion === 2 ? sample : undefined,
+                ));
+            }
             const finalStatus = (await callAndDecode(session, {
                 tool: "manage_index",
                 args: { action: "status", path: repoRoot },
@@ -652,7 +694,8 @@ export async function recordSuite(taskSuite, options) {
         throw new Error(`Repository revision changed during recording (${revision} -> ${finalRevision}); discard this run.`);
     }
     return {
-        version: 1,
+        version: outputVersion,
+        ...(outputVersion === 2 ? { warmSampleCount } : {}),
         metadata: {
             repoRoot,
             gitRevision: revision,
@@ -660,6 +703,7 @@ export async function recordSuite(taskSuite, options) {
             serverInfo,
             node: recorderNodeMetadata(),
             taskRuns,
+            warmSampleCount,
         },
         observations,
     };

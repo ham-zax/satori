@@ -24,7 +24,7 @@ pnpm eval:useful-context:record -- \
   --dry-run
 ```
 
-`--startup-timeout-ms`, `--call-timeout-ms`, and `--close-timeout-ms` bound every process phase. `--out` must be outside the measured repository. Recording requires the same clean Git worktree before and after the run. Observation version 1 metadata binds the report to the canonical root, Git revision, normalized task-suite SHA-256, MCP server name/version, Node version/platform/architecture, preparation sync statistics, and the completed operation generation and runtime fingerprint for every task. The current status envelope does not expose a separate indexed fingerprint; the completed sync receipt is the available compatibility-gated fingerprint proof. The existing grader accepts this additive metadata.
+`--startup-timeout-ms`, `--call-timeout-ms`, and `--close-timeout-ms` bound every process phase. `--out` must be outside the measured repository. Recording requires the same clean Git worktree before and after the run. One warm sample emits observation version 1 for compatibility. `--warm-samples N` with `N > 1` emits version 2 with one cold sample and numbered warm samples per task. Metadata binds the report to the canonical root, Git revision, normalized task-suite SHA-256, MCP server name/version, Node version/platform/architecture, preparation sync statistics, and the completed operation generation and runtime fingerprint for every task. The current status envelope does not expose a separate indexed fingerprint; the completed sync receipt is the available compatibility-gated fingerprint proof.
 
 ## Grade
 
@@ -38,7 +38,9 @@ node scripts/satori-useful-context.mjs \
   --json
 ```
 
-An observation set records both `cold` and `warm` results for every committed task:
+An observation set records both `cold` and `warm` results for every committed task. Version 2 additionally records `sample`, `sourceReached`, nullable `callsToSource`, and `sourceMode` (`search_preview`, `read_file`, or `null`) so non-source tool calls are not mislabeled as source access:
+
+Version 1 observations produced by current recorders also preserve the explicit source-evidence tuple. When `callsToSource` is non-null it must identify an actual call in `1..toolCalls`; legacy records without the tuple remain unknown rather than being inferred as source-backed.
 
 ```json
 {
@@ -80,7 +82,7 @@ The full observation set must contain exactly one observation for every task and
 
 ## Metrics
 
-The report includes owner-in-top-three, exact-open, caller-recovery, dirty-owner, and stale-recovery rates; zero-result and fallback rates; cold, warm, and exact-identifier latency percentiles; UTF-8 serialized response bytes by query class; and context-byte percentiles. Percentiles use deterministic nearest-rank semantics.
+The report includes owner-in-top-three, exact-open, caller-recovery, dirty-owner, and stale-recovery rates; zero-result and fallback rates; latency, UTF-8 payload bytes, context bytes, tool calls, and calls-to-source distributions; plus query-class latency and payload distributions. Version 2 publishes separate `metrics.cold` and `metrics.warm` trees so increasing the warm sample count cannot reweight cold observations. Percentiles use deterministic nearest-rank semantics.
 
 Task `baselineLimits` are optional regression gates. A configured gate failure is retained in the JSON report and makes the CLI exit with status 2. Context bytes count ordered result `content` and `preview` through the first expected owner; when the owner is absent, all returned result evidence counts. Later invocations do not add context after the owner has been reached. The committed corpus deliberately omits limits until a repeatable baseline has been measured; it does not invent absolute product budgets.
 

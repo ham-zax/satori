@@ -36,8 +36,9 @@ Satori exposes exactly six MCP tools:
 - Use operators only when useful: `lang:`, `path:`, `-path:`, `must:`, `exclude:`.
 - Pass the user's requested path; if Satori resolves an indexed parent, use the returned `codebaseRoot` for result navigation.
 - Treat `warnings[]` as usable-but-degraded results unless `blocksUse=true`; read each warning's `action` before deciding whether to sync, narrow, or verify.
+- `NAVIGATION_REPAIR_REQUIRED` means vector completion evidence remains valid but local symbol/relationship sidecars are missing, corrupt, or incompatible; run `manage_index(action="repair")`, not reindex, to rebuild local navigation.
 - Grouped `formatVersion: 2` results contain canonical facts, not per-result tool calls: inspect `target`, `quality`, `navigation.graph`, required graph-ready `navigation.inbound="verify"`, and optional `callerSearchTerm`.
-- Use `debug=true` only when ranking, filter, freshness, exact-registry, tracked-lexical, or latency explanations are required; inspect `hints.debugSummary` first, then `debugSearch.exactRegistry`, `phaseTimingsMs`, `trackedLexical`, and `passesUsed`.
+- Use `debugMode=summary|ranking|freshness|full` only when the corresponding diagnostics are required. Existing `debug=true` selects `full`. Inspect `hints.debugSummary` before deeper `debugSearch` evidence.
 
 ## Navigation Rules
 
@@ -53,6 +54,7 @@ Satori exposes exactly six MCP tools:
 ## Index Rules
 
 - `manage_index` actions are `create`, `reindex`, `sync`, `status`, `clear`, and `repair`. Responses are JSON envelopes in MCP text content (`tool`, `version`, `action`, `path`, `status`, `message`/`humanText`, optional `reason`/`hints`/`warnings`/`preflight`) — parse structured fields for branching.
+- `manage_index status` defaults to `detail=summary`. Request `capabilities` for full symbol/language evidence, `diagnostics` for compatibility/runtime-owner evidence, or `full` for both.
 - If any tool returns `requires_reindex`, stop normal navigation and report the exact proof failure. Provider-backed `create` and `reindex` are expensive full rebuilds and require explicit user approval before invocation; do not substitute `sync` for a required rebuild.
 - Use `manage_index(action="sync")` for freshness convergence and ignore-rule updates.
 - Use `manage_index(action="repair")` only to rebuild local readiness when vector payload and trusted fingerprint proof already match; if repair refuses, report its proof failure and request approval before following a create/reindex hint.

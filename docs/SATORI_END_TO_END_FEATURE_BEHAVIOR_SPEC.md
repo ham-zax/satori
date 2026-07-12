@@ -79,8 +79,9 @@ Language capability contract:
 - Language analysis has one normalized contract. Oxc `0.139.0` owns JavaScript/JSX/TypeScript/TSX/DTS analysis. `web-tree-sitter` `0.26.10` plus pinned WASM grammars owns Python, Go, Rust, Java, C#, C++, and Scala. The Scala grammar asset is packaged with core and checksum-documented. Parser failure or syntax-error recovery produces bounded searchable text without authoritative symbols.
 - Parser, extractor, and relationship-builder versions are durable compatibility fields. A missing or older identity fails closed with `requires_reindex`; `sync` and `repair` cannot relabel an index built by a different analysis contract.
 - Parser or extractor failure must degrade to synthesized file-owner fallback, must not crash indexing, and must not attach stale extracted-symbol owner metadata.
-- Observed symbol quality (F9 Phase 1): `manage_index status` exposes structured `symbolQuality` derived from the compatible symbol registry (non-file symbol coverage on symbol-eligible languages). `list_codebases` Ready lines include a compact `symbolQuality=<status>` marker. Status values are `symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown` with `basis: "symbol_registry"`. This gauge does **not** claim parser fallback cause; search-only languages are not labeled `symbol_sparse`. Lifecycle `indexed` means searchable/readable, not automatically symbol-rich.
-- Language capability evidence: `manage_index status` may expose additive `languageCapabilities`, sorted by canonical language and limited to languages observed in the compatible registry. It combines the static public declaration with indexed-file and non-file-symbol evidence plus relationship-sidecar compatibility. Effective `semanticSearch`, `exactSymbol`, `outline`, and `callGraph` states are `ready|degraded|unavailable|not_applicable`; deterministic `degradationReasons` explain weaker states. A compatible relationship sidecar is evidence even when it contains zero edges. Missing or generation-incompatible sidecars fail closed and never imply grouped `navigation.graph="ready"`.
+- Observed symbol quality (F9 Phase 1): `manage_index status` exposes structured `symbolQuality` derived from sealed publication-time registry aggregates (non-file symbol coverage on symbol-eligible languages). Summary and diagnostics read only the generation pointer and compact generation seal; they do not deserialize the per-file manifest or symbol shards. `evidenceAvailability` distinguishes sealed richness from currently proven navigation availability (`ready` \| `missing` \| `corrupt` \| `incompatible` \| `unverified`). Capabilities/full may load symbol records for the language matrix. `list_codebases` Ready lines include a compact `symbolQuality=<status>` marker. Status values are `symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown` with `basis: "symbol_registry"`. This gauge does **not** claim parser fallback cause; search-only languages are not labeled `symbol_sparse`. Lifecycle `indexed` means searchable/readable, not automatically symbol-rich.
+- Status projection: `manage_index status` defaults to `detail="summary"`, which keeps authoritative readiness, active mutation, durable operation, warnings, recommendations, and compact symbol-quality status while omitting the language matrix, runtime-owner list, compatibility prose, and symbol-shard loading. `detail="capabilities"` adds full `symbolQuality` and `languageCapabilities`; `detail="diagnostics"` adds lifecycle, compatibility, proof, and runtime-owner evidence without the language matrix; `detail="full"` includes both projections. The selected `detail` is echoed in every status envelope.
+- Language capability evidence: `manage_index status` with `detail="capabilities"` or `detail="full"` may expose additive `languageCapabilities`, sorted by canonical language and limited to languages observed in the compatible registry. It combines the static public declaration with indexed-file and non-file-symbol evidence plus relationship-sidecar compatibility. Effective `semanticSearch`, `exactSymbol`, `outline`, and `callGraph` states are `ready|degraded|unavailable|not_applicable`; deterministic `degradationReasons` explain weaker states. A compatible relationship sidecar is evidence even when it contains zero edges. Missing or generation-incompatible sidecars fail closed and never imply grouped `navigation.graph="ready"`.
 - L1 symbol-only languages must not claim `callGraphBuild` or `callGraphQuery`; grouped results must carry `navigation.graph="unsupported_language"`, and direct `call_graph` must remain unsupported or not-ready even if relationship sidecars exist globally.
 - Adding extensions to the capability matrix must not silently broaden the default indexing profile. Any profile expansion requires an explicit allowlist/profile test.
 - Search-only artifact/container languages such as Vue, Svelte, Astro, CSS/SCSS, Dockerfile, Makefile, CMakeLists, and Justfile must not claim `symbols`, `owner`, `imports`, `fileOutline`, or `callGraph` until deterministic extractors exist.
@@ -97,7 +98,9 @@ Symbol identity contract:
 Behavior contract:
 - Trigger: MCP server starts and tools are invoked.
 - Effect: Requests route through `ToolHandlers`, enforcing indexing/fingerprint/sync/sidecar gates before returning envelopes.
-- Observability: JSON envelopes (`status`, `hints`, `warnings`, `freshnessDecision`, `freshnessSummary`), search telemetry `response_bytes`, and deterministic debug payload when `debug:true`.
+- Read readiness is receipt-bound. A cached ready state carries the proven collection, exact marker identity/run ID, policy document digest/hash, payload count, navigation generation and manifest hashes, plus the exact prepared-read observation under which revalidation succeeded. Every warm reuse rechecks collection existence, reads and compares one exact completion marker, verifies policy/profile and the immutable navigation generation seal, and requires that prepared observation to remain unchanged through freshness. Exact payload count is reused only while that sealed receipt remains identical. Cold proof and repair validate the referenced navigation artifacts; warm observation reads only `current.json` and `seal.json`.
+- Vector completion proof and navigation proof are separate. Missing, incompatible, or corrupt local navigation does not relabel a valid vector marker/policy/payload tuple as `invalid_v2`; search can remain vector-ready while status/search emit `NAVIGATION_REPAIR_REQUIRED` and recommend `manage_index repair`. Strict graph-rich generation resolution still requires valid navigation.
+- Observability: JSON envelopes (`status`, `hints`, `warnings`, `freshnessDecision`, `freshnessSummary`), search telemetry `response_bytes`, and deterministic source-built debug projections selected by `debugMode=summary|ranking|freshness|full`; each mode constructs only its allowlisted fields, and existing `debug:true` remains an alias for `full`.
 - Determinism: Explicit sort/tie-break chains, stable warning ordering, fixed caps/thresholds/constants.
 - Performance impact: incremental sync, coalescing, bounded retries, bounded rerank top-K, cached git-status, watcher debounce.
 
@@ -160,7 +163,7 @@ Outputs:
   - `status` (`ok|not_ready|not_indexed|requires_reindex|blocked|error`)
   - `reason` (when applicable)
   - `message`, `humanText`
-  - optional `warnings`, `hints`, `preflight`, `operation`, `repairProof`, `symbolQuality`, `languageCapabilities`, `syncStats`
+  - optional `detail`, `warnings`, `hints`, `preflight`, `operation`, `repairProof`, `symbolQuality`, `languageCapabilities`, `syncStats`
 - `humanText` remains deterministic operator-facing guidance; structured fields are authoritative for client branching.
 - Successful `sync` responses include additive structured `syncStats` (`added`, `removed`, `modified`). Consumers must use this evidence rather than parsing `humanText` when proving that a sync detected source changes.
 - The additive optional `repairProof` field does not change the version 1 envelope. It contains `collection`, `snapshot`, `marker`, `fingerprint`, `payload`, `staleRemoteChunks`, and `navigation`; each item has `status=matched|failed|missing|unproven|not_checked`, an optional explanatory `basis`, and optional counts. Pre-proof input/provider/owner/lease/indexing refusals may omit it. Once evidence collection begins, backend and publication failures preserve the latest partial proof.
@@ -239,7 +242,14 @@ Determinism:
 Common recipes:
 1. Runtime triage: `scope=runtime, resultMode=grouped, groupBy=symbol`.
 2. Noise remediation: apply `.satoriignore`, wait debounce, rerun search.
-3. Debug ranking: `debug:true`, inspect `hints.debugSummary` first, then drill into `hints.debugSearch` if needed.
+3. Debug ranking: `debugMode:"ranking"`, inspect `hints.debugSummary` first, then drill into bounded `hints.debugSearch` ranking evidence if needed. Use `debug:true` only when the backward-compatible full projection is required.
+
+Verification routing:
+- Find behavioral ownership with grouped semantic search; resolve a known identifier with the exact-registry path.
+- Read implementations through `read_file(open_symbol)` or the published bounded span. Use the source-backed exact preview only for quick orientation.
+- Use `call_graph` for advisory caller/callee context, then verify inbound impact with a scoped literal search, direct references, or tests.
+- Verify known literal/line claims with bounded source reads or lexical search. Batch independent claims locally rather than issuing one semantic query per claim.
+- Use `debugMode="ranking"` for selection diagnosis, `debugMode="freshness"` for readiness/sync diagnosis, and status `detail="capabilities"|"diagnostics"|"full"` only when the summary is insufficient.
 
 Behavior:
 - Trigger: search call.
@@ -277,7 +287,6 @@ Outputs:
 Warnings/hints:
 - `OUTLINE_MISSING_SYMBOL_METADATA:<count>`.
 - `OUTLINE_CALL_GRAPH_UNAVAILABLE:<reason>` when registry-backed outline succeeds but graph traversal is not available for returned symbols.
-- `OUTLINE_SYMBOL_REGISTRY_WARNINGS:<count>` when the compatible registry loaded with non-fatal duplicate/candidate warnings.
 - `OUTLINE_SYNTHESIZED_FILE_SYMBOL` when only a synthesized file owner is returned.
 - Reindex hint payload on sidecar incompatibility.
 
@@ -318,7 +327,7 @@ Warnings/hints:
 - Missing sidecar: reindex hint.
 - Missing symbol: advisory hint.
 - Validated Python source-backed recovery keeps the suppressed low-confidence note and adds `SOURCE_BACKED_DYNAMIC_CALLEES:<n>` or `SOURCE_BACKED_DYNAMIC_CALLERS:<n>` only for exact target-validated recovery.
-- Registry `Duplicate symbolKey` diagnostics collapse to `DUPLICATE_SYMBOL_KEY:N sample=…` at presentation time.
+- Multiple records sharing one logical `symbolKey` do not degrade exact-instance traversal. `call_graph` requires the concrete `symbolInstanceId`; duplicate exact instance IDs remain incompatible registry state.
 - When inbound direction is notes-only (no inbound edges, suppressed low-confidence caller notes present), attach `hints.nextSteps` with executable `search_codebase` using `must:<identifier> <identifier>` (identifier extracted from the symbol label). Optional query `path:` is the unique suppressed **caller site** file when exactly one exists; omit `path:` when sites are multi-file or missing (never constrain to the callee defining file alone).
 
 Determinism:
@@ -426,7 +435,7 @@ Behavior:
 
 5b) Exact registry identifier fast path
 - Trigger: grouped symbol searches with exact identifier-like queries, current compatible symbol registry, and no ambiguous exact owner.
-- Effect: after freshness gates pass, exact symbol registry hits can return a symbol group before semantic/vector search, tracked lexical scan, or rerank. Ambiguous/missing registry matches fall back to the normal search path without guessing; exact-eligible fallback uses the primary semantic pass plus bounded lexical recovery, not the expanded semantic pass.
+- Effect: after freshness gates pass, exact symbol registry hits can return a symbol group before semantic/vector search, tracked lexical scan, or rerank. The fast path adds a source-backed preview only when a descriptor-bound current-source read matches the registry file hash; the preview is restricted to the symbol span and the standard five-line/768-byte cap. Read, hash, span, or stability failure omits the preview without substituting registry labels. Ambiguous/missing registry matches fall back to the normal search path without guessing; exact-eligible fallback uses the primary semantic pass plus bounded lexical recovery, not the expanded semantic pass.
 - Observability: `hints.debugSearch.exactRegistry`, `hints.debugSearch.phaseTimingsMs`, `hints.debugSearch.passesUsed`, and per-result `debug.provenance.retrievalPasses` include `exact_registry` on hits. Missing or incompatible registry state reports `exactRegistry.reason=registry_unavailable` when `debug:true`.
 - Determinism: exact path filters inspect only that file's registry symbols; unscoped duplicate exact names are ambiguous and fall back.
 - Performance: warm exact identifier lookup avoids vector search, tracked lexical scan, and rerank when the registry hit is unique.
@@ -551,7 +560,7 @@ Recent vs legacy:
 5) Annotated read mode
 - Trigger: `mode="annotated"`.
 - Effect: returns content plus outline metadata (`outlineStatus`, `outline`, `hasMore`, optional hints/warnings).
-- Observability: JSON annotated envelope. Outline registry diagnostics collapse to `OUTLINE_SYMBOL_REGISTRY_WARNINGS:N action=… sample=…` when present.
+- Observability: JSON annotated envelope with the exact outline status and any relationship/span warnings.
 - Determinism: stable status coercion (`ok|requires_reindex|unsupported|ambiguous`).
 - Performance: optional outline lookup; plain mode remains cheaper.
 

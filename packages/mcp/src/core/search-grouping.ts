@@ -54,17 +54,17 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
             if (selected.length >= limit) {
                 return;
             }
-            if (selectedIds.has(group.groupId)) {
+            if (selectedIds.has(group.__groupId)) {
                 continue;
             }
 
-            const fileCount = fileCounts.get(group.file) || 0;
+            const fileCount = fileCounts.get(group.target.file) || 0;
             if (fileCount >= fileCap) {
                 summary.skippedByFileCap += 1;
                 continue;
             }
 
-            const symbolDiversityKey = group.symbolInstanceId || group.symbolKey || group.symbolId;
+            const symbolDiversityKey = group.__symbolInstanceId || group.__symbolKey || group.target.symbolId;
             if (groupBy === "symbol" && typeof symbolDiversityKey === "string") {
                 const symbolCount = symbolCounts.get(symbolDiversityKey) || 0;
                 if (symbolCount >= SEARCH_DIVERSITY_MAX_PER_SYMBOL) {
@@ -75,8 +75,8 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
             }
 
             selected.push(group);
-            selectedIds.add(group.groupId);
-            fileCounts.set(group.file, fileCount + 1);
+            selectedIds.add(group.__groupId);
+            fileCounts.set(group.target.file, fileCount + 1);
         }
     };
 

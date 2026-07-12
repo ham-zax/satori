@@ -1,5 +1,4 @@
 import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
-import { truncateContent } from "../utils.js";
 import {
     repairSourceBackedPythonSpan,
     type PythonSourceBackedSpanRepair,
@@ -8,7 +7,6 @@ import {
     SEARCH_PROXIMITY_WINDOW,
     type PathCategory,
     type SearchGroupBy,
-    type SearchScope,
 } from "./search-constants.js";
 import {
     applyGroupDiversity,
@@ -26,30 +24,30 @@ import {
     sortSearchCandidates,
 } from "./search-ranking-policy.js";
 import {
+    OVERSIZED_SYMBOL_LINE_THRESHOLD,
+    boundSearchEvidenceSpan,
     buildDisplaySymbolLabel,
-    buildInboundRecoveryAction,
-    buildSearchGroupFallbacks,
+    buildSearchGraphNavigation,
     buildSearchGroupPreview,
-    buildSearchGroupRecommendedAction,
-    buildSearchResultCapabilities,
     buildSearchSpanWarningCodes,
-    normalizeSearchSymbolLabel,
+    isValidSearchSpan,
+    searchSpanContains,
+    searchSpansEqual,
 } from "./search-response-helpers.js";
 import type {
     CallGraphHint,
     SearchCapabilityConfidence,
     SearchChunkResult,
     SearchGroupResult,
+    SearchNavigationUnavailableReasonV2,
     SearchSpan,
 } from "./search-types.js";
 import {
-    buildNavigationFallback,
     buildSearchGroupCallGraphHint,
-    buildSearchNextActions,
-    shouldAllowPreviewReadFallback,
     type SearchNavigationHelpers,
     type SearchNavigationState,
 } from "./search-navigation.js";
+import { WARNING_CODES } from "./warnings.js";
 
 type SearchCandidateLike = {
     result: {
@@ -58,6 +56,8 @@ type SearchCandidateLike = {
         symbolLabel?: string | null;
         symbolKind?: string | null;
         content?: string | null;
+        startLine?: number;
+        endLine?: number;
     };
     finalScore: number;
     pathCategory: PathCategory;
@@ -90,6 +90,10 @@ type SearchOwnerResolution = {
     ownerSymbolInstanceId?: string;
     symbolKind?: string;
     ownerSource?: Extract<SearchOwnerSource, "owner_metadata" | "registry_repair">;
+    ownerProof?: {
+        symbolInstanceId: string;
+        basis: "bytes" | "lines";
+    };
 };
 
 type SearchResultLike = SearchCandidateLike["result"] & {
@@ -107,6 +111,7 @@ type GroupAccumulator = {
     ownerSymbolInstanceId?: string;
     ownerSymbolKind?: string;
     ownerSource: SearchOwnerSource;
+    validatedOwnerChunkCount: number;
 };
 
 type RawSearchCandidateLike = SearchCandidateLike & {
@@ -117,100 +122,190 @@ type RawSearchCandidateLike = SearchCandidateLike & {
     fusionScore: number;
 };
 
+type CompactTargetResolution = {
+    target: SearchGroupResult["target"];
+    registrySymbol?: SymbolRecord;
+};
+
+function resolveCompactTarget(input: {
+    fallbackFile: string;
+    fallbackSpan: SearchSpan;
+    registrySymbol?: SymbolRecord;
+    ownershipRegistrySymbol?: SymbolRecord;
+    ownershipValidated?: boolean;
+    navigationHelpers: SearchNavigationHelpers;
+}): CompactTargetResolution | undefined {
+    const fallbackFile = input.navigationHelpers.sanitizeIndexedRelativeFilePath(input.fallbackFile);
+    if (!fallbackFile || !isValidSearchSpan(input.fallbackSpan)) {
+        return undefined;
+    }
+
+    const fallbackTarget: SearchGroupResult["target"] = {
+        file: fallbackFile,
+        span: {
+            startLine: input.fallbackSpan.startLine,
+            endLine: input.fallbackSpan.endLine,
+        },
+    };
+    if (!input.registrySymbol) {
+        return { target: fallbackTarget };
+    }
+
+    const ownershipSymbol = input.ownershipRegistrySymbol ?? input.registrySymbol;
+    const ownershipFile = ownershipSymbol
+        ? input.navigationHelpers.sanitizeIndexedRelativeFilePath(ownershipSymbol.file)
+        : undefined;
+    const ownershipSpan: SearchSpan | undefined = ownershipSymbol
+        ? {
+            startLine: ownershipSymbol.span.startLine,
+            endLine: ownershipSymbol.span.endLine,
+        }
+        : undefined;
+    if (
+        !ownershipSymbol
+        || ownershipFile !== fallbackFile
+        || (!input.ownershipValidated && !searchSpanContains(ownershipSpan!, input.fallbackSpan))
+    ) {
+        return { target: fallbackTarget };
+    }
+
+    const registryFile = input.navigationHelpers.sanitizeIndexedRelativeFilePath(input.registrySymbol.file);
+    const registrySpan: SearchSpan = {
+        startLine: input.registrySymbol.span.startLine,
+        endLine: input.registrySymbol.span.endLine,
+    };
+    if (
+        registryFile !== fallbackFile
+        || !isValidSearchSpan(registrySpan)
+        || input.registrySymbol.symbolInstanceId !== ownershipSymbol.symbolInstanceId
+    ) {
+        return { target: fallbackTarget };
+    }
+
+    if (input.registrySymbol.kind !== "file") {
+        const symbolId = input.registrySymbol.symbolInstanceId.trim();
+        if (!symbolId) {
+            return { target: fallbackTarget };
+        }
+        return {
+            target: {
+                file: registryFile,
+                span: registrySpan,
+                symbolId,
+            },
+            registrySymbol: input.registrySymbol,
+        };
+    }
+    return {
+        target: {
+            file: registryFile,
+            span: registrySpan,
+        },
+        registrySymbol: input.registrySymbol,
+    };
+}
+
+function buildOwnerQuality(input: {
+    registrySymbol?: SymbolRecord;
+    ownerSource: SearchOwnerSource;
+    spanValidation: SearchSpanValidation;
+}): "high" | "medium" | "low" {
+    if (input.registrySymbol?.kind === "file") {
+        return "low";
+    }
+    if (input.registrySymbol) {
+        return input.spanValidation === "unverified" ? "medium" : "high";
+    }
+    return input.ownerSource === "owner_metadata" || input.ownerSource === "registry_repair"
+        ? "medium"
+        : "low";
+}
+
+function buildGraphEvidence(callGraphHint: CallGraphHint): NonNullable<SearchGroupResult["debug"]>["graphEvidence"] | undefined {
+    if (!callGraphHint.supported) {
+        return undefined;
+    }
+    return {
+        validatedAt: callGraphHint.validatedAt,
+        sidecarBuiltAt: callGraphHint.sidecarBuiltAt,
+    };
+}
+
 export function buildExactRegistryGroupResult(input: {
-    codebaseRoot: string;
-    query: string;
-    scope: SearchScope;
-    groupBy: SearchGroupBy;
     symbol: SymbolRecord;
     spanRepair?: PythonSourceBackedSpanRepair;
     indexedAt: string | null;
     navigationState: SearchNavigationState;
-    sidecarReadyForOutline: boolean;
+    graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
     debug: boolean;
     now: () => number;
-    previewMaxChars: number;
+    previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
-}): SearchGroupResult & { __exactLexicalMatch: boolean } {
+}): SearchGroupResult | undefined {
     const span: SearchSpan = {
         startLine: input.symbol.span.startLine,
         endLine: input.symbol.span.endLine,
     };
-    const previewSpan: SearchSpan = {
-        startLine: span.startLine,
-        endLine: span.endLine,
-    };
-    const symbolSpan: SearchSpan = {
-        startLine: span.startLine,
-        endLine: span.endLine,
-    };
-    const displaySymbolLabel = normalizeSearchSymbolLabel(input.symbol.label) || input.symbol.label;
-    const callGraphHint = buildSearchGroupCallGraphHint({
-        file: input.symbol.file,
-        language: input.symbol.language,
-        span,
-        symbolLabel: displaySymbolLabel,
-        ownerSymbolInstanceId: input.symbol.symbolInstanceId,
+    const targetResolution = resolveCompactTarget({
+        fallbackFile: input.symbol.file,
+        fallbackSpan: span,
         registrySymbol: input.symbol,
+        navigationHelpers: input.navigationHelpers,
+    });
+    if (!targetResolution?.registrySymbol) {
+        return undefined;
+    }
+    const { target, registrySymbol } = targetResolution;
+    const displaySymbolLabel = buildDisplaySymbolLabel({
+        symbolLabel: input.symbol.label,
+        symbolKind: input.symbol.kind,
+        relativePath: target.file,
+        span: target.span,
+    });
+    const callGraphHint = buildSearchGroupCallGraphHint({
+        file: target.file,
+        language: registrySymbol.language,
+        span: target.span,
+        symbolLabel: displaySymbolLabel,
+        ownerSymbolInstanceId: registrySymbol.symbolInstanceId,
+        registrySymbol,
         registryLoaded: true,
         navigationState: input.navigationState,
     }, input.navigationHelpers);
-    const nextActions = buildSearchNextActions(
-        input.codebaseRoot,
-        input.symbol.file,
-        span,
-        callGraphHint,
-        input.sidecarReadyForOutline,
-        input.symbol,
-        input.navigationHelpers,
-    );
-    const navigationFallback = buildNavigationFallback(
-        input.codebaseRoot,
-        input.symbol.file,
-        previewSpan,
-        callGraphHint,
-        input.sidecarReadyForOutline,
-        shouldAllowPreviewReadFallback(callGraphHint, Boolean(nextActions?.openSymbol)),
-        input.navigationHelpers,
-    );
-    const capabilities = buildSearchResultCapabilities({
-        callGraphHint,
-        confidence: "high",
-        hasOpenSymbol: Boolean(nextActions?.openSymbol),
-        hasReadFallback: Boolean(navigationFallback?.readSpan),
-        semanticMatch: "medium",
-        spanValidation: input.spanRepair
-            ? (input.spanRepair.validated ? "verified" : input.spanRepair.attempted ? "unverified" : "not_applicable")
-            : "not_applicable",
-    });
-    const preview = [
-        displaySymbolLabel,
-        input.symbol.qualifiedName !== displaySymbolLabel ? input.symbol.qualifiedName : "",
-    ].filter(Boolean).join("\n");
+    const spanValidation: SearchSpanValidation = input.spanRepair
+        ? (input.spanRepair.validated ? "verified" : input.spanRepair.attempted ? "unverified" : "not_applicable")
+        : "not_applicable";
+    const graphEvidence = input.graphUnavailableReasonOverride
+        ? undefined
+        : buildGraphEvidence(callGraphHint);
+    const exactEvidenceSpan = target.span.endLine - target.span.startLine + 1 >= OVERSIZED_SYMBOL_LINE_THRESHOLD
+        ? boundSearchEvidenceSpan(target.span)
+        : undefined;
 
-    const result: SearchGroupResult & { __exactLexicalMatch: boolean } = {
-        kind: "group",
-        groupId: input.symbol.symbolInstanceId,
-        file: input.symbol.file,
-        span,
-        previewSpan,
-        symbolSpan,
-        language: input.symbol.language,
-        symbolId: input.symbol.symbolInstanceId,
-        symbolLabel: displaySymbolLabel,
-        symbolKey: input.symbol.symbolKey,
-        symbolInstanceId: input.symbol.symbolInstanceId,
-        symbolKind: input.symbol.kind,
-        confidence: "high",
+    return {
+        target,
+        displayLabel: displaySymbolLabel,
+        language: registrySymbol.language,
+        symbolKind: registrySymbol.kind,
         score: 1,
-        indexedAt: input.indexedAt,
-        stalenessBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
-        collapsedChunkCount: 1,
-        callGraphHint,
-        ...(navigationFallback ? { navigationFallback } : {}),
-        ...(nextActions ? { nextActions } : {}),
-        capabilities,
-        preview: truncateContent(preview, input.previewMaxChars),
+        quality: {
+            owner: buildOwnerQuality({
+                registrySymbol,
+                ownerSource: "owner_metadata",
+                spanValidation,
+            }),
+            semantic: "medium",
+        },
+        preview: "",
+        ...(exactEvidenceSpan ? { evidenceSpan: exactEvidenceSpan } : {}),
+        navigation: buildSearchGraphNavigation(
+            callGraphHint,
+            input.symbol.name,
+            input.graphUnavailableReasonOverride,
+        ),
+        __groupId: registrySymbol.symbolInstanceId,
+        __symbolKey: registrySymbol.symbolKey,
+        __symbolInstanceId: registrySymbol.symbolInstanceId,
         __exactLexicalMatch: true,
         ...(input.debug ? {
             debug: {
@@ -224,6 +319,11 @@ export function buildExactRegistryGroupResult(input: {
                 agentFitReason: "exact_registry",
                 matchesMust: true,
                 exactLexicalMatch: true,
+                freshness: {
+                    newestChunkIndexedAt: input.indexedAt,
+                    ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
+                },
+                ...(graphEvidence ? { graphEvidence } : {}),
                 provenance: {
                     retrievalPasses: ["exact_registry"],
                     backendScoreKinds: [],
@@ -236,42 +336,9 @@ export function buildExactRegistryGroupResult(input: {
             },
         } : {}),
     };
-
-    result.recommendedNextAction = buildSearchGroupRecommendedAction(result);
-    if (
-        result.callGraphHint.supported
-        && result.capabilities.callGraphCallers === "low"
-    ) {
-        const inboundRecovery = buildInboundRecoveryAction({
-            codebaseRoot: input.codebaseRoot,
-            symbolLabel: result.symbolLabel,
-            groupId: result.groupId,
-            scope: input.scope,
-            groupBy: input.groupBy,
-        });
-        if (inboundRecovery) {
-            result.inboundRecovery = inboundRecovery;
-        }
-    }
-    const fallbacks = buildSearchGroupFallbacks({
-        codebaseRoot: input.codebaseRoot,
-        query: input.query,
-        scope: input.scope,
-        groupBy: input.groupBy,
-        result,
-    });
-    if (fallbacks) {
-        result.fallbacks = fallbacks;
-    }
-
-    return result;
 }
 
 export function buildGroupedSymbolSearchResult(input: {
-    codebaseRoot: string;
-    query: string;
-    scope: SearchScope;
-    groupBy: SearchGroupBy;
     representative: SearchCandidateLike;
     previewSpan: SearchSpan;
     indexedAt: string | null;
@@ -284,52 +351,77 @@ export function buildGroupedSymbolSearchResult(input: {
     registryUnavailableReason?: CallGraphUnavailableReason;
     registrySymbolRepair?: PythonSourceBackedSpanRepair;
     navigationState: SearchNavigationState;
-    sidecarReadyForOutline: boolean;
+    graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
     debug: boolean;
     now: () => number;
-    previewMaxChars: number;
+    previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
     chunkCount: number;
     semanticMatch: SearchCapabilityConfidence;
     spanValidation: SearchSpanValidation;
-}): SearchGroupResult & { __exactLexicalMatch: boolean } {
-    const symbolKind = input.ownerSymbolKind
-        || (typeof input.representative.result.symbolKind === "string" ? input.representative.result.symbolKind : undefined);
+    ownershipValidated?: boolean;
+}): SearchGroupResult | undefined {
     const supportBoost = Math.min(Math.log1p(input.chunkCount) * 0.01, 0.03);
     const symbolScore = input.representative.finalScore + supportBoost;
-    const confidence = input.ownerSource === "owner_metadata" || input.ownerSource === "registry_repair"
-        ? (symbolKind === "file" ? "low" : "medium")
-        : "low";
-    const registrySymbol = input.registrySymbolRepair?.symbol || input.registrySymbol;
-    const symbolSpan: SearchSpan | undefined = registrySymbol
-        ? {
-            startLine: registrySymbol.span.startLine,
-            endLine: registrySymbol.span.endLine,
-        }
+    if (!Number.isFinite(symbolScore)) {
+        return undefined;
+    }
+    const repairedRegistrySymbol = input.registrySymbolRepair?.validated
+        && input.registrySymbolRepair.symbol?.symbolInstanceId === input.registrySymbol?.symbolInstanceId
+        ? input.registrySymbolRepair.symbol
         : undefined;
-    const span: SearchSpan = symbolSpan
+    const candidateRegistrySymbol = repairedRegistrySymbol || input.registrySymbol;
+    const targetResolution = resolveCompactTarget({
+        fallbackFile: input.representative.result.relativePath,
+        fallbackSpan: input.previewSpan,
+        registrySymbol: candidateRegistrySymbol,
+        ownershipRegistrySymbol: input.registrySymbol,
+        ownershipValidated: input.ownershipValidated,
+        navigationHelpers: input.navigationHelpers,
+    });
+    if (!targetResolution) {
+        return undefined;
+    }
+    const { target, registrySymbol } = targetResolution;
+    const representativeSpan: SearchSpan = {
+        startLine: input.representative.result.startLine ?? input.previewSpan.startLine,
+        endLine: input.representative.result.endLine ?? input.previewSpan.endLine,
+    };
+    const rawEvidenceSpan = isValidSearchSpan(representativeSpan) ? representativeSpan : input.previewSpan;
+    const ownedEvidenceSpan = registrySymbol
         ? {
-            startLine: symbolSpan.startLine,
-            endLine: symbolSpan.endLine,
+            startLine: Math.max(rawEvidenceSpan.startLine, target.span.startLine),
+            endLine: Math.min(rawEvidenceSpan.endLine, target.span.endLine),
         }
-        : {
-            startLine: input.previewSpan.startLine,
-            endLine: input.previewSpan.endLine,
-        };
-    const groupId = input.ownerSymbolInstanceId
-        || input.ownerSymbolKey
-        || buildFallbackGroupId(input.representative.result.relativePath, input.previewSpan);
+        : rawEvidenceSpan;
+    const evidenceSpan = boundSearchEvidenceSpan(
+        isValidSearchSpan(ownedEvidenceSpan) ? ownedEvidenceSpan : input.previewSpan,
+    );
+    const effectiveOwnerSource: SearchOwnerSource = registrySymbol
+        ? input.ownerSource
+        : candidateRegistrySymbol
+            ? "fallback"
+            : input.ownerSource;
+    const representativeSymbolKind = typeof input.representative.result.symbolKind === "string"
+        ? input.representative.result.symbolKind
+        : undefined;
+    const symbolKind = registrySymbol?.kind
+        || representativeSymbolKind
+        || (!candidateRegistrySymbol ? input.ownerSymbolKind : undefined);
+    const groupId = registrySymbol?.symbolInstanceId
+        || registrySymbol?.symbolKey
+        || buildFallbackGroupId(target.file, input.previewSpan);
     const repSymbolLabel = buildDisplaySymbolLabel({
         symbolLabel: typeof input.representative.result.symbolLabel === "string" ? input.representative.result.symbolLabel : undefined,
         symbolKind,
-        relativePath: input.representative.result.relativePath,
-        span,
+        relativePath: target.file,
+        span: target.span,
         content: String(input.representative.result.content || ""),
     });
     const callGraphHint = buildSearchGroupCallGraphHint({
-        file: input.representative.result.relativePath,
+        file: target.file,
         language: input.representative.result.language || "unknown",
-        span,
+        span: target.span,
         symbolLabel: repSymbolLabel,
         ownerSymbolInstanceId: input.ownerSymbolInstanceId,
         registrySymbol,
@@ -337,55 +429,35 @@ export function buildGroupedSymbolSearchResult(input: {
         registryUnavailableReason: input.registryUnavailableReason,
         navigationState: input.navigationState,
     }, input.navigationHelpers);
-    const nextActions = buildSearchNextActions(
-        input.codebaseRoot,
-        input.representative.result.relativePath,
-        span,
-        callGraphHint,
-        input.sidecarReadyForOutline,
-        registrySymbol,
-        input.navigationHelpers,
-    );
-    const navigationFallback = buildNavigationFallback(
-        input.codebaseRoot,
-        input.representative.result.relativePath,
-        input.previewSpan,
-        callGraphHint,
-        input.sidecarReadyForOutline,
-        shouldAllowPreviewReadFallback(callGraphHint, Boolean(nextActions?.openSymbol)),
-        input.navigationHelpers,
-    );
 
-    const result: SearchGroupResult & { __exactLexicalMatch: boolean } = {
-        kind: "group",
-        groupId,
-        file: input.representative.result.relativePath,
-        span,
-        previewSpan: input.previewSpan,
-        ...(symbolSpan ? { symbolSpan } : {}),
+    const graphEvidence = input.graphUnavailableReasonOverride
+        ? undefined
+        : buildGraphEvidence(callGraphHint);
+    return {
+        target,
+        displayLabel: repSymbolLabel,
         language: input.representative.result.language || "unknown",
-        ...(input.ownerSymbolInstanceId ? { symbolId: input.ownerSymbolInstanceId } : {}),
-        symbolLabel: repSymbolLabel,
-        ...(input.ownerSymbolKey ? { symbolKey: input.ownerSymbolKey } : {}),
-        ...(input.ownerSymbolInstanceId ? { symbolInstanceId: input.ownerSymbolInstanceId } : {}),
         ...(symbolKind ? { symbolKind } : {}),
-        confidence,
         score: symbolScore,
-        indexedAt: input.indexedAt,
-        stalenessBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
-        collapsedChunkCount: input.chunkCount,
-        callGraphHint,
-        ...(navigationFallback ? { navigationFallback } : {}),
-        ...(nextActions ? { nextActions } : {}),
-        capabilities: buildSearchResultCapabilities({
+        quality: {
+            owner: buildOwnerQuality({
+                registrySymbol,
+                ownerSource: effectiveOwnerSource,
+                spanValidation: input.spanValidation,
+            }),
+            semantic: input.semanticMatch,
+        },
+        ...(input.chunkCount >= 2 ? { evidenceChunks: input.chunkCount } : {}),
+        preview: buildSearchGroupPreview(repSymbolLabel, String(input.representative.result.content || ""), input.previewMaxBytes),
+        ...(!searchSpansEqual(target.span, evidenceSpan) ? { evidenceSpan } : {}),
+        navigation: buildSearchGraphNavigation(
             callGraphHint,
-            confidence,
-            hasOpenSymbol: Boolean(nextActions?.openSymbol),
-            hasReadFallback: Boolean(navigationFallback?.readSpan),
-            semanticMatch: input.semanticMatch,
-            spanValidation: input.spanValidation,
-        }),
-        preview: buildSearchGroupPreview(repSymbolLabel, String(input.representative.result.content || ""), input.previewMaxChars),
+            registrySymbol?.name,
+            input.graphUnavailableReasonOverride,
+        ),
+        __groupId: groupId,
+        ...(registrySymbol?.symbolKey ? { __symbolKey: registrySymbol.symbolKey } : {}),
+        ...(registrySymbol?.symbolInstanceId ? { __symbolInstanceId: registrySymbol.symbolInstanceId } : {}),
         __exactLexicalMatch: input.representative.exactLexicalMatch,
         ...(input.debug ? {
             debug: {
@@ -400,50 +472,24 @@ export function buildGroupedSymbolSearchResult(input: {
                 matchesMust: input.representative.passesMatchedMust,
                 exactLexicalMatch: input.representative.exactLexicalMatch,
                 symbolAggregation: {
-                    ownerSource: input.ownerSource,
+                    ownerSource: effectiveOwnerSource,
                     evidenceChunkCount: input.chunkCount,
                     supportBoost,
                 },
-                provenance: buildSearchCandidateProvenance(input.representative, input.ownerSource),
+                freshness: {
+                    newestChunkIndexedAt: input.indexedAt,
+                    ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
+                },
+                ...(graphEvidence ? { graphEvidence } : {}),
+                provenance: buildSearchCandidateProvenance(input.representative, effectiveOwnerSource),
             },
         } : {}),
     };
-
-    result.recommendedNextAction = buildSearchGroupRecommendedAction(result);
-    if (
-        result.callGraphHint.supported
-        && result.capabilities.callGraphCallers === "low"
-    ) {
-        const inboundRecovery = buildInboundRecoveryAction({
-            codebaseRoot: input.codebaseRoot,
-            symbolLabel: result.symbolLabel,
-            groupId: result.groupId,
-            scope: input.scope,
-            groupBy: input.groupBy,
-        });
-        if (inboundRecovery) {
-            result.inboundRecovery = inboundRecovery;
-        }
-    }
-    const fallbacks = buildSearchGroupFallbacks({
-        codebaseRoot: input.codebaseRoot,
-        query: input.query,
-        scope: input.scope,
-        groupBy: input.groupBy,
-        result,
-    });
-    if (fallbacks) {
-        result.fallbacks = fallbacks;
-    }
-
-    return result;
 }
 
 export function buildVisibleGroupedSearchResults(input: {
     scored: SearchCandidateLike[];
     codebaseRoot: string;
-    query: string;
-    scope: SearchScope;
     groupBy: SearchGroupBy;
     limit: number;
     queryPlan: SearchQueryPlanLike;
@@ -451,10 +497,10 @@ export function buildVisibleGroupedSearchResults(input: {
     registry?: SymbolRegistry;
     registryUnavailableReason?: CallGraphUnavailableReason;
     navigationState: SearchNavigationState;
-    sidecarReadyForOutline: boolean;
+    graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
     debug: boolean;
     now: () => number;
-    previewMaxChars: number;
+    previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
     parseIndexedAtMs: (indexedAt?: string) => number | undefined;
     resolveOwner: (result: SearchResultLike) => SearchOwnerResolution;
@@ -466,11 +512,31 @@ export function buildVisibleGroupedSearchResults(input: {
     registryRepairGroupCount: number;
 } {
     const groups = new Map<string, GroupAccumulator>();
+    let invalidGroupCandidateOmitted = false;
     for (const candidate of input.scored) {
         const result = candidate.result as SearchResultLike;
+        const normalizedFile = input.navigationHelpers.sanitizeIndexedRelativeFilePath(result.relativePath);
+        const candidateSpan: SearchSpan = {
+            startLine: result.startLine ?? Number.NaN,
+            endLine: result.endLine ?? Number.NaN,
+        };
+        if (!normalizedFile || !isValidSearchSpan(candidateSpan) || !Number.isFinite(candidate.finalScore)) {
+            invalidGroupCandidateOmitted = true;
+            continue;
+        }
+        const safeCandidate: SearchCandidateLike = normalizedFile === result.relativePath
+            ? candidate
+            : {
+                ...candidate,
+                result: {
+                    ...result,
+                    relativePath: normalizedFile,
+                },
+            };
+        const safeResult = safeCandidate.result as SearchResultLike;
         let groupKey = "";
         const ownerResolution = input.groupBy === "symbol"
-            ? input.resolveOwner(result)
+            ? input.resolveOwner(safeResult)
             : {};
         const ownerSymbolKey = ownerResolution.ownerSymbolKey;
         const ownerSymbolInstanceId = ownerResolution.ownerSymbolInstanceId;
@@ -478,34 +544,41 @@ export function buildVisibleGroupedSearchResults(input: {
         let ownerSource: SearchOwnerSource = "fallback";
 
         if (input.groupBy === "file") {
-            groupKey = `file:${result.relativePath}`;
+            groupKey = `file:${safeResult.relativePath}`;
         } else if (ownerSymbolKey) {
             groupKey = ownerSymbolInstanceId
-                ? `owner:${ownerSymbolKey}:${ownerSymbolInstanceId}`
-                : `owner:${ownerSymbolKey}`;
+                ? `owner:${safeResult.relativePath}:${ownerSymbolKey}:${ownerSymbolInstanceId}`
+                : `owner:${safeResult.relativePath}:${ownerSymbolKey}`;
             ownerSource = ownerResolution.ownerSource || "owner_metadata";
         } else {
-            const proximityBucket = Math.floor((Math.max(1, result.startLine || 1) - 1) / SEARCH_PROXIMITY_WINDOW);
-            groupKey = `fallback:${result.relativePath}:${proximityBucket}`;
+            const proximityBucket = Math.floor((candidateSpan.startLine - 1) / SEARCH_PROXIMITY_WINDOW);
+            groupKey = `fallback:${safeResult.relativePath}:${proximityBucket}`;
         }
 
         const existing = groups.get(groupKey);
         if (!existing) {
             groups.set(groupKey, {
-                chunks: [candidate],
+                chunks: [safeCandidate],
                 ownerSymbolKey,
                 ownerSymbolInstanceId,
                 ownerSymbolKind,
                 ownerSource,
+                validatedOwnerChunkCount: ownerResolution.ownerProof?.symbolInstanceId === ownerSymbolInstanceId ? 1 : 0,
             });
             continue;
         }
 
-        existing.chunks.push(candidate);
+        existing.chunks.push(safeCandidate);
+        if (ownerResolution.ownerProof?.symbolInstanceId === existing.ownerSymbolInstanceId) {
+            existing.validatedOwnerChunkCount += 1;
+        }
     }
 
     const groupedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }> = [];
     const spanWarningCodes = new Set<string>();
+    if (invalidGroupCandidateOmitted) {
+        spanWarningCodes.add(WARNING_CODES.SEARCH_INVALID_GROUP_TARGET_OMITTED);
+    }
     let exactMatchPinningApplied = false;
     let registryRepairGroupCount = 0;
 
@@ -557,11 +630,7 @@ export function buildVisibleGroupedSearchResults(input: {
                 ? "low"
                 : "medium";
 
-        groupedResults.push(buildGroupedSymbolSearchResult({
-            codebaseRoot: input.codebaseRoot,
-            query: input.query,
-            scope: input.scope,
-            groupBy: input.groupBy,
+        const groupedResult = buildGroupedSymbolSearchResult({
             representative,
             previewSpan,
             indexedAt: indexedAtMax || null,
@@ -574,17 +643,23 @@ export function buildVisibleGroupedSearchResults(input: {
             registryUnavailableReason: input.registryUnavailableReason,
             registrySymbolRepair,
             navigationState: input.navigationState,
-            sidecarReadyForOutline: input.sidecarReadyForOutline,
+            graphUnavailableReasonOverride: input.graphUnavailableReasonOverride,
             debug: input.debug,
             now: input.now,
-            previewMaxChars: input.previewMaxChars,
+            previewMaxBytes: input.previewMaxBytes,
             navigationHelpers: input.navigationHelpers,
             chunkCount: group.chunks.length,
             semanticMatch,
             spanValidation: registrySymbolRepair
                 ? (registrySymbolRepair.validated ? "verified" : registrySymbolRepair.attempted ? "unverified" : "not_applicable")
                 : "not_applicable",
-        }));
+            ownershipValidated: group.validatedOwnerChunkCount === group.chunks.length,
+        });
+        if (groupedResult) {
+            groupedResults.push(groupedResult);
+        } else {
+            spanWarningCodes.add(WARNING_CODES.SEARCH_INVALID_GROUP_TARGET_OMITTED);
+        }
     }
 
     const rankedGroupedResults = (input.queryPlan.referenceSeeking || input.queryPlan.intent === "identifier")

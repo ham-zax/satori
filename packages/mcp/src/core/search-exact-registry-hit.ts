@@ -56,11 +56,10 @@ export type BuildExactRegistryHitEnvelopeInput = {
     indexedAt: string | null;
     navigationState: SearchNavigationState;
     navigationWarning?: string;
-    sidecarReadyForOutline: boolean;
     debug: boolean;
     debugInput: ExactRegistryHitDebugInput;
     now: () => number;
-    previewMaxChars: number;
+    previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
     partialIndexSearchWarnings: string[];
     dirtyFilesNotFreshened: boolean;
@@ -122,7 +121,7 @@ function buildExactRegistryDebugHint(
 
 export function buildExactRegistryHitEnvelope(
     input: BuildExactRegistryHitEnvelopeInput,
-): SearchResponseEnvelope {
+): SearchResponseEnvelope | undefined {
     const exactRegistrySymbolRepair = repairSourceBackedPythonSpan({
         codebaseRoot: input.codebaseRoot,
         symbol: input.symbol,
@@ -136,28 +135,31 @@ export function buildExactRegistryHitEnvelope(
     });
 
     const exactGroup = buildExactRegistryGroupResult({
-        codebaseRoot: input.codebaseRoot,
-        query: input.query,
-        scope: input.scope,
-        groupBy: input.groupBy,
         symbol: exactRegistrySymbolRepair.symbol,
         spanRepair: exactRegistrySymbolRepair,
         indexedAt: input.indexedAt,
         navigationState: input.navigationState,
-        sidecarReadyForOutline: input.sidecarReadyForOutline,
+        graphUnavailableReasonOverride: input.partialIndexSearchWarnings.includes(
+            "SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE",
+        )
+            ? "partial_index_navigation_unavailable"
+            : undefined,
         debug: input.debug,
         now: input.now,
-        previewMaxChars: input.previewMaxChars,
+        previewMaxBytes: input.previewMaxBytes,
         navigationHelpers: input.navigationHelpers,
     });
+    if (!exactGroup) {
+        return undefined;
+    }
     const visibleGroupedResults = [exactGroup];
     const noiseMitigationHint = input.buildNoiseMitigationHint(
-        visibleGroupedResults.map((result) => result.file),
+        visibleGroupedResults.map((result) => result.target.file),
     );
     const generatedArtifactsHint = input.buildGeneratedArtifactsVerificationHint(
         visibleGroupedResults.map((result) => ({
-            file: result.file,
-            span: result.span,
+            file: result.target.file,
+            span: result.target.span,
         })),
     );
     const debugSearchHint = input.debug

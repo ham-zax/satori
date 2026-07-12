@@ -47,7 +47,7 @@ function symbolKindRank(kind?: string): number {
 }
 
 function resolveOwnerSpan(group: SearchGroupResult): { startLine?: number; endLine?: number } | undefined {
-    return group.symbolSpan || group.span;
+    return group.target.span;
 }
 
 function spanLineCount(group: SearchGroupResult): number {
@@ -80,7 +80,7 @@ function compareTightOwnerPreference(a: SearchGroupResult, b: SearchGroupResult)
         return aDecl ? -1 : 1;
     }
 
-    if (a.file && b.file && a.file === b.file) {
+    if (a.target.file === b.target.file) {
         const spanCmp = spanLineCount(a) - spanLineCount(b);
         if (spanCmp !== 0) {
             return spanCmp;
@@ -108,17 +108,17 @@ function compareGroupedSearchResults(
         return b.score - a.score;
     }
 
-    const fileCmp = compareContractStringsAsc(a.file, b.file);
+    const fileCmp = compareContractStringsAsc(a.target.file, b.target.file);
     if (fileCmp !== 0) return fileCmp;
-    const spanCmp = compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+    const spanCmp = compareNullableNumbersAsc(a.target.span.startLine, b.target.span.startLine);
     if (spanCmp !== 0) return spanCmp;
-    const labelCmp = compareContractStringsAsc(a.symbolLabel, b.symbolLabel);
+    const labelCmp = compareContractStringsAsc(a.displayLabel, b.displayLabel);
     if (labelCmp !== 0) return labelCmp;
-    return compareContractStringsAsc(a.symbolId, b.symbolId);
+    return compareContractStringsAsc(a.target.symbolId, b.target.symbolId);
 }
 
 function isDeclarationSearchGroup(group: SearchGroupResult): boolean {
-    const label = (group.symbolLabel || "").trim().toLowerCase();
+    const label = group.displayLabel.trim().toLowerCase();
     if (/^(?:async\s+)?(?:class|type|interface|enum|struct|function|method|def)\b/.test(label)) {
         return true;
     }
@@ -133,21 +133,21 @@ function isDeclarationSearchGroup(group: SearchGroupResult): boolean {
 }
 
 function normalizeDeclarationGroupKey(group: SearchGroupResult): string | null {
-    if (!group.file || !group.symbolLabel) {
+    if (!group.target.file || !group.displayLabel) {
         return null;
     }
     if (!isDeclarationSearchGroup(group)) {
         return null;
     }
 
-    const normalizedLabel = group.symbolLabel
+    const normalizedLabel = group.displayLabel
         .toLowerCase()
         .replace(/\s+/g, " ")
         .trim();
-    const ownerIdentity = group.symbolKey || group.symbolInstanceId;
+    const ownerIdentity = group.__symbolKey || group.__symbolInstanceId;
     return ownerIdentity
-        ? `${group.file}::${normalizedLabel}::${ownerIdentity}`
-        : `${group.file}::${normalizedLabel}`;
+        ? `${group.target.file}::${normalizedLabel}::${ownerIdentity}`
+        : `${group.target.file}::${normalizedLabel}`;
 }
 
 export function sortGroupedSearchResults<T extends SearchGroupResult & { __exactLexicalMatch: boolean }>(

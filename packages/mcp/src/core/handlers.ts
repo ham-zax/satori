@@ -93,6 +93,7 @@ import {
 import {
     buildOutlineSpanWarningCodes as buildSearchOutlineSpanWarningCodes,
     normalizeSearchSymbolLabel as normalizeSearchSymbolLabelHelper,
+    SEARCH_GROUP_PREVIEW_MAX_BYTES,
 } from "./search-response-helpers.js";
 import { runSearchFrontDoor } from "./search-frontdoor.js";
 import {
@@ -161,7 +162,6 @@ import { MutationLeaseCoordinator, type RootMutationLease } from "./mutation-lea
 
 const SEARCH_PARTIAL_INDEX_LIMIT_REACHED_WARNING = 'SEARCH_PARTIAL_INDEX:limit_reached';
 const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = 'SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE';
-const SEARCH_GROUP_PREVIEW_MAX_CHARS = 800;
 const SEARCH_DEBUG_CHANGED_CODE_MAX_FILES = 10;
 const SEARCH_DEBUG_CHANGED_CODE_MAX_SYMBOLS = 20;
 const SEARCH_DEBUG_CHANGED_CODE_MAX_DIRECT_CALLERS = 20;
@@ -2110,7 +2110,13 @@ export class ToolHandlers {
 
     private sanitizeIndexedRelativeFilePath(relativeFilePath: string): string | undefined {
         const normalized = this.normalizeRelativeFilePath(relativeFilePath);
-        if (!normalized || path.isAbsolute(normalized)) {
+        if (
+            !normalized
+            || normalized.includes("\0")
+            || path.isAbsolute(normalized)
+            || path.win32.isAbsolute(normalized)
+            || /^[A-Za-z]:/.test(normalized)
+        ) {
             return undefined;
         }
         const compact = path.posix.normalize(normalized).replace(/^\.\/+/, '').trim();
@@ -2618,7 +2624,7 @@ export class ToolHandlers {
                 changedFilesBoostSkippedForLargeChangeSet: initialChangedFilesBoostSkippedForLargeChangeSet,
                 dirtyFilesNotFreshened: initialDirtyFilesNotFreshened,
                 rankingProvenance: initialRankingProvenance,
-                previewMaxChars: SEARCH_GROUP_PREVIEW_MAX_CHARS,
+                previewMaxBytes: SEARCH_GROUP_PREVIEW_MAX_BYTES,
             }, {
                 searchQuerySupport: this.searchQuerySupport,
                 measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
@@ -2707,6 +2713,10 @@ export class ToolHandlers {
                     isError: true,
                     meta: { searchDiagnostics }
                 };
+            }
+
+            if (exactFastPath.warning) {
+                execution.searchWarnings.push(exactFastPath.warning);
             }
 
             const envelope = await finalizeSearchResults({

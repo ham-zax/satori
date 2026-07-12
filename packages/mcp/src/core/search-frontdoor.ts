@@ -7,6 +7,7 @@ import type {
     SearchRequestInput,
     SearchResponseEnvelope,
 } from "./search-types.js";
+import { SEARCH_RESPONSE_FORMAT_VERSION } from "./search-types.js";
 import type { FreshnessDecision } from "./sync.js";
 import type {
     CompletionProbeDebugHint,
@@ -125,6 +126,7 @@ function buildBlockedReadinessPayload(
 
     if (state.state === "not_indexed") {
         return {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status: "not_indexed",
             reason: "not_indexed",
             path: searchContext.path,
@@ -152,6 +154,7 @@ function buildBlockedReadinessPayload(
         const preferRepair = !preferSync && state.reason === "missing_marker_doc";
         const action = preferSync ? "sync" : preferRepair ? "repair" : "create";
         return {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status: "not_indexed",
             reason: "not_indexed",
             path: searchContext.path,

@@ -17,3 +17,10 @@ test('isWarningCode accepts only registered warning identifiers', () => {
     assert.equal(isWarningCode(''), false);
     assert.equal(isWarningCode(null), false);
 });
+
+test('invalid grouped target warning is part of the authoritative registry', () => {
+    assert.equal(
+        WARNING_CODES.SEARCH_INVALID_GROUP_TARGET_OMITTED,
+        'SEARCH_INVALID_GROUP_TARGET_OMITTED',
+    );
+});

@@ -470,8 +470,10 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
             symbols,
         });
         assert.deepEqual(payload, {
+            formatVersion: 2,
             status: 'ok',
             path: '<repo>',
+            codebaseRoot: '<repo>',
             query: 'validate session',
             scope: 'runtime',
             groupBy: 'symbol',
@@ -490,12 +492,6 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
                 changedFilesBoostApplied: false,
                 changedFilesBoostSkippedForLargeChangeSet: false,
             },
-            hints: {
-                version: 1,
-                navigation: {
-                    nextStep: 'Use recommendedNextAction when present. Call call_graph only when nextActions.callGraph is present and callGraphHint.supported=true.',
-                },
-            },
             recommendedNextAction: {
                 resultIndex: 0,
                 tool: 'read_file',
@@ -503,121 +499,30 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
                     path: '<repo>/src/auth.ts',
                     open_symbol: {
                         symbolId: '<symbol:function:validateSession>',
-                        symbolLabel: 'function validateSession(token: string)',
                     },
                 },
-                reason: 'Open the selected owner before graph traversal so edits are grounded in source.',
+                reason: 'Open the highest-ranked concrete symbol before graph traversal or editing.',
             },
             results: [{
-                kind: 'group',
-                groupId: '<symbol:function:validateSession>',
-                file: 'src/auth.ts',
-                span: { startLine: 5, endLine: 7 },
-                previewSpan: { startLine: 5, endLine: 7 },
-                symbolSpan: { startLine: 5, endLine: 7 },
+                target: {
+                    file: 'src/auth.ts',
+                    span: { startLine: 5, endLine: 7 },
+                    symbolId: '<symbol:function:validateSession>',
+                },
+                displayLabel: 'function validateSession(token: string)',
                 language: 'typescript',
-                symbolId: '<symbol:function:validateSession>',
-                symbolLabel: 'function validateSession(token: string)',
-                symbolKey: '<symbol-key:function:validateSession>',
-                symbolInstanceId: '<symbol:function:validateSession>',
                 symbolKind: 'function',
-                confidence: 'medium',
                 score: '<score>',
-                indexedAt: '2026-01-01T00:30:00.000Z',
-                stalenessBucket: 'fresh',
-                collapsedChunkCount: 1,
-                callGraphHint: {
-                    supported: true,
-                    validated: true,
-                    validatedAt: '2026-01-01T01:00:00.000Z',
-                    sidecarBuiltAt: '2026-01-01T00:00:00.000Z',
-                    symbolRef: {
-                        file: 'src/auth.ts',
-                        symbolId: '<symbol:function:validateSession>',
-                        symbolLabel: 'function validateSession(token: string)',
-                        span: { startLine: 5, endLine: 7 },
-                    },
+                quality: {
+                    owner: 'high',
+                    semantic: 'medium',
                 },
-                capabilities: {
-                    openSymbol: 'medium',
-                    callGraphCallers: 'low',
-                    callGraphCallees: 'medium',
-                    semanticMatch: 'medium',
+                navigation: {
+                    graph: 'ready',
+                    inbound: 'verify',
+                    callerSearchTerm: 'validateSession',
                 },
-                nextActions: {
-                    openSymbol: {
-                        tool: 'read_file',
-                        args: {
-                            path: '<repo>/src/auth.ts',
-                            open_symbol: {
-                                symbolId: '<symbol:function:validateSession>',
-                                symbolLabel: 'function validateSession(token: string)',
-                            },
-                        },
-                    },
-                    callGraph: {
-                        tool: 'call_graph',
-                        args: {
-                            path: '<repo>',
-                            symbolRef: {
-                                file: 'src/auth.ts',
-                                symbolId: '<symbol:function:validateSession>',
-                                symbolLabel: 'function validateSession(token: string)',
-                                span: { startLine: 5, endLine: 7 },
-                            },
-                            depth: 1,
-                            limit: 20,
-                        },
-                        directions: ['callers', 'callees'],
-                    },
-                    outlineWindow: {
-                        tool: 'file_outline',
-                        args: {
-                            path: '<repo>',
-                            file: 'src/auth.ts',
-                            start_line: 5,
-                            end_line: 7,
-                            resolveMode: 'outline',
-                        },
-                    },
-                },
-                recommendedNextAction: {
-                    tool: 'read_file',
-                    args: {
-                        path: '<repo>/src/auth.ts',
-                        open_symbol: {
-                            symbolId: '<symbol:function:validateSession>',
-                            symbolLabel: 'function validateSession(token: string)',
-                        },
-                    },
-                    reason: 'Open the selected owner before graph traversal so edits are grounded in source.',
-                },
-                inboundRecovery: {
-                    tool: 'search_codebase',
-                    args: {
-                        path: '<repo>',
-                        query: 'must:validateSession validateSession',
-                        scope: 'runtime',
-                        resultMode: 'grouped',
-                        groupBy: 'symbol',
-                        limit: 5,
-                    },
-                    reason: 'call_graph inbound is advisory/low confidence; verify callers with must: before blast-radius edits',
-                },
-                fallbacks: [{
-                    when: 'before treating call_graph inbound edges as empty or complete for blast radius',
-                    tool: 'search_codebase',
-                    args: {
-                        path: '<repo>',
-                        query: 'must:validateSession validateSession',
-                        scope: 'runtime',
-                        resultMode: 'grouped',
-                        groupBy: 'symbol',
-                        limit: 5,
-                    },
-                    reason: 'call_graph inbound is advisory/low confidence; verify callers with must: before blast-radius edits',
-                }],
-                preview: 'function validateSession(token: string)\nreturn normalizeToken(token).length > 0;',
+                preview: 'return normalizeToken(token).length > 0;',
             }],
         });
     }));
@@ -779,6 +684,7 @@ test('golden MCP search_codebase invalid root shape', async () => {
         assert.equal(response.isError, true);
         const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
         assert.deepEqual(payload, {
+            formatVersion: 2,
             status: 'not_indexed',
             reason: 'not_indexed',
             path: '<repo>/missing-root',
@@ -809,6 +715,7 @@ test('golden MCP search_codebase failed index shape', async () => {
 
         const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot });
         assert.deepEqual(payload, {
+            formatVersion: 2,
             status: 'not_indexed',
             reason: 'index_failed',
             codebasePath: '<repo>',

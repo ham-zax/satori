@@ -19,6 +19,7 @@ import type {
     SearchRecommendedNextAction,
     SearchResponseEnvelope,
 } from "./search-types.js";
+import { SEARCH_RESPONSE_FORMAT_VERSION } from "./search-types.js";
 import type { FreshnessDecision } from "./sync.js";
 import type { WarningCode } from "./warnings.js";
 import type { ReindexPreflightResult } from "./working-tree-state.js";
@@ -204,6 +205,7 @@ export class ToolResponseBuilders {
     ): Record<string, unknown> {
         const detailLine = detail ? `${detail}\n\n` : "";
         const base = searchContext ? {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             path: searchContext.path,
             query: searchContext.query,
             scope: searchContext.scope,
@@ -302,6 +304,7 @@ export class ToolResponseBuilders {
         searchContext: SearchContext,
     ): SearchResponseEnvelope {
         return {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status: "not_ready",
             reason: "indexing",
             codebasePath,
@@ -353,6 +356,7 @@ export class ToolResponseBuilders {
 
             case "skipped_missing_path":
                 return {
+                    formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
                     status: "not_indexed",
                     reason: "not_indexed",
                     codebasePath,
@@ -420,6 +424,7 @@ export class ToolResponseBuilders {
         searchContext: SearchContext,
     ): SearchResponseEnvelope {
         return {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status: "not_ready",
             reason: "vector_backend_unavailable",
             code: diagnostic.code,
@@ -443,6 +448,7 @@ export class ToolResponseBuilders {
         reason?: NonOkReason,
     ): SearchResponseEnvelope {
         return {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status,
             ...(reason ? { reason } : {}),
             path: searchContext.path,

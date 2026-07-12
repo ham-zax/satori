@@ -8,31 +8,37 @@ import {
 import type { SearchGroupResult } from "./search-types.js";
 
 type Sortable = SearchGroupResult & { __exactLexicalMatch: boolean };
+type GroupInput = Partial<SearchGroupResult> & {
+    file: string;
+    displayLabel: string;
+    score: number;
+    span?: { startLine: number; endLine: number };
+    symbolId?: string;
+};
 
-function group(partial: Partial<SearchGroupResult> & Pick<SearchGroupResult, "file" | "symbolLabel" | "score">): Sortable {
+function group(partial: GroupInput): Sortable {
+    const span = partial.span || { startLine: 1, endLine: 10 };
     return {
-        kind: "group",
-        groupId: partial.groupId || `grp_${partial.file}_${partial.symbolLabel}`,
-        file: partial.file,
-        span: partial.span || { startLine: 1, endLine: 10 },
-        symbolSpan: partial.symbolSpan,
+        target: {
+            file: partial.file,
+            span,
+            ...(partial.symbolId ? { symbolId: partial.symbolId } : {}),
+        },
+        displayLabel: partial.displayLabel,
         language: partial.language || "typescript",
-        symbolId: partial.symbolId,
-        symbolLabel: partial.symbolLabel,
         symbolKind: partial.symbolKind,
         score: partial.score,
-        indexedAt: null,
-        stalenessBucket: "fresh",
-        collapsedChunkCount: 1,
-        callGraphHint: { supported: false, reason: "missing_symbol" },
-        capabilities: {
-            openSymbol: "medium",
-            callGraphCallers: "low",
-            callGraphCallees: "low",
-            semanticMatch: "medium",
+        quality: {
+            owner: "medium",
+            semantic: "medium",
         },
-        preview: partial.preview || partial.symbolLabel,
-        __exactLexicalMatch: false,
+        preview: partial.preview || partial.displayLabel,
+        navigation: { graph: "missing_symbol" },
+        __groupId: partial.__groupId || `grp_${partial.file}_${partial.displayLabel}`,
+        ...(partial.__symbolKey ? { __symbolKey: partial.__symbolKey } : {}),
+        ...(partial.__symbolInstanceId ? { __symbolInstanceId: partial.__symbolInstanceId } : {}),
+        __exactLexicalMatch: partial.__exactLexicalMatch || false,
+        ...(partial.debug ? { debug: partial.debug } : {}),
     };
 }
 
@@ -45,32 +51,30 @@ test("sortGroupedSearchResults prefers method over mega-class on near-tied score
     const results: Sortable[] = [
         group({
             file: "packages/mcp/src/core/handlers.ts",
-            symbolLabel: "class ToolHandlers",
+            displayLabel: "class ToolHandlers",
             symbolKind: "class",
             score: 0.78,
-            symbolSpan: { startLine: 382, endLine: 2631 },
             span: { startLine: 382, endLine: 2631 },
         }),
         group({
             file: "packages/mcp/src/core/handlers.ts",
-            symbolLabel: "async method recoverStaleIndexingStateIfNeeded(codebasePath: string)",
+            displayLabel: "async method recoverStaleIndexingStateIfNeeded(codebasePath: string)",
             symbolKind: "method",
             score: 0.75,
-            symbolSpan: { startLine: 1071, endLine: 1108 },
             span: { startLine: 1071, endLine: 1108 },
         }),
     ];
 
     sortGroupedSearchResults(results, false);
     assert.equal(results[0].symbolKind, "method");
-    assert.match(results[0].symbolLabel, /recoverStaleIndexingStateIfNeeded/);
+    assert.match(results[0].displayLabel, /recoverStaleIndexingStateIfNeeded/);
 });
 
 test("sortGroupedSearchResults prefers declaration over comment-like group on near-tie", () => {
     const results: Sortable[] = [
         group({
             file: "packages/mcp/src/core/sync.ts",
-            symbolLabel: "comment block",
+            displayLabel: "comment block",
             symbolKind: "file",
             score: 1.02,
             preview: "// Context is the single source of truth for effective ignore rules.",
@@ -78,58 +82,57 @@ test("sortGroupedSearchResults prefers declaration over comment-like group on ne
         }),
         group({
             file: "packages/cli/src/install.ts",
-            symbolLabel: "function prepareClaudeInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand)",
+            displayLabel: "function prepareClaudeInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand)",
             symbolKind: "function",
             score: 0.99,
             preview: "function prepareClaudeInstall(...) {",
             span: { startLine: 750, endLine: 792 },
-            symbolSpan: { startLine: 750, endLine: 792 },
         }),
     ];
 
     sortGroupedSearchResults(results, false);
     assert.equal(results[0].symbolKind, "function");
-    assert.match(results[0].symbolLabel, /prepareClaudeInstall/);
+    assert.match(results[0].displayLabel, /prepareClaudeInstall/);
 });
 
 test("sortGroupedSearchResults keeps clear higher score even for mega-class", () => {
     const results: Sortable[] = [
         group({
             file: "a.ts",
-            symbolLabel: "class Big",
+            displayLabel: "class Big",
             symbolKind: "class",
             score: 0.95,
-            symbolSpan: { startLine: 1, endLine: 2000 },
+            span: { startLine: 1, endLine: 2000 },
         }),
         group({
             file: "b.ts",
-            symbolLabel: "function small()",
+            displayLabel: "function small()",
             symbolKind: "function",
             score: 0.5,
-            symbolSpan: { startLine: 1, endLine: 5 },
+            span: { startLine: 1, endLine: 5 },
         }),
     ];
 
     sortGroupedSearchResults(results, false);
-    assert.equal(results[0].symbolLabel, "class Big");
+    assert.equal(results[0].displayLabel, "class Big");
 });
 
 test("sortGroupedSearchResults still pins exact lexical match over near-tie preference", () => {
     const results: Sortable[] = [
         group({
             file: "a.ts",
-            symbolLabel: "function preferred()",
+            displayLabel: "function preferred()",
             symbolKind: "function",
             score: 0.8,
-            symbolSpan: { startLine: 1, endLine: 5 },
+            span: { startLine: 1, endLine: 5 },
         }),
         {
             ...group({
                 file: "b.ts",
-                symbolLabel: "class ExactHit",
+                displayLabel: "class ExactHit",
                 symbolKind: "class",
                 score: 0.2,
-                symbolSpan: { startLine: 1, endLine: 500 },
+                span: { startLine: 1, endLine: 500 },
             }),
             __exactLexicalMatch: true,
             debug: {
@@ -154,7 +157,7 @@ test("sortGroupedSearchResults still pins exact lexical match over near-tie pref
 
     const applied = sortGroupedSearchResults(results, true);
     assert.equal(applied, true);
-    assert.equal(results[0].symbolLabel, "class ExactHit");
+    assert.equal(results[0].displayLabel, "class ExactHit");
     assert.equal(results[0].debug?.provenance?.exactMatchPinned, true);
 });
 
@@ -162,23 +165,23 @@ test("collapseDuplicateDeclarationGroups keeps tighter near-tie winner", () => {
     const groups = [
         group({
             file: "a.ts",
-            symbolLabel: "function foo()",
+            displayLabel: "function foo()",
             symbolKind: "function",
-            symbolKey: "k1",
+            __symbolKey: "k1",
             score: 0.8,
-            symbolSpan: { startLine: 1, endLine: 40 },
+            span: { startLine: 1, endLine: 40 },
         }),
         group({
             file: "a.ts",
-            symbolLabel: "function foo()",
+            displayLabel: "function foo()",
             symbolKind: "function",
-            symbolKey: "k1",
+            __symbolKey: "k1",
             score: 0.79,
-            symbolSpan: { startLine: 1, endLine: 5 },
+            span: { startLine: 1, endLine: 5 },
         }),
     ];
 
     const collapsed = collapseDuplicateDeclarationGroups(groups);
     assert.equal(collapsed.length, 1);
-    assert.equal(collapsed[0].symbolSpan?.endLine, 5);
+    assert.equal(collapsed[0].target.span.endLine, 5);
 });

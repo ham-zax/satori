@@ -16,6 +16,10 @@ export type SearchOwnerResolutionResult = {
     ownerSymbolInstanceId?: string;
     symbolKind?: string;
     ownerSource?: "owner_metadata" | "registry_repair";
+    ownerProof?: {
+        symbolInstanceId: string;
+        basis: "bytes" | "lines";
+    };
 };
 
 export type SearchOwnerResolutionInputResult = Partial<SemanticSearchResult> & {
@@ -45,6 +49,19 @@ function buildSearchOwnerChunk(result: SearchOwnerResolutionInputResult): CodeCh
         return null;
     }
 
+    const hasStartByte = result.startByte !== undefined;
+    const hasEndByte = result.endByte !== undefined;
+    if (hasStartByte || hasEndByte) {
+        if (
+            !Number.isSafeInteger(result.startByte)
+            || !Number.isSafeInteger(result.endByte)
+            || Number(result.startByte) < 0
+            || Number(result.endByte) < Number(result.startByte)
+        ) {
+            return null;
+        }
+    }
+
     const metadata: CodeChunk["metadata"] = {
         startLine: Math.max(1, startLine),
         endLine: Math.max(Math.max(1, startLine), endLine),
@@ -54,10 +71,10 @@ function buildSearchOwnerChunk(result: SearchOwnerResolutionInputResult): CodeCh
         symbolLabel: typeof result?.symbolLabel === "string" ? result.symbolLabel : undefined,
         symbolKind: typeof result?.symbolKind === "string" ? result.symbolKind : undefined,
     };
-    if (Number.isFinite(result?.startByte)) {
+    if (hasStartByte) {
         metadata.startByte = Number(result.startByte);
     }
-    if (Number.isFinite(result?.endByte)) {
+    if (hasEndByte) {
         metadata.endByte = Number(result.endByte);
     }
 
@@ -65,6 +82,56 @@ function buildSearchOwnerChunk(result: SearchOwnerResolutionInputResult): CodeCh
         content: String(result?.content || ""),
         metadata,
     };
+}
+
+type SearchChunkContainment = "contains" | "not_contained" | "invalid_byte_evidence";
+
+function resolveSearchChunkContainment(symbol: SymbolRecord, chunk: CodeChunk): SearchChunkContainment {
+    const chunkStartByte = chunk.metadata.startByte;
+    const chunkEndByte = chunk.metadata.endByte;
+    const symbolStartByte = symbol.span.startByte;
+    const symbolEndByte = symbol.span.endByte;
+    const byteValues = [chunkStartByte, chunkEndByte, symbolStartByte, symbolEndByte];
+    if (byteValues.some((value) => value !== undefined)) {
+        if (
+            !byteValues.every((value) => Number.isSafeInteger(value) && Number(value) >= 0)
+            || Number(chunkEndByte) < Number(chunkStartByte)
+            || Number(symbolEndByte) < Number(symbolStartByte)
+        ) {
+            return "invalid_byte_evidence";
+        }
+        return Number(symbolStartByte) <= Number(chunkStartByte)
+            && Number(chunkEndByte) <= Number(symbolEndByte)
+            ? "contains"
+            : "not_contained";
+    }
+    return symbol.span.startLine <= chunk.metadata.startLine
+        && chunk.metadata.endLine <= symbol.span.endLine
+        ? "contains"
+        : "not_contained";
+}
+
+function buildSearchOwnerProof(symbol: SymbolRecord, chunk: CodeChunk): SearchOwnerResolutionResult["ownerProof"] {
+    if (resolveSearchChunkContainment(symbol, chunk) !== "contains") return undefined;
+    return {
+        symbolInstanceId: symbol.symbolInstanceId,
+        basis: chunk.metadata.startByte !== undefined ? "bytes" : "lines",
+    };
+}
+
+function resolveSafeSearchOwnerSymbolForChunk(
+    chunk: CodeChunk,
+    symbols: SymbolRecord[],
+): SymbolRecord | undefined {
+    const fileOwner = symbols.find((symbol) => symbol.kind === "file");
+    if (!fileOwner || resolveSearchChunkContainment(fileOwner, chunk) !== "contains") {
+        return undefined;
+    }
+    const containedSymbols = symbols.filter((symbol) => (
+        symbol.kind !== "file"
+        && resolveSearchChunkContainment(symbol, chunk) === "contains"
+    ));
+    return resolveOwnerSymbolForChunk({ chunk, symbols: [fileOwner, ...containedSymbols] });
 }
 
 function resolveBestOverlappingSearchSymbol(input: {
@@ -75,7 +142,6 @@ function resolveBestOverlappingSearchSymbol(input: {
     isWriterActionTerm: (value: string) => boolean;
 }): SymbolRecord | undefined {
     const chunkStart = Math.max(1, Number(input.ownerChunk.metadata.startLine || 1));
-    const chunkEnd = Math.max(chunkStart, Number(input.ownerChunk.metadata.endLine || chunkStart));
     const chunkLines = input.ownerChunk.content.split(/\r?\n/);
     const normalizeSymbolEvidence = (value: string): string => value
         .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -83,7 +149,7 @@ function resolveBestOverlappingSearchSymbol(input: {
         .toLowerCase();
     const scored = input.fileSymbols
         .filter((symbol) => symbol.kind !== "file")
-        .filter((symbol) => symbol.span.startLine <= chunkEnd && chunkStart <= symbol.span.endLine)
+        .filter((symbol) => resolveSearchChunkContainment(symbol, input.ownerChunk) === "contains")
         .map((symbol) => {
             const symbolName = normalizeSymbolEvidence(symbol.name);
             const symbolIdentityEvidence = normalizeSymbolEvidence([
@@ -204,6 +270,7 @@ export function resolveSearchOwnerFromRegistry(input: {
         : undefined;
     const fileSymbols = normalizedFile ? input.registry.symbolsByFile.get(normalizedFile) : undefined;
     const ownerChunk = buildSearchOwnerChunk(input.result);
+    let metadataIdentityRejected = false;
 
     if (
         metadataOwnerKey
@@ -211,29 +278,51 @@ export function resolveSearchOwnerFromRegistry(input: {
         && input.registry.symbolsByInstanceId.has(metadataOwnerInstanceId)
     ) {
         const owner = input.registry.symbolsByInstanceId.get(metadataOwnerInstanceId);
-        if (owner?.kind === "file" && fileSymbols && ownerChunk && input.lexicalTerms) {
-            const tighterOwner = resolveBestOverlappingSearchSymbol({
-                fileSymbols,
-                ownerChunk,
-                lexicalTerms: input.lexicalTerms,
-                hasTokenBoundaryMatch: input.hasTokenBoundaryMatch,
-                isWriterActionTerm: input.isWriterActionTerm,
-            });
-            if (tighterOwner && tighterOwner.symbolInstanceId !== metadataOwnerInstanceId) {
-                return {
-                    ownerSymbolKey: tighterOwner.symbolKey,
-                    ownerSymbolInstanceId: tighterOwner.symbolInstanceId,
-                    symbolKind: tighterOwner.kind,
-                    ownerSource: "registry_repair",
-                };
-            }
+        const ownerFile = owner
+            ? input.sanitizeIndexedRelativeFilePath(owner.file)
+            : undefined;
+        const ownerContainment = owner && ownerChunk
+            ? resolveSearchChunkContainment(owner, ownerChunk)
+            : "not_contained";
+        if (ownerContainment === "invalid_byte_evidence") {
+            return {};
         }
-        return {
-            ownerSymbolKey: metadataOwnerKey,
-            ownerSymbolInstanceId: metadataOwnerInstanceId,
-            symbolKind: owner?.kind || metadataSymbolKind,
-            ownerSource: "owner_metadata",
-        };
+        const ownerContainsEvidence = Boolean(
+            owner
+            && ownerFile
+            && normalizedFile
+            && ownerFile === normalizedFile
+            && ownerContainment === "contains"
+        );
+        if (!ownerContainsEvidence) {
+            metadataIdentityRejected = true;
+        } else {
+            if (owner?.kind === "file" && fileSymbols && ownerChunk && input.lexicalTerms) {
+                const tighterOwner = resolveBestOverlappingSearchSymbol({
+                    fileSymbols,
+                    ownerChunk,
+                    lexicalTerms: input.lexicalTerms,
+                    hasTokenBoundaryMatch: input.hasTokenBoundaryMatch,
+                    isWriterActionTerm: input.isWriterActionTerm,
+                });
+                if (tighterOwner && tighterOwner.symbolInstanceId !== metadataOwnerInstanceId) {
+                    return {
+                        ownerSymbolKey: tighterOwner.symbolKey,
+                        ownerSymbolInstanceId: tighterOwner.symbolInstanceId,
+                        symbolKind: tighterOwner.kind,
+                        ownerSource: "registry_repair",
+                        ownerProof: buildSearchOwnerProof(tighterOwner, ownerChunk),
+                    };
+                }
+            }
+            return {
+                ownerSymbolKey: metadataOwnerKey,
+                ownerSymbolInstanceId: metadataOwnerInstanceId,
+                symbolKind: owner?.kind || metadataSymbolKind,
+                ownerSource: "owner_metadata",
+                ownerProof: owner && ownerChunk ? buildSearchOwnerProof(owner, ownerChunk) : undefined,
+            };
+        }
     }
 
     if (fileSymbols && ownerChunk) {
@@ -252,43 +341,49 @@ export function resolveSearchOwnerFromRegistry(input: {
                         ownerSymbolInstanceId: overlappingOwner.symbolInstanceId,
                         symbolKind: overlappingOwner.kind,
                         ownerSource: "registry_repair",
+                        ownerProof: buildSearchOwnerProof(overlappingOwner, ownerChunk),
                     };
                 }
             }
             if (metadataOwnerKey) {
                 const keyCandidates = fileSymbols.filter((symbol) => symbol.symbolKey === metadataOwnerKey);
                 if (keyCandidates.length > 0) {
-                    const owner = resolveOwnerSymbolForChunk({
-                        chunk: ownerChunk,
-                        symbols: keyCandidates.some((symbol) => symbol.kind === "file") ? keyCandidates : [
+                    const owner = resolveSafeSearchOwnerSymbolForChunk(
+                        ownerChunk,
+                        keyCandidates.some((symbol) => symbol.kind === "file") ? keyCandidates : [
                             ...fileSymbols.filter((symbol) => symbol.kind === "file"),
                             ...keyCandidates,
                         ],
-                    });
-                    if (owner.symbolKey === metadataOwnerKey) {
+                    );
+                    if (owner?.symbolKey === metadataOwnerKey) {
                         return {
                             ownerSymbolKey: owner.symbolKey,
                             ownerSymbolInstanceId: owner.symbolInstanceId,
                             symbolKind: owner.kind,
                             ownerSource: "registry_repair",
+                            ownerProof: buildSearchOwnerProof(owner, ownerChunk),
                         };
                     }
                 }
             }
 
-            const owner = resolveOwnerSymbolForChunk({ chunk: ownerChunk, symbols: fileSymbols });
+            const owner = resolveSafeSearchOwnerSymbolForChunk(ownerChunk, fileSymbols);
+            if (!owner) {
+                return {};
+            }
             return {
                 ownerSymbolKey: owner.symbolKey,
                 ownerSymbolInstanceId: owner.symbolInstanceId,
                 symbolKind: owner.kind,
                 ownerSource: "registry_repair",
+                ownerProof: buildSearchOwnerProof(owner, ownerChunk),
             };
         } catch {
             // Registry repair is a compatibility aid; fallback paths below preserve search usability.
         }
     }
 
-    return metadataOwnerKey
+    return metadataOwnerKey && !metadataIdentityRejected
         ? {
             ownerSymbolKey: metadataOwnerKey,
             ownerSymbolInstanceId: metadataOwnerInstanceId,

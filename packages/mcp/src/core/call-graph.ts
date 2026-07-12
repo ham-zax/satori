@@ -12,21 +12,14 @@ import {
     type CallSite,
 } from '@zokizuan/satori-core';
 import { CallGraphSidecarInfo, IndexFingerprint } from '../config.js';
+import type { CallGraphSymbolRef, SearchSpan } from './search-types.js';
+
+export type { CallGraphSymbolRef } from './search-types.js';
 
 export type CallGraphDirection = 'callers' | 'callees' | 'both';
 export type CallGraphEdgeKind = 'call' | 'import' | 'dynamic';
 
-export interface CallGraphSpan {
-    startLine: number;
-    endLine: number;
-}
-
-export interface CallGraphSymbolRef {
-    file: string;
-    symbolId: string;
-    symbolLabel?: string;
-    span?: CallGraphSpan;
-}
+export type CallGraphSpan = SearchSpan;
 
 export interface CallGraphNode {
     symbolId: string;
@@ -296,7 +289,7 @@ export class CallGraphSidecarManager {
                 supported: false,
                 reason: 'missing_symbol',
                 hints: {
-                    message: 'Symbol ID was not found in the call-graph sidecar. Use grouped search results to refresh callGraphHint.',
+                    message: 'Symbol ID was not found in the call-graph sidecar. Run grouped search again to refresh the canonical target.',
                 },
             };
         }

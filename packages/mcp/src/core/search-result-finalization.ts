@@ -28,6 +28,7 @@ import type {
     SearchFreshnessSummary,
     SearchResponseEnvelope,
 } from "./search-types.js";
+import { SEARCH_GROUP_PREVIEW_MAX_BYTES } from "./search-response-helpers.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import type { FreshnessDecision } from "./sync.js";
 import type { ExactRegistryLookupDebug } from "./search/exact-registry.js";
@@ -84,8 +85,6 @@ type FinalizeSearchResultsInput = {
     searchSymbolRegistryManifestHash?: string;
     execution: Extract<SearchExecutionOutcome, { kind: "ok" }>;
 };
-
-const SEARCH_GROUP_PREVIEW_MAX_CHARS = 800;
 
 export type SearchResultFinalizationHost = {
     searchQuerySupport: SearchQuerySupport;
@@ -323,8 +322,6 @@ export async function finalizeSearchResults(
     const groupedSearchResults = buildVisibleGroupedSearchResultsHelper({
         scored,
         codebaseRoot: input.effectiveRoot,
-        query: input.query,
-        scope: input.scope,
         groupBy: input.groupBy,
         limit: input.limit,
         queryPlan: input.queryPlan,
@@ -332,10 +329,14 @@ export async function finalizeSearchResults(
         registry: searchSymbolRegistry,
         registryUnavailableReason: searchSymbolRegistryUnavailableReason,
         navigationState: callGraphNavigationState,
-        sidecarReadyForOutline: Boolean(searchSymbolRegistryManifestHash),
+        graphUnavailableReasonOverride: input.partialIndexSearchWarnings.includes(
+            "SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE",
+        )
+            ? "partial_index_navigation_unavailable"
+            : undefined,
         debug: input.debug,
         now: host.now,
-        previewMaxChars: SEARCH_GROUP_PREVIEW_MAX_CHARS,
+        previewMaxBytes: SEARCH_GROUP_PREVIEW_MAX_BYTES,
         navigationHelpers: host.getSearchNavigationHelpers(),
         parseIndexedAtMs: (indexedAt?: string) => host.parseIndexedAtMs(indexedAt),
         resolveOwner: (result) => host.resolveSearchOwnerFromRegistry(result as SearchResultLike, searchSymbolRegistry, input.queryPlan),
@@ -356,14 +357,14 @@ export async function finalizeSearchResults(
     const visibleGroupedResults = groupedSearchResults.visibleResults;
     const noiseMitigationHint = host.searchQuerySupport.buildNoiseMitigationHint(
         input.effectiveRoot,
-        visibleGroupedResults.map((result) => result.file),
+        visibleGroupedResults.map((result) => result.target.file),
         input.scope,
     );
     const generatedArtifactsHint = host.buildGeneratedArtifactsVerificationHint(
         input.effectiveRoot,
         visibleGroupedResults.map((result) => ({
-            file: result.file,
-            span: result.span,
+            file: result.target.file,
+            span: result.target.span,
         })),
     );
     const groupedDebugHint = debugHintBase

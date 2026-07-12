@@ -65,9 +65,15 @@ type ParsedSemanticSearchInvocation = {
 };
 type SearchPayloadResultView = {
     file?: string;
+    target?: {
+        file: string;
+        span: { startLine: number; endLine: number };
+        symbolId?: string;
+    };
     symbolId?: string;
     symbolInstanceId?: string;
     symbolLabel?: string;
+    displayLabel?: string;
     debug?: {
         lexicalScore?: number;
         exactLexicalMatch?: boolean;
@@ -540,7 +546,7 @@ function parseSemanticSearchInvocation(args: unknown[]): ParsedSemanticSearchInv
     };
 }
 
-test('handleSearchCode grouped output includes symbol metadata and callGraphHint', async () => {
+test('handleSearchCode grouped output omits unproven chunk identity from its compact target', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [{
             content: 'return session.isValid();',
@@ -569,13 +575,12 @@ test('handleSearchCode grouped output includes symbol metadata and callGraphHint
         assert.equal(payload.status, 'ok');
         assert.equal(payload.resultMode, 'grouped');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].symbolId, undefined);
-        assert.equal(payload.results[0].callGraphHint.supported, false);
-        assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol');
+        assert.equal(payload.results[0].target.symbolId, undefined);
+        assert.equal(payload.results[0].navigation.graph, 'missing_symbol');
     });
 });
 
-test('handleSearchCode grouped symbol mode emits relationship-backed callGraphHint without a legacy sidecar', async () => {
+test('handleSearchCode grouped symbol mode emits a graph-ready concrete target without a legacy sidecar', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const fileContent = [
             'class SessionManager {',
@@ -620,19 +625,19 @@ test('handleSearchCode grouped symbol mode emits relationship-backed callGraphHi
             scope: 'runtime',
             resultMode: 'grouped',
             groupBy: 'symbol',
-            limit: 5
+            limit: 5,
+            debug: true,
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const result = payload.results[0];
-        assert.equal(result.callGraphHint.supported, true);
-        assert.equal(result.callGraphHint.symbolRef.symbolId, validateSymbol!.symbolInstanceId);
-        assert.equal(result.callGraphHint.sidecarBuiltAt, '2026-01-01T00:00:00.000Z');
-        assert.deepEqual(result.nextActions.callGraph.args.symbolRef, result.callGraphHint.symbolRef);
+        assert.equal(result.navigation.graph, 'ready');
+        assert.equal(result.target.symbolId, validateSymbol!.symbolInstanceId);
+        assert.equal(result.debug.graphEvidence.sidecarBuiltAt, '2026-01-01T00:00:00.000Z');
     }));
 });
 
-test('handleSearchCode does not surface read_file action from stale-symbol chunk', async () => {
+test('handleSearchCode does not promote stale chunk identity and recommends its validated span', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const fileContent = [
             'function currentSession(token: string) {',
@@ -677,17 +682,18 @@ test('handleSearchCode does not surface read_file action from stale-symbol chunk
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const result = payload.results[0];
-        assert.equal(result.callGraphHint.supported, false);
-        assert.equal(result.callGraphHint.reason, 'stale_symbol_ref');
-        assert.equal(result.nextActions, undefined);
-        assert.equal(result.navigationFallback?.readSpan, undefined);
-        assert.notEqual(result.recommendedNextAction?.tool, 'read_file');
-        assert.equal(result.fallbacks?.some((fallback: { tool?: string }) => fallback.tool === 'read_file'), undefined);
-        assert.notEqual(payload.recommendedNextAction?.tool, 'read_file');
+        assert.equal(result.target.symbolId, undefined);
+        assert.equal(result.navigation.graph, 'stale_symbol_ref');
+        assert.equal(payload.recommendedNextAction?.tool, 'read_file');
+        assert.deepEqual(payload.recommendedNextAction?.args, {
+            path: path.join(repoPath, 'src/stale.ts'),
+            start_line: 1,
+            end_line: 3,
+        });
     }));
 });
 
-test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph for Go symbol-only results', async () => {
+test('handleSearchCode grouped symbol mode keeps Go read identity while graph is unsupported', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
         fs.writeFileSync(path.join(repoPath, 'src', 'service.go'), [
@@ -738,15 +744,13 @@ test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph f
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const result = payload.results[0];
-        assert.equal(result.callGraphHint.supported, false);
-        assert.equal(result.callGraphHint.reason, 'unsupported_language');
-        assert.equal(result.nextActions?.openSymbol?.tool, 'read_file');
-        assert.equal(result.nextActions?.callGraph, undefined);
-        assert.equal(result.navigationFallback, undefined);
+        assert.equal(result.target.symbolId, addSymbol!.symbolInstanceId);
+        assert.equal(result.navigation.graph, 'unsupported_language');
+        assert.equal(payload.recommendedNextAction?.args?.open_symbol?.symbolId, addSymbol!.symbolInstanceId);
     }));
 });
 
-test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph for Rust symbol-only results', async () => {
+test('handleSearchCode grouped symbol mode keeps Rust read identity while graph is unsupported', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
         fs.writeFileSync(path.join(repoPath, 'src', 'stack.rs'), [
@@ -800,15 +804,13 @@ test('handleSearchCode grouped symbol mode does not emit nextActions.callGraph f
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const result = payload.results[0];
-        assert.equal(result.callGraphHint.supported, false);
-        assert.equal(result.callGraphHint.reason, 'unsupported_language');
-        assert.equal(result.nextActions?.openSymbol?.tool, 'read_file');
-        assert.equal(result.nextActions?.callGraph, undefined);
-        assert.equal(result.navigationFallback, undefined);
+        assert.equal(result.target.symbolId, pushSymbol!.symbolInstanceId);
+        assert.equal(result.navigation.graph, 'unsupported_language');
+        assert.equal(payload.recommendedNextAction?.args?.open_symbol?.symbolId, pushSymbol!.symbolInstanceId);
     }));
 });
 
-test('handleSearchCode relationship-backed callGraphHint works end to end with call_graph without a legacy sidecar', async () => {
+test('handleSearchCode compact target works end to end with call_graph without a legacy sidecar', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const fileContent = [
             'function normalizeToken(token: string) {',
@@ -888,12 +890,15 @@ test('handleSearchCode relationship-backed callGraphHint works end to end with c
 
         const searchPayload = JSON.parse(searchResponse.content[0]?.text || '{}');
         const result = searchPayload.results[0];
-        assert.equal(result.callGraphHint.supported, true);
-        assert.deepEqual(result.nextActions.callGraph.args.symbolRef, result.callGraphHint.symbolRef);
+        assert.equal(result.navigation.graph, 'ready');
+        assert.equal(result.target.symbolId, validateSymbol!.symbolInstanceId);
 
         const callGraphResponse = await handlers.handleCallGraph({
             path: repoPath,
-            ...result.nextActions.callGraph.args,
+            symbolRef: result.target,
+            direction: 'both',
+            depth: 1,
+            limit: 20,
         });
 
         const graphPayload = JSON.parse(callGraphResponse.content[0]?.text || '{}');
@@ -958,12 +963,10 @@ test('handleSearchCode grouped symbol mode collapses chunks by owner symbol iden
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].collapsedChunkCount, 2);
-        assert.equal(payload.results[0].symbolKey, 'owner_auth_login_key');
-        assert.equal(payload.results[0].symbolInstanceId, 'owner_auth_login_instance');
-        assert.equal(payload.results[0].symbolId, 'owner_auth_login_instance');
-        assert.equal(payload.results[0].callGraphHint.supported, false);
-        assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol_registry');
+        assert.equal(payload.results[0].evidenceChunks, 2);
+        assert.equal(payload.results[0].target.symbolId, undefined);
+        assert.equal(payload.results[0].navigation.graph, 'missing_symbol_registry');
+        assert.equal('symbolKey' in payload.results[0], false);
         assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'owner_metadata');
     });
 });
@@ -1036,13 +1039,11 @@ test('handleSearchCode grouped symbol mode repairs legacy chunks from compatible
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
             assert.equal(payload.results.length, 1);
-            assert.equal(payload.results[0].collapsedChunkCount, 2);
-            assert.equal(payload.results[0].symbolKey, owner.symbolKey);
-            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].evidenceChunks, 2);
             assert.equal(payload.results[0].symbolKind, 'method');
-            assert.equal(payload.results[0].symbolId, owner.symbolInstanceId);
-            assert.equal(payload.results[0].callGraphHint.supported, true);
-            assert.equal(payload.results[0].callGraphHint.symbolRef.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].navigation.graph, 'ready');
+            assert.equal('symbolKey' in payload.results[0], false);
             assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'registry_repair');
         });
     });
@@ -1105,10 +1106,10 @@ test('handleSearchCode ranks exact warning-code emission above tests and generic
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
-        assert.equal(payload.results[0].file, 'packages/mcp/src/core/handlers.ts');
-        assert.equal(payload.results[0].symbolLabel, 'async method handleSearchCode(args: any)');
-        assert.notEqual(payload.results[0].file, 'packages/mcp/src/core/handlers.index_state_stability.test.ts');
-        assert.notEqual(payload.results[0].symbolLabel, 'method buildReindexHint(codebasePath: string)');
+        assert.equal(payload.results[0].target.file, 'packages/mcp/src/core/handlers.ts');
+        assert.equal(payload.results[0].displayLabel, 'async method handleSearchCode(args: any)');
+        assert.notEqual(payload.results[0].target.file, 'packages/mcp/src/core/handlers.index_state_stability.test.ts');
+        assert.notEqual(payload.results[0].displayLabel, 'method buildReindexHint(codebasePath: string)');
         assert.equal(payload.hints?.debugSearch?.queryIntent?.reasons.includes('writer_seeking_query'), true);
     });
 });
@@ -1159,9 +1160,9 @@ test('handleSearchCode ranks natural-language emitted warning site above generic
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
-        assert.equal(payload.results[0].symbolLabel, 'async method handleSearchCode(args: any)');
+        assert.equal(payload.results[0].displayLabel, 'async method handleSearchCode(args: any)');
         assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
-        assert.equal(payload.results[1].symbolLabel, 'method buildReindexHint(codebasePath: string)');
+        assert.equal(payload.results[1].displayLabel, 'method buildReindexHint(codebasePath: string)');
     });
 });
 
@@ -1210,7 +1211,7 @@ test('handleSearchCode supplements exact warning-code retrieval from tracked lex
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
-        assert.equal(payload.results[0].file, relativePath);
+        assert.equal(payload.results[0].target.file, relativePath);
         assert.match(payload.results[0].preview, /SEARCH_PARTIAL_INDEX/);
         assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
         assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
@@ -1261,7 +1262,7 @@ test('handleSearchCode supplements quoted exact literal retrieval from tracked l
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
-        assert.equal(payload.results[0].file, relativePath);
+        assert.equal(payload.results[0].target.file, relativePath);
         assert.match(payload.results[0].preview, /partial index search warning/i);
         assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
         assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
@@ -1334,11 +1335,9 @@ test('handleSearchCode exact registry fast path returns a grouped symbol despite
             assert.equal(semanticSearchCalls, 0);
             assert.equal(rerankCalls, 0);
             assert.equal(payload.results.length, 1);
-            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
-            assert.equal(typeof payload.results[0].callGraphHint?.supported, 'boolean');
-            assert.equal(payload.results[0].nextActions?.openSymbol?.tool, 'read_file');
-            assert.equal(payload.results[0].recommendedNextAction?.tool, 'read_file');
-            assert.equal(payload.results[0].recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
+            assert.equal(typeof payload.results[0].navigation?.graph, 'string');
+            assert.equal(payload.results[0].recommendedNextAction, undefined);
             assert.equal(payload.recommendedNextAction?.tool, 'read_file');
             assert.equal(payload.recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
             assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('exact_registry'), true);
@@ -1407,8 +1406,8 @@ test('handleSearchCode exact registry fast path repairs a dirty symbol span from
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
-            assert.deepEqual(payload.results[0].span, { startLine: 3, endLine: 5 });
+            assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
+            assert.deepEqual(payload.results[0].target.span, { startLine: 3, endLine: 5 });
         });
     });
 });
@@ -1457,6 +1456,101 @@ test('handleSearchCode exact registry fast path rejects a dirty symbol missing f
             assert.equal(payload.status, 'ok');
             assert.equal(semanticSearchCalls > 0, true);
             assert.equal(payload.results.some((result: { symbolLabel?: string }) => result.symbolLabel?.includes('removedExactOwner')), false);
+        });
+    });
+});
+
+test('handleSearchCode declines an invalid exact registry target and continues normal retrieval', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const manifest: SymbolRegistryManifest = {
+                schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+                normalizedRootPath: repoPath,
+                rootFingerprint: 'test-root-fingerprint',
+                indexPolicyHash: 'test-policy',
+                languageRouterVersion: 'test-router-v1',
+                extractorVersion: 'test-extractor-v1',
+                relationshipVersion: 'test-relationships-v1',
+                builtAt: '2026-01-01T00:00:00.000Z',
+                files: [{
+                    path: 'src/invalid-registry.ts',
+                    hash: 'invalid-registry-hash',
+                    language: 'typescript',
+                    symbolCount: 1,
+                }],
+            };
+            const invalidSymbol: SymbolRecord = {
+                symbolKey: 'symkey_malformed_exact_owner',
+                symbolInstanceId: 'syminst_malformed_exact_owner',
+                language: 'typescript',
+                kind: 'function',
+                name: 'malformedExactOwner',
+                qualifiedName: 'malformedExactOwner',
+                label: 'function malformedExactOwner()',
+                file: 'src/invalid-registry.ts',
+                span: { startLine: 0, endLine: 0 },
+                parentQualifiedNamePath: [],
+                fileHash: 'invalid-registry-hash',
+                extractorVersion: 'test-extractor-v1',
+            } as SymbolRecord;
+            const invalidRegistry = buildSymbolRegistry({
+                manifest,
+                symbols: [invalidSymbol],
+            });
+
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            const navigationStore = (handlers as unknown as {
+                navigationStore: {
+                    getManifest: () => Promise<{
+                        status: 'ok';
+                        registry: ReturnType<typeof buildSymbolRegistry>;
+                        manifestHash: string;
+                    }>;
+                };
+            }).navigationStore;
+            const originalGetManifest = navigationStore.getManifest;
+            try {
+                navigationStore.getManifest = async () => ({
+                    status: 'ok',
+                    registry: invalidRegistry,
+                    manifestHash: 'invalid-registry-manifest-hash',
+                });
+                (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
+                    semanticSearchCalls += 1;
+                    return [{
+                        content: 'export function malformedExactOwner() { return "fallback"; }',
+                        relativePath: 'src/fallback.ts',
+                        startLine: 1,
+                        endLine: 1,
+                        language: 'typescript',
+                        score: 0.9,
+                        indexedAt: '2026-01-01T00:30:00.000Z',
+                        symbolLabel: 'function malformedExactOwner()',
+                    }];
+                };
+
+                const response = await handlers.handleSearchCode({
+                    path: repoPath,
+                    query: 'malformedExactOwner',
+                    scope: 'runtime',
+                    resultMode: 'grouped',
+                    groupBy: 'symbol',
+                    limit: 5,
+                });
+
+                const payload = JSON.parse(response.content[0]?.text || '{}');
+                assert.equal(payload.status, 'ok');
+                assert.equal(semanticSearchCalls > 0, true);
+                assert.equal(payload.results.length, 1);
+                assert.equal(payload.results[0].target.file, 'src/fallback.ts');
+                assert.equal(
+                    warningCodes(payload).includes('SEARCH_INVALID_GROUP_TARGET_OMITTED'),
+                    true,
+                );
+            } finally {
+                navigationStore.getManifest = originalGetManifest;
+            }
         });
     });
 });
@@ -1649,8 +1743,8 @@ test('handleSearchCode exact registry fast path limits path-scoped lookup to the
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].file, targetPath);
-            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].target.file, targetPath);
+            assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
             assert.equal(payload.hints?.debugSearch?.exactRegistry?.candidateSet, 'path_exact_file');
             assert.equal(payload.hints?.debugSearch?.exactRegistry?.inspectedSymbolCount, targetSymbols.length);
         });
@@ -1704,7 +1798,7 @@ test('handleSearchCode exact registry miss still allows bounded tracked lexical 
             assert.equal(payload.hints?.debugSearch?.trackedLexical?.enabled, true);
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('expanded'), false);
-            assert.equal(payload.results[0].file, lexicalPath);
+            assert.equal(payload.results[0].target.file, lexicalPath);
             assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
         });
     });
@@ -1753,7 +1847,7 @@ test('handleSearchCode tracked lexical recovery reads active ignore patterns onc
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].file, trackedPaths[1]);
+            assert.equal(payload.results[0].target.file, trackedPaths[1]);
             assert.equal(getActiveIgnorePatternsCalls, 1);
         });
     });
@@ -1828,7 +1922,7 @@ test('handleSearchCode tracked lexical recovery short-circuits exact-ish line sc
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].file, lexicalPath);
+            assert.equal(payload.results[0].target.file, lexicalPath);
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
             assert.equal(scoreCandidateCalls <= 3, true);
             assert.equal(trackedNewlineSplitCalls, 0);
@@ -1875,7 +1969,7 @@ test('handleSearchCode exact symbolInstanceId fast path only uses current regist
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
             assert.equal(payload.hints?.debugSearch?.exactRegistry?.reason, 'symbol_instance_id');
         });
     });
@@ -1930,8 +2024,8 @@ test('handleSearchCode uses must-only exact identifier queries for exact registr
             assert.equal(payload.status, 'ok');
             assert.equal(semanticSearchCalls, 0);
             assert.equal(payload.results.length, 1);
-            assert.equal(payload.results[0].file, relativePath);
-            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].target.file, relativePath);
+            assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
             assert.equal(payload.hints?.debugSearch?.queryIntent?.semanticQuery, 'cli_entry_point');
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('exact_registry'), true);
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('primary'), false);
@@ -2268,7 +2362,7 @@ test('handleSearchCode does not read tracked lexical symlinks whose targets are 
     });
 });
 
-test('handleSearchCode repairs symbol-only file-owner results to tighter outline symbols with strong evidence', async () => {
+test('handleSearchCode does not promote broad file-owned evidence to a nested outline symbol', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {
             const relativePath = 'src/stack.rs';
@@ -2324,14 +2418,13 @@ test('handleSearchCode repairs symbol-only file-owner results to tighter outline
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].symbolInstanceId, push.symbolInstanceId);
-            assert.equal(payload.results[0].symbolKind, 'method');
-            assert.equal(payload.results[0].callGraphHint.supported, false);
-            assert.equal(payload.results[0].callGraphHint.reason, 'unsupported_language');
-            assert.equal(payload.results[0].nextActions?.openSymbol?.tool, 'read_file');
-            assert.equal(payload.results[0].nextActions?.callGraph, undefined);
+            assert.equal(payload.results[0].target.symbolId, undefined);
+            assert.deepEqual(payload.results[0].target.span, { startLine: 1, endLine: 6 });
+            assert.equal(payload.results[0].symbolKind, 'file');
+            assert.equal(payload.results[0].navigation.graph, 'missing_symbol');
+            assert.equal(payload.results[0].nextActions, undefined);
             assert.equal(payload.results[0].navigationFallback, undefined);
-            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'registry_repair');
+            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'fallback');
         });
     });
 });
@@ -2392,10 +2485,10 @@ test('handleSearchCode does not repair file-owner chunks to arbitrary nested met
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].symbolInstanceId, stack.symbolInstanceId);
+            assert.equal(payload.results[0].target.symbolId, stack.symbolInstanceId);
             assert.equal(payload.results[0].symbolKind, 'type');
-            assert.notEqual(payload.results[0].symbolLabel, 'method new');
-            assert.notEqual(payload.results[0].symbolLabel, 'method push');
+            assert.notEqual(payload.results[0].displayLabel, 'method new');
+            assert.notEqual(payload.results[0].displayLabel, 'method push');
         });
     });
 });
@@ -2453,9 +2546,10 @@ test('handleSearchCode does not repair ambiguous broad file-owner matches to exe
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].symbolInstanceId, fileOwner.symbolInstanceId);
+            assert.equal(payload.results[0].target.symbolId, undefined);
             assert.equal(payload.results[0].symbolKind, 'file');
-            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'owner_metadata');
+            assert.equal(payload.results[0].navigation.graph, 'missing_symbol');
+            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'fallback');
         });
     });
 });
@@ -2515,13 +2609,11 @@ test('handleSearchCode does not emit method graph hints from weak graph-capable 
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].symbolInstanceId, fileOwner.symbolInstanceId);
+            assert.equal(payload.results[0].target.symbolId, undefined);
             assert.equal(payload.results[0].symbolKind, 'file');
-            assert.equal(payload.results[0].callGraphHint.supported, false);
-            assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol');
-            assert.equal(payload.results[0].nextActions, undefined);
-            assert.notEqual(payload.results[0].callGraphHint?.symbolRef?.symbolId, emitLogin.symbolInstanceId);
-            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'owner_metadata');
+            assert.equal(payload.results[0].navigation.graph, 'missing_symbol');
+            assert.notEqual(payload.results[0].target.symbolId, emitLogin.symbolInstanceId);
+            assert.equal(payload.results[0].debug?.symbolAggregation?.ownerSource, 'fallback');
         });
     });
 });
@@ -2590,16 +2682,9 @@ test('handleSearchCode grouped symbol mode disables call graph hints when relati
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assert.equal(payload.results[0].symbolId, owner.symbolInstanceId);
-            assert.equal(payload.results[0].symbolInstanceId, owner.symbolInstanceId);
-            assert.equal(payload.results[0].callGraphHint.supported, false);
-            assert.equal(payload.results[0].callGraphHint.reason, 'incompatible_relationship_sidecar');
-            assert.equal(payload.results[0].nextActions?.openSymbol?.tool, 'read_file');
-            assert.equal(payload.results[0].nextActions?.openSymbol?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
-            assert.equal(payload.results[0].nextActions?.callGraph, undefined);
-            assert.equal(payload.results[0].navigationFallback, undefined);
-            assert.equal(payload.results[0].recommendedNextAction?.tool, 'read_file');
-            assert.equal(payload.results[0].recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.results[0].navigation.graph, 'incompatible_relationship_sidecar');
+            assert.equal(payload.results[0].recommendedNextAction, undefined);
             assert.equal(payload.recommendedNextAction?.tool, 'read_file');
             assert.equal(payload.recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
             assert.ok(warningCodes(payload).includes('SEARCH_RELATIONSHIP_SIDECAR_UNAVAILABLE:incompatible'));
@@ -2658,14 +2743,15 @@ test('handleSearchCode grouped symbol mode does not require registry when owner 
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
             assert.equal(payload.results.length, 1);
-            assert.equal(payload.results[0].collapsedChunkCount, 2);
-            assert.equal(payload.results[0].symbolKey, 'owner_auth_login_key');
+            assert.equal(payload.results[0].evidenceChunks, 2);
+            assert.equal(payload.results[0].target.symbolId, undefined);
+            assert.equal(payload.results[0].navigation.graph, 'incompatible_symbol_registry');
             assert.equal(payload.results[0].debug.symbolAggregation.ownerSource, 'owner_metadata');
             assert.equal(payload.results[0].nextActions, undefined);
             assert.equal(payload.results[0].navigationFallback, undefined);
             assert.equal(payload.results[0].recommendedNextAction, undefined);
             assert.equal(payload.results[0].fallbacks, undefined);
-            assert.equal(payload.recommendedNextAction, undefined);
+            assert.equal(payload.recommendedNextAction?.tool, 'read_file');
         });
     });
 });
@@ -2753,15 +2839,16 @@ test('handleSearchCode keeps same-label declaration groups separate when owner s
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 2);
-        const results = payload.results as Array<{ symbolKey?: string }>;
+        const results = payload.results as Array<{ target: { span: { startLine: number; endLine: number } } }>;
         assert.deepEqual(
-            results.map((result) => result.symbolKey).sort(),
-            ['owner_helper_source_key', 'owner_helper_test_key']
+            results.map((result) => result.target.span.startLine).sort((left, right) => left - right),
+            [1, 20]
         );
+        assert.equal(results.every((result) => !('symbolId' in result.target)), true);
     });
 });
 
-test('handleSearchCode grouped output includes compact nextActions for supported symbols', async () => {
+test('handleSearchCode grouped output derives one envelope action from compact navigation facts', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [{
             content: 'return session.isValid();',
@@ -2787,18 +2874,20 @@ test('handleSearchCode grouped output includes compact nextActions for supported
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const result = payload.results[0];
 
-        assert.equal(result.callGraphHint.supported, false);
-        assert.equal(result.callGraphHint.reason, 'missing_symbol');
+        assert.equal(result.navigation.graph, 'missing_symbol');
         assert.equal(result.nextActions, undefined);
-        assert.deepEqual(result.navigationFallback.readSpan, {
+        assert.equal(result.navigationFallback, undefined);
+        assert.deepEqual(payload.recommendedNextAction, {
+            resultIndex: 0,
             tool: 'read_file',
             args: {
                 path: path.resolve(repoPath, 'src/auth.ts'),
                 start_line: 3,
-                end_line: 6
-            }
+                end_line: 6,
+            },
+            reason: 'Read the highest-ranked validated span before inferring symbol ownership.',
         });
-        assert.equal(payload.hints?.navigation?.nextStep, 'Use recommendedNextAction when present. Call call_graph only when nextActions.callGraph is present and callGraphHint.supported=true.');
+        assert.equal(payload.hints?.navigation, undefined);
     });
 });
 
@@ -2827,8 +2916,10 @@ test('handleSearchCode grouped output caps previews for compact default response
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.match(payload.results[0].preview, /^method validateSession\(token: string\)\n/);
-        assert.equal(payload.results[0].preview.length, 803);
+        assert.doesNotMatch(payload.results[0].preview, /method validateSession\(token: string\)/);
+        assert.match(payload.results[0].preview, /^x+/);
+        assert.equal(Buffer.byteLength(payload.results[0].preview, 'utf8') <= 768, true);
+        assert.equal(payload.results[0].preview.split('\n').length <= 5, true);
     });
 });
 
@@ -2866,12 +2957,12 @@ test('handleSearchCode normalizes malformed labels and removes noisy duplicate p
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].symbolLabel, 'function qap_spread_type');
-        assert.match(payload.results[0].preview, /^function qap_spread_type\n/);
+        assert.equal(payload.results[0].displayLabel, 'function qap_spread_type');
+        assert.doesNotMatch(payload.results[0].preview, /^function qap_spread_type$/m);
         assert.match(payload.results[0].preview, /return qap_spread_type\(frame\)/);
         assert.doesNotMatch(payload.results[0].preview, /@cached/);
         assert.doesNotMatch(payload.results[0].preview, /unrelatedOwner/);
-        assert.equal((payload.results[0].preview.match(/function qap_spread_type/g) || []).length, 1);
+        assert.equal((payload.results[0].preview.match(/function qap_spread_type/g) || []).length, 0);
     });
 });
 
@@ -2908,8 +2999,8 @@ test('handleSearchCode compacts multiline signatures without leaking parameter f
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].symbolLabel, 'function check_survival');
-        assert.match(payload.results[0].preview, /^function check_survival\n/);
+        assert.equal(payload.results[0].displayLabel, 'function check_survival');
+        assert.doesNotMatch(payload.results[0].preview, /^function check_survival$/m);
         assert.match(payload.results[0].preview, /return survives/);
         assert.doesNotMatch(payload.results[0].preview, /^hreshold_violated="ADF",$/m);
         assert.doesNotMatch(payload.results[0].preview, /^.*mi_2_given_1/m);
@@ -2986,16 +3077,14 @@ test('handleSearchCode repairs registry-owned Python multiline spans before expo
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
-        assert.equal(payload.results[0].span.startLine, 4);
-        assert.equal(payload.results[0].span.endLine, 15);
-        assert.equal(payload.results[0].previewSpan.startLine, 2);
-        assert.equal(payload.results[0].previewSpan.endLine, 9);
-        assert.equal(payload.results[0].symbolSpan.startLine, 4);
-        assert.equal(payload.results[0].symbolSpan.endLine, 15);
-        assert.equal(payload.results[0].callGraphHint.symbolRef.span.startLine, 4);
-        assert.equal(payload.results[0].callGraphHint.symbolRef.span.endLine, 15);
-        assert.equal(payload.results[0].nextActions.openSymbol.args.open_symbol.symbolId, owner.symbolInstanceId);
-        assert.equal(payload.results[0].nextActions.openSymbol.args.open_symbol.end_line, undefined);
+        assert.equal(payload.results[0].target.span.startLine, 4);
+        assert.equal(payload.results[0].target.span.endLine, 15);
+        assert.deepEqual(payload.results[0].evidenceSpan, { startLine: 4, endLine: 9 });
+        assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
+        assert.equal(payload.results[0].quality.owner, 'high');
+        assert.equal(payload.results[0].navigation.graph, 'ready');
+        assert.equal(payload.recommendedNextAction?.args?.open_symbol?.symbolId, owner.symbolInstanceId);
+        assert.equal(payload.results[0].nextActions, undefined);
         assert.ok(warningCodes(payload).includes('SEARCH_SPAN_START_BEFORE_DEF'));
         assert.ok(warningCodes(payload).includes('SEARCH_TRUNCATED_SYMBOL_SPAN'));
     }));
@@ -3063,14 +3152,15 @@ test('handleSearchCode downgrades openSymbol capability when Python span validat
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
-        assert.equal(payload.results[0].span.startLine, 1);
-        assert.equal(payload.results[0].span.endLine, 6);
-        assert.equal(payload.results[0].capabilities.openSymbol, 'low');
+        assert.equal(payload.results[0].target.span.startLine, 1);
+        assert.equal(payload.results[0].target.span.endLine, 6);
+        assert.equal(payload.results[0].quality.owner, 'medium');
+        assert.equal(payload.results[0].capabilities, undefined);
         assert.ok(warningCodes(payload).includes('SEARCH_SYMBOL_SPAN_UNVERIFIED'));
     }));
 });
 
-test('handleSearchCode reports caller graph confidence conservatively for supported graph handles', async () => {
+test('handleSearchCode publishes compact ready state for supported graph handles', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const fileContent = [
             'export function build_entry_telemetry() {',
@@ -3116,9 +3206,9 @@ test('handleSearchCode reports caller graph confidence conservatively for suppor
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].callGraphHint.supported, true);
-        assert.equal(payload.results[0].capabilities.callGraphCallers, 'low');
-        assert.equal(payload.results[0].capabilities.callGraphCallees, 'medium');
+        assert.equal(payload.results[0].navigation.graph, 'ready');
+        assert.equal(payload.results[0].navigation.callerSearchTerm, 'build_entry_telemetry');
+        assert.equal(payload.results[0].capabilities, undefined);
     }));
 });
 
@@ -3156,20 +3246,17 @@ test('handleSearchCode downgrades stale search symbol refs to navigation fallbac
         const payload = JSON.parse(response.content[0]?.text || '{}');
         const result = payload.results[0];
 
-        assert.equal(result.callGraphHint.supported, false);
-        assert.equal(result.callGraphHint.reason, 'missing_symbol');
-        assert.deepEqual(result.previewSpan, { startLine: 3, endLine: 6 });
-        assert.equal(result.symbolSpan, undefined);
+        assert.equal(result.navigation.graph, 'missing_symbol');
+        assert.deepEqual(result.target.span, { startLine: 3, endLine: 6 });
+        assert.equal(result.evidenceSpan, undefined);
+        assert.equal(result.target.symbolId, undefined);
         assert.equal(result.nextActions, undefined);
-        assert.deepEqual(result.navigationFallback.readSpan, {
-            tool: 'read_file',
-            args: {
-                path: path.resolve(repoPath, 'src/auth.ts'),
-                start_line: 3,
-                end_line: 6
-            }
+        assert.equal(result.navigationFallback, undefined);
+        assert.deepEqual(payload.recommendedNextAction?.args, {
+            path: path.resolve(repoPath, 'src/auth.ts'),
+            start_line: 3,
+            end_line: 6,
         });
-        assert.equal(result.navigationFallback.fileOutlineWindow, undefined);
     });
 });
 
@@ -3489,7 +3576,7 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, 'src/retry-40.ts');
+        assert.equal(payload.results[0].target.file, 'src/retry-40.ts');
         assert.equal(warningCodes(payload).includes('FILTER_MUST_UNSATISFIED'), false);
         assert.equal(payload.hints?.debugSearch?.mustRetry?.attempts, 2);
         assert.equal(payload.hints?.debugSearch?.mustRetry?.satisfied, true);
@@ -3537,8 +3624,8 @@ test('handleSearchCode grouped representative prefers must-matching chunk within
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, 'src/auth.ts');
-        assert.equal(payload.results[0].span?.startLine, 20);
+        assert.equal(payload.results[0].target.file, 'src/auth.ts');
+        assert.equal(payload.results[0].target.span?.startLine, 20);
         assert.equal(payload.results[0].debug?.matchesMust, true);
         assert.match(payload.results[0].preview, /ERR_CODE_42/);
     });
@@ -3604,7 +3691,7 @@ test('handleSearchCode grouped diversity keeps multi-file coverage by default', 
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        const files = payload.results.map((result: SearchPayloadResultView) => result.file);
+        const files = payload.results.map((result: SearchPayloadResultView) => result.target?.file);
         assert.equal(files.includes('src/two.ts'), true);
         assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerFile, 2);
         assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerSymbol, 1);
@@ -3658,9 +3745,10 @@ test('handleSearchCode grouped diversity keeps distinct symbol instances that sh
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 2);
         assert.deepEqual(
-            payload.results.map((result: SearchPayloadResultView) => result.symbolInstanceId),
-            ['owner_login_instance_a', 'owner_login_instance_b']
+            payload.results.map((result: SearchPayloadResultView) => result.target?.span.startLine),
+            [1, 5]
         );
+        assert.equal(payload.results.every((result: SearchPayloadResultView) => result.target?.symbolId === undefined), true);
     });
 });
 
@@ -3708,7 +3796,7 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
             debug: true
         });
         const autoPayload = JSON.parse(autoResponse.content[0]?.text || '{}');
-        assert.equal(autoPayload.results[0].file, 'src/changed.ts');
+        assert.equal(autoPayload.results[0].target.file, 'src/changed.ts');
         assert.equal(autoPayload.freshnessSummary.changedFileCount, 1);
         assert.equal(autoPayload.freshnessSummary.gitDirtyFilesConsidered, true);
         assert.equal(autoPayload.freshnessSummary.changedFilesBoostApplied, true);
@@ -3724,7 +3812,7 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
             debug: true
         });
         const defaultPayload = JSON.parse(defaultResponse.content[0]?.text || '{}');
-        const defaultChanged = defaultPayload.results.find((result: SearchPayloadResultView) => result.file === 'src/changed.ts');
+        const defaultChanged = defaultPayload.results.find((result: SearchPayloadResultView) => result.target?.file === 'src/changed.ts');
         assert.equal(defaultChanged?.debug?.changedFilesMultiplier, 1);
         assert.equal(defaultPayload.freshnessSummary.changedFileCount, 1);
         assert.equal(defaultPayload.freshnessSummary.gitDirtyFilesConsidered, true);
@@ -3904,7 +3992,7 @@ test('handleSearchCode preserves successful results when watcher maintenance fai
 
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, 'src/result.ts');
+        assert.equal(payload.results[0].target.file, 'src/result.ts');
     });
 });
 
@@ -3966,7 +4054,7 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence when in
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, relativePath);
+        assert.equal(payload.results[0].target.file, relativePath);
         assert.match(payload.results[0].preview, /endColumn/);
         assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), true);
     });
@@ -4012,9 +4100,9 @@ test('handleSearchCode replaces stale dirty-file candidates with current identif
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, relativePath);
-        assert.equal(payload.results[0].symbolLabel, 'function FreshCurrentIdentifier');
-        assert.deepEqual(payload.results[0].span, { startLine: 1, endLine: 3 });
+        assert.equal(payload.results[0].target.file, relativePath);
+        assert.equal(payload.results[0].displayLabel, 'function FreshCurrentIdentifier');
+        assert.deepEqual(payload.results[0].target.span, { startLine: 1, endLine: 3 });
         assert.doesNotMatch(payload.results[0].preview, /RemovedStaleIdentifier/);
         assert.ok(payload.results[0].debug.provenance.retrievalPasses.includes('dirty_overlay'));
     });
@@ -4156,7 +4244,7 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence after s
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, relativePath);
+        assert.equal(payload.results[0].target.file, relativePath);
         assert.match(payload.results[0].preview, /endColumn/);
         assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), false);
         assert.equal(payload.hints.debugSearch.passesUsed.includes('live_path'), true);
@@ -4253,7 +4341,7 @@ test('handleSearchCode supplements exact path-scoped tracked test evidence witho
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, relativePath);
+        assert.equal(payload.results[0].target.file, relativePath);
         assert.match(payload.results[0].preview, /endColumn/);
         assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('live_path'), false);
         assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
@@ -4346,7 +4434,7 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, relativePath);
+        assert.equal(payload.results[0].target.file, relativePath);
         assert.match(payload.results[0].preview, /endColumn/);
         assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
         assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
@@ -4617,7 +4705,7 @@ test('handleSearchCode auto_changed_first skips boost when changed file set exce
             debug: true
         });
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'src/unchanged.ts');
+        assert.equal(payload.results[0].target.file, 'src/unchanged.ts');
         assert.equal(payload.freshnessSummary.changedFileCount, SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES + 1);
         assert.equal(payload.freshnessSummary.gitDirtyFilesConsidered, true);
         assert.equal(payload.freshnessSummary.changedFilesBoostApplied, false);
@@ -5047,7 +5135,7 @@ test('handleSearchCode prefers usage hits over declarations for reference-seekin
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
+        assert.equal(payload.results[0].target.file, 'src/runtime_usage.ts');
         assert.equal(payload.results[0].debug?.exactLexicalMatch, false);
         assert.equal(payload.hints?.debugSearch?.queryIntent?.classification, 'mixed');
         assert.equal(payload.hints?.debugSearch?.queryIntent?.reasons?.includes('reference_seeking_query'), true);
@@ -5101,7 +5189,7 @@ test('handleSearchCode ranks canonical owners above tool wrappers for implementa
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'packages/mcp/src/core/handlers.ts');
+        assert.equal(payload.results[0].target.file, 'packages/mcp/src/core/handlers.ts');
         assert.equal(payload.results[0].debug?.pathCategory, 'core');
         assert.equal(payload.results[1].debug?.pathCategory, 'adapter');
     });
@@ -5149,7 +5237,7 @@ test('handleSearchCode demotes tests below implementation owners unless test int
             debug: true
         });
         const ownerPayload = JSON.parse(ownerResponse.content[0]?.text || '{}');
-        assert.equal(ownerPayload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(ownerPayload.results[0].target.file, 'packages/cli/src/install.ts');
         assert.equal(ownerPayload.results[0].debug?.agentFitReason, 'writer_owner');
         assert.equal(ownerPayload.results[1].debug?.agentFitReason, 'implementation_query_test_demotion');
 
@@ -5163,7 +5251,7 @@ test('handleSearchCode demotes tests below implementation owners unless test int
             debug: true
         });
         const testPayload = JSON.parse(testResponse.content[0]?.text || '{}');
-        assert.equal(testPayload.results[0].file, 'packages/cli/src/install.test.ts');
+        assert.equal(testPayload.results[0].target.file, 'packages/cli/src/install.test.ts');
         assert.equal(testPayload.results[0].debug?.agentFitReason, 'test_intent');
     });
 });
@@ -5210,7 +5298,7 @@ test('handleSearchCode strongly demotes test helpers for implementation freshnes
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'packages/mcp/src/core/sync.ts');
+        assert.equal(payload.results[0].target.file, 'packages/mcp/src/core/sync.ts');
         assert.equal(payload.results[0].debug?.agentFitReason, 'implementation_symbol');
         assert.equal(payload.results[1].debug?.agentFitReason, 'implementation_query_test_demotion');
         assert.equal(payload.hints?.debugSearch?.rerank?.exactMatchPinningEnabled, false);
@@ -5260,7 +5348,7 @@ test('handleSearchCode ranks script runtime owners above package installability 
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'scripts/check-version-freshness.mjs');
+        assert.equal(payload.results[0].target.file, 'scripts/check-version-freshness.mjs');
         assert.equal(payload.results[0].debug?.pathCategory, 'scriptRuntime');
         assert.equal(payload.results[0].debug?.agentFitReason, 'script_implementation');
     });
@@ -5317,8 +5405,8 @@ test('handleSearchCode boosts exact phase/path anchors for broad semantic querie
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'scripts/ops/phase6p_pair_relationship_observation_source.py');
-        assert.equal(payload.results[1].file, 'scripts/ops/phase6m_pair_relationship_object.py');
+        assert.equal(payload.results[0].target.file, 'scripts/ops/phase6p_pair_relationship_observation_source.py');
+        assert.equal(payload.results[1].target.file, 'scripts/ops/phase6m_pair_relationship_object.py');
         assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
         assert.equal(payload.hints?.debugSearch?.queryIntent?.classification, 'mixed');
     });
@@ -5394,9 +5482,9 @@ test('handleSearchCode demotes sibling structural-anchor near misses below a neu
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'scripts/ops/phase6p_pair_relationship_observation_source.py');
-        assert.equal(payload.results[1].file, 'scripts/ops/pair_relationship_observation_source_runtime_admission.py');
-        assert.equal(payload.results[2].file, 'scripts/ops/phase6m_pair_relationship_observation_source.py');
+        assert.equal(payload.results[0].target.file, 'scripts/ops/phase6p_pair_relationship_observation_source.py');
+        assert.equal(payload.results[1].target.file, 'scripts/ops/pair_relationship_observation_source_runtime_admission.py');
+        assert.equal(payload.results[2].target.file, 'scripts/ops/phase6m_pair_relationship_observation_source.py');
         assert.equal(payload.results[0].debug?.lexicalScore > payload.results[1].debug?.lexicalScore, true);
         assert.equal(payload.results[1].debug?.lexicalScore > payload.results[2].debug?.lexicalScore, true);
         assert.equal(payload.hints?.debugSearch?.queryIntent?.classification, 'mixed');
@@ -5445,7 +5533,7 @@ test('handleSearchCode ranks writer owners above repo config readers for write-i
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(payload.results[0].target.file, 'packages/cli/src/install.ts');
         assert.equal(payload.results[0].debug?.agentFitReason, 'writer_owner');
     });
 });
@@ -5492,7 +5580,7 @@ test('handleSearchCode treats class-qualified mutator methods as writer owners',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(payload.results[0].target.file, 'packages/cli/src/install.ts');
         assert.equal(payload.results[0].debug?.agentFitReason, 'writer_owner');
     });
 });
@@ -5544,9 +5632,9 @@ test('handleSearchCode does not treat formatter pushes as writer owners', async 
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(payload.results[0].target.file, 'packages/cli/src/install.ts');
         assert.equal(payload.results[0].debug?.agentFitReason, 'writer_owner');
-        assert.equal(payload.results[1].file, 'packages/mcp/src/tools/list_codebases.ts');
+        assert.equal(payload.results[1].target.file, 'packages/mcp/src/tools/list_codebases.ts');
         assert.equal(payload.results[1].debug?.agentFitReason, 'writer_query_non_writer');
     });
 });
@@ -5591,7 +5679,7 @@ test('handleSearchCode ranks implementation chunks above type-only results for o
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'packages/mcp/src/core/handlers.ts');
+        assert.equal(payload.results[0].target.file, 'packages/mcp/src/core/handlers.ts');
         assert.equal(payload.results[0].debug?.agentFitReason, 'implementation_chunk');
         assert.equal(payload.results[1].debug?.agentFitReason, 'type_not_owner');
     });
@@ -5648,7 +5736,7 @@ test('handleSearchCode does not boost dirty tests for non-test implementation qu
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'packages/cli/src/install.ts');
+        assert.equal(payload.results[0].target.file, 'packages/cli/src/install.ts');
         assert.equal(payload.freshnessSummary.changedFilesBoostApplied, false);
         assert.equal(payload.hints?.debugSearch?.changedFilesBoost?.boostedCandidates, 0);
         assert.equal(payload.results[1].debug?.changedFilesMultiplier, 1);
@@ -5717,8 +5805,8 @@ test('handleSearchCode collapses duplicate declaration groups for reference-seek
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
-        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.file === 'src/hurst_gate.ts' && result.symbolLabel === 'class HurstGateState');
+        assert.equal(payload.results[0].target.file, 'src/runtime_usage.ts');
+        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.target?.file === 'src/hurst_gate.ts' && result.displayLabel === 'class HurstGateState');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -5828,7 +5916,7 @@ test('handleSearchCode collapses duplicate declaration groups for identifier que
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.file === 'src/hurst_gate.ts' && result.symbolLabel === 'class HurstGateState');
+        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.target?.file === 'src/hurst_gate.ts' && result.displayLabel === 'class HurstGateState');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -5895,8 +5983,8 @@ test('handleSearchCode reference-seeking queries downweight fragment-only matche
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
-        assert.equal(payload.results[1].file !== 'src/check_gate_state.ts', true);
+        assert.equal(payload.results[0].target.file, 'src/runtime_usage.ts');
+        assert.equal(payload.results[1].target.file !== 'src/check_gate_state.ts', true);
     });
 });
 
@@ -5955,8 +6043,8 @@ test('handleSearchCode reference-seeking queries rank runtime usage above declar
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
-        assert.equal(payload.results[1].file, 'src/hurst_gate.ts');
+        assert.equal(payload.results[0].target.file, 'src/runtime_usage.ts');
+        assert.equal(payload.results[1].target.file, 'src/hurst_gate.ts');
     });
 });
 
@@ -6112,8 +6200,8 @@ test('handleSearchCode treats arrow function declarations as declarations for re
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.results[0].file, 'src/runtime_usage.ts');
-        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'const check_hurst_gate =');
+        assert.equal(payload.results[0].target.file, 'src/runtime_usage.ts');
+        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.target?.file === 'src/check_hurst_gate.ts' && result.displayLabel === 'const check_hurst_gate =');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -6222,7 +6310,7 @@ test('handleSearchCode collapses duplicate function declaration groups for refer
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.file === 'src/check_hurst_gate.ts' && result.symbolLabel === 'function check_hurst_gate');
+        const declarationHits = payload.results.filter((result: SearchPayloadResultView) => result.target?.file === 'src/check_hurst_gate.ts' && result.displayLabel === 'function check_hurst_gate');
         assert.equal(declarationHits.length, 1);
     });
 });
@@ -6913,7 +7001,7 @@ test('handleSearchCode omits noiseMitigation hint when top grouped results are r
     });
 });
 
-test('handleSearchCode grouped fallback emits stable hash groupId and unsupported callGraphHint when symbol is missing', async () => {
+test('handleSearchCode grouped fallback omits internal identity and emits compact missing-symbol navigation', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [{
             content: 'const value = computeToken();',
@@ -6942,35 +7030,21 @@ test('handleSearchCode grouped fallback emits stable hash groupId and unsupporte
 
         assert.equal(firstPayload.results.length, 1);
         assert.equal(secondPayload.results.length, 1);
-        assert.match(firstPayload.results[0].groupId, /^grp_[a-f0-9]{16}$/);
-        assert.equal(firstPayload.results[0].groupId, secondPayload.results[0].groupId);
-        assert.equal(firstPayload.results[0].callGraphHint.supported, false);
-        assert.equal(firstPayload.results[0].callGraphHint.reason, 'missing_symbol');
-        assert.deepEqual(firstPayload.results[0].previewSpan, { startLine: 42, endLine: 45 });
-        assert.equal(firstPayload.results[0].symbolSpan, undefined);
-        assert.equal(firstPayload.results[0].navigationFallback.message, 'Call graph not available for this result; use readSpan or fileOutlineWindow to navigate.');
-        assert.equal(firstPayload.results[0].navigationFallback.context.codebaseRoot, repoPath);
-        assert.equal(firstPayload.results[0].navigationFallback.context.relativeFile, 'src/runtime.ts');
-        assert.equal(firstPayload.results[0].navigationFallback.context.absolutePath, undefined);
-        assert.deepEqual(firstPayload.results[0].navigationFallback.readSpan, {
-            tool: 'read_file',
-            args: {
-                path: path.resolve(repoPath, 'src/runtime.ts'),
-                start_line: 42,
-                end_line: 45
-            }
+        assert.deepEqual(firstPayload.results[0], secondPayload.results[0]);
+        assert.equal(firstPayload.results[0].groupId, undefined);
+        assert.equal(firstPayload.results[0].navigation.graph, 'missing_symbol');
+        assert.deepEqual(firstPayload.results[0].target, {
+            file: 'src/runtime.ts',
+            span: { startLine: 42, endLine: 45 },
         });
-        assert.equal(firstPayload.results[0].recommendedNextAction.tool, 'read_file');
-        assert.deepEqual(
-            firstPayload.results[0].recommendedNextAction.args,
-            firstPayload.results[0].navigationFallback.readSpan.args
-        );
-        assert.equal(firstPayload.results[0].fallbacks[0].tool, 'read_file');
-        assert.deepEqual(
-            firstPayload.results[0].fallbacks[0].args,
-            firstPayload.results[0].navigationFallback.readSpan.args
-        );
-        assert.equal(firstPayload.results[0].navigationFallback.fileOutlineWindow, undefined);
+        assert.equal(firstPayload.results[0].navigationFallback, undefined);
+        assert.equal(firstPayload.results[0].fallbacks, undefined);
+        assert.equal(firstPayload.results[0].recommendedNextAction, undefined);
+        assert.deepEqual(firstPayload.recommendedNextAction?.args, {
+            path: path.resolve(repoPath, 'src/runtime.ts'),
+            start_line: 42,
+            end_line: 45,
+        });
     });
 });
 
@@ -7020,13 +7094,12 @@ test('handleSearchCode emits fileOutlineWindow navigation fallback when sidecar 
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].callGraphHint.supported, false);
-        assert.equal(payload.results[0].callGraphHint.reason, 'missing_symbol');
-        assert.equal(payload.results[0].navigationFallback.fileOutlineWindow, undefined);
+        assert.equal(payload.results[0].navigation.graph, 'missing_symbol');
+        assert.equal(payload.results[0].navigationFallback, undefined);
     });
 });
 
-test('handleSearchCode subdirectory query builds navigationFallback from effectiveRoot and preserves relative file', async () => {
+test('handleSearchCode subdirectory query publishes the effective root once and preserves relative target file', async () => {
     await withTempRepo(async (repoPath) => {
         const subdirPath = path.join(repoPath, 'src');
         fs.mkdirSync(subdirPath, { recursive: true });
@@ -7086,12 +7159,11 @@ test('handleSearchCode subdirectory query builds navigationFallback from effecti
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results.length, 1);
-        assert.equal(payload.results[0].file, 'src/runtime.ts');
-        assert.equal(payload.results[0].navigationFallback.context.codebaseRoot, repoPath);
-        assert.equal(payload.results[0].navigationFallback.context.relativeFile, 'src/runtime.ts');
-        assert.equal(payload.results[0].navigationFallback.context.absolutePath, undefined);
-        assert.equal(payload.results[0].navigationFallback.readSpan.args.path, path.resolve(repoPath, 'src/runtime.ts'));
-        assert.equal(payload.results[0].navigationFallback.fileOutlineWindow, undefined);
+        assert.equal(payload.results[0].target.file, 'src/runtime.ts');
+        assert.equal(payload.path, subdirPath);
+        assert.equal(payload.codebaseRoot, repoPath);
+        assert.equal(payload.results[0].navigationFallback, undefined);
+        assert.equal(payload.recommendedNextAction.args.path, path.resolve(repoPath, 'src/runtime.ts'));
     });
 });
 
@@ -7138,10 +7210,11 @@ test('handleSearchCode grouped sorting places null symbolLabel last for determin
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results.length, 2);
-        assert.equal(payload.results[0].symbolId, 'owner_with_label_instance');
-        assert.equal(payload.results[1].symbolId, 'owner_without_label_instance');
-        assert.equal(typeof payload.results[1].symbolLabel, 'string');
-        assert.notEqual(payload.results[1].symbolLabel, null);
+        assert.equal(payload.results[0].target.symbolId, undefined);
+        assert.equal(payload.results[1].target.symbolId, undefined);
+        assert.equal(payload.results[0].displayLabel, 'function withLabel(token: string)');
+        assert.equal(typeof payload.results[1].displayLabel, 'string');
+        assert.notEqual(payload.results[1].displayLabel, null);
     });
 });
 
@@ -7525,8 +7598,8 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
             assert.equal(payload.results.length, 1);
-            assert.equal(payload.results[0].symbolId, undefined);
-            assert.equal(payload.results[0].file, 'src/primary.ts');
+            assert.equal(payload.results[0].target.symbolId, undefined);
+            assert.equal(payload.results[0].target.file, 'src/primary.ts');
             assert.deepEqual(warningCodes(payload), ['SEARCH_PASS_FAILED:expanded']);
             assert.equal(payload.warnings[0].severity, 'degraded');
             assert.equal(response.meta?.searchDiagnostics?.searchPassFailureCount, 1);

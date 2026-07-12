@@ -23,6 +23,7 @@ import type {
 } from "./search-types.js";
 import type { FreshnessDecision } from "./sync.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
+import { WARNING_CODES } from "./warnings.js";
 import {
     findExactRegistryMatch,
     shouldAttemptExactRegistryLookup,
@@ -83,7 +84,7 @@ type SearchExactFastPathInput = {
     changedFilesBoostSkippedForLargeChangeSet: boolean;
     dirtyFilesNotFreshened: boolean;
     rankingProvenance: SearchDebugHint["rankingProvenance"];
-    previewMaxChars: number;
+    previewMaxBytes: number;
 };
 
 type SearchExactFastPathHandled = {
@@ -103,6 +104,7 @@ type SearchExactFastPathContinue = {
     searchSymbolRegistry?: SymbolRegistry;
     searchSymbolRegistryManifestHash?: string;
     exactRegistryFallbackForTrackedLexical: boolean;
+    warning?: string;
 };
 
 export type SearchExactFastPathOutcome =
@@ -248,7 +250,6 @@ export async function runExactRegistryFastPath(
         indexedAt: registryState.registry.manifest.builtAt || null,
         navigationState: callGraphNavigationState,
         navigationWarning: callGraphNavigationState.warning,
-        sidecarReadyForOutline: true,
         debug: input.debug,
         debugInput: {
             queryIntent: {
@@ -316,7 +317,7 @@ export async function runExactRegistryFastPath(
             exactRegistry: exactRegistryDebug,
         },
         now: host.now,
-        previewMaxChars: input.previewMaxChars,
+        previewMaxBytes: input.previewMaxBytes,
         navigationHelpers: host.getSearchNavigationHelpers(),
         partialIndexSearchWarnings: input.partialIndexSearchWarnings,
         dirtyFilesNotFreshened: input.dirtyFilesNotFreshened,
@@ -324,6 +325,17 @@ export async function runExactRegistryFastPath(
         buildNoiseMitigationHint: (files) => host.searchQuerySupport.buildNoiseMitigationHint(input.effectiveRoot, files, input.scope),
         buildGeneratedArtifactsVerificationHint: (results) => host.buildGeneratedArtifactsVerificationHint(input.effectiveRoot, results),
     });
+
+    if (!envelope) {
+        return {
+            kind: "continue",
+            exactRegistryDebug,
+            searchSymbolRegistry: registryState.registry,
+            searchSymbolRegistryManifestHash: registryState.manifestHash,
+            exactRegistryFallbackForTrackedLexical: true,
+            warning: WARNING_CODES.SEARCH_INVALID_GROUP_TARGET_OMITTED,
+        };
+    }
 
     return {
         kind: "handled",

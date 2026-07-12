@@ -626,7 +626,6 @@ function isStructuredEnvelopeText(text: string): boolean {
 			"hints",
 			"warnings",
 			"freshnessDecision",
-			"navigationFallback",
 			"outlineStatus",
 		];
 		return envelopeKeys.some((key) => key in record);
@@ -863,7 +862,7 @@ const SEARCH_CODEBASE_SCHEMA = Type.Object({
 
 const CALL_GRAPH_SCHEMA = Type.Object({
 	path: Type.String({ description: "ABSOLUTE path to indexed root or subdirectory." }),
-	symbolRef: Type.Object({}, { additionalProperties: true, description: "Symbol reference from search callGraphHint." }),
+	symbolRef: Type.Object({}, { additionalProperties: true, description: "Graph-ready target from a grouped search result." }),
 	direction: Type.Optional(
 		Type.Union([Type.Literal("callers"), Type.Literal("callees"), Type.Literal("both")], {
 			description: "Traversal direction.",

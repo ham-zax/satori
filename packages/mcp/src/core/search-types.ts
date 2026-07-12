@@ -4,6 +4,8 @@ import { FingerprintSource, IndexFingerprint } from "../config.js";
 
 export type StalenessBucket = "fresh" | "aging" | "stale" | "unknown";
 
+export const SEARCH_RESPONSE_FORMAT_VERSION = 2 as const;
+
 export interface SearchSpan {
     startLine: number;
     endLine: number;
@@ -35,6 +37,10 @@ export type NavigationUnavailableReason =
     | NavigationUnsupportedReason
     | NavigationRegistryUnavailableReason;
 
+export type SearchNavigationUnavailableReasonV2 =
+    | NavigationUnavailableReason
+    | "partial_index_navigation_unavailable";
+
 export type CallGraphHint =
     | {
         supported: true;
@@ -48,47 +54,6 @@ export type CallGraphHint =
         reason: NavigationUnavailableReason;
     };
 
-export interface SearchNextActionReadSymbol {
-    tool: "read_file";
-    args: {
-        path: string;
-        open_symbol: {
-            symbolId: string;
-            symbolLabel?: string;
-            start_line?: number;
-            end_line?: number;
-        };
-    };
-}
-
-export interface SearchNextActionFileOutlineWindow {
-    tool: "file_outline";
-    args: {
-        path: string;
-        file: string;
-        start_line: number;
-        end_line: number;
-        resolveMode: "outline";
-    };
-}
-
-export interface SearchNextActionCallGraph {
-    tool: "call_graph";
-    args: {
-        path: string;
-        symbolRef: CallGraphSymbolRef;
-        depth: number;
-        limit: number;
-    };
-    directions: Array<"callers" | "callees">;
-}
-
-export interface SearchNextActions {
-    openSymbol?: SearchNextActionReadSymbol;
-    outlineWindow?: SearchNextActionFileOutlineWindow;
-    callGraph?: SearchNextActionCallGraph;
-}
-
 export type SearchActionTool = "read_file" | "file_outline" | "call_graph" | "search_codebase" | "manage_index";
 
 export interface SearchRecommendedNextAction {
@@ -98,35 +63,7 @@ export interface SearchRecommendedNextAction {
     reason: string;
 }
 
-export interface SearchResultFallback {
-    when: string;
-    tool: SearchActionTool;
-    args: Record<string, unknown>;
-    reason: string;
-}
-
-/** Executable recovery when call_graph inbound is advisory/low (not blast-radius authority). */
-export interface SearchInboundRecovery {
-    tool: "search_codebase";
-    args: {
-        path: string;
-        query: string;
-        scope: SearchScope;
-        resultMode: "grouped";
-        groupBy: SearchGroupBy;
-        limit: number;
-    };
-    reason: string;
-}
-
 export type SearchCapabilityConfidence = "high" | "medium" | "low" | "unavailable";
-
-export interface SearchResultCapabilities {
-    openSymbol: SearchCapabilityConfidence;
-    callGraphCallers: SearchCapabilityConfidence;
-    callGraphCallees: SearchCapabilityConfidence;
-    semanticMatch: SearchCapabilityConfidence;
-}
 
 export interface SearchWarningDetail {
     code: string;
@@ -175,92 +112,88 @@ export interface SearchChunkResult {
     };
 }
 
-export interface SearchGroupResult {
-    kind: "group";
-    groupId: string;
-    file: string;
-    span: SearchSpan;
-    previewSpan?: SearchSpan;
-    symbolSpan?: SearchSpan;
-    language: string;
-    symbolId?: string;
-    symbolLabel: string;
-    symbolKey?: string;
-    symbolInstanceId?: string;
-    symbolKind?: string;
-    confidence?: "high" | "medium" | "low";
-    score: number;
-    indexedAt: string | null;
-    stalenessBucket: StalenessBucket;
-    collapsedChunkCount: number;
-    callGraphHint: CallGraphHint;
-    navigationFallback?: SearchNavigationFallback;
-    nextActions?: SearchNextActions;
-    recommendedNextAction?: SearchRecommendedNextAction;
-    /** Prefer this must: search to verify callers when capabilities.callGraphCallers is low. */
-    inboundRecovery?: SearchInboundRecovery;
-    fallbacks?: SearchResultFallback[];
-    capabilities: SearchResultCapabilities;
-    preview: string;
-    debug?: {
-        representativeChunkCount: number;
-        pathCategory: string;
-        pathMultiplier: number;
-        topChunkScore: number;
-        lexicalScore: number;
-        changedFilesMultiplier?: number;
-        agentFitMultiplier?: number;
-        agentFitReason?: string;
-        matchesMust?: boolean;
-        exactLexicalMatch: boolean;
-        symbolAggregation?: {
-            ownerSource: "owner_metadata" | "registry_repair" | "fallback";
-            evidenceChunkCount: number;
-            supportBoost: number;
-        };
-        provenance?: {
-            retrievalPasses: string[];
-            backendScoreKinds: Array<"dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown">;
-            semanticCandidate: boolean;
-            lexicalCandidate: boolean;
-            rerankAdjusted: boolean;
-            exactMatchPinned: boolean;
-            ownerRepairApplied: boolean;
-        };
-    };
-}
-
-export interface SearchNavigationFallbackContext {
-    codebaseRoot: string;
-    relativeFile: string;
-    absolutePath?: string;
-}
-
-export interface SearchNavigationFallbackReadSpan {
-    tool: "read_file";
-    args: {
-        path: string;
-        start_line: number;
-        end_line: number;
-    };
-}
-
-export interface SearchNavigationFallbackFileOutlineWindow {
-    tool: "file_outline";
-    args: {
-        path: string;
+export type SearchGroupedTargetV2 =
+    | {
         file: string;
-        start_line: number;
-        end_line: number;
-        resolveMode: "outline";
+        span: SearchSpan;
+        symbolId: string;
+    }
+    | {
+        file: string;
+        span: SearchSpan;
+        symbolId?: never;
+    };
+
+export type SearchGraphNavigationV2 =
+    | {
+        graph: "ready";
+        inbound: "verify";
+        callerSearchTerm?: string;
+    }
+    | {
+        graph: SearchNavigationUnavailableReasonV2;
+        inbound?: never;
+        callerSearchTerm?: never;
+    };
+
+export interface SearchGroupedDebugV2 {
+    representativeChunkCount: number;
+    pathCategory: string;
+    pathMultiplier: number;
+    topChunkScore: number;
+    lexicalScore: number;
+    changedFilesMultiplier?: number;
+    agentFitMultiplier?: number;
+    agentFitReason?: string;
+    matchesMust?: boolean;
+    exactLexicalMatch: boolean;
+    symbolAggregation?: {
+        ownerSource: "owner_metadata" | "registry_repair" | "fallback";
+        evidenceChunkCount: number;
+        supportBoost: number;
+    };
+    freshness?: {
+        newestChunkIndexedAt: string | null;
+        ageBucket: StalenessBucket;
+    };
+    graphEvidence?: {
+        validatedAt?: string;
+        sidecarBuiltAt?: string;
+    };
+    provenance?: {
+        retrievalPasses: string[];
+        backendScoreKinds: Array<"dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown">;
+        semanticCandidate: boolean;
+        lexicalCandidate: boolean;
+        rerankAdjusted: boolean;
+        exactMatchPinned: boolean;
+        ownerRepairApplied: boolean;
     };
 }
 
-export interface SearchNavigationFallback {
-    message: string;
-    context: SearchNavigationFallbackContext;
-    readSpan: SearchNavigationFallbackReadSpan;
-    fileOutlineWindow?: SearchNavigationFallbackFileOutlineWindow;
+export interface SearchGroupedResultV2 {
+    target: SearchGroupedTargetV2;
+    displayLabel: string;
+    language: string;
+    symbolKind?: string;
+    score: number;
+    quality: {
+        owner: "high" | "medium" | "low";
+        semantic: SearchCapabilityConfidence;
+    };
+    evidenceChunks?: number;
+    preview: string;
+    evidenceSpan?: SearchSpan;
+    navigation: SearchGraphNavigationV2;
+    debug?: SearchGroupedDebugV2;
+}
+
+/** Internal grouping/ranking state. Envelope serialization removes every __ field. */
+export interface SearchGroupResult extends SearchGroupedResultV2 {
+    __groupId: string;
+    __symbolKey?: string;
+    __symbolInstanceId?: string;
+    __exactLexicalMatch: boolean;
 }
 
 export interface FingerprintCompatibilityDiagnostics {
@@ -278,10 +211,6 @@ export interface SearchNoiseMitigationHint {
     recommendedScope: "runtime";
     suggestedIgnorePatterns: string[];
     debounceMs: number;
-    nextStep: string;
-}
-
-export interface SearchNavigationHint {
     nextStep: string;
 }
 
@@ -447,7 +376,6 @@ export interface SearchDebugHint {
 
 export interface SearchResponseHints extends Record<string, unknown> {
     version?: 1;
-    navigation?: SearchNavigationHint;
     noiseMitigation?: SearchNoiseMitigationHint;
     debugSearch?: SearchDebugHint;
     debugSummary?: {
@@ -462,7 +390,14 @@ export interface SearchResponseHints extends Record<string, unknown> {
             reason: "generated_outputs_present";
             message: string;
             files: string[];
-            nextSteps: SearchNavigationFallbackReadSpan[];
+            nextSteps: Array<{
+                tool: "read_file";
+                args: {
+                    path: string;
+                    start_line: number;
+                    end_line: number;
+                };
+            }>;
         };
     };
 }
@@ -492,10 +427,12 @@ export interface IndexingFailureMetadata {
 }
 
 interface SearchBaseResponseEnvelope {
+    formatVersion: typeof SEARCH_RESPONSE_FORMAT_VERSION;
     status: "ok" | "requires_reindex" | "not_indexed" | "not_ready";
     reason?: NonOkReason;
     code?: "MISSING_PROVIDER_CONFIG" | VectorBackendResponseCode;
     path: string;
+    codebaseRoot?: string;
     query: string;
     scope: SearchScope;
     groupBy: SearchGroupBy;
@@ -512,7 +449,7 @@ interface SearchBaseResponseEnvelope {
 
 export interface SearchGroupedResponseEnvelope extends SearchBaseResponseEnvelope {
     resultMode: "grouped";
-    results: SearchGroupResult[];
+    results: SearchGroupedResultV2[];
 }
 
 export interface SearchRawResponseEnvelope extends SearchBaseResponseEnvelope {

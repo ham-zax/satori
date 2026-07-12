@@ -16,7 +16,7 @@ import type {
     ReadFileOpenSymbolResponseEnvelope,
 } from "../core/search-types.js";
 
-const readFileInputSchema = z.object({
+export const readFileInputSchema = z.object({
     path: absoluteFilesystemPathSchema(
         "ABSOLUTE path to the file under an indexed/searchable codebase root (relative paths are rejected).",
     ),
@@ -325,7 +325,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
 export const readFileTool: McpTool = {
     name: "read_file",
     description: () =>
-        "Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). Requires an absolute path whose canonical real path is inside a tracked root with status indexed or sync_completed. Supports optional 1-based inclusive line ranges and safe truncation.",
+        "Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). For a grouped search target, resolve target.file under codebaseRoot; when target.symbolId exists, pass it as open_symbol.symbolId, otherwise pass target.span as the 1-based inclusive start_line/end_line window. The canonical real file path must stay inside a tracked root with status indexed or sync_completed.",
     inputSchemaZod: () => readFileInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});

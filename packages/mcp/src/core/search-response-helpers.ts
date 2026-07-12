@@ -1,26 +1,22 @@
 import * as path from "path";
 import { compareContractStrings } from "@zokizuan/satori-core";
-import { truncateContent } from "../utils.js";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
-import type { SearchGroupBy, SearchScope } from "./search-constants.js";
 import type {
     CallGraphHint,
-    SearchCapabilityConfidence,
     SearchChunkResult,
     SearchDebugHint,
     SearchFreshnessSummary,
+    SearchGraphNavigationV2,
     SearchGroupResult,
-    SearchInboundRecovery,
+    SearchNavigationUnavailableReasonV2,
     SearchRecommendedNextAction,
     SearchResponseEnvelope,
-    SearchResultCapabilities,
     SearchSpan,
     SearchWarningDetail,
 } from "./search-types.js";
 import { WARNING_CODES } from "./warnings.js";
 
 const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = "SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE";
-type SearchSpanValidation = "verified" | "unverified" | "not_applicable";
 
 export function buildSearchPassWarning(passId: string): string {
     return `SEARCH_PASS_FAILED:${passId} - ${passId} semantic search pass failed; results may be degraded.`;
@@ -139,6 +135,15 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
             action: "Use read_file spans for inspection; reindex only if the response asks for requires_reindex.",
         };
     }
+    if (code === WARNING_CODES.SEARCH_INVALID_GROUP_TARGET_OMITTED) {
+        return {
+            code,
+            severity: "degraded",
+            blocksUse: false,
+            message: "One or more grouped hits were omitted because their path, span, or score was not safe to publish.",
+            action: "Use a narrower path: query or debug search evidence to inspect malformed backend metadata.",
+        };
+    }
     if (code.startsWith("SEARCH_PARTIAL_INDEX:")) {
         return {
             code,
@@ -228,36 +233,12 @@ export function buildSearchDebugSummary(
     };
 }
 
-export function buildSearchResultCapabilities(input: {
-    callGraphHint: CallGraphHint;
-    confidence?: "high" | "medium" | "low";
-    hasOpenSymbol: boolean;
-    hasReadFallback: boolean;
-    semanticMatch: SearchCapabilityConfidence;
-    spanValidation: SearchSpanValidation;
-}): SearchResultCapabilities {
-    const openSymbol: SearchCapabilityConfidence = input.hasOpenSymbol
-        ? input.spanValidation === "unverified"
-            ? "low"
-            : (input.confidence === "high" ? "high" : "medium")
-        : input.hasReadFallback
-            ? "medium"
-            : "low";
-    const graphUnavailableConfidence: SearchCapabilityConfidence = input.callGraphHint.supported
-        ? "medium"
-        : input.callGraphHint.reason === "unsupported_language"
-            ? "unavailable"
-            : "low";
-    return {
-        openSymbol,
-        callGraphCallers: input.callGraphHint.supported ? "low" : graphUnavailableConfidence,
-        callGraphCallees: input.callGraphHint.supported ? "medium" : graphUnavailableConfidence,
-        semanticMatch: input.semanticMatch,
-    };
-}
-
 /** Prefer plain preview reads when full symbol span would open a wall of code (L11/B2). */
 export const OVERSIZED_SYMBOL_LINE_THRESHOLD = 200;
+export const SEARCH_GROUP_PREVIEW_MAX_BYTES = 768;
+export const SEARCH_DISPLAY_LABEL_MAX_BYTES = 160;
+export const SEARCH_CALLER_TERM_MAX_BYTES = 96;
+export const SEARCH_EVIDENCE_WINDOW_MAX_LINES = 40;
 
 function symbolSpanLineCount(span: SearchSpan | undefined): number | null {
     if (!span || !Number.isFinite(span.startLine) || !Number.isFinite(span.endLine)) {
@@ -271,82 +252,143 @@ function isOversizedSymbolSpan(span: SearchSpan | undefined): boolean {
     return lines !== null && lines >= OVERSIZED_SYMBOL_LINE_THRESHOLD;
 }
 
-function resolveAbsoluteReadPath(result: SearchGroupResult): string | undefined {
-    const openPath = result.nextActions?.openSymbol?.args?.path;
-    if (typeof openPath === "string" && openPath.length > 0) {
-        return openPath;
+export function isValidSearchSpan(span: SearchSpan | undefined): span is SearchSpan {
+    return Boolean(span)
+        && Number.isSafeInteger(span?.startLine)
+        && Number.isSafeInteger(span?.endLine)
+        && Number(span?.startLine) > 0
+        && Number(span?.endLine) >= Number(span?.startLine);
+}
+
+export function searchSpansEqual(left: SearchSpan, right: SearchSpan): boolean {
+    return left.startLine === right.startLine && left.endLine === right.endLine;
+}
+
+export function searchSpanContains(container: SearchSpan, evidence: SearchSpan): boolean {
+    return isValidSearchSpan(container)
+        && isValidSearchSpan(evidence)
+        && container.startLine <= evidence.startLine
+        && evidence.endLine <= container.endLine;
+}
+
+export function boundSearchEvidenceSpan(span: SearchSpan): SearchSpan {
+    return {
+        startLine: span.startLine,
+        endLine: Math.min(
+            span.endLine,
+            span.startLine + SEARCH_EVIDENCE_WINDOW_MAX_LINES - 1,
+        ),
+    };
+}
+
+export function roundSearchScore(score: number): number {
+    return Number(score.toFixed(6));
+}
+
+function resolveSearchTargetAbsolutePath(
+    codebaseRoot: string,
+    relativeFile: string,
+): string | undefined {
+    if (
+        !relativeFile
+        || relativeFile.includes("\0")
+        || path.isAbsolute(relativeFile)
+        || path.win32.isAbsolute(relativeFile)
+        || /^[A-Za-z]:/.test(relativeFile)
+    ) {
+        return undefined;
     }
-    const fallbackPath = result.navigationFallback?.readSpan?.args?.path;
-    if (typeof fallbackPath === "string" && fallbackPath.length > 0) {
-        return fallbackPath;
+
+    const normalizedFile = path.posix.normalize(relativeFile.replace(/\\/g, "/"));
+    if (
+        !normalizedFile
+        || normalizedFile === ".."
+        || normalizedFile.startsWith("../")
+        || path.posix.isAbsolute(normalizedFile)
+    ) {
+        return undefined;
     }
-    return undefined;
+
+    const resolvedRoot = path.resolve(codebaseRoot);
+    const absolutePath = path.resolve(resolvedRoot, normalizedFile);
+    const relativeToRoot = path.relative(resolvedRoot, absolutePath);
+    if (
+        relativeToRoot === ".."
+        || relativeToRoot.startsWith(`..${path.sep}`)
+        || path.isAbsolute(relativeToRoot)
+    ) {
+        return undefined;
+    }
+    return absolutePath;
 }
 
 export function buildSearchGroupRecommendedAction(
+    codebaseRoot: string,
     result: SearchGroupResult,
     resultIndex?: number,
 ): SearchRecommendedNextAction | undefined {
-    // Oversized symbols: recommend plain preview read first. Do not smuggle preview into
-    // open_symbol (exact open always expands to full resolved span) or shrink primary span.
-    if (isOversizedSymbolSpan(result.symbolSpan) && result.previewSpan) {
-        const absolutePath = resolveAbsoluteReadPath(result);
-        const previewStart = Number(result.previewSpan.startLine);
-        const previewEnd = Number(result.previewSpan.endLine);
-        if (
-            absolutePath
-            && Number.isFinite(previewStart)
-            && Number.isFinite(previewEnd)
-            && previewEnd >= previewStart
-        ) {
-            return {
-                ...(resultIndex !== undefined ? { resultIndex } : {}),
-                tool: "read_file",
-                args: {
-                    path: absolutePath,
-                    start_line: Math.max(1, previewStart),
-                    end_line: Math.max(1, previewEnd),
-                },
-                reason: "Symbol span is oversized; read the hit preview first before exact open_symbol.",
-            };
-        }
+    if (!isValidSearchSpan(result.target.span)) {
+        return undefined;
+    }
+    if (
+        result.target.symbolId !== undefined
+        && (result.target.symbolId.trim().length === 0 || result.target.symbolId !== result.target.symbolId.trim())
+    ) {
+        return undefined;
+    }
+    const absolutePath = resolveSearchTargetAbsolutePath(codebaseRoot, result.target.file);
+    if (!absolutePath) {
+        return undefined;
     }
 
-    if (result.nextActions?.openSymbol) {
+    if (isOversizedSymbolSpan(result.target.span) && result.evidenceSpan && isValidSearchSpan(result.evidenceSpan)) {
         return {
             ...(resultIndex !== undefined ? { resultIndex } : {}),
             tool: "read_file",
-            args: result.nextActions.openSymbol.args,
-            reason: result.confidence === "high"
-                ? "Open the exact owner before call graph because symbol identity is high confidence."
-                : "Open the selected owner before graph traversal so edits are grounded in source.",
+            args: {
+                path: absolutePath,
+                start_line: result.evidenceSpan.startLine,
+                end_line: result.evidenceSpan.endLine,
+            },
+            reason: "The symbol is large; ground the result in its matched evidence span first.",
         };
     }
-    if (result.navigationFallback?.readSpan) {
+
+    if (typeof result.target.symbolId === "string" && result.target.symbolId.length > 0) {
         return {
             ...(resultIndex !== undefined ? { resultIndex } : {}),
             tool: "read_file",
-            args: result.navigationFallback.readSpan.args,
-            reason: "Call graph navigation is unavailable; read the result span directly.",
+            args: {
+                path: absolutePath,
+                open_symbol: { symbolId: result.target.symbolId },
+            },
+            reason: "Open the highest-ranked concrete symbol before graph traversal or editing.",
         };
     }
-    if (result.nextActions?.outlineWindow) {
-        return {
-            ...(resultIndex !== undefined ? { resultIndex } : {}),
-            tool: "file_outline",
-            args: result.nextActions.outlineWindow.args,
-            reason: "Open the nearby outline window to resolve the owner before reading code.",
-        };
-    }
-    return undefined;
+
+    return {
+        ...(resultIndex !== undefined ? { resultIndex } : {}),
+        tool: "read_file",
+        args: {
+            path: absolutePath,
+            start_line: result.target.span.startLine,
+            end_line: result.target.span.endLine,
+        },
+        reason: "Read the highest-ranked validated span before inferring symbol ownership.",
+    };
 }
 
-export function buildTopRecommendedSearchAction(results: SearchGroupResult[]): SearchRecommendedNextAction | undefined {
-    const firstActionableIndex = results.findIndex((result) => buildSearchGroupRecommendedAction(result) !== undefined);
+export function buildTopRecommendedSearchAction(
+    codebaseRoot: string,
+    results: SearchGroupResult[],
+): SearchRecommendedNextAction | undefined {
+    const firstActionableIndex = results.findIndex(
+        (result) => buildSearchGroupRecommendedAction(codebaseRoot, result) !== undefined,
+    );
     if (firstActionableIndex < 0) {
         return undefined;
     }
-    return buildSearchGroupRecommendedAction(results[firstActionableIndex], firstActionableIndex);
+    return buildSearchGroupRecommendedAction(codebaseRoot, results[firstActionableIndex], firstActionableIndex);
 }
 
 export function buildTopRecommendedRawSearchAction(
@@ -357,97 +399,20 @@ export function buildTopRecommendedRawSearchAction(
     if (!first) {
         return undefined;
     }
+    const absolutePath = resolveSearchTargetAbsolutePath(codebaseRoot, first.file);
+    if (!absolutePath || !isValidSearchSpan(first.span)) {
+        return undefined;
+    }
     return {
         resultIndex: 0,
         tool: "read_file",
         args: {
-            path: path.resolve(codebaseRoot, first.file),
-            start_line: Math.max(1, first.span.startLine),
-            end_line: Math.max(Math.max(1, first.span.startLine), first.span.endLine),
+            path: absolutePath,
+            start_line: first.span.startLine,
+            end_line: first.span.endLine,
         },
         reason: "Open the top raw chunk before inferring ownership from ungrouped search results.",
     };
-}
-
-/**
- * Structured inbound recovery for weak call_graph callers.
- * Query shape is intentional: `must:<id> <id>` (hard filter + free-text copy for ranking).
- * Never path-pins the callee defining file — that would miss cross-file callers.
- */
-export function buildInboundRecoveryAction(input: {
-    codebaseRoot: string;
-    symbolLabel?: string;
-    groupId?: string;
-    scope: SearchScope;
-    groupBy: SearchGroupBy;
-}): SearchInboundRecovery | undefined {
-    const constructed = buildInboundNotesOnlySearchQuery({
-        symbolLabel: input.symbolLabel,
-        symbolId: input.groupId,
-    });
-    if (!constructed.query) {
-        return undefined;
-    }
-    return {
-        tool: "search_codebase",
-        args: {
-            path: input.codebaseRoot,
-            query: constructed.query,
-            scope: input.scope,
-            resultMode: "grouped",
-            groupBy: input.groupBy,
-            limit: 5,
-        },
-        reason: "call_graph inbound is advisory/low confidence; verify callers with must: before blast-radius edits",
-    };
-}
-
-export function buildSearchGroupFallbacks(input: {
-    codebaseRoot: string;
-    query: string;
-    scope: SearchScope;
-    groupBy: SearchGroupBy;
-    result: SearchGroupResult;
-}): SearchGroupResult["fallbacks"] | undefined {
-    const fallbacks: NonNullable<SearchGroupResult["fallbacks"]> = [];
-    if (input.result.callGraphHint.supported) {
-        const inbound = buildInboundRecoveryAction({
-            codebaseRoot: input.codebaseRoot,
-            symbolLabel: input.result.symbolLabel,
-            groupId: input.result.groupId,
-            scope: input.scope,
-            groupBy: input.groupBy,
-        });
-        const query = inbound?.args.query || buildExactSymbolFallbackQuery(input.result, input.query);
-        fallbacks.push({
-            when: "before treating call_graph inbound edges as empty or complete for blast radius",
-            tool: "search_codebase",
-            args: {
-                path: input.codebaseRoot,
-                query,
-                scope: input.scope,
-                resultMode: "grouped",
-                groupBy: input.groupBy,
-                limit: 5,
-            },
-            reason: inbound?.reason
-                || "Inbound graph coverage can be incomplete; exact lexical search verifies references before impact analysis.",
-        });
-    } else if (input.result.navigationFallback?.readSpan) {
-        fallbacks.push({
-            when: `call graph is unavailable: ${input.result.callGraphHint.supported ? "unknown" : input.result.callGraphHint.reason}`,
-            tool: "read_file",
-            args: input.result.navigationFallback.readSpan.args,
-            reason: "Read the indexed span directly because deterministic graph navigation is unavailable.",
-        });
-    }
-
-    return fallbacks.length > 0 ? fallbacks : undefined;
-}
-
-function buildExactSymbolFallbackQuery(result: SearchGroupResult, originalQuery: string): string {
-    const identifier = extractIdentifierFromSymbolLabel(result.symbolLabel) || extractIdentifierFromSymbolLabel(result.groupId);
-    return identifier ? `must:${identifier} ${identifier}` : originalQuery;
 }
 
 /**
@@ -511,6 +476,61 @@ export function extractIdentifierFromSymbolLabel(label: string | null | undefine
     return identifiers.find((identifier) => !keywordLike.has(identifier));
 }
 
+export function buildCallerSearchTerm(candidate: string | null | undefined): string | undefined {
+    const normalized = candidate?.trim();
+    if (!normalized || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(normalized)) {
+        return undefined;
+    }
+    return Buffer.byteLength(normalized, "utf8") <= SEARCH_CALLER_TERM_MAX_BYTES
+        ? normalized
+        : undefined;
+}
+
+export function buildSearchGraphNavigation(
+    callGraphHint: CallGraphHint,
+    callerCandidate?: string,
+    unavailableReasonOverride?: SearchNavigationUnavailableReasonV2,
+): SearchGraphNavigationV2 {
+    if (unavailableReasonOverride) {
+        return { graph: unavailableReasonOverride };
+    }
+    if (!callGraphHint.supported) {
+        return { graph: callGraphHint.reason };
+    }
+    const callerSearchTerm = buildCallerSearchTerm(callerCandidate);
+    return {
+        graph: "ready",
+        inbound: "verify",
+        ...(callerSearchTerm ? { callerSearchTerm } : {}),
+    };
+}
+
+export function truncateSearchUtf8(
+    value: string,
+    requestedMaxBytes: number,
+    marker = "...",
+): string {
+    const maxBytes = Math.max(0, Math.floor(requestedMaxBytes));
+    if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+        return value;
+    }
+    const markerBytes = Buffer.byteLength(marker, "utf8");
+    if (markerBytes > maxBytes) {
+        return "";
+    }
+    let result = "";
+    let usedBytes = 0;
+    for (const character of value) {
+        const characterBytes = Buffer.byteLength(character, "utf8");
+        if (usedBytes + characterBytes + markerBytes > maxBytes) {
+            break;
+        }
+        result += character;
+        usedBytes += characterBytes;
+    }
+    return `${result}${marker}`;
+}
+
 export function buildDisplaySymbolLabel(input: {
     symbolLabel?: string | null;
     symbolKind?: string;
@@ -520,14 +540,20 @@ export function buildDisplaySymbolLabel(input: {
 }): string {
     const normalizedLabel = normalizeSearchSymbolLabel(input.symbolLabel);
     if (normalizedLabel) {
-        return normalizedLabel;
+        return truncateSearchUtf8(normalizedLabel, SEARCH_DISPLAY_LABEL_MAX_BYTES);
     }
     const content = input.content || "";
     const declaration = content.match(/\b(?:async\s+)?(?:function|def|class|const|let|var|interface|type)\s+([A-Za-z_$][\w$]*)/);
     if (declaration) {
-        return `${input.symbolKind || "symbol"} ${declaration[1]}`;
+        return truncateSearchUtf8(
+            `${input.symbolKind || "symbol"} ${declaration[1]}`,
+            SEARCH_DISPLAY_LABEL_MAX_BYTES,
+        );
     }
-    return `${input.symbolKind || "symbol"} ${input.relativePath}:${Math.max(1, input.span.startLine)}`;
+    return truncateSearchUtf8(
+        `${input.symbolKind || "symbol"} ${input.relativePath}:${Math.max(1, input.span.startLine)}`,
+        SEARCH_DISPLAY_LABEL_MAX_BYTES,
+    );
 }
 
 export function normalizeSearchSymbolLabel(label: string | null | undefined): string | undefined {
@@ -557,14 +583,14 @@ export function normalizeSearchSymbolLabel(label: string | null | undefined): st
     return normalized.length > 0 ? normalized : undefined;
 }
 
-export function buildSearchGroupPreview(symbolLabel: string, content: string, previewMaxChars: number): string {
+export function buildSearchGroupPreview(symbolLabel: string, content: string, previewMaxBytes: number): string {
     const normalizedLabel = normalizeSearchSymbolLabel(symbolLabel) || symbolLabel;
     const labelIdentifier = extractIdentifierFromSymbolLabel(normalizedLabel);
-    const previewLines = [normalizedLabel];
-    const seen = new Set([normalizeSearchPreviewLine(normalizedLabel).toLowerCase()]);
+    const previewLines: string[] = [];
+    const seen = new Set<string>();
     let skippingSignatureContinuation = false;
 
-    for (const rawLine of content.split(/\r?\n/)) {
+    for (const rawLine of content.split(/\r\n?|\n/)) {
         const line = normalizeSearchPreviewLine(rawLine);
         if (!line || isSearchPreviewNoiseLine(line)) {
             continue;
@@ -584,7 +610,7 @@ export function buildSearchGroupPreview(symbolLabel: string, content: string, pr
         }
 
         const lineIdentifier = extractIdentifierFromSymbolLabel(line);
-        if (lineIdentifier && labelIdentifier && lineIdentifier !== labelIdentifier && isSearchPreviewNeighborDeclarationLine(line) && previewLines.length > 1) {
+        if (lineIdentifier && labelIdentifier && lineIdentifier !== labelIdentifier && isSearchPreviewNeighborDeclarationLine(line) && previewLines.length > 0) {
             break;
         }
         if (lineIdentifier && labelIdentifier && lineIdentifier === labelIdentifier && isSearchPreviewPureDuplicateDeclarationLine(line)) {
@@ -602,7 +628,10 @@ export function buildSearchGroupPreview(symbolLabel: string, content: string, pr
         }
     }
 
-    return truncateContent(previewLines.join("\n"), previewMaxChars);
+    return truncateSearchUtf8(
+        previewLines.join("\n"),
+        Math.min(SEARCH_GROUP_PREVIEW_MAX_BYTES, previewMaxBytes),
+    );
 }
 
 function normalizeSearchPreviewLine(line: string): string {

@@ -8,10 +8,11 @@ import {
     repoRelativeFilePathSchema,
 } from './types.js';
 import { resolveVectorBackedToolContext } from './provider-context.js';
+import type { CallGraphSymbolRef } from '../core/search-types.js';
 
-const symbolRefSchema = z.object({
+export const callGraphSymbolRefSchema: z.ZodType<CallGraphSymbolRef> = z.object({
     file: repoRelativeFilePathSchema('Repo-relative file path from the codebase root (not absolute; resolved only against that root).'),
-    symbolId: z.string().min(1).describe('Symbol identifier from search_codebase.callGraphHint. On symbol-owned flows, this should carry the symbolInstanceId.'),
+    symbolId: z.string().min(1).describe('Concrete symbol identifier from search_codebase grouped result target.symbolId.'),
     symbolLabel: z.string().optional().describe('Optional symbol display label.'),
     span: z.object({
         startLine: z.number().int().positive(),
@@ -19,9 +20,9 @@ const symbolRefSchema = z.object({
     }).optional().describe('Optional symbol span in the file.'),
 });
 
-const callGraphInputSchema = z.object({
+export const callGraphInputSchema = z.object({
     path: absoluteFilesystemPathSchema('ABSOLUTE filesystem path to the indexed codebase root or subdirectory (relative paths are rejected).'),
-    symbolRef: symbolRefSchema.describe('Symbol reference from a grouped search result callGraphHint.'),
+    symbolRef: callGraphSymbolRefSchema.describe('Pass a graph-ready grouped search result target directly.'),
     direction: z.enum(['callers', 'callees', 'both']).default('both').optional().describe('Traversal direction from the starting symbol.'),
     depth: z.number().int().min(1).max(3).default(1).optional().describe('Traversal depth (max 3).'),
     limit: z.number().int().positive().default(20).optional().describe('Maximum number of returned edges.'),
@@ -29,7 +30,7 @@ const callGraphInputSchema = z.object({
 
 export const callGraphTool: McpTool = {
     name: 'call_graph',
-    description: () => 'Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph): unique same-file name matches are high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them, or an imported module has a unique same-name target (e.g. class methods without a top-level EXPORTS record; generic names like push/get stay suppressed). Traversal is bounded (depth/limit) and incomplete by design—empty or short edge lists are not proof of “no callers.” Output is advisory navigation context, not authoritative blast-radius proof; confirm impact with search_codebase, read_file, tests, and references before editing. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report counts returned in that response, not whole-sidecar totals.',
+    description: () => 'Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. When a grouped search result has navigation.graph="ready", pass its target directly as symbolRef and use the envelope codebaseRoot as path. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph); traversal is bounded, incomplete, advisory, and not authoritative blast-radius proof, so empty or short edge lists are not proof of no callers. Verify impact with search_codebase, read_file, tests, or direct references. In successful responses, sidecar.nodeCount and sidecar.edgeCount count only records returned in that response.',
     inputSchemaZod: () => callGraphInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const normalizedArgs = (args && typeof args === 'object')

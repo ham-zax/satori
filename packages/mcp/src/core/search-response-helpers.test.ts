@@ -2,10 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     OVERSIZED_SYMBOL_LINE_THRESHOLD,
+    SEARCH_CALLER_TERM_MAX_BYTES,
+    buildCallerSearchTerm,
     buildInboundNotesOnlySearchQuery,
-    buildInboundRecoveryAction,
+    buildSearchGraphNavigation,
+    buildSearchGroupPreview,
     buildSearchGroupRecommendedAction,
     buildSearchWarningDetails,
+    buildTopRecommendedSearchAction,
+    roundSearchScore,
+    truncateSearchUtf8,
 } from "./search-response-helpers.js";
 import type { SearchGroupResult } from "./search-types.js";
 
@@ -26,7 +32,6 @@ test("buildSearchWarningDetails sorts warning codes with contract order (localeC
             "SEARCH_SYMBOL_SPAN_UNVERIFIED",
             "SEARCH_TRUNCATED_SYMBOL_SPAN",
         ]);
-        // Second call with reverse input must match.
         const again = buildSearchWarningDetails([
             "SEARCH_SYMBOL_SPAN_UNVERIFIED",
             "SEARCH_TRUNCATED_SYMBOL_SPAN",
@@ -38,111 +43,155 @@ test("buildSearchWarningDetails sorts warning codes with contract order (localeC
     }
 });
 
-function baseGroup(partial: Partial<SearchGroupResult>): SearchGroupResult {
+function baseGroup(partial: Partial<SearchGroupResult> = {}): SearchGroupResult {
     return {
-        kind: "group",
-        groupId: "g1",
-        file: "src/tool-handlers.ts",
-        span: { startLine: 1, endLine: 2000 },
-        previewSpan: { startLine: 100, endLine: 140 },
-        symbolSpan: { startLine: 1, endLine: 2000 },
+        target: {
+            file: "src/tool-handlers.ts",
+            span: { startLine: 1, endLine: 2000 },
+            symbolId: "sym_tool_handlers",
+        },
+        displayLabel: "class ToolHandlers",
         language: "typescript",
-        symbolLabel: "class ToolHandlers",
-        confidence: "medium",
+        symbolKind: "class",
         score: 0.9,
-        stalenessBucket: "fresh",
-        collapsedChunkCount: 1,
-        callGraphHint: {
-            supported: true,
-            symbolRef: {
-                file: "src/tool-handlers.ts",
-                symbolId: "sym_tool_handlers",
-                span: { startLine: 1, endLine: 2000 },
-            },
-            validated: true,
-            validatedAt: "2026-01-01T00:00:00.000Z",
-            sidecarBuiltAt: "2026-01-01T00:00:00.000Z",
-        },
-        nextActions: {
-            openSymbol: {
-                tool: "read_file",
-                args: {
-                    path: "/repo/src/tool-handlers.ts",
-                    open_symbol: { symbolId: "sym_tool_handlers" },
-                },
-            },
-        },
-        capabilities: {
-            openSymbol: "medium",
-            callGraphCallers: "low",
-            callGraphCallees: "medium",
-            semanticMatch: "medium",
-        },
+        quality: { owner: "high", semantic: "medium" },
+        evidenceSpan: { startLine: 100, endLine: 140 },
         preview: "class ToolHandlers",
+        navigation: { graph: "ready", inbound: "verify", callerSearchTerm: "ToolHandlers" },
+        __groupId: "g1",
+        __symbolInstanceId: "sym_tool_handlers",
+        __exactLexicalMatch: false,
         ...partial,
     };
 }
 
-test("oversized symbol recommends plain read_file preview before exact open", () => {
+test("oversized symbol recommends the matched evidence span before exact open", () => {
     assert.ok(OVERSIZED_SYMBOL_LINE_THRESHOLD >= 200);
-    const result = baseGroup({});
-    const action = buildSearchGroupRecommendedAction(result, 0);
+    const result = baseGroup();
+    const action = buildSearchGroupRecommendedAction("/repo", result, 0);
     assert.ok(action);
     assert.equal(action.tool, "read_file");
-    assert.equal(action.args.path, "/repo/src/tool-handlers.ts");
-    assert.equal(action.args.start_line, 100);
-    assert.equal(action.args.end_line, 140);
-    assert.equal(action.args.open_symbol, undefined);
-    // Exact open and full graph span remain available on the result.
-    assert.equal(result.nextActions?.openSymbol?.args.open_symbol.symbolId, "sym_tool_handlers");
-    assert.deepEqual(result.callGraphHint.supported ? result.callGraphHint.symbolRef.span : null, {
-        startLine: 1,
-        endLine: 2000,
+    assert.equal(action.resultIndex, 0);
+    assert.deepEqual(action.args, {
+        path: "/repo/src/tool-handlers.ts",
+        start_line: 100,
+        end_line: 140,
     });
-    assert.deepEqual(result.symbolSpan, { startLine: 1, endLine: 2000 });
+    assert.equal(result.target.symbolId, "sym_tool_handlers");
+    assert.deepEqual(result.target.span, { startLine: 1, endLine: 2000 });
 });
 
-test("non-oversized symbol still recommends exact open_symbol", () => {
+test("non-oversized concrete symbol recommends exact open_symbol", () => {
     const result = baseGroup({
-        symbolSpan: { startLine: 10, endLine: 40 },
-        span: { startLine: 10, endLine: 40 },
-        previewSpan: { startLine: 12, endLine: 20 },
+        target: {
+            file: "src/tool-handlers.ts",
+            span: { startLine: 10, endLine: 40 },
+            symbolId: "sym_tool_handlers",
+        },
+        evidenceSpan: { startLine: 12, endLine: 20 },
     });
-    const action = buildSearchGroupRecommendedAction(result);
+    const action = buildSearchGroupRecommendedAction("/repo", result);
     assert.ok(action);
-    assert.deepEqual(action.args.open_symbol, { symbolId: "sym_tool_handlers" });
-});
-
-test("buildInboundNotesOnlySearchQuery extracts identifier from multi-token labels", () => {
-    const built = buildInboundNotesOnlySearchQuery({
-        symbolLabel: "method buildOperatorSummary(operators: ParsedSearchOperators)",
-        file: "src/search-query-planning.ts",
+    assert.deepEqual(action.args, {
+        path: "/repo/src/tool-handlers.ts",
+        open_symbol: { symbolId: "sym_tool_handlers" },
     });
-    assert.equal(built.query, "must:buildOperatorSummary buildOperatorSummary path:src/search-query-planning.ts");
-    assert.equal(built.pathFilterIncluded, true);
 });
 
-test("buildInboundRecoveryAction uses must: without callee path for inbound", () => {
-    const action = buildInboundRecoveryAction({
-        codebaseRoot: "/repo",
-        symbolLabel: "method checkMutation(_action: RuntimeOwnerMutationAction)",
-        scope: "runtime",
-        groupBy: "symbol",
+test("recommended actions reject executable targets outside the codebase root", () => {
+    for (const file of ["../outside.ts", "/etc/passwd", "C:\\Windows\\system.ini", "src/bad\0.ts"]) {
+        const action = buildSearchGroupRecommendedAction("/repo", baseGroup({
+            target: {
+                file,
+                span: { startLine: 1, endLine: 2 },
+                symbolId: "sym_target",
+            },
+        }));
+        assert.equal(action, undefined, file);
+    }
+
+    assert.equal(buildSearchGroupRecommendedAction("/repo", baseGroup({
+        target: {
+            file: "src/valid.ts",
+            span: { startLine: 1, endLine: 2 },
+            symbolId: "   ",
+        },
+    })), undefined);
+});
+
+test("top recommendation preserves ranked order instead of skipping a span-only first result", () => {
+    const first = baseGroup({
+        target: { file: "src/first.ts", span: { startLine: 8, endLine: 12 } },
+        navigation: { graph: "missing_symbol" },
     });
-    assert.ok(action);
-    assert.equal(action?.tool, "search_codebase");
-    assert.equal(action?.args.path, "/repo");
-    assert.match(action?.args.query || "", /^must:checkMutation checkMutation$/);
-    assert.ok(!action?.args.query.includes("path:"));
-    assert.match(action?.reason || "", /advisory|low confidence|must:/i);
+    const second = baseGroup({
+        target: {
+            file: "src/second.ts",
+            span: { startLine: 2, endLine: 6 },
+            symbolId: "sym_second",
+        },
+    });
+    const action = buildTopRecommendedSearchAction("/repo", [first, second]);
+    assert.equal(action?.resultIndex, 0);
+    assert.deepEqual(action?.args, {
+        path: "/repo/src/first.ts",
+        start_line: 8,
+        end_line: 12,
+    });
 });
 
-test("buildInboundNotesOnlySearchQuery omits unsafe path and empty identifier", () => {
+test("caller term is a complete bounded ASCII identifier and only accompanies graph-ready state", () => {
+    assert.equal(buildCallerSearchTerm("checkMutation"), "checkMutation");
+    assert.equal(buildCallerSearchTerm("member.call"), undefined);
+    assert.equal(buildCallerSearchTerm("x".repeat(SEARCH_CALLER_TERM_MAX_BYTES + 1)), undefined);
+    assert.deepEqual(
+        buildSearchGraphNavigation({
+            supported: true,
+            symbolRef: { file: "src/gate.ts", symbolId: "sym_gate" },
+            validated: true,
+            validatedAt: "2026-01-01T00:00:00.000Z",
+            sidecarBuiltAt: "2026-01-01T00:00:00.000Z",
+        }, "checkMutation"),
+        { graph: "ready", inbound: "verify", callerSearchTerm: "checkMutation" },
+    );
+    assert.deepEqual(
+        buildSearchGraphNavigation({ supported: false, reason: "missing_symbol" }, "checkMutation"),
+        { graph: "missing_symbol" },
+    );
+});
+
+test("group previews contain source evidence without repeating the display label", () => {
+    assert.equal(
+        buildSearchGroupPreview(
+            "function validateSession(token: string)",
+            "function validateSession(token: string) {\n  return token.length > 0;\n}",
+            768,
+        ),
+        "return token.length > 0;",
+    );
+});
+
+test("UTF-8 truncation and score serialization are deterministic", () => {
+    const truncated = truncateSearchUtf8("alpha-你好-omega", 13);
+    assert.ok(Buffer.byteLength(truncated, "utf8") <= 13);
+    assert.equal(truncated.endsWith("..."), true);
+    assert.equal(truncated.includes("�"), false);
+    assert.equal(roundSearchScore(0.123456789), 0.123457);
+});
+
+test("buildInboundNotesOnlySearchQuery extracts identifier and rejects unsafe paths", () => {
     assert.deepEqual(
         buildInboundNotesOnlySearchQuery({
-            symbolLabel: "function login()",
-            file: "/absolute/root",
+            symbolLabel: "method buildOperatorSummary(operators: ParsedSearchOperators)",
+            file: "src/search-query-planning.ts",
         }),
+        {
+            query: "must:buildOperatorSummary buildOperatorSummary path:src/search-query-planning.ts",
+            pathFilterIncluded: true,
+        },
+    );
+    assert.deepEqual(
+        buildInboundNotesOnlySearchQuery({ symbolLabel: "function login()", file: "/absolute/root" }),
         { query: "must:login login", pathFilterIncluded: false },
     );
     assert.deepEqual(

@@ -8,6 +8,7 @@ import type {
     VectorBackendDiagnosticCode
 } from "../core/backend-diagnostics.js";
 import { MissingProviderConfigIssue, ToolResponse } from "./types.js";
+import { SEARCH_RESPONSE_FORMAT_VERSION } from "../core/search-types.js";
 
 export { classifyVectorBackendError };
 export type { VectorBackendDiagnostic, VectorBackendDiagnosticCode };
@@ -86,6 +87,7 @@ export function formatSearchProviderConfigError(
         content: [{
             type: "text",
             text: stringifyToolJson({
+                formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
                 status: "not_ready",
                 reason: "missing_provider_config",
                 code: issue.code,
@@ -119,6 +121,7 @@ export function formatSearchVectorBackendError(
         content: [{
             type: "text",
             text: stringifyToolJson({
+                formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
                 status: "not_ready",
                 reason: "vector_backend_unavailable",
                 code: diagnostic.code,

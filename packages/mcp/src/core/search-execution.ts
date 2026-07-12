@@ -456,7 +456,7 @@ export async function runSearchExecution(
         }
 
         if (canSupplementLivePathEvidence) {
-            const livePathResults = host.searchQuerySupport.buildLivePathScopedSearchResults({
+            const livePathResults = await host.searchQuerySupport.buildLivePathScopedSearchResults({
                 effectiveRoot: input.effectiveRoot,
                 parsedOperators: input.parsedOperators,
                 queryPlan: input.queryPlan,

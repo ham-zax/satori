@@ -255,12 +255,12 @@ export class SearchQuerySupport {
             return () => true;
         }
     }
-    public buildLivePathScopedSearchResults(input: {
+    public async buildLivePathScopedSearchResults(input: {
         effectiveRoot: string;
         parsedOperators: ParsedSearchOperators;
         queryPlan: SearchQueryPlan;
         changedFiles: Set<string>;
-    }): SearchResultLike[] {
+    }): Promise<SearchResultLike[]> {
         if (input.parsedOperators.path.length === 0 || input.changedFiles.size === 0) {
             return [];
         }
@@ -299,21 +299,20 @@ export class SearchQuerySupport {
                 continue;
             }
 
+            let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
             let stat: fs.Stats;
-            try {
-                stat = fs.statSync(absolutePath);
-            } catch {
-                continue;
-            }
-            if (!stat.isFile() || stat.size > SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES) {
-                continue;
-            }
-
             let content: string;
             try {
-                content = fs.readFileSync(absolutePath, 'utf8');
+                handle = await openRegularFileInsideRoot(absolutePath, input.effectiveRoot);
+                stat = await handle.stat();
+                if (!stat.isFile() || stat.size > SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES) {
+                    continue;
+                }
+                content = await handle.readFile('utf8');
             } catch {
                 continue;
+            } finally {
+                await handle?.close().catch(() => undefined);
             }
 
             const lowerContent = content.toLowerCase();
@@ -611,14 +610,14 @@ export class SearchQuerySupport {
 
         return null;
     }
-    public buildTrackedLexicalSearchResults(input: {
+    public async buildTrackedLexicalSearchResults(input: {
         effectiveRoot: string;
         parsedOperators: ParsedSearchOperators;
         queryPlan: SearchQueryPlan;
         scope: SearchScope;
         limit: number;
         exactRegistryFallback: boolean;
-    }): { results: SearchResultLike[]; debug: TrackedLexicalSearchDebug } {
+    }): Promise<{ results: SearchResultLike[]; debug: TrackedLexicalSearchDebug }> {
         const disabledDebug = (): TrackedLexicalSearchDebug => ({
             enabled: false,
             trackedPathCount: 0,
@@ -725,24 +724,23 @@ export class SearchQuerySupport {
                 continue;
             }
 
+            let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
             let stat: fs.Stats;
-            try {
-                stat = fs.statSync(absolutePath);
-            } catch {
-                continue;
-            }
-            if (!stat.isFile() || stat.size > SEARCH_TRACKED_LEXICAL_MAX_BYTES || bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
-                if (bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
-                    debug.cappedByBytes = true;
-                }
-                continue;
-            }
-
             let content: string;
             try {
-                content = fs.readFileSync(absolutePath, 'utf8');
+                handle = await openRegularFileInsideRoot(absolutePath, input.effectiveRoot);
+                stat = await handle.stat();
+                if (!stat.isFile() || stat.size > SEARCH_TRACKED_LEXICAL_MAX_BYTES || bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
+                    if (bytesRead + stat.size > SEARCH_TRACKED_LEXICAL_TOTAL_BYTES) {
+                        debug.cappedByBytes = true;
+                    }
+                    continue;
+                }
+                content = await handle.readFile('utf8');
             } catch {
                 continue;
+            } finally {
+                await handle?.close().catch(() => undefined);
             }
             filesScanned += 1;
             bytesRead += stat.size;

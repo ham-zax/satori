@@ -246,8 +246,20 @@ async function writeSearchSymbolRegistry(input: {
         }],
     };
 
-    await writeSymbolRegistrySidecar({
+    const result = await writeSymbolRegistrySidecar({
         registry: buildSymbolRegistry({ manifest, symbols }),
+    });
+    await writeRelationshipSidecar({
+        normalizedRootPath: input.repoPath,
+        symbolRegistryManifestHash: result.manifestHash,
+        relationshipVersion: manifest.relationshipVersion,
+        builtAt: manifest.builtAt,
+        files: manifest.files,
+        records: [],
+        analysisByFile: new Map([[input.relativePath, {
+            moduleBindings: [],
+            callSites: [],
+        }]]),
     });
 
     return symbols;
@@ -314,8 +326,20 @@ async function writeSearchSymbolRegistryForFiles(input: {
         files: manifestFiles,
     };
 
-    await writeSymbolRegistrySidecar({
+    const result = await writeSymbolRegistrySidecar({
         registry: buildSymbolRegistry({ manifest, symbols: allSymbols }),
+    });
+    await writeRelationshipSidecar({
+        normalizedRootPath: input.repoPath,
+        symbolRegistryManifestHash: result.manifestHash,
+        relationshipVersion: manifest.relationshipVersion,
+        builtAt: manifest.builtAt,
+        files: manifest.files,
+        records: [],
+        analysisByFile: new Map(manifest.files.map((file) => [file.path, {
+            moduleBindings: [],
+            callSites: [],
+        }])),
     });
 
     return allSymbols;
@@ -342,6 +366,10 @@ async function writeSearchRelationshipSidecar(input: {
             symbolCount: input.symbolCount,
         }],
         records: input.records,
+        analysisByFile: new Map([[input.relativePath, {
+            moduleBindings: [],
+            callSites: [],
+        }]]),
     });
 }
 
@@ -2208,6 +2236,34 @@ test('handleSearchCode ignores tracked lexical paths that resolve outside the re
     });
 });
 
+test('handleSearchCode does not read tracked lexical symlinks whose targets are outside the repo root', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/external.ts';
+        const outsidePath = path.join(path.dirname(repoPath), 'external-secret.ts');
+        fs.writeFileSync(outsidePath, 'export const EXTERNAL_TRACKED_SECRET = true;\n', 'utf8');
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.symlinkSync(outsidePath, path.join(repoPath, relativePath));
+
+        const handlers = createHandlers(repoPath, []);
+        (handlers as unknown as ToolHandlersTestOverrides).context.getTrackedRelativePaths = () => [relativePath];
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: `path:${relativePath} EXTERNAL_TRACKED_SECRET`,
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 0);
+        assert.equal(payload.hints?.debugSearch?.trackedLexical?.filesScanned, 0);
+    });
+});
+
 test('handleSearchCode repairs symbol-only file-owner results to tighter outline symbols with strong evidence', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {
@@ -4070,6 +4126,39 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence after s
     });
 });
 
+test('handleSearchCode does not read dirty live-path symlinks whose targets are outside the repo root', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/external-live.ts';
+        const outsidePath = path.join(path.dirname(repoPath), 'external-live-secret.ts');
+        fs.writeFileSync(outsidePath, 'export const EXTERNAL_LIVE_SECRET = true;\n', 'utf8');
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.symlinkSync(outsidePath, path.join(repoPath, relativePath));
+
+        const handlers = createHandlers(repoPath, []);
+        (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
+            ensureFreshness: async () => ({ mode: 'synced', changed: true, stats: { added: 0, removed: 0, modified: 1 } })
+        };
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set([relativePath]),
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: `path:${relativePath} EXTERNAL_LIVE_SECRET`,
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 0);
+    });
+});
+
 test('handleSearchCode supplements exact path-scoped tracked test evidence without dirty-file live path fallback', async () => {
     await withTempRepo(async (repoPath) => {
         const relativePath = 'src/path-scoped.test.ts';
@@ -4163,6 +4252,10 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
             milvusEndpoint: 'http://127.0.0.1:19530',
         }) as unknown as MutableHandlerContext;
         await context.recreateSynchronizerForCodebase(repoPath);
+        context.getActiveIndexedCollectionName = async () => context.resolveCollectionName(repoPath);
+        context.getVectorStore = () => ({
+            hasCollection: async () => true,
+        }) as ReturnType<MutableHandlerContext['getVectorStore']>;
         context.semanticSearch = async () => ([
             {
                 content: 'export const unrelated = true;',

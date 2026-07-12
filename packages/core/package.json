@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "tsx": "^4.22.4",
-    "typescript": "^5.0.0"
+    "typescript": "^6.0.3"
   },
   "files": [
     "dist/**/*.js",
@@ -51,6 +51,6 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   }
 }

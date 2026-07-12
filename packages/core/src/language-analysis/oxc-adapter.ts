@@ -1,8 +1,10 @@
-import { parseSync, type Program } from 'oxc-parser';
+import type { Program } from 'oxc-parser' with { "resolution-mode": "require" };
 
 import type { ExtractedSymbol, ExtractedSymbolKind } from '../languages';
 import { Utf8SourceMap } from './source-map';
 import type { CallSite, LanguageAnalysisInput, ModuleBinding } from './types';
+
+const { parseSync } = require('oxc-parser') as typeof import('oxc-parser', { with: { "resolution-mode": "require" } });
 
 type AstNode = {
     type: string;

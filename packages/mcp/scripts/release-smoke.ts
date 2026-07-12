@@ -180,8 +180,10 @@ async function runDirectRuntimeInitializeSmoke(coreTarballPath: string, tarballP
 
 function runPackedCoreParserSmoke(coreTarballPath: string, smokeExecDir: string): void {
     const script = [
-        "const { createLanguageAnalysisService } = require('@zokizuan/satori-core');",
+        "const { createLanguageAnalysisService, GeminiEmbedding } = require('@zokizuan/satori-core');",
         "const analyzer = createLanguageAnalysisService();",
+        "const gemini = new GeminiEmbedding({ model: 'gemini-embedding-001', apiKey: 'release-smoke-no-network' });",
+        "if (gemini.getClient()?.constructor?.name !== 'GoogleGenAI') process.exit(10);",
         "const tsSource = 'const label = é;\\nexport function run() { return \"你好😀\"; }';",
         "const pySource = '# café 😀\\ndef run():\\n    return \"你好\"';",
         "const scalaSource = '// café 😀\\nclass Service { def run(): String = \"你好\" }';",

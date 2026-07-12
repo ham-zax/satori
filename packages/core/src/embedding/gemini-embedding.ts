@@ -1,5 +1,7 @@
-import { ContentEmbedding, GoogleGenAI } from '@google/genai';
+import type { ContentEmbedding, GoogleGenAI as GoogleGenAIClient } from '@google/genai' with { "resolution-mode": "require" };
 import { Embedding, EmbeddingVector } from './base-embedding';
+
+const { GoogleGenAI } = require('@google/genai') as typeof import('@google/genai', { with: { "resolution-mode": "require" } });
 
 export interface GeminiEmbeddingConfig {
     model: string;
@@ -9,7 +11,7 @@ export interface GeminiEmbeddingConfig {
 }
 
 export class GeminiEmbedding extends Embedding {
-    private client: GoogleGenAI;
+    private client: GoogleGenAIClient;
     private config: GeminiEmbeddingConfig;
     private dimension: number = 3072; // Default dimension for gemini-embedding-001
     protected maxTokens: number = 2048; // Maximum tokens for Gemini embedding models
@@ -140,7 +142,7 @@ export class GeminiEmbedding extends Embedding {
     /**
      * Get client instance (for advanced usage)
      */
-    getClient(): GoogleGenAI {
+    getClient(): GoogleGenAIClient {
         return this.client;
     }
 

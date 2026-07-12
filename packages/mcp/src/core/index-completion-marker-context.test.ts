@@ -21,6 +21,10 @@ import type {
     IndexCompletionMarkerDocument,
     SemanticSearchRequest
 } from '@zokizuan/satori-core';
+import {
+    getCompletionMarkerReader,
+    validateCompletionProof,
+} from './completion-proof.js';
 
 class FakeEmbedding extends Embedding {
     protected maxTokens = 8192;
@@ -161,9 +165,9 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
     };
 }
 
-function buildMarker(): IndexCompletionMarkerDocument {
+function buildMarker(indexPolicyHash = 'test-policy'): IndexCompletionMarkerDocument {
     return {
-        kind: 'satori_index_completion_v1',
+        kind: 'satori_index_completion_v2',
         codebasePath: '/repo/app',
         fingerprint: {
             embeddingProvider: 'VoyageAI',
@@ -178,7 +182,8 @@ function buildMarker(): IndexCompletionMarkerDocument {
         indexedFiles: 169,
         totalChunks: 1,
         completedAt: '2026-02-27T23:57:10.000Z',
-        runId: 'run_20260227'
+        runId: 'run_20260227',
+        indexPolicyHash,
     };
 }
 
@@ -217,23 +222,159 @@ test('Context marker lifecycle writes, reads, and clears completion marker doc',
         vectorDatabase: db,
     });
     const codebasePath = '/repo/app';
+    const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
     await db.insertHybrid(collectionName, [buildChunkDoc('lifecycle_chunk', 'src/runtime.ts')]);
 
     await context.writeIndexCompletionMarker(codebasePath, {
-        ...buildMarker(),
+        ...buildMarker(policy.policyHash),
         indexedFiles: 1,
         totalChunks: 1,
     });
     const marker = await context.getIndexCompletionMarker(codebasePath);
     assert.ok(marker);
-    assert.equal(marker?.kind, 'satori_index_completion_v1');
+    assert.equal(marker?.kind, 'satori_index_completion_v2');
     assert.equal(marker?.runId, 'run_20260227');
 
     await context.clearIndexCompletionMarker(codebasePath);
     const afterClear = await context.getIndexCompletionMarker(codebasePath);
     assert.equal(afterClear, null);
+});
+
+test('Context-backed completion proof classifies a stored v1 marker as legacy policy-unsealed', async () => {
+    const { db } = createInMemoryVectorDb();
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+    });
+    const codebasePath = '/repo/app';
+    const collectionName = context.resolveCollectionName(codebasePath);
+    await db.createHybridCollection(collectionName, 4);
+    await db.insertHybrid(collectionName, [
+        buildChunkDoc('legacy_chunk', 'src/legacy.ts'),
+        {
+            id: INDEX_COMPLETION_MARKER_DOC_ID,
+            vector: [0, 0, 0, 0],
+            content: 'legacy marker',
+            relativePath: '.__satori__/index_completion_marker.json',
+            startLine: 0,
+            endLine: 0,
+            fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+            metadata: {
+                kind: 'satori_index_completion_v1',
+                codebasePath,
+            },
+        },
+    ]);
+
+    const result = await validateCompletionProof({
+        codebasePath,
+        getIndexCompletionMarker: getCompletionMarkerReader(context),
+    });
+
+    assert.deepEqual(result, {
+        outcome: 'stale_local',
+        reason: 'legacy_policy_unsealed',
+    });
+});
+
+test('Context-backed completion proof reports invalid v2 evidence before unrelated v1 evidence', async () => {
+    const { db } = createInMemoryVectorDb();
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+    });
+    const codebasePath = '/repo/app';
+    const familyCollectionName = context.resolveCollectionName(codebasePath);
+    const legacyCollectionName = `${familyCollectionName}__gen_legacy`;
+    await db.createHybridCollection(familyCollectionName, 4);
+    await db.createHybridCollection(legacyCollectionName, 4);
+    await db.insertHybrid(familyCollectionName, [{
+        id: INDEX_COMPLETION_MARKER_DOC_ID,
+        vector: [0, 0, 0, 0],
+        content: 'invalid current marker',
+        relativePath: '.__satori__/index_completion_marker.json',
+        startLine: 0,
+        endLine: 0,
+        fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+        metadata: {
+            ...buildMarker('policy-hash'),
+            indexedFiles: 'invalid',
+        },
+    }]);
+    await db.insertHybrid(legacyCollectionName, [{
+        id: INDEX_COMPLETION_MARKER_DOC_ID,
+        vector: [0, 0, 0, 0],
+        content: 'legacy marker',
+        relativePath: '.__satori__/index_completion_marker.json',
+        startLine: 0,
+        endLine: 0,
+        fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+        metadata: {
+            kind: 'satori_index_completion_v1',
+            codebasePath,
+        },
+    }]);
+
+    const result = await validateCompletionProof({
+        codebasePath,
+        getIndexCompletionMarker: getCompletionMarkerReader(context),
+    });
+
+    assert.deepEqual(result, {
+        outcome: 'stale_local',
+        reason: 'invalid_payload',
+    });
+});
+
+test('Context-backed completion proof does not let an orphan staged v2 mask the base legacy marker', async () => {
+    const { db } = createInMemoryVectorDb();
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+    });
+    const codebasePath = '/repo/app';
+    const familyCollectionName = context.resolveCollectionName(codebasePath);
+    const orphanCollectionName = `${familyCollectionName}__gen_orphan`;
+    await db.createHybridCollection(familyCollectionName, 4);
+    await db.createHybridCollection(orphanCollectionName, 4);
+    await db.insertHybrid(familyCollectionName, [{
+        id: INDEX_COMPLETION_MARKER_DOC_ID,
+        vector: [0, 0, 0, 0],
+        content: 'legacy marker',
+        relativePath: '.__satori__/index_completion_marker.json',
+        startLine: 0,
+        endLine: 0,
+        fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+        metadata: {
+            kind: 'satori_index_completion_v1',
+            codebasePath,
+        },
+    }]);
+    await db.insertHybrid(orphanCollectionName, [{
+        id: INDEX_COMPLETION_MARKER_DOC_ID,
+        vector: [0, 0, 0, 0],
+        content: 'orphan invalid marker',
+        relativePath: '.__satori__/index_completion_marker.json',
+        startLine: 0,
+        endLine: 0,
+        fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+        metadata: {
+            ...buildMarker('policy-hash'),
+            indexedFiles: 'invalid',
+        },
+    }]);
+
+    const result = await validateCompletionProof({
+        codebasePath,
+        getIndexCompletionMarker: getCompletionMarkerReader(context),
+    });
+
+    assert.deepEqual(result, {
+        outcome: 'stale_local',
+        reason: 'legacy_policy_unsealed',
+    });
 });
 
 test('Context getIndexCompletionMarker selects the newest proven staged generation in a family', async () => {
@@ -316,13 +457,15 @@ test('Context semanticSearch always excludes completion marker docs from query f
         vectorDatabase: db,
     });
     const codebasePath = '/repo/app';
+    const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
 
     await db.insertHybrid(collectionName, [
         buildChunkDoc('filter_chunk', 'src/runtime.ts'),
-        buildMarkerDoc(buildMarker())
+        buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
+    context.publishResolvedIndexPolicy(policy, { collectionName });
 
     await context.semanticSearch({
         codebasePath,
@@ -350,6 +493,7 @@ test('Context semanticSearch uses the active staged generation when the base fam
         vectorDatabase: db,
     });
     const codebasePath = '/repo/app';
+    const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const familyCollectionName = context.resolveCollectionName(codebasePath);
     const stagedCollectionName = `${familyCollectionName}__gen_ready`;
 
@@ -357,11 +501,12 @@ test('Context semanticSearch uses the active staged generation when the base fam
     await db.insertHybrid(stagedCollectionName, [
         buildChunkDoc('ready_chunk', 'src/runtime.ts'),
         buildMarkerDoc({
-            ...buildMarker(),
+            ...buildMarker(policy.policyHash),
             completedAt: '2026-02-28T23:57:10.000Z',
             runId: 'run_ready'
         })
     ]);
+    context.publishResolvedIndexPolicy(policy, { collectionName: stagedCollectionName });
 
     const results = await context.semanticSearch({
         codebasePath,
@@ -417,12 +562,14 @@ test('Context semanticSearch does not apply dense thresholds to hybrid RRF resul
         vectorDatabase: db,
     });
     const codebasePath = '/repo/app';
+    const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
     await db.insertHybrid(collectionName, [
         buildChunkDoc('hybrid_chunk', 'src/runtime.ts'),
-        buildMarkerDoc(buildMarker())
+        buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
+    context.publishResolvedIndexPolicy(policy, { collectionName });
 
     const results = await context.semanticSearch({
         codebasePath,
@@ -472,12 +619,14 @@ test('Context semanticSearch request preserves dense thresholds and returns dens
         vectorDatabase: db,
     });
     const codebasePath = '/repo/app';
+    const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createCollection(collectionName, 4);
     await db.insert(collectionName, [
         buildChunkDoc('dense_chunk', 'src/core/high.ts'),
-        buildMarkerDoc(buildMarker())
+        buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
+    context.publishResolvedIndexPolicy(policy, { collectionName });
 
     const request: SemanticSearchRequest = {
         codebasePath,

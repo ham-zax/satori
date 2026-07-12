@@ -1269,7 +1269,7 @@ test('handleSearchCode supplements quoted exact literal retrieval from tracked l
     });
 });
 
-test('handleSearchCode exact registry fast path returns a grouped symbol without semantic search, tracked lexical, or rerank', async () => {
+test('handleSearchCode exact registry fast path returns a grouped symbol despite watcher maintenance failure', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {
             const relativePath = 'packages/mcp/src/core/handlers.ts';
@@ -1305,6 +1305,10 @@ test('handleSearchCode exact registry fast path returns a grouped symbol without
                     return [];
                 }
             });
+            (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
+                ensureFreshness: async () => ({ mode: 'skipped_recent', changed: false }),
+                touchWatchedCodebase: async () => { throw new Error('watch boom'); },
+            };
             (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
                 semanticSearchCalls += 1;
                 throw new Error('semanticSearch should not run for exact registry hits');
@@ -3868,6 +3872,39 @@ test('handleSearchCode exposes freshness summary and warns when dirty files were
         assert.equal(payload.warnings[0].severity, 'caution');
         assert.match(payload.warnings[0].message, /dirty or untracked files may have changed after the last sync/i);
         assert.match(payload.warnings[0].action, /manage_index sync/);
+    });
+});
+
+test('handleSearchCode preserves successful results when watcher maintenance fails', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'export const result = true;',
+            relativePath: 'src/result.ts',
+            startLine: 1,
+            endLine: 1,
+            language: 'typescript',
+            score: 0.99,
+            symbolId: 'sym_result',
+            symbolLabel: 'const result',
+        }]);
+        (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
+            ensureFreshness: async () => ({ mode: 'skipped_recent', changed: false }),
+            touchWatchedCodebase: async () => { throw new Error('watch boom'); },
+        };
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'result',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1,
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results.length, 1);
+        assert.equal(payload.results[0].file, 'src/result.ts');
     });
 });
 
@@ -7781,7 +7818,7 @@ async function runSearchFreshnessDecisionCase(
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(ensureFreshnessCalls, 1);
-        assert.equal(completionProofCalls, expected.completionProofCalls ?? 1);
+        assert.equal(completionProofCalls, expected.completionProofCalls ?? 2);
         assert.equal(semanticSearchCalls, expected.semanticSearchCalls);
         assert.equal(payload.status, expected.status);
         if (expected.reason) {

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { IndexPolicyPublicationError } from "@zokizuan/satori-core";
 import { ManageIndexingHandlers } from "./manage-indexing-handlers.js";
 import type {
     IndexFingerprint,
@@ -39,6 +40,8 @@ type StartBackgroundIndexing = {
         forceReindex: boolean,
         writeCollectionName?: string,
         mutationLease?: RootMutationLease,
+        previousIndexedInfo?: Record<string, unknown>,
+        policyUpdate?: { customExtensions?: string[]; customIgnorePatterns?: string[] },
     ): Promise<void>;
 };
 
@@ -254,13 +257,19 @@ function createFailedIndexingHarness(
         beforeHasCollection?: (collectionName: string) => void;
         touchWatchedCodebase?: () => Promise<void>;
         rebuildCallGraphForIndex?: () => Promise<void>;
+        publishNavigationCandidate?: (candidate: { generationId: string }) => Promise<void>;
         pruneIndexedCollectionFamily?: (keepCollectionName: string) => Promise<string[]>;
         previousIndexedInfo?: Record<string, unknown>;
+        initialCustomExtensions?: string[];
+        initialCustomIgnorePatterns?: string[];
+        failPolicyPublicationAfterCommit?: boolean;
     } = {},
 ) {
     const droppedCollections: string[] = [];
     const failedSnapshots: Array<{ path: string; errorMessage: string; progress?: number }> = [];
     const publicationEvents: string[] = [];
+    let publishedCustomExtensions = [...(options.initialCustomExtensions ?? [])];
+    let publishedCustomIgnorePatterns = [...(options.initialCustomIgnorePatterns ?? [])];
     let writeCollectionOverride: string | null = null;
     let indexedSnapshots = 0;
     const publishedSnapshots: Array<{ status: string; collectionName?: string }> = [];
@@ -279,6 +288,44 @@ function createFailedIndexingHarness(
     const context = {
         getVectorStore: () => vectorStore,
         loadResolvedIgnorePatterns: async () => undefined,
+        resolveIndexPolicyForCodebase: async (_root: string, update: { customExtensions?: string[]; customIgnorePatterns?: string[] } = {}) => ({
+            canonicalRoot: path.resolve(_root),
+            profile: 'default',
+            customExtensions: update.customExtensions ?? publishedCustomExtensions,
+            customIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
+            supportedExtensions: ['.ts', ...(update.customExtensions ?? publishedCustomExtensions)],
+            effectiveIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
+            policyHash: JSON.stringify(update),
+        }),
+        publishResolvedIndexPolicy: (policy: { canonicalRoot: string; policyHash: string; customExtensions: string[]; customIgnorePatterns: string[] }, binding: { collectionName: string; navigationGenerationId?: string }) => {
+            publishedCustomExtensions = [...policy.customExtensions];
+            publishedCustomIgnorePatterns = [...policy.customIgnorePatterns];
+            publicationEvents.push('policy:publish');
+            if (options.failPolicyPublicationAfterCommit) {
+                throw new IndexPolicyPublicationError(
+                    'policy committed before acknowledgement failed',
+                    {
+                        status: 'committed',
+                        operation: 'publish',
+                        canonicalRoot: policy.canonicalRoot,
+                        documentToken: 'candidate-document-token',
+                        policyHash: policy.policyHash,
+                        collectionName: binding.collectionName,
+                        ...(binding.navigationGenerationId ? { navigationGenerationId: binding.navigationGenerationId } : {}),
+                    },
+                    new Error('publication wrapper rejected receipt'),
+                );
+            }
+        },
+        clearPublishedIndexPolicy: () => {
+            publishedCustomExtensions = [];
+            publishedCustomIgnorePatterns = [];
+            publicationEvents.push('policy:clear');
+        },
+        getCurrentNavigationGeneration: async () => null,
+        restoreNavigationGeneration: async () => {
+            publicationEvents.push('navigation:restore');
+        },
         ensureCollectionPrepared: async () => {
             if (writeCollectionOverride) {
                 existingCollections.add(writeCollectionOverride);
@@ -315,6 +362,7 @@ function createFailedIndexingHarness(
         },
         publishNavigationCandidate: async (candidate: { generationId: string }) => {
             publicationEvents.push(`navigation:publish:${candidate.generationId}`);
+            await options.publishNavigationCandidate?.(candidate);
         },
         discardNavigationCandidate: async (candidate: { generationId: string }) => {
             publicationEvents.push(`navigation:discard:${candidate.generationId}`);
@@ -324,18 +372,52 @@ function createFailedIndexingHarness(
                 ? options.previousIndexedInfo.collectionName
                 : null
         ),
+        getActiveIndexedCollectionName: async () => (
+            typeof options.previousIndexedInfo?.collectionName === "string"
+                ? options.previousIndexedInfo.collectionName
+                : null
+        ),
         getIndexCompletionMarker: async () => options.previousIndexedInfo
             ? {
-                kind: "satori_index_completion_v1",
+                kind: "satori_index_completion_v2",
                 codebasePath: "repo",
                 fingerprint: RUNTIME_FINGERPRINT,
                 indexedFiles: Number(options.previousIndexedInfo.indexedFiles ?? 0),
                 totalChunks: Number(options.previousIndexedInfo.totalChunks ?? 0),
                 completedAt: new Date(0).toISOString(),
                 runId: "test-run",
+                indexPolicyHash: 'policy-hash',
                 indexStatus: options.previousIndexedInfo.indexStatus === "limit_reached" ? "limit_reached" : "completed",
             }
             : null,
+        resolveProvenGeneration: async (root: string) => {
+            if (!options.previousIndexedInfo || typeof options.previousIndexedInfo.collectionName !== 'string') return null;
+            return {
+                collectionName: options.previousIndexedInfo.collectionName,
+                marker: {
+                    kind: 'satori_index_completion_v2',
+                    codebasePath: 'repo',
+                    fingerprint: RUNTIME_FINGERPRINT,
+                    indexedFiles: Number(options.previousIndexedInfo.indexedFiles ?? 0),
+                    totalChunks: Number(options.previousIndexedInfo.totalChunks ?? 0),
+                    completedAt: new Date(0).toISOString(),
+                    runId: 'test-run',
+                    indexPolicyHash: 'policy-hash',
+                    indexStatus: options.previousIndexedInfo.indexStatus === 'limit_reached' ? 'limit_reached' as const : 'completed' as const,
+                },
+                navigation: null,
+                policy: {
+                    canonicalRoot: path.resolve(root),
+                    profile: 'default' as const,
+                    customExtensions: [...publishedCustomExtensions],
+                    customIgnorePatterns: [...publishedCustomIgnorePatterns],
+                    fileBasedIgnorePatterns: [],
+                    supportedExtensions: ['.ts', ...publishedCustomExtensions],
+                    effectiveIgnorePatterns: [...publishedCustomIgnorePatterns],
+                    policyHash: 'policy-hash',
+                },
+            };
+        },
     };
 
     const host = {
@@ -350,6 +432,7 @@ function createFailedIndexingHarness(
                 publishedSnapshots.push({ status: stats.status, collectionName });
             },
             setCodebaseIndexManifest: () => undefined,
+            setCodebaseCallGraphSidecar: () => undefined,
         },
         syncManager: {
             recordCurrentIgnoreControlSignature: async () => undefined,
@@ -386,6 +469,12 @@ function createFailedIndexingHarness(
         },
         publishedSnapshots,
         publicationEvents,
+        get publishedCustomExtensions() {
+            return publishedCustomExtensions;
+        },
+        get publishedCustomIgnorePatterns() {
+            return publishedCustomIgnorePatterns;
+        },
         handler: new ManageIndexingHandlers(host as unknown as ConstructorParameters<typeof ManageIndexingHandlers>[0]) as unknown as StartBackgroundIndexing,
     };
 }
@@ -397,13 +486,14 @@ function createIndexLaunchHarness(
         startBackgroundIndexing?: (codebasePath: string, lease?: RootMutationLease) => Promise<void> | void;
         touchWatchedCodebase?: (codebasePath: string) => Promise<void>;
         assertIndexMutationCapabilities?: (coordinator: MutationLeaseCoordinator) => void;
+        initialIndexed?: boolean;
     } = {},
 ) {
     const coordinator = new MutationLeaseCoordinator({
         stateDir: path.join(path.dirname(repoPath), "launch-leases"),
         ownerId: "launch-owner",
     });
-    let lifecycle: "not_found" | "indexing" | "indexfailed" = "not_found";
+    let lifecycle: "not_found" | "indexing" | "indexed" | "indexfailed" = options.initialIndexed ? "indexed" : "not_found";
     let failedCalls = 0;
     let saveCalls = 0;
     let canonicalizeCalls = 0;
@@ -414,8 +504,23 @@ function createIndexLaunchHarness(
     const handler = new ManageIndexingHandlers({
         context: {
             getVectorStore: () => ({ checkCollectionLimit: async () => true }),
-            addCustomExtensions: () => undefined,
-            addCustomIgnorePatterns: () => undefined,
+            resolveProvenGeneration: async () => options.initialIndexed ? {
+                collectionName: resolveCollectionName(repoPath),
+                marker: {
+                    kind: 'satori_index_completion_v2',
+                    indexedFiles: 3,
+                    totalChunks: 9,
+                    indexStatus: 'completed',
+                },
+                navigation: null,
+            } : null,
+            getActiveIndexedCollectionName: async () => options.initialIndexed ? resolveCollectionName(repoPath) : null,
+            getIndexCompletionMarker: async () => options.initialIndexed ? {
+                kind: 'satori_index_completion_v2',
+                indexedFiles: 3,
+                totalChunks: 9,
+                indexStatus: 'completed',
+            } : null,
         },
         snapshotManager: {
             setCodebaseIndexing: () => { lifecycle = "indexing"; },
@@ -424,6 +529,7 @@ function createIndexLaunchHarness(
                 failedCalls += 1;
                 failedRoots.push(codebasePath);
             },
+            setCodebaseIndexed: () => { lifecycle = "indexed"; },
             saveCodebaseSnapshot: () => {
                 saveCalls += 1;
                 return true;
@@ -444,8 +550,16 @@ function createIndexLaunchHarness(
         },
         recoverStaleIndexingStateIfNeeded: async () => undefined,
         getSnapshotIndexingCodebases: () => lifecycle === "indexing" ? [repoPath] : [],
-        getSnapshotCodebaseInfo: () => lifecycle === "not_found" ? undefined : { status: lifecycle },
-        getSnapshotIndexedCodebases: () => [],
+        getSnapshotCodebaseInfo: () => lifecycle === "not_found" ? undefined : lifecycle === "indexed" || (options.initialIndexed && lifecycle === "indexing") ? {
+            status: lifecycle,
+            indexedFiles: 3,
+            totalChunks: 9,
+            indexStatus: 'completed',
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified',
+            collectionName: resolveCollectionName(repoPath),
+        } : { status: lifecycle },
+        getSnapshotIndexedCodebases: () => lifecycle === "indexed" ? [repoPath] : [],
         buildManageActionBlockedMessage: () => "blocked",
         buildCreateHint: () => ({}),
         buildReindexHint: () => ({}),
@@ -658,6 +772,25 @@ test("handleIndexCodebase foreground failure after indexing publication becomes 
     });
 });
 
+test("handleIndexCodebase restores a live proven generation when force-reindex launch fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const harness = createIndexLaunchHarness(repoPath, {
+            initialIndexed: true,
+            touchWatchedCodebase: async () => {
+                throw new Error("watcher setup failed");
+            },
+        });
+
+        const response = await harness.handler.handleIndexCodebase({ path: repoPath, force: true });
+        const payload = JSON.parse(response.content[0].text);
+
+        assert.equal(payload.status, "error");
+        assert.equal(harness.lifecycle, "indexed");
+        assert.equal(harness.failedCalls, 0);
+        assert.equal(harness.launchedRoots.length, 0);
+    });
+});
+
 test("handleIndexCodebase keeps the canonical root when foreground publication fails", async () => {
     await withTempRepo(async (repoPath) => {
         const aliasPath = path.join(path.dirname(repoPath), "repo-failure-alias");
@@ -735,8 +868,31 @@ test("background indexing treats watcher touch as best effort after proof", asyn
         assert.equal(harness.failedSnapshots.length, 0);
         assert.deepEqual(harness.publicationEvents, [
             "marker:completed",
+            "policy:publish",
             "navigation:publish:candidate-generation",
         ]);
+    });
+});
+
+test("background indexing publishes partial custom-policy updates without erasing omitted fields", async () => {
+    await withTempRepo(async (repoPath) => {
+        const harness = createFailedIndexingHarness(new Set(), {
+            initialCustomExtensions: ['.foo'],
+            initialCustomIgnorePatterns: ['private/**'],
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+        });
+
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            false,
+            undefined,
+            undefined,
+            undefined,
+            { customIgnorePatterns: ['generated/**'] },
+        );
+
+        assert.deepEqual(harness.publishedCustomExtensions, ['.foo']);
+        assert.deepEqual(harness.publishedCustomIgnorePatterns, ['generated/**']);
     });
 });
 
@@ -746,6 +902,8 @@ test("background indexing preserves the previous proven collection when navigati
         const stagedCollection = `${previousCollection}__gen_candidate`;
         const existingCollections = new Set([previousCollection]);
         const harness = createFailedIndexingHarness(existingCollections, {
+            initialCustomExtensions: ['.foo'],
+            initialCustomIgnorePatterns: ['private/**'],
             indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
             previousIndexedInfo: {
                 status: "indexing",
@@ -772,7 +930,14 @@ test("background indexing preserves the previous proven collection when navigati
             },
         });
 
-        await harness.handler.startBackgroundIndexing(repoPath, true, stagedCollection);
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            true,
+            stagedCollection,
+            undefined,
+            undefined,
+            { customIgnorePatterns: ['generated/**'] },
+        );
 
         assert.equal(existingCollections.has(previousCollection), true);
         assert.equal(existingCollections.has(stagedCollection), false);
@@ -783,15 +948,213 @@ test("background indexing preserves the previous proven collection when navigati
     });
 });
 
+test("background indexing restores the sealed previous policy when navigation pointer publication fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const previousCollection = resolveCollectionName(repoPath);
+        const stagedCollection = `${previousCollection}__gen_candidate`;
+        const existingCollections = new Set([previousCollection]);
+        const harness = createFailedIndexingHarness(existingCollections, {
+            initialCustomExtensions: ['.foo'],
+            initialCustomIgnorePatterns: ['private/**'],
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            previousIndexedInfo: {
+                status: "indexing",
+                indexedFiles: 3,
+                totalChunks: 9,
+                indexStatus: "completed",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+                collectionName: previousCollection,
+            },
+            publishNavigationCandidate: async () => {
+                throw new Error("navigation pointer publication failed");
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            true,
+            stagedCollection,
+            undefined,
+            undefined,
+            { customIgnorePatterns: ['generated/**'] },
+        );
+
+        assert.equal(existingCollections.has(previousCollection), true);
+        assert.equal(existingCollections.has(stagedCollection), false);
+        assert.deepEqual(harness.publishedCustomExtensions, ['.foo']);
+        assert.deepEqual(harness.publishedCustomIgnorePatterns, ['private/**']);
+        assert.deepEqual(harness.publicationEvents, [
+            'marker:completed',
+            'policy:publish',
+            'navigation:publish:candidate-generation',
+            'navigation:discard:candidate-generation',
+            'policy:publish',
+        ]);
+        assert.deepEqual(harness.publishedSnapshots, [{ status: 'completed', collectionName: previousCollection }]);
+        assert.deepEqual(harness.failedSnapshots, []);
+    });
+});
+
+test("background indexing restores absent policy state when first navigation publication fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const collectionName = `${resolveCollectionName(repoPath)}__gen_initial`;
+        const existingCollections = new Set<string>();
+        const harness = createFailedIndexingHarness(existingCollections, {
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            publishNavigationCandidate: async () => {
+                throw new Error("initial navigation pointer publication failed");
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            false,
+            collectionName,
+            undefined,
+            undefined,
+            { customIgnorePatterns: ['generated/**'] },
+        );
+
+        assert.equal(existingCollections.has(collectionName), false);
+        assert.deepEqual(harness.publishedCustomExtensions, []);
+        assert.deepEqual(harness.publishedCustomIgnorePatterns, []);
+        assert.deepEqual(harness.publicationEvents, [
+            'marker:completed',
+            'policy:publish',
+            'navigation:publish:candidate-generation',
+            'navigation:discard:candidate-generation',
+            'policy:clear',
+        ]);
+    });
+});
+
+test("background indexing preserves an existing candidate when policy commits before acknowledgement fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const previousCollection = resolveCollectionName(repoPath);
+        const stagedCollection = `${previousCollection}__gen_candidate`;
+        const existingCollections = new Set([previousCollection]);
+        const harness = createFailedIndexingHarness(existingCollections, {
+            initialCustomIgnorePatterns: ['private/**'],
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            previousIndexedInfo: {
+                status: "indexing",
+                indexedFiles: 3,
+                totalChunks: 9,
+                indexStatus: "completed",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+                collectionName: previousCollection,
+            },
+            failPolicyPublicationAfterCommit: true,
+        });
+
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            true,
+            stagedCollection,
+            undefined,
+            undefined,
+            { customIgnorePatterns: ['generated/**'] },
+        );
+
+        assert.equal(existingCollections.has(previousCollection), true);
+        assert.equal(existingCollections.has(stagedCollection), true);
+        assert.deepEqual(harness.droppedCollections, []);
+        assert.deepEqual(harness.publicationEvents, ['marker:completed', 'policy:publish']);
+        assert.deepEqual(harness.failedSnapshots, []);
+        assert.deepEqual(harness.publishedSnapshots, []);
+    });
+});
+
+test("background indexing preserves an initial candidate when policy commits before acknowledgement fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const stagedCollection = `${resolveCollectionName(repoPath)}__gen_initial`;
+        const existingCollections = new Set<string>();
+        const harness = createFailedIndexingHarness(existingCollections, {
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            failPolicyPublicationAfterCommit: true,
+        });
+
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            false,
+            stagedCollection,
+            undefined,
+            undefined,
+            { customIgnorePatterns: ['generated/**'] },
+        );
+
+        assert.equal(existingCollections.has(stagedCollection), true);
+        assert.deepEqual(harness.droppedCollections, []);
+        assert.deepEqual(harness.publicationEvents, ['marker:completed', 'policy:publish']);
+        assert.deepEqual(harness.failedSnapshots, []);
+        assert.deepEqual(harness.publishedSnapshots, []);
+    });
+});
+
 test("background indexing does not replace a previous complete generation with limit_reached", async () => {
     await withTempRepo(async (repoPath) => {
         const previousCollection = resolveCollectionName(repoPath);
         const stagedCollection = `${previousCollection}__gen_partial`;
         const existingCollections = new Set([previousCollection]);
         const harness = createFailedIndexingHarness(existingCollections, {
+            initialCustomExtensions: ['.foo'],
+            initialCustomIgnorePatterns: ['private/**'],
             indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 2, status: "limit_reached" }),
             previousIndexedInfo: {
                 status: "indexing",
+                indexedFiles: 3,
+                totalChunks: 9,
+                indexStatus: "completed",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+                collectionName: previousCollection,
+            },
+            pruneIndexedCollectionFamily: async (keepCollectionName) => {
+                const dropped: string[] = [];
+                for (const collectionName of Array.from(existingCollections)) {
+                    if (collectionName !== keepCollectionName) {
+                        existingCollections.delete(collectionName);
+                        harness.droppedCollections.push(collectionName);
+                        dropped.push(collectionName);
+                    }
+                }
+                return dropped;
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            true,
+            stagedCollection,
+            undefined,
+            undefined,
+            { customIgnorePatterns: ['generated/**'] },
+        );
+
+        assert.equal(existingCollections.has(previousCollection), true);
+        assert.equal(existingCollections.has(stagedCollection), false);
+        assert.deepEqual(harness.publishedSnapshots, [{ status: "completed", collectionName: previousCollection }]);
+        assert.deepEqual(harness.publicationEvents, []);
+        assert.deepEqual(harness.publishedCustomExtensions, ['.foo']);
+        assert.deepEqual(harness.publishedCustomIgnorePatterns, ['private/**']);
+    });
+});
+
+test("background indexing preserves a complete generation after it transitions through sync_completed", async () => {
+    await withTempRepo(async (repoPath) => {
+        const previousCollection = resolveCollectionName(repoPath);
+        const stagedCollection = `${previousCollection}__gen_partial_after_sync`;
+        const existingCollections = new Set([previousCollection]);
+        const harness = createFailedIndexingHarness(existingCollections, {
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 2, status: "limit_reached" }),
+            previousIndexedInfo: {
+                status: "sync_completed",
+                added: 1,
+                removed: 0,
+                modified: 1,
+                totalChanges: 2,
                 indexedFiles: 3,
                 totalChunks: 9,
                 indexStatus: "completed",
@@ -816,6 +1179,7 @@ test("background indexing does not replace a previous complete generation with l
 
         assert.equal(existingCollections.has(previousCollection), true);
         assert.equal(existingCollections.has(stagedCollection), false);
+        assert.deepEqual(harness.droppedCollections, [stagedCollection]);
         assert.deepEqual(harness.publishedSnapshots, [{ status: "completed", collectionName: previousCollection }]);
         assert.deepEqual(harness.publicationEvents, []);
     });

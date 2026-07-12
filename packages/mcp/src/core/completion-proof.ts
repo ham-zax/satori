@@ -11,6 +11,7 @@ export type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mism
 export type CompletionProofReason =
     | "missing_marker_doc"
     | "invalid_marker_kind"
+    | "legacy_policy_unsealed"
     | "path_mismatch"
     | "invalid_payload"
     | "fingerprint_mismatch"
@@ -23,13 +24,14 @@ export type CompletionProofValidationResult = {
 };
 
 export type ValidatedCompletionMarker = {
-    kind: 'satori_index_completion_v1';
+    kind: 'satori_index_completion_v2';
     codebasePath: string;
     fingerprint: IndexFingerprint;
     indexedFiles: number;
     totalChunks: number;
     completedAt: string;
     runId: string;
+    indexPolicyHash: string;
     indexStatus: 'completed' | 'limit_reached';
     navigationGenerationId?: string;
     symbolRegistryManifestHash?: string;
@@ -38,21 +40,50 @@ export type ValidatedCompletionMarker = {
 
 export type CompletionMarkerReader = (codebasePath: string) => Promise<unknown>;
 
+type CompletionMarkerEvidence =
+    | { status: 'valid_v2'; marker: unknown }
+    | { status: 'invalid_v2' }
+    | { status: 'legacy_v1'; marker: unknown }
+    | { status: 'missing' };
+
 type CompletionMarkerProvider = {
-    getIndexCompletionMarker: CompletionMarkerReader;
+    getIndexCompletionMarker?: CompletionMarkerReader;
+    getIndexCompletionMarkerForValidation?: CompletionMarkerReader;
 };
 
 function isCompletionMarkerProvider(value: unknown): value is CompletionMarkerProvider {
     return typeof value === "object"
         && value !== null
-        && typeof (value as { getIndexCompletionMarker?: unknown }).getIndexCompletionMarker === "function";
+        && (
+            typeof (value as { getIndexCompletionMarkerForValidation?: unknown }).getIndexCompletionMarkerForValidation === "function"
+            || typeof (value as { getIndexCompletionMarker?: unknown }).getIndexCompletionMarker === "function"
+        );
 }
 
 export function getCompletionMarkerReader(value: unknown): CompletionMarkerReader | undefined {
     if (!isCompletionMarkerProvider(value)) {
         return undefined;
     }
-    return value.getIndexCompletionMarker.bind(value);
+    if (typeof value.getIndexCompletionMarkerForValidation === 'function') {
+        return value.getIndexCompletionMarkerForValidation.bind(value);
+    }
+    return value.getIndexCompletionMarker?.bind(value);
+}
+
+function parseCompletionMarkerEvidence(value: unknown): CompletionMarkerEvidence | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (record.status === 'valid_v2' && 'marker' in record) {
+        return { status: 'valid_v2', marker: record.marker };
+    }
+    if (record.status === 'invalid_v2') {
+        return { status: 'invalid_v2' };
+    }
+    if (record.status === 'legacy_v1' && 'marker' in record) {
+        return { status: 'legacy_v1', marker: record.marker };
+    }
+    if (record.status === 'missing') return { status: 'missing' };
+    return null;
 }
 
 function trimTrailingSeparators(inputPath: string): string {
@@ -100,7 +131,7 @@ export function parseCompletionMarker(
     }
 
     const record = marker as Record<string, unknown>;
-    if (record.kind !== "satori_index_completion_v1") {
+    if (record.kind !== "satori_index_completion_v2") {
         return null;
     }
 
@@ -124,6 +155,9 @@ export function parseCompletionMarker(
     if (typeof record.runId !== "string" || record.runId.trim().length === 0) {
         return null;
     }
+    if (typeof record.indexPolicyHash !== "string" || record.indexPolicyHash.length === 0) {
+        return null;
+    }
 
     if (record.indexStatus !== undefined
         && record.indexStatus !== 'completed'
@@ -143,13 +177,14 @@ export function parseCompletionMarker(
     }
 
     return {
-        kind: 'satori_index_completion_v1',
+        kind: 'satori_index_completion_v2',
         codebasePath: record.codebasePath,
         fingerprint,
         indexedFiles: record.indexedFiles,
         totalChunks: record.totalChunks,
         completedAt: record.completedAt,
         runId: record.runId,
+        indexPolicyHash: record.indexPolicyHash,
         indexStatus: record.indexStatus === 'limit_reached'
             ? 'limit_reached'
             : 'completed',
@@ -167,7 +202,10 @@ function validateMarkerShape(
 ): { ok: true; marker: ValidatedCompletionMarker } | { ok: false; reason: CompletionProofReason } {
     if (marker && typeof marker === 'object') {
         const kind = (marker as { kind?: unknown }).kind;
-        if (kind !== 'satori_index_completion_v1') {
+        if (kind === 'satori_index_completion_v1') {
+            return { ok: false, reason: 'legacy_policy_unsealed' };
+        }
+        if (kind !== 'satori_index_completion_v2') {
             return { ok: false, reason: 'invalid_marker_kind' };
         }
     }
@@ -203,6 +241,16 @@ export async function validateCompletionProof(args: {
     } catch (error) {
         onProbeError?.(error);
         return { outcome: "probe_failed", reason: "probe_failed" };
+    }
+
+    const evidence = parseCompletionMarkerEvidence(marker);
+    if (evidence?.status === 'invalid_v2') {
+        return { outcome: 'stale_local', reason: 'invalid_payload' };
+    }
+    if (evidence?.status === 'missing') {
+        marker = null;
+    } else if (evidence?.status === 'legacy_v1' || evidence?.status === 'valid_v2') {
+        marker = evidence.marker;
     }
 
     if (!marker) {

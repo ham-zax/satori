@@ -40,13 +40,14 @@ const CAPABILITIES = new CapabilityResolver({
 
 function buildMarker(repoPath: string, fingerprint: IndexFingerprint = RUNTIME_FINGERPRINT) {
     return {
-        kind: 'satori_index_completion_v1',
+        kind: 'satori_index_completion_v2',
         codebasePath: repoPath,
         fingerprint,
         indexedFiles: 4,
         totalChunks: 8,
         completedAt: '2026-02-28T08:00:00.000Z',
-        runId: 'run_test'
+        runId: 'run_test',
+        indexPolicyHash: 'test-policy',
     };
 }
 

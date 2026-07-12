@@ -45,6 +45,7 @@ test('SnapshotManager rejects invalid lifecycle counts and progress during shape
         { status: 'indexed', indexedFiles: 1, totalChunks: Number.MAX_SAFE_INTEGER + 1, indexStatus: 'completed', lastUpdated },
         { status: 'sync_completed', added: 0, removed: -1, modified: 0, totalChanges: 0, lastUpdated },
         { status: 'sync_completed', added: 0, removed: 0, modified: 0.5, totalChanges: 0, lastUpdated },
+        { status: 'sync_completed', added: 2, removed: 3, modified: 4, totalChanges: 1, lastUpdated },
     ];
 
     for (const value of invalid) {
@@ -55,6 +56,31 @@ test('SnapshotManager rejects invalid lifecycle counts and progress during shape
         indexingPercentage: 42.5,
         lastUpdated,
     }), true);
+});
+
+test('setCodebaseSyncCompleted rejects partially supplied or invalid completion proof', () => {
+    const manager = new SnapshotManager(FINGERPRINT_A);
+    const codebase = '/tmp/satori-partial-sync-proof';
+    manager.setCodebaseIndexed(codebase, {
+        indexedFiles: 1,
+        totalChunks: 2,
+        status: 'completed',
+    }, FINGERPRINT_A, 'verified', 'collection-a');
+
+    assert.throws(() => manager.setCodebaseSyncCompleted(codebase, {
+        added: 0,
+        removed: 0,
+        modified: 1,
+        indexedFiles: -1,
+        totalChunks: 3,
+        indexStatus: 'completed',
+    }), /completion proof/i);
+    assert.throws(() => manager.setCodebaseSyncCompleted(codebase, {
+        added: 0,
+        removed: 0,
+        modified: 1,
+        indexedFiles: 1,
+    }), /completion proof/i);
 });
 
 function operationReceipt(
@@ -1149,11 +1175,24 @@ test('setCodebaseSyncCompleted respects explicit fingerprintSource override', ()
             status: 'completed'
         }, FINGERPRINT_A, 'assumed_v2');
 
-        manager.setCodebaseSyncCompleted(codebase, { added: 1, removed: 0, modified: 1 }, FINGERPRINT_A, 'verified');
+        manager.setCodebaseSyncCompleted(codebase, {
+            added: 1,
+            removed: 0,
+            modified: 1,
+            indexedFiles: 3,
+            totalChunks: 7,
+            indexStatus: 'completed',
+        }, FINGERPRINT_A, 'verified');
         const updated = manager.getCodebaseInfo(codebase);
         assert.ok(updated);
         assert.equal(updated?.status, 'sync_completed');
         assert.equal(updated?.fingerprintSource, 'verified');
+        if (updated?.status !== 'sync_completed') {
+            assert.fail(`Expected sync_completed, received ${updated?.status}`);
+        }
+        assert.equal(updated.indexedFiles, 3);
+        assert.equal(updated.totalChunks, 7);
+        assert.equal(updated.indexStatus, 'completed');
     });
 });
 
@@ -1835,7 +1874,7 @@ test('v3 object maps reject arrays instead of accepting them as empty records', 
     });
 });
 
-test('metadata-only save cannot resurrect stale indexing after the same operation completed', () => {
+test('metadata-only save cannot attach stale lifecycle metadata after the same operation completed', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo-metadata-lifecycle');
         fs.mkdirSync(codebase, { recursive: true });
@@ -1865,7 +1904,40 @@ test('metadata-only save cannot resurrect stale indexing after the same operatio
         reader.loadCodebaseSnapshot();
         assert.equal(reader.getCodebaseStatus(codebase), 'indexed');
         assert.equal(reader.getLatestOperation(codebase)?.phase, 'completed');
-        assert.equal(reader.getCodebaseInfo(codebase)?.ignoreControlSignature, 'metadata-from-stale-reader');
+        assert.equal(reader.getCodebaseInfo(codebase)?.ignoreControlSignature, undefined);
+    });
+});
+
+test('metadata-only save retains call-graph metadata for the unchanged lifecycle generation', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-current-metadata');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const seed = new SnapshotManager(FINGERPRINT_A);
+        seed.setCodebaseIndexed(codebase, {
+            indexedFiles: 2,
+            totalChunks: 4,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified', 'collection-a');
+        assert.equal(seed.saveCodebaseSnapshot(), true);
+
+        const metadataWriter = new SnapshotManager(FINGERPRINT_A);
+        metadataWriter.loadCodebaseSnapshot();
+        metadataWriter.setCodebaseCallGraphSidecar(codebase, {
+            version: 'v3',
+            sidecarPath: path.join(homeDir, 'call-graph.json'),
+            builtAt: new Date().toISOString(),
+            nodeCount: 3,
+            edgeCount: 1,
+            noteCount: 0,
+            fingerprint: FINGERPRINT_A,
+        });
+        assert.equal(metadataWriter.saveCodebaseSnapshot(), true);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseInfo(codebase)?.callGraphSidecar?.nodeCount, 3);
+        assert.equal(reader.getCodebaseInfo(codebase)?.collectionName, 'collection-a');
     });
 });
 

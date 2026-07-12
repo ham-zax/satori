@@ -154,6 +154,7 @@ export class SnapshotManager {
     private pendingTombstoneRemovals: Set<string> = new Set();
     private pendingLifecycleRoots: Set<string> = new Set();
     private pendingMetadataFields: Map<string, Set<SnapshotMetadataField>> = new Map();
+    private pendingMetadataLifecycleTokens: Map<string, string> = new Map();
     private isDirty = false;
     private lastLoadedSnapshotStateToken: string | null = null;
     private snapshotCorruptionWarning: SnapshotCorruptionWarning | undefined;
@@ -167,6 +168,7 @@ export class SnapshotManager {
         pendingTombstoneRemovals: Set<string>;
         pendingLifecycleRoots: Set<string>;
         pendingMetadataFields: Map<string, Set<SnapshotMetadataField>>;
+        pendingMetadataLifecycleTokens: Map<string, string>;
         isDirty: boolean;
     } {
         return {
@@ -179,6 +181,7 @@ export class SnapshotManager {
             pendingMetadataFields: new Map(
                 Array.from(this.pendingMetadataFields.entries(), ([root, fields]) => [root, new Set(fields)]),
             ),
+            pendingMetadataLifecycleTokens: new Map(this.pendingMetadataLifecycleTokens),
             isDirty: this.isDirty,
         };
     }
@@ -191,6 +194,7 @@ export class SnapshotManager {
         this.pendingTombstoneRemovals = checkpoint.pendingTombstoneRemovals;
         this.pendingLifecycleRoots = checkpoint.pendingLifecycleRoots;
         this.pendingMetadataFields = checkpoint.pendingMetadataFields;
+        this.pendingMetadataLifecycleTokens = checkpoint.pendingMetadataLifecycleTokens;
         this.isDirty = checkpoint.isDirty;
         this.refreshDerivedState();
     }
@@ -268,10 +272,29 @@ export class SnapshotManager {
     }
 
     private markMetadataDirty(codebasePath: string, field: SnapshotMetadataField): void {
+        if (!this.pendingMetadataLifecycleTokens.has(codebasePath)) {
+            const info = this.codebaseInfoMap.get(codebasePath);
+            if (info) {
+                this.pendingMetadataLifecycleTokens.set(codebasePath, this.buildLifecycleToken(info));
+            }
+        }
         const fields = this.pendingMetadataFields.get(codebasePath) ?? new Set<SnapshotMetadataField>();
         fields.add(field);
         this.pendingMetadataFields.set(codebasePath, fields);
         this.markDirty();
+    }
+
+    private buildLifecycleToken(info: CodebaseInfo): string {
+        const record = info as unknown as Record<string, unknown>;
+        return stableSerialize({
+            status: info.status,
+            lastUpdated: record.lastUpdated,
+            collectionName: info.collectionName,
+            indexStatus: record.indexStatus,
+            indexedFiles: record.indexedFiles,
+            totalChunks: record.totalChunks,
+            fingerprint: info.indexFingerprint,
+        });
     }
 
     private assertMetadataMutationPreservesDerivedFields(previous: CodebaseInfo, next: CodebaseInfo, operation: string): void {
@@ -622,7 +645,16 @@ export class SnapshotManager {
                 return isNonnegativeSafeInteger(rawInfo.added)
                     && isNonnegativeSafeInteger(rawInfo.removed)
                     && isNonnegativeSafeInteger(rawInfo.modified)
-                    && isNonnegativeSafeInteger(rawInfo.totalChanges);
+                    && isNonnegativeSafeInteger(rawInfo.totalChanges)
+                    && rawInfo.totalChanges === rawInfo.added + rawInfo.removed + rawInfo.modified
+                    && (
+                        rawInfo.indexedFiles === undefined
+                        && rawInfo.totalChunks === undefined
+                        && rawInfo.indexStatus === undefined
+                        || isNonnegativeSafeInteger(rawInfo.indexedFiles)
+                        && isNonnegativeSafeInteger(rawInfo.totalChunks)
+                        && (rawInfo.indexStatus === "completed" || rawInfo.indexStatus === "limit_reached")
+                    );
             case "requires_reindex":
                 return typeof rawInfo.message === "string";
             default:
@@ -891,6 +923,8 @@ export class SnapshotManager {
         }
 
         const merged: CodebaseInfo = { ...lifecycleBase };
+        const lifecycleTokenMatches = this.pendingMetadataLifecycleTokens.get(codebasePath)
+            === this.buildLifecycleToken(lifecycleBase);
         const localRecord = localInfo as unknown as Record<string, unknown>;
         const lifecycleRecord = lifecycleBase as unknown as Record<string, unknown>;
         const sameIndexGeneration = localInfo.status === lifecycleBase.status
@@ -901,20 +935,20 @@ export class SnapshotManager {
             && localInfo.indexFingerprint !== undefined
             && lifecycleBase.indexFingerprint !== undefined
             && indexFingerprintsEqual(localInfo.indexFingerprint, lifecycleBase.indexFingerprint);
-        if (sameIndexGeneration && fields.has('callGraphSidecar')) {
+        if (lifecycleTokenMatches && sameIndexGeneration && fields.has('callGraphSidecar')) {
             merged.callGraphSidecar = localInfo.callGraphSidecar
                 ? structuredClone(localInfo.callGraphSidecar)
                 : undefined;
         }
-        if (sameIndexGeneration && fields.has('indexManifest')) {
+        if (lifecycleTokenMatches && sameIndexGeneration && fields.has('indexManifest')) {
             merged.indexManifest = localInfo.indexManifest
                 ? structuredClone(localInfo.indexManifest)
                 : undefined;
         }
-        if (fields.has('ignoreRulesVersion')) {
+        if (lifecycleTokenMatches && fields.has('ignoreRulesVersion')) {
             merged.ignoreRulesVersion = localInfo.ignoreRulesVersion;
         }
-        if (fields.has('ignoreControlSignature')) {
+        if (lifecycleTokenMatches && fields.has('ignoreControlSignature')) {
             merged.ignoreControlSignature = localInfo.ignoreControlSignature;
         }
         return merged;
@@ -1116,6 +1150,7 @@ export class SnapshotManager {
             this.pendingTombstoneRemovals.clear();
             this.pendingLifecycleRoots.clear();
             this.pendingMetadataFields.clear();
+            this.pendingMetadataLifecycleTokens.clear();
             this.isDirty = false;
             if (!fs.existsSync(this.snapshotFilePath)) {
                 console.log('[SNAPSHOT] Snapshot file does not exist. Starting with empty codebase list.');
@@ -1198,6 +1233,7 @@ export class SnapshotManager {
             this.pendingRemovals.clear();
             this.pendingTombstoneRemovals.clear();
             this.pendingMetadataFields.clear();
+            this.pendingMetadataLifecycleTokens.clear();
             this.refreshDerivedState();
             this.isDirty = hadRuntimeState;
             if (hadRuntimeState && !quarantine.replacementChanged) {
@@ -1263,6 +1299,7 @@ export class SnapshotManager {
             this.pendingTombstoneRemovals.clear();
             this.pendingLifecycleRoots.clear();
             this.pendingMetadataFields.clear();
+            this.pendingMetadataLifecycleTokens.clear();
             this.isDirty = false;
             this.refreshDerivedState();
             this.rememberCurrentSnapshotStateToken();
@@ -1555,7 +1592,8 @@ export class SnapshotManager {
         stats: { indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' },
         indexFingerprint?: IndexFingerprint,
         fingerprintSource: FingerprintSource = 'verified',
-        collectionName?: string
+        collectionName?: string,
+        preserveDerivedMetadata: boolean = true,
     ): void {
         this.markCodebasePresent(codebasePath);
         const existing = this.codebaseInfoMap.get(codebasePath);
@@ -1571,8 +1609,8 @@ export class SnapshotManager {
             collectionName: resolvedCollectionName,
             indexFingerprint: indexFingerprint || this.runtimeFingerprint,
             fingerprintSource,
-            callGraphSidecar: existing?.callGraphSidecar,
-            indexManifest: existing?.indexManifest,
+            callGraphSidecar: preserveDerivedMetadata ? existing?.callGraphSidecar : undefined,
+            indexManifest: preserveDerivedMetadata ? existing?.indexManifest : undefined,
             ignoreRulesVersion: existing?.ignoreRulesVersion,
             ignoreControlSignature: existing?.ignoreControlSignature,
         };
@@ -1604,7 +1642,14 @@ export class SnapshotManager {
 
     public setCodebaseSyncCompleted(
         codebasePath: string,
-        stats: { added: number; removed: number; modified: number },
+        stats: {
+            added: number;
+            removed: number;
+            modified: number;
+            indexedFiles?: number;
+            totalChunks?: number;
+            indexStatus?: 'completed' | 'limit_reached';
+        },
         indexFingerprint?: IndexFingerprint,
         fingerprintSource: FingerprintSource = 'verified',
         collectionName?: string
@@ -1615,6 +1660,45 @@ export class SnapshotManager {
         const resolvedCollectionName = typeof collectionName === "string" && collectionName.trim().length > 0
             ? collectionName.trim()
             : existing?.collectionName;
+        const suppliedCompletionProofFields = [
+            stats.indexedFiles,
+            stats.totalChunks,
+            stats.indexStatus,
+        ].filter((value) => value !== undefined).length;
+        const hasExplicitCompletionProof = Number.isSafeInteger(stats.indexedFiles)
+            && Number(stats.indexedFiles) >= 0
+            && Number.isSafeInteger(stats.totalChunks)
+            && Number(stats.totalChunks) >= 0
+            && (stats.indexStatus === 'completed' || stats.indexStatus === 'limit_reached');
+        if (suppliedCompletionProofFields > 0 && (!hasExplicitCompletionProof || suppliedCompletionProofFields !== 3)) {
+            throw new Error('Sync completion proof must supply valid indexedFiles, totalChunks, and indexStatus together.');
+        }
+        const existingCompletionProof = (() => {
+            if (
+                !existing
+                || existing.collectionName !== resolvedCollectionName
+                || (existing.status !== 'indexed' && existing.status !== 'sync_completed')
+                || !Number.isSafeInteger(existing.indexedFiles)
+                || Number(existing.indexedFiles) < 0
+                || !Number.isSafeInteger(existing.totalChunks)
+                || Number(existing.totalChunks) < 0
+                || (existing.indexStatus !== 'completed' && existing.indexStatus !== 'limit_reached')
+            ) {
+                return undefined;
+            }
+            return {
+                indexedFiles: existing.indexedFiles,
+                totalChunks: existing.totalChunks,
+                indexStatus: existing.indexStatus,
+            };
+        })();
+        const completionProof = hasExplicitCompletionProof
+            ? {
+                indexedFiles: Number(stats.indexedFiles),
+                totalChunks: Number(stats.totalChunks),
+                indexStatus: stats.indexStatus as 'completed' | 'limit_reached',
+            }
+            : existingCompletionProof;
         const info: CodebaseInfoSyncCompleted = {
             status: 'sync_completed',
             added: stats.added,
@@ -1629,6 +1713,7 @@ export class SnapshotManager {
             indexManifest: existing?.indexManifest,
             ignoreRulesVersion: existing?.ignoreRulesVersion,
             ignoreControlSignature: existing?.ignoreControlSignature,
+            ...completionProof,
         };
         this.codebaseInfoMap.set(codebasePath, info);
         this.markDirty();

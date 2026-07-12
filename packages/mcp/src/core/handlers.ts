@@ -127,6 +127,7 @@ import type {
     CompletionProofValidationResult
 } from "./completion-proof.js";
 import {
+    getCompletionMarkerReader,
     validateCompletionProof as validateIndexCompletionProof
 } from "./completion-proof.js";
 import {
@@ -216,6 +217,7 @@ type TrackedRootEntry = {
 
 type IndexCompletionMarkerContext = {
     getIndexCompletionMarker?: (codebasePath: string) => Promise<IndexCompletionMarkerDocument | null>;
+    getIndexCompletionMarkerForValidation?: (codebasePath: string) => Promise<unknown>;
     getActiveIndexedCollectionName?: (codebasePath: string) => Promise<string | null>;
     getCompletionProofCollectionName?: (codebasePath: string) => Promise<string | null>;
     clearIndexCompletionMarker?: (codebasePath: string, assertMutationCurrent?: () => void) => Promise<void>;
@@ -844,6 +846,14 @@ export class ToolHandlers {
         }
         if (typeof syncManager.registerCodebaseWatcher === 'function') {
             await syncManager.registerCodebaseWatcher(codebasePath);
+        }
+    }
+
+    private async touchWatchedCodebaseBestEffort(codebasePath: string): Promise<void> {
+        try {
+            await this.touchWatchedCodebase(codebasePath);
+        } catch (error) {
+            console.warn(`[SEARCH] Failed to refresh watcher for '${codebasePath}' after successful search: ${formatUnknownError(error)}`);
         }
     }
 
@@ -1485,9 +1495,7 @@ export class ToolHandlers {
         return validateIndexCompletionProof({
             codebasePath,
             runtimeFingerprint: this.runtimeFingerprint,
-            getIndexCompletionMarker: typeof (this.context as unknown as IndexCompletionMarkerContext).getIndexCompletionMarker === 'function'
-                ? (markerPath) => (this.context as unknown as IndexCompletionMarkerContext).getIndexCompletionMarker?.(markerPath) ?? Promise.resolve(null)
-                : undefined,
+            getIndexCompletionMarker: getCompletionMarkerReader(this.context),
             onProbeError: (error) => {
                 console.warn(`[INDEX-PROOF] Completion marker probe failed for '${codebasePath}': ${formatUnknownError(error)}`);
             }
@@ -2530,8 +2538,9 @@ export class ToolHandlers {
             }
             const encoderEngine = this.context.getEmbeddingEngine();
             const rootTag = `[SEARCH][root=${effectiveRoot}]`;
+            const requestId = crypto.randomUUID();
             console.log(`${rootTag} Searching (requestedPath='${absolutePath}')`);
-            console.log(`${rootTag} Query: "${input.query}"`);
+            console.log(`${rootTag} Query metadata: length=${input.query.length}, requestId=${requestId}`);
             console.log(`${rootTag} Indexing status: Completed`);
             console.log(`${rootTag} 🧠 Using embedding provider: ${encoderEngine.getProvider()} for search`);
 
@@ -2626,7 +2635,7 @@ export class ToolHandlers {
             let exactRegistryFallbackForTrackedLexical = exactFastPath.exactRegistryFallbackForTrackedLexical;
 
             if (exactFastPath.kind === 'handled') {
-                await this.touchWatchedCodebase(effectiveRoot);
+                await this.touchWatchedCodebaseBestEffort(effectiveRoot);
                 return {
                     content: [{ type: "text", text: this.stringifyToolJson(exactFastPath.envelope) }],
                     meta: {
@@ -2739,7 +2748,7 @@ export class ToolHandlers {
                 now: this.now,
             });
 
-            await this.touchWatchedCodebase(effectiveRoot);
+            await this.touchWatchedCodebaseBestEffort(effectiveRoot);
             return {
                 content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                 meta: { searchDiagnostics }

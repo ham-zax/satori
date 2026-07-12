@@ -446,13 +446,14 @@ test('handleClearIndex persists one clear receipt before clearing and keeps it a
 
         const context = {
             getIndexCompletionMarker: async () => ({
-                kind: 'satori_index_completion_v1',
+                kind: 'satori_index_completion_v2',
                 codebasePath: repoPath,
                 fingerprint: RUNTIME_FINGERPRINT,
                 indexedFiles: 1,
                 totalChunks: 2,
                 completedAt: '2026-02-27T23:57:10.000Z',
                 runId: 'clear-recovery-run',
+                indexPolicyHash: 'test-policy',
             }),
             clearIndex: async () => {
                 assert.ok(receipts.persistedPhases.includes('accepted'));
@@ -616,13 +617,14 @@ test('handleGetIndexingStatus reports partial limit_reached instead of fully ind
         };
         const context = {
             getIndexCompletionMarker: async () => ({
-                kind: 'satori_index_completion_v1',
+                kind: 'satori_index_completion_v2',
                 codebasePath: repoPath,
                 fingerprint: RUNTIME_FINGERPRINT,
                 indexedFiles: 12,
                 totalChunks: 450000,
                 completedAt: '2026-02-28T08:00:00.000Z',
                 runId: 'partial-run',
+                indexPolicyHash: 'test-policy',
             }),
             getVectorStore: () => ({
                 hasCollection: async () => true,
@@ -861,13 +863,14 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
             getIndexCompletionMarker: async () => {
                 markerCalls += 1;
                 return {
-                    kind: 'satori_index_completion_v1',
+                    kind: 'satori_index_completion_v2',
                     codebasePath: repoPath,
                     fingerprint: indexedFingerprint,
                     indexedFiles: 169,
                     totalChunks: 728,
                     completedAt: '2026-02-27T23:57:10.000Z',
-                    runId: 'run_test'
+                    runId: 'run_test',
+                    indexPolicyHash: 'test-policy',
                 };
             }
         } as unknown as HandlerContext;

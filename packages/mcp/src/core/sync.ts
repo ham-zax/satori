@@ -74,6 +74,9 @@ interface SyncStats {
     changedFiles: string[];
     navigationRecovery?: 'rebuilt' | 'failed';
     collectionName?: string;
+    indexedFiles?: number;
+    totalChunks?: number;
+    indexStatus?: 'completed' | 'limit_reached';
 }
 
 type WatchSyncReason = 'watch_event' | 'ignore_rules_changed';

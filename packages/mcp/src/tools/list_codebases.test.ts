@@ -44,13 +44,14 @@ function buildContext(
 
 function createMarker(path: string, overrides?: Record<string, unknown>) {
     return {
-        kind: 'satori_index_completion_v1',
+        kind: 'satori_index_completion_v2',
         codebasePath: path,
         fingerprint: { ...RUNTIME_FINGERPRINT },
         indexedFiles: 10,
         totalChunks: 25,
         completedAt: '2026-02-28T08:00:00.000Z',
         runId: 'run_123',
+        indexPolicyHash: 'test-policy',
         ...overrides
     };
 }

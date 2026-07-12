@@ -130,8 +130,6 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
             resolveStagedCollectionName: (codebasePath: string, generationId: string) =>
                 `${resolveCollectionName(codebasePath)}__gen_${generationId}`,
         } : {}),
-        addCustomExtensions: () => undefined,
-        addCustomIgnorePatterns: () => undefined,
         clearIndex: async () => undefined,
     } as unknown as HandlerContext;
 

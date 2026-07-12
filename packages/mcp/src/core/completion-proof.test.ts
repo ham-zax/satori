@@ -13,13 +13,14 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
 
 function marker(overrides: Record<string, unknown> = {}) {
     return {
-        kind: 'satori_index_completion_v1',
+        kind: 'satori_index_completion_v2',
         codebasePath: '/repo/a',
         fingerprint: { ...RUNTIME_FINGERPRINT },
         indexedFiles: 10,
         totalChunks: 25,
         completedAt: '2026-02-28T08:00:00.000Z',
         runId: 'run_123',
+        indexPolicyHash: 'policy-hash',
         ...overrides
     };
 }
@@ -54,6 +55,19 @@ test('validateCompletionProof accepts non-negative integer marker counts', async
     });
 
     assert.equal(result.outcome, 'valid');
+});
+
+test('validateCompletionProof classifies v1 markers as legacy policy-unsealed proof', async () => {
+    const legacy = marker();
+    delete (legacy as Record<string, unknown>).indexPolicyHash;
+    (legacy as Record<string, unknown>).kind = 'satori_index_completion_v1';
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => legacy,
+    });
+    assert.equal(result.outcome, 'stale_local');
+    assert.equal(result.reason, 'legacy_policy_unsealed');
 });
 
 test('validateCompletionProof rejects unsafe marker counts', async () => {

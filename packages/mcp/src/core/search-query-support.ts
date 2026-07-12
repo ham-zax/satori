@@ -214,13 +214,22 @@ export class SearchQuerySupport {
         if (typeof relativePath !== 'string') {
             return null;
         }
-        const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+        const candidate = relativePath.trim();
+        if (
+            candidate.includes('\0')
+            || /^[A-Za-z]:/.test(candidate)
+            || path.posix.isAbsolute(candidate)
+            || path.win32.isAbsolute(candidate)
+        ) {
+            return null;
+        }
+        const normalized = path.posix.normalize(candidate.replace(/\\/g, '/'));
         if (normalized.length === 0 || normalized === '.') {
             return null;
         }
         if (
-            normalized.startsWith('..')
-            || normalized.includes('/../')
+            normalized === '..'
+            || normalized.startsWith('../')
             || path.posix.isAbsolute(normalized)
             || path.win32.isAbsolute(normalized)
         ) {
@@ -315,8 +324,14 @@ export class SearchQuerySupport {
                 await handle?.close().catch(() => undefined);
             }
 
-            const lowerContent = content.toLowerCase();
-            if (lexicalTerms.length > 0 && !lexicalTerms.some((term) => lowerContent.includes(term))) {
+            if (lexicalTerms.length > 0 && this.scoreCandidateLexicalEvidence(input.queryPlan, {
+                content,
+                relativePath: normalized,
+                startLine: 1,
+                endLine: content.split(/\r?\n/).length,
+                language: getLanguageIdFromFilename(normalized, 'text'),
+                score: 1,
+            }).score <= 0) {
                 continue;
             }
 
@@ -324,6 +339,9 @@ export class SearchQuerySupport {
             const matchingLineIndex = lexicalTerms.length > 0
                 ? this.findBestLivePathLexicalLineIndex(lines, input.queryPlan.lexicalTerms)
                 : 0;
+            if (lexicalTerms.length > 0 && matchingLineIndex < 0) {
+                continue;
+            }
             const anchorLineIndex = matchingLineIndex >= 0 ? matchingLineIndex : 0;
             const startLine = Math.max(1, anchorLineIndex + 1 - SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES);
             const endLine = Math.min(lines.length, anchorLineIndex + 1 + SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES);
@@ -850,13 +868,17 @@ export class SearchQuerySupport {
         const orderedTerms = [
             ...lexicalTerms.filter((term) => term.kind === 'whole'),
             ...lexicalTerms.filter((term) => term.kind !== 'whole'),
-        ].map((term) => term.value.toLowerCase()).filter((term) => term.length > 0);
-
+        ];
         for (const term of orderedTerms) {
-            const lineIndex = lines.findIndex((line) => line.toLowerCase().includes(term));
-            if (lineIndex >= 0) {
-                return lineIndex;
-            }
+            const normalizedTerm = term.value.toLowerCase();
+            if (!normalizedTerm) continue;
+            const lineIndex = lines.findIndex((line) => {
+                const normalizedLine = line.toLowerCase();
+                return term.kind === 'whole'
+                    ? hasSearchTokenBoundaryMatch(normalizedLine, normalizedTerm)
+                    : normalizedLine.includes(normalizedTerm);
+            });
+            if (lineIndex >= 0) return lineIndex;
         }
 
         return -1;
@@ -1007,7 +1029,8 @@ export class SearchQuerySupport {
             };
         }
 
-        const coveredByRootGitignore = normalizedObserved.some((filePath) => cacheEntry.matcher!.ignores(filePath));
+        const coveredByRootGitignore = normalizedObserved.length > 0
+            && normalizedObserved.every((filePath) => cacheEntry.matcher!.ignores(filePath));
         const noisyFilesNotIgnored = normalizedObserved.filter((filePath) => !cacheEntry.matcher!.ignores(filePath));
         const suggestedIgnorePatterns = SEARCH_NOISE_HINT_PATTERNS.filter((pattern) =>
             this.patternMatchesAnyPath(pattern, noisyFilesNotIgnored)

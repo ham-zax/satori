@@ -362,7 +362,9 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
             assert.equal(info.reindexReason, 'navigation_recovery_failed');
             assert.match(info.message || '', /Ignore-rule reconciliation deleted indexed paths/);
             assert.equal(snapshotManager.getCodebaseIndexedPaths?.(repoPath).includes(ignoredRelativePath), false);
-            assert.equal(triggerSearchPayload.freshnessDecision && (triggerSearchPayload.freshnessDecision as JsonObject).mode, 'ignore_reload_failed');
+            assert.equal(triggerSearchPayload.status, 'requires_reindex');
+            assert.equal(triggerSearchPayload.reason, 'requires_reindex');
+            assert.equal(triggerSearchPayload.freshnessDecision && (triggerSearchPayload.freshnessDecision as JsonObject).mode, 'skipped_requires_reindex');
             assert.equal(JSON.stringify(triggerSearchPayload).includes(oldSymbolInstanceId), false);
 
             const triggerResults = triggerSearchPayload.results;

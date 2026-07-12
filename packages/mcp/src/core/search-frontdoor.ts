@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as path from "path";
 import { requireAbsoluteFilesystemPath, trackCodebasePath } from "../utils.js";
 import type { CompletionProofReason } from "./completion-proof.js";
 import type {
@@ -261,44 +262,55 @@ export async function runSearchFrontDoor(
     let proofDebugHint = trackedRootState.state === "ready" ? trackedRootState.proofDebugHint : undefined;
     let partialIndexSearchWarnings = searchableRoot ? buildPartialIndexWarnings(host, searchableRoot) : [];
 
-    const freshnessDecision = await host.ensureSearchFreshness(effectiveRoot);
-    host.noteFreshnessMode(freshnessDecision.mode);
-    const freshnessBlockedPayload = host.buildFreshnessBlockedSearchPayload(
-        effectiveRoot,
-        freshnessDecision,
-        searchContext,
-    );
-    if (freshnessBlockedPayload) {
+    for (let freshnessAttempt = 0; freshnessAttempt < 2; freshnessAttempt += 1) {
+        const freshnessRoot = effectiveRoot;
+        const freshnessDecision = await host.ensureSearchFreshness(freshnessRoot);
+        host.noteFreshnessMode(freshnessDecision.mode);
+
+        const postFreshnessRootState = await host.preparePostFreshnessTrackedRootRead(absolutePath);
+        const readinessBlockedPayload = buildBlockedReadinessPayload(postFreshnessRootState, searchContext, host);
+        if (readinessBlockedPayload) {
+            return { kind: "blocked", payload: readinessBlockedPayload };
+        }
+        if (postFreshnessRootState.state !== "ready") {
+            throw new Error(`Unexpected non-ready tracked root state after freshness gating: ${postFreshnessRootState.state}`);
+        }
+
+        const observedRoot = postFreshnessRootState.root.path || absolutePath;
+        if (path.resolve(observedRoot) !== path.resolve(freshnessRoot)) {
+            if (freshnessAttempt === 1) {
+                throw new Error("Tracked root identity changed repeatedly during search freshness validation.");
+            }
+            searchableRoot = postFreshnessRootState.root;
+            effectiveRoot = observedRoot;
+            proofDebugHint = postFreshnessRootState.proofDebugHint;
+            partialIndexSearchWarnings = buildPartialIndexWarnings(host, searchableRoot);
+            continue;
+        }
+
+        const freshnessBlockedPayload = host.buildFreshnessBlockedSearchPayload(
+            freshnessRoot,
+            freshnessDecision,
+            searchContext,
+        );
+        if (freshnessBlockedPayload) {
+            return { kind: "blocked", payload: freshnessBlockedPayload };
+        }
+
+        searchableRoot = postFreshnessRootState.root;
+        effectiveRoot = observedRoot;
+        proofDebugHint = postFreshnessRootState.proofDebugHint;
+        partialIndexSearchWarnings = buildPartialIndexWarnings(host, searchableRoot);
         return {
-            kind: "blocked",
-            payload: freshnessBlockedPayload,
+            kind: "ready",
+            absolutePath,
+            effectiveRoot,
+            searchableRoot,
+            freshnessDecision,
+            partialIndexSearchWarnings,
+            proofDebugHint,
         };
     }
 
-    const postFreshnessTrackedRootState = await host.preparePostFreshnessTrackedRootRead(absolutePath);
-    const postFreshnessBlockedPayload = buildBlockedReadinessPayload(postFreshnessTrackedRootState, searchContext, host);
-    if (postFreshnessBlockedPayload) {
-        return {
-            kind: "blocked",
-            payload: postFreshnessBlockedPayload,
-        };
-    }
-    if (postFreshnessTrackedRootState.state !== "ready") {
-        throw new Error(`Unexpected non-ready tracked root state after freshness gating: ${postFreshnessTrackedRootState.state}`);
-    }
-
-    searchableRoot = postFreshnessTrackedRootState.root;
-    effectiveRoot = searchableRoot.path || absolutePath;
-    proofDebugHint = postFreshnessTrackedRootState.proofDebugHint;
-    partialIndexSearchWarnings = buildPartialIndexWarnings(host, searchableRoot);
-
-    return {
-        kind: "ready",
-        absolutePath,
-        effectiveRoot,
-        searchableRoot,
-        freshnessDecision,
-        partialIndexSearchWarnings,
-        proofDebugHint,
-    };
+    throw new Error("Tracked root identity changed repeatedly during search freshness validation.");
 }

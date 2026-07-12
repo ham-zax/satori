@@ -90,13 +90,14 @@ function withTempHome<T>(fn: (homeDir: string) => Promise<T> | T): Promise<T> | 
 
 function buildMarker(repoPath: string, fingerprint: IndexFingerprint = RUNTIME_FINGERPRINT) {
     return {
-        kind: 'satori_index_completion_v1',
+        kind: 'satori_index_completion_v2',
         codebasePath: repoPath,
         fingerprint,
         indexedFiles: 169,
         totalChunks: 728,
         completedAt: '2026-02-28T08:00:00.000Z',
-        runId: 'run_test'
+        runId: 'run_test',
+        indexPolicyHash: 'test-policy',
     };
 }
 
@@ -1168,8 +1169,6 @@ test('handleIndexCodebase create proceeds when snapshot is indexed but completio
                 checkCollectionLimit: async () => true
             }),
             getIndexCompletionMarker: async () => null,
-            addCustomExtensions: () => undefined,
-            addCustomIgnorePatterns: () => undefined,
             resolveCollectionName: () => 'base_collection',
             resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
             setWriteCollectionOverride: () => undefined,
@@ -1235,17 +1234,16 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
                 }
             }),
             getIndexCompletionMarker: async () => ({
-                kind: 'satori_index_completion_v1',
+                kind: 'satori_index_completion_v2',
                 codebasePath: repoPath,
                 fingerprint: indexedFingerprint,
                 indexedFiles: 169,
                 totalChunks: 728,
                 completedAt: '2026-02-28T08:00:00.000Z',
-                runId: 'run_test'
+                runId: 'run_test',
+                indexPolicyHash: 'test-policy',
             }),
             getActiveIndexedCollectionName: async () => 'proven_collection',
-            addCustomExtensions: () => undefined,
-            addCustomIgnorePatterns: () => undefined,
             clearIndexCompletionMarker: async () => undefined
         } as unknown as HandlerContext;
         const snapshotManager = {

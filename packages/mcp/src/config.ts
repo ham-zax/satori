@@ -214,6 +214,9 @@ export interface CodebaseInfoSyncCompleted extends CodebaseInfoBase {
     removed: number;             // Number of files removed
     modified: number;            // Number of files modified
     totalChanges: number;        // Total number of changes
+    indexedFiles?: number;       // Completion-proof file count for rollback authority
+    totalChunks?: number;        // Completion-proof payload count for rollback authority
+    indexStatus?: 'completed' | 'limit_reached';
 }
 
 // Reindex required state - fingerprint mismatch or legacy assumptions

@@ -255,8 +255,6 @@ test('handleIndexCodebase touches the watch list when create starts successfully
         const watch = createWatchRecorder();
         const context = {
             getVectorStore: () => ({ checkCollectionLimit: async () => true }),
-            addCustomExtensions: () => undefined,
-            addCustomIgnorePatterns: () => undefined,
             resolveCollectionName: () => 'base_collection',
             resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
             setWriteCollectionOverride: () => undefined,
@@ -284,8 +282,6 @@ test('handleReindexCodebase touches the watch list when reindex starts successfu
         const watch = createWatchRecorder();
         const context = {
             getVectorStore: () => ({ checkCollectionLimit: async () => true }),
-            addCustomExtensions: () => undefined,
-            addCustomIgnorePatterns: () => undefined,
             resolveCollectionName: () => 'base_collection',
             resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
             setWriteCollectionOverride: () => undefined,

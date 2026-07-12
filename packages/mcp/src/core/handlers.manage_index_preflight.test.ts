@@ -81,8 +81,6 @@ function createHandlers(
         clearIndexCompletionMarker: async () => undefined,
         pruneIndexedCollectionFamily: async () => [],
         pruneUnprovenStagedCollectionFamily: async () => [],
-        addCustomExtensions: () => undefined,
-        addCustomIgnorePatterns: () => undefined,
         clearIndex: async () => undefined,
     } as unknown as HandlerContext;
 

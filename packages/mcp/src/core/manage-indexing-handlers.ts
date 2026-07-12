@@ -4,11 +4,16 @@ import {
     COLLECTION_LIMIT_MESSAGE,
     Context,
     deleteCollectionWithVerification,
+    IndexPolicyPublicationError,
     RemoteCollectionDeletePendingError,
 } from "@zokizuan/satori-core";
 import type {
+    CustomIndexPolicyUpdate,
+    CurrentNavigationGeneration,
+    IndexCompletionMarkerDocument,
     RepairProof,
     RepairSnapshotEvidence,
+    ResolvedIndexPolicy,
 } from "@zokizuan/satori-core";
 import type { SnapshotManager } from "./snapshot.js";
 import type { SyncManager } from "./sync.js";
@@ -24,6 +29,7 @@ import {
     type IndexFingerprint,
     type IndexOperationPhase,
     type IndexOperationReceipt,
+    type CallGraphSidecarInfo,
 } from "../config.js";
 import { absolutePathOrRaw, requireAbsoluteFilesystemPath, trackCodebasePath } from "../utils.js";
 import type { ReindexPreflightResult } from "./working-tree-state.js";
@@ -95,6 +101,7 @@ type ManageIndexingHandlersHost = {
         writeCollectionName?: string,
         mutationLease?: RootMutationLease,
         previousIndexedInfo?: Record<string, unknown>,
+        policyUpdate?: CustomIndexPolicyUpdate,
     ) => Promise<void> | void;
     manageResponse(
         action: ManageIndexAction | "reindex",
@@ -165,6 +172,19 @@ type ManageIndexingHandlersHost = {
     assertIndexMutationCapabilities(): void;
     mutationLeaseCoordinator: MutationLeaseCoordinator | null;
 };
+
+type ProvenGenerationResolver = {
+    resolveProvenGeneration(codebasePath: string): Promise<{
+        collectionName: string;
+        marker: IndexCompletionMarkerDocument;
+        navigation: CurrentNavigationGeneration | null;
+        policy: ResolvedIndexPolicy;
+    } | null>;
+};
+
+function resolveProvenGeneration(context: Context, codebasePath: string) {
+    return (context as Context & ProvenGenerationResolver).resolveProvenGeneration(codebasePath);
+}
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -311,6 +331,10 @@ export class ManageIndexingHandlers {
         const customIgnorePatterns = Array.isArray(ignorePatterns)
             ? ignorePatterns.filter((pattern): pattern is string => typeof pattern === "string")
             : [];
+        const policyUpdate: CustomIndexPolicyUpdate = {
+            ...(Array.isArray(customExtensions) ? { customExtensions: customFileExtensions } : {}),
+            ...(Array.isArray(ignorePatterns) ? { customIgnorePatterns } : {}),
+        };
         const requestedDropCollection = typeof zillizDropCollection === "string" ? zillizDropCollection.trim() : undefined;
         let dropSummaryLine = "";
         let mutationLease: RootMutationLease | undefined;
@@ -318,6 +342,7 @@ export class ManageIndexingHandlers {
         let operationTerminal = false;
         let lastDurableOperation: IndexOperationReceipt | undefined;
         let canonicalRoot = preparedCanonicalRoot;
+        let existingInfo: Record<string, unknown> | undefined;
         const transitionOperation = (phase: IndexOperationPhase, mutateSnapshot?: () => void) => {
             if (!mutationLease || typeof this.host.snapshotManager.transitionOperation !== "function") {
                 mutateSnapshot?.();
@@ -455,7 +480,7 @@ export class ManageIndexingHandlers {
                 );
             }
 
-            const existingInfo = this.host.getSnapshotCodebaseInfo(absolutePath);
+            existingInfo = this.host.getSnapshotCodebaseInfo(absolutePath);
             if (!forceReindex && existingInfo?.status === "requires_reindex") {
                 return this.host.manageResponse(
                     manageAction,
@@ -682,16 +707,6 @@ export class ManageIndexingHandlers {
                 );
             }
 
-            if (customFileExtensions.length > 0) {
-                console.log(`[CUSTOM-EXTENSIONS] Adding ${customFileExtensions.length} custom extensions: ${customFileExtensions.join(", ")}`);
-                this.host.context.addCustomExtensions(customFileExtensions);
-            }
-
-            if (customIgnorePatterns.length > 0) {
-                console.log(`[IGNORE-PATTERNS] Adding ${customIgnorePatterns.length} custom ignore patterns: ${customIgnorePatterns.join(", ")}`);
-                this.host.context.addCustomIgnorePatterns(customIgnorePatterns);
-            }
-
             const failedInfo = this.host.getSnapshotCodebaseInfo(absolutePath);
             if (failedInfo?.status === "indexfailed") {
                 const previousError = typeof failedInfo.errorMessage === "string" ? failedInfo.errorMessage : "Unknown error";
@@ -719,6 +734,7 @@ export class ManageIndexingHandlers {
                 stagedCollectionName,
                 mutationLease,
                 existingInfo,
+                policyUpdate,
             );
             leaseTransferred = mutationLease !== undefined;
             const launchedLease = mutationLease;
@@ -768,6 +784,56 @@ export class ManageIndexingHandlers {
         } catch (error: unknown) {
             console.error("Error in handleIndexCodebase:", error);
             const failurePath = canonicalRoot ?? absolutePathOrRaw(codebasePath);
+            const previousFingerprint = parseIndexFingerprint(existingInfo?.indexFingerprint);
+            const previousCollectionName = typeof existingInfo?.collectionName === "string"
+                ? existingInfo.collectionName.trim()
+                : "";
+            const previousIndexedFiles = existingInfo?.indexedFiles;
+            const previousTotalChunks = existingInfo?.totalChunks;
+            let restorePreviousLifecycle = false;
+            if (
+                forceReindex
+                && previousCollectionName.length > 0
+                && previousFingerprint
+                && existingInfo?.fingerprintSource === "verified"
+                && existingInfo?.indexStatus === "completed"
+                && Number.isSafeInteger(previousIndexedFiles)
+                && Number(previousIndexedFiles) >= 0
+                && Number.isSafeInteger(previousTotalChunks)
+                && Number(previousTotalChunks) >= 0
+            ) {
+                try {
+                    const provenGeneration = await resolveProvenGeneration(this.host.context, failurePath);
+                    restorePreviousLifecycle = provenGeneration?.collectionName === previousCollectionName
+                        && provenGeneration.marker.indexStatus !== "limit_reached"
+                        && provenGeneration.marker.indexedFiles === Number(previousIndexedFiles)
+                        && provenGeneration.marker.totalChunks === Number(previousTotalChunks)
+                        && indexFingerprintsEqual(previousFingerprint, this.host.runtimeFingerprint);
+                } catch {
+                    restorePreviousLifecycle = false;
+                }
+            }
+            const applyFailureLifecycle = (): void => {
+                if (restorePreviousLifecycle && previousFingerprint) {
+                    this.host.snapshotManager.setCodebaseIndexed(
+                        failurePath,
+                        {
+                            indexedFiles: Number(previousIndexedFiles),
+                            totalChunks: Number(previousTotalChunks),
+                            status: "completed",
+                        },
+                        previousFingerprint,
+                        "verified",
+                        previousCollectionName,
+                    );
+                    return;
+                }
+                this.host.snapshotManager.setCodebaseIndexFailed(
+                    failurePath,
+                    formatUnknownError(error),
+                    this.host.getSnapshotIndexingProgress(failurePath),
+                );
+            };
             const vectorBackendDiagnostic = classifyVectorBackendError(error);
             if (vectorBackendDiagnostic) {
                 const errorMessage = formatUnknownError(error);
@@ -778,7 +844,7 @@ export class ManageIndexingHandlers {
                 let operation;
                 try {
                     operation = mutationLease && !operationTerminal && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease)
-                        ? transitionOperation("failed")
+                        ? transitionOperation("failed", applyFailureLifecycle)
                         : lastDurableOperation;
                 } catch (receiptError) {
                     console.error("Failed to persist terminal operation receipt:", receiptError);
@@ -789,13 +855,7 @@ export class ManageIndexingHandlers {
             let operation;
             try {
                 operation = mutationLease && !operationTerminal && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease)
-                    ? transitionOperation("failed", () => {
-                        this.host.snapshotManager.setCodebaseIndexFailed(
-                            failurePath,
-                            formatUnknownError(error),
-                            this.host.getSnapshotIndexingProgress(failurePath),
-                        );
-                    })
+                    ? transitionOperation("failed", applyFailureLifecycle)
                     : lastDurableOperation;
             } catch (receiptError) {
                 console.error("Failed to persist terminal operation receipt:", receiptError);
@@ -1196,11 +1256,16 @@ export class ManageIndexingHandlers {
         writeCollectionName?: string,
         mutationLease?: RootMutationLease,
         previousIndexedInfo?: Record<string, unknown>,
+        policyUpdate: CustomIndexPolicyUpdate = {},
     ): Promise<void> {
         const absolutePath = codebasePath;
         let lastSaveTime = 0;
         let targetCollectionName: string | undefined;
         let navigationCandidate: import("@zokizuan/satori-core").StagedNavigationSidecarGeneration | undefined;
+        let previousNavigation: import("@zokizuan/satori-core").CurrentNavigationGeneration | null = null;
+        let previousPolicy: ResolvedIndexPolicy | null = null;
+        let candidatePolicy: ResolvedIndexPolicy | null = null;
+        let candidatePolicyPublished = false;
         let writingReceiptPublished = false;
         const assertMutationCurrent = mutationLease
             ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease)
@@ -1275,22 +1340,22 @@ export class ManageIndexingHandlers {
                     ? ((previousInfo?.indexManifest as Record<string, unknown>).indexedPaths as unknown[])
                         .filter((entry): entry is string => typeof entry === "string")
                     : undefined,
+                callGraphSidecar: previousInfo?.callGraphSidecar as CallGraphSidecarInfo | undefined,
             }
             : null;
 
         if (previousCompleteGeneration) {
-            const [provenCollectionName, marker] = await Promise.all([
-                this.host.context.getCompletionProofCollectionName(absolutePath),
-                this.host.context.getIndexCompletionMarker(absolutePath),
-            ]);
+            const provenGeneration = await resolveProvenGeneration(this.host.context, absolutePath);
             if (
-                provenCollectionName !== previousCompleteGeneration.collectionName
-                || !marker
-                || marker.indexStatus === "limit_reached"
-                || marker.indexedFiles !== previousCompleteGeneration.indexedFiles
-                || marker.totalChunks !== previousCompleteGeneration.totalChunks
+                provenGeneration?.collectionName !== previousCompleteGeneration.collectionName
+                || provenGeneration.marker.indexStatus === "limit_reached"
+                || provenGeneration.marker.indexedFiles !== previousCompleteGeneration.indexedFiles
+                || provenGeneration.marker.totalChunks !== previousCompleteGeneration.totalChunks
             ) {
                 previousCompleteGeneration = null;
+            } else {
+                previousNavigation = provenGeneration.navigation;
+                previousPolicy = provenGeneration.policy;
             }
         }
 
@@ -1321,12 +1386,15 @@ export class ManageIndexingHandlers {
             const profileConfig = this.host.loadIndexProfileForCodebase(absolutePath);
             console.log(`[BACKGROUND-INDEX] Using index profile '${profileConfig.profile}'${profileConfig.configPath ? ` from ${profileConfig.configPath}` : " (default)"}`);
 
-            await this.host.context.loadResolvedIgnorePatterns(absolutePath);
+            candidatePolicy = await this.host.context.resolveIndexPolicyForCodebase(absolutePath, policyUpdate);
+            if (!previousCompleteGeneration) {
+                previousNavigation = await this.host.context.getCurrentNavigationGeneration(absolutePath).catch(() => null);
+            }
 
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
-            const ignorePatterns = this.host.getContextActiveIgnorePatterns(absolutePath);
-            const supportedExtensions = this.host.getContextIndexedExtensions(absolutePath);
-            console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(", ")}`);
+            const ignorePatterns = candidatePolicy.effectiveIgnorePatterns;
+            const supportedExtensions = candidatePolicy.supportedExtensions;
+            console.log(`[BACKGROUND-INDEX] Using ${ignorePatterns.length} effective ignore patterns (policy=${candidatePolicy.policyHash.slice(0, 12)}).`);
             const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns, supportedExtensions);
             await synchronizer.initialize(assertMutationCurrent, publishMutation);
 
@@ -1367,6 +1435,7 @@ export class ManageIndexingHandlers {
                 assertMutationCurrent,
                 publishMutation,
                 deferFullIndexPublication: true,
+                indexPolicy: candidatePolicy,
             });
             navigationCandidate = stats.navigationCandidate;
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
@@ -1393,7 +1462,14 @@ export class ManageIndexingHandlers {
                         previousCompleteGeneration.fingerprint,
                         "verified",
                         previousCompleteGeneration.collectionName,
+                        false,
                     );
+                    if (previousCompleteGeneration.callGraphSidecar) {
+                        this.host.snapshotManager.setCodebaseCallGraphSidecar(
+                            absolutePath,
+                            previousCompleteGeneration.callGraphSidecar,
+                        );
+                    }
                     if (previousCompleteGeneration.indexedPaths) {
                         this.host.snapshotManager.setCodebaseIndexManifest(
                             absolutePath,
@@ -1413,6 +1489,12 @@ export class ManageIndexingHandlers {
             }
 
             if (stats.status === "limit_reached") {
+                this.host.context.publishResolvedIndexPolicy(
+                    candidatePolicy,
+                    { collectionName: targetCollectionName },
+                    publishMutation,
+                );
+                candidatePolicyPublished = true;
                 await this.host.context.publishCompletedIndexMarker(
                     absolutePath,
                     stats.indexedFiles,
@@ -1420,6 +1502,8 @@ export class ManageIndexingHandlers {
                     targetCollectionName,
                     "limit_reached",
                     assertMutationCurrent,
+                    undefined,
+                    candidatePolicy.policyHash,
                 );
             }
 
@@ -1450,6 +1534,7 @@ export class ManageIndexingHandlers {
                     "completed",
                     assertMutationCurrent,
                     stats.navigationCandidate,
+                    candidatePolicy.policyHash,
                 );
             }
             if (mutationLease) {
@@ -1460,6 +1545,22 @@ export class ManageIndexingHandlers {
             } catch (watcherError) {
                 console.warn(`[BACKGROUND-INDEX] Failed to refresh watcher for '${absolutePath}' after index proof: ${formatUnknownError(watcherError)}`);
             }
+            if (stats.status === "completed" && stats.navigationCandidate) {
+                this.host.context.publishResolvedIndexPolicy(
+                    candidatePolicy,
+                    {
+                        collectionName: targetCollectionName,
+                        navigationGenerationId: stats.navigationCandidate.generationId,
+                    },
+                    publishMutation,
+                );
+                candidatePolicyPublished = true;
+                await this.host.context.publishNavigationCandidate(
+                    stats.navigationCandidate,
+                    assertMutationCurrent,
+                    publishMutation,
+                );
+            }
             persistBackgroundPhase("completed", () => {
                 this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified", targetCollectionName);
                 this.host.snapshotManager.setCodebaseIndexManifest(absolutePath, this.host.getContextTrackedRelativePaths(absolutePath));
@@ -1468,13 +1569,6 @@ export class ManageIndexingHandlers {
                 this.host.saveSnapshotIfSupported();
             }
             this.host.setIndexingStats({ indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks });
-            if (stats.status === "completed" && stats.navigationCandidate) {
-                await this.host.context.publishNavigationCandidate(
-                    stats.navigationCandidate,
-                    assertMutationCurrent,
-                    publishMutation,
-                );
-            }
 
             try {
                 const droppedCollections = await this.host.pruneIndexedCollectionFamily(
@@ -1502,6 +1596,13 @@ export class ManageIndexingHandlers {
             console.log(`[BACKGROUND-INDEX] ${message}`);
         } catch (error: unknown) {
             console.error(`[BACKGROUND-INDEX] Error during indexing for ${absolutePath}:`, error);
+
+            if (error instanceof IndexPolicyPublicationError && error.committed) {
+                console.error(
+                    `[BACKGROUND-INDEX] Policy publication for '${absolutePath}' committed before acknowledgement failed; preserving candidate artifacts for the current owner or startup recovery.`,
+                );
+                return;
+            }
 
             if (mutationLease && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease) === false) {
                 console.error(`[BACKGROUND-INDEX] Refusing stale terminal transition for '${absolutePath}' after mutation lease loss.`);
@@ -1542,6 +1643,36 @@ export class ManageIndexingHandlers {
                     console.warn(`[BACKGROUND-INDEX] Failed to discard navigation candidate '${navigationCandidate.generationId}': ${formatUnknownError(navigationCleanupError)}`);
                 }
             }
+            if (previousNavigation && navigationCandidate) {
+                try {
+                    await this.host.context.restoreNavigationGeneration(
+                        absolutePath,
+                        previousNavigation,
+                        assertMutationCurrent,
+                        publishMutation,
+                    );
+                } catch (navigationRestoreError) {
+                    console.error(`[BACKGROUND-INDEX] Failed to restore previous navigation generation '${previousNavigation.generationId}': ${formatUnknownError(navigationRestoreError)}`);
+                }
+            }
+            if (candidatePolicyPublished) {
+                try {
+                    if (previousPolicy && previousCompleteGeneration) {
+                        this.host.context.publishResolvedIndexPolicy(
+                            previousPolicy,
+                            {
+                                collectionName: previousCompleteGeneration.collectionName,
+                                ...(previousNavigation ? { navigationGenerationId: previousNavigation.generationId } : {}),
+                            },
+                            publishMutation,
+                        );
+                    } else {
+                        this.host.context.clearPublishedIndexPolicy(absolutePath, publishMutation);
+                    }
+                } catch (policyRestoreError) {
+                    console.error(`[BACKGROUND-INDEX] Failed to restore previous index policy state for '${absolutePath}': ${formatUnknownError(policyRestoreError)}`);
+                }
+            }
             assertMutationCurrent?.();
 
             try {
@@ -1557,7 +1688,14 @@ export class ManageIndexingHandlers {
                             previousCompleteGeneration.fingerprint,
                             "verified",
                             previousCompleteGeneration.collectionName,
+                            false,
                         );
+                        if (previousCompleteGeneration.callGraphSidecar) {
+                            this.host.snapshotManager.setCodebaseCallGraphSidecar(
+                                absolutePath,
+                                previousCompleteGeneration.callGraphSidecar,
+                            );
+                        }
                         if (previousCompleteGeneration.indexedPaths) {
                             this.host.snapshotManager.setCodebaseIndexManifest(
                                 absolutePath,

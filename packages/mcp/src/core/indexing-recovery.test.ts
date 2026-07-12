@@ -17,13 +17,14 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
 
 function buildMarker(overrides: Partial<IndexCompletionMarkerDocument> = {}): IndexCompletionMarkerDocument {
     return {
-        kind: 'satori_index_completion_v1',
+        kind: 'satori_index_completion_v2',
         codebasePath: '/repo/app',
         fingerprint: RUNTIME_FINGERPRINT,
         indexedFiles: 169,
         totalChunks: 728,
         completedAt: '2026-02-27T23:57:10.000Z',
         runId: 'run_20260227',
+        indexPolicyHash: 'policy-hash',
         ...overrides,
     };
 }

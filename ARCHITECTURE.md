@@ -464,7 +464,7 @@ search_codebase
       -> 2-pass semantic retrieval + RRF fusion
       -> scope hard filters (runtime/docs/mixed) + path priors
       -> grouped or raw response shaping
-      -> grouped mode emits callGraphHint + freshnessDecision
+      -> grouped mode emits compact canonical targets + freshnessDecision
   -> telemetry emit
 
 call_graph

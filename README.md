@@ -20,7 +20,7 @@ Satori indexes a repo and gives MCP-compatible agents a fixed investigation path
 - Check nearby callers/callees when graph support is available (advisory only — not blast-radius proof).
 - Build derived symbol registry and relationship sidecars during completed full indexes.
 - See observed `symbolQuality` on ready roots and `manage_index status` before treating outline/graph as rich.
-- Recover weak inbound graph context with executable `inboundRecovery` (`must:` lexical search) on grouped hits.
+- Treat graph-ready `navigation.inbound="verify"` as explicit caller-confidence state; use the optional `callerSearchTerm` identifier in a separate `must:` lexical search.
 - Get clear recovery steps when context is stale, partial, not ready, or multi-runtime owners conflict.
 - Install the MCP server and first-party workflow skill with one command.
 - Avoid resident MCP startup through `npx`; clients launch an installer-owned Node launcher.
@@ -44,7 +44,7 @@ npx -y @zokizuan/satori-cli@latest install --client all
 npx -y @zokizuan/satori-cli@latest doctor
 ```
 
-Satori requires Node.js 22.12 or newer. This release uses UTF-8-normalized `language-analysis-v4` and `relationship-v3` evidence; indexes built with `language-analysis-v3` or `relationship-v2` return `requires_reindex` and must be rebuilt once. `sync` does not migrate an incompatible index.
+Satori requires Node.js 22.13 or newer. This release uses UTF-8-normalized `language-analysis-v4` and `relationship-v3` evidence; indexes built with `language-analysis-v3` or `relationship-v2` return `requires_reindex` and must be rebuilt once. `sync` does not migrate an incompatible index.
 
 Supported installers: `codex`, `claude`, `opencode`, and `all`.
 
@@ -212,11 +212,13 @@ Completed full indexes write navigation sidecars:
 - Compatibility manifests so stale, missing, or incompatible sidecars degrade explicitly instead of being silently trusted.
 - Canonical JSON navigation state plus an additive `navigation.sqlite` cache. JSON remains the source that runtime navigation serves by default; SQLite is optional for validation or explicit experimental reads and may serve only after proving parity with the canonical JSON registry and relationship sidecars.
 
-Current relationship limits are intentional. `CALLS v0` is heuristic/name-based (not a compiler-grade call graph): unique same-file targets can be high confidence; cross-file edges stay low unless `IMPORTS`/`EXPORTS` evidence upgrades them, or an imported module has a unique same-name target (for example class methods without a top-level `EXPORTS` record). Generic names like `push`/`get` stay suppressed without `EXPORTS`. Ambiguous same-name targets are skipped. Empty or short edge lists are not proof of “no callers.” Prefer `inboundRecovery` / `must:` search, tests, and direct references before blast-radius edits. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
+Current relationship limits are intentional. `CALLS v0` is heuristic/name-based (not a compiler-grade call graph): unique same-file targets can be high confidence; cross-file edges stay low unless `IMPORTS`/`EXPORTS` evidence upgrades them, or an imported module has a unique same-name target (for example class methods without a top-level `EXPORTS` record). Generic names like `push`/`get` stay suppressed without `EXPORTS`. Ambiguous same-name targets are skipped. Empty or short edge lists are not proof of “no callers.” Every graph-ready grouped result carries `navigation.inbound="verify"`; when `callerSearchTerm` is present, use it in a separate `must:<term> <term>` search, tests, and direct references before blast-radius edits. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
 
 Language capability is explicit. TypeScript, JavaScript, and Python are the only production-ready `call_graph` languages. Go, Rust, Java, C#, C++, and Scala are `symbol_only`: `file_outline` and `read_file(open_symbol)` use compatible sidecar symbols and current-source validation, while `call_graph` returns `unsupported_language`. Broader catalog/parser support does not imply graph-ready navigation.
 
 Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish across small edits, but it is candidate lookup only and is not exact identity.
+
+Grouped search responses use `formatVersion: 2`. Each result carries one canonical `target` with a repo-relative file, a 1-based inclusive span, and an optional registry-proven concrete `symbolId`; display data, quality, source-only preview evidence, and navigation state are separate facts. Pass a graph-ready `target` directly to `call_graph` with the envelope `codebaseRoot`, and treat its required `navigation.inbound="verify"` as the caller-confidence contract. For reads, resolve `target.file` under `codebaseRoot`, use `open_symbol.symbolId` when present, and otherwise read `target.span`. Raw result objects are unchanged.
 
 `call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and avoid re-embedding or rewriting unchanged vector chunks. Current source may still be reparsed to recompute deterministic cross-file relationship evidence against the merged registry. If changed-file indexing stops early, recovery fails, or a partial full index hits a limit, Satori clears or withholds navigation state instead of publishing a mixed generation. Public reasons prefer precise values such as `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `stale_symbol_ref`, `navigation_recovery_failed`, and `partial_index_navigation_unavailable`.
 
@@ -226,7 +228,7 @@ Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish ac
 |---|---|
 | `list_codebases` | See indexed roots and lifecycle buckets; ready roots include compact `symbolQuality=…` and optional Runtime owners summary |
 | `manage_index` | JSON-envelope lifecycle: create, reindex, sync, status, clear, repair (clear is destructive; repair only when vector payload + trusted fingerprint proof allow). `status` may include structured `symbolQuality` and Runtime owners |
-| `search_codebase` | Runtime-first plain-English discovery with exact operators, symbol groups, freshness, warnings, `recommendedNextAction`, and optional `inboundRecovery` when graph callers are advisory |
+| `search_codebase` | Runtime-first plain-English discovery with exact operators, compact v2 symbol groups, freshness, warnings, one `recommendedNextAction`, explicit inbound verification, and optional `callerSearchTerm` evidence |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing (`ok` / `ambiguous` / `not_found`) |
 | `call_graph` | Bounded advisory caller/callee context from a search `symbolRef` when relationship-backed navigation is ready (TS/JS/Python; not sole blast-radius authority) |
 | `read_file` | Bounded reads under indexed/searchable roots only (absolute paths; not a general host FS reader), with ranges, annotations, or exact `open_symbol` spans |
@@ -297,7 +299,7 @@ Use `pnpm run dev:install-local-mcp:no-build` after a previous build when you on
 Current release versions:
 
 - `@zokizuan/satori-core@2.0.0`
-- `@zokizuan/satori-mcp@5.0.0`
+- `@zokizuan/satori-mcp@6.0.0`
 - `@zokizuan/satori-cli@0.5.0` (install examples may use `@latest`)
 
 Preflight before publishing:

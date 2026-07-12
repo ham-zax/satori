@@ -104,9 +104,8 @@ lang:typescript path:packages/mcp/src must:lease interrupted indexing recovery
 Supported operators are `lang:`, `path:`, `-path:`, `must:`, and `exclude:`. Inspect:
 
 - `warnings` and each warning action;
-- `recommendedNextAction`;
-- result `fallbacks`;
-- `capabilities` before assuming outline or graph depth.
+- the envelope `recommendedNextAction`;
+- each grouped result's canonical `target`, `quality`, and `navigation.graph` state.
 
 Warnings are degraded evidence unless `blocksUse=true`.
 
@@ -122,11 +121,11 @@ Once a candidate file is known, use `file_outline` to resolve the exact symbol a
 }
 ```
 
-Follow the returned `navigationFallback` arguments rather than rebuilding a span from prose.
+For grouped `formatVersion: 2` results, build reads from the envelope `codebaseRoot` plus `target.file`: use `open_symbol.symbolId` when present, otherwise use the 1-based inclusive `target.span`. Do not rebuild spans from prose.
 
 ### Inspect Relationships
 
-When a result includes a supported `callGraphHint`, pass its `symbolRef` to `call_graph`. CALLS v0 is name-based and heuristic. Treat it as context, then confirm inbound impact with scoped text search, tests, or direct references.
+When a grouped result has `navigation.graph="ready"`, pass its `target` directly to `call_graph` with the envelope `codebaseRoot`. That state carries `navigation.inbound="verify"` because CALLS v0 is name-based and heuristic. Treat it as context, then confirm inbound impact with scoped text search, tests, or direct references. If `callerSearchTerm` is present, a separate `must:<term> <term>` search is the compact verification path.
 
 ### Read The Proof
 
@@ -209,7 +208,7 @@ Local diagnostics measure runtime behavior, not whether a result was useful or a
 1. Search for the behavior in plain English.
 2. Compare the top owners and inspect freshness warnings.
 3. Open the leading file outline and resolve the exact symbol.
-4. Inspect supported outbound relationships or follow returned fallbacks.
+4. Inspect supported outbound relationships, or use the canonical target's read mapping when graph navigation is unavailable.
 5. Read the exact symbol and only the immediately necessary collaborators.
 6. Stop when the owner, invariant, and state transition are supported by current source.
 

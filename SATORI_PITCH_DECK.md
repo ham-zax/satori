@@ -21,7 +21,7 @@ Agents grep nearby files, guess the right function, edit from partial context, a
 | **Wrong file** | Nearby text isn't the same as the right implementation. Agents edit the obvious file, not the correct one. | `satori-landing/index.html:1083-1089` |
 | **Missed callers** | A change looks small until three other functions depend on it. Without caller context, breakage is invisible. | `satori-landing/index.html:1091-1096`; `AGENTS.md:45` |
 | **Stale context** | Active repos move while agents work. Old indexes produce hallucinated edits from outdated code. Satori's `freshnessDecision` envelope and `requires_reindex` gate make this explicit. | `satori-landing/index.html:1098-1103`; `CHANGELOG.md:374,379,874` |
-| **Opaque decisions** | Results point to real files, symbols, and warning states, but agents don't surface *why* they chose a path. Satori's structured envelopes (status / hints / warnings / nextActions) make agent reasoning inspectable. | `satori-landing/index.html:1106-1110`; `AGENTS.md:53-59` |
+| **Opaque decisions** | Results point to real files, symbols, and warning states, but agents don't surface *why* they chose a path. Satori's structured envelopes (status / hints / warnings / canonical targets) make agent reasoning inspectable. | `satori-landing/index.html:1106-1110`; `AGENTS.md:53-59` |
 
 ---
 
@@ -325,7 +325,7 @@ Satori's architecture maps cleanly onto Azure services. Today it runs on Milvus/
 Generic indexes go stale silently. Satori has fingerprint gates, completion proof, Merkle sync, and explicit state transitions so agents get `requires_reindex` instead of corrupt results. `AGENTS.md:54` makes this an invariant: do not substitute `sync` for `reindex` on fingerprint mismatch.
 
 ### vs. Graph-Only Tools
-Pure graph tools need exact symbol names to start. Satori starts with natural-language semantic discovery, then narrows to symbols and call graphs. `search_codebase` → `file_outline` → `call_graph` → `read_file(open_symbol)`. When graph is unsupported, `navigationFallback` is executable — no guessing.
+Pure graph tools need exact symbol names to start. Satori starts with natural-language semantic discovery, then narrows to symbols and call graphs. `search_codebase` → `file_outline` → `call_graph` → `read_file(open_symbol)`. When graph is unavailable, the compact grouped target still provides deterministic symbol or span reads.
 
 ### vs. Other Code-Intelligence MCPs
 Satori ships a deterministic comparison harness (`pnpm run vs:code-intelligence`) that runs Satori and `codebase-memory-mcp` on the same 5-task suite. Satori also acknowledges MIT-licensed upstream inspiration in `THIRD_PARTY.md` rather than claiming sole invention.

@@ -599,7 +599,7 @@ defects from recommendations that did not demonstrate a contract violation.
 | Supplied claim | Disposition | Current result |
 | --- | --- | --- |
 | A committed policy publication is reported as an ordinary failure | Confirmed in a narrower reachable form and fixed | The production mutation coordinator holds the root lock through its synchronous callback and has no post-callback lease check, so the review's ownership-transfer sequence cannot occur through `publishWhileCurrent()`. A post-rename exception or another supported wrapper can still produce an ambiguous acknowledgement. Publish now returns a typed receipt and throws `IndexPolicyPublicationError` with `committed=true` and that receipt after a durable commit. Background indexing preserves candidate vector/navigation artifacts and performs no destructive cleanup in this state. |
-| Policy removal has the same ambiguous acknowledgement | Confirmed and fixed | Removal returns the same typed receipt model, including the previous document token, and reports a committed removal distinctly when a wrapper throws after invocation. |
+| Policy removal has the same ambiguous acknowledgement | Confirmed and fixed | Removal returns the same typed receipt model, including the previous logical document digest, and reports a committed removal distinctly when a wrapper throws after invocation. |
 | `indexCodebase()` accepts a resolved policy from another root | Confirmed and fixed | `indexCodebase()`, expected-chunk reconstruction, and navigation generation construction reject a policy whose canonical root differs from the operation root before collection or policy mutation. Tests prove neither root is mutated. |
 | Direct Context indexing has hidden publication semantics | Partially confirmed and clarified | The method contract now states that ordinary calls build and publish the complete generation, while `deferFullIndexPublication` leaves publication to the staged-generation owner. Production callers were audited: MCP background indexing uses deferred publication and the Core fallback intentionally uses complete publication; no duplicate production policy publisher remains. |
 | Invalid-v2 evidence reports an invented payload mismatch | Confirmed and fixed | Core evidence is intentionally coarse (`invalid_v2`); it no longer labels every parseable but unproven marker as `payload_mismatch`. MCP retains its public fail-closed `invalid_payload` lifecycle reason. |
@@ -622,3 +622,108 @@ defects from recommendations that did not demonstrate a contract violation.
   inverse case where orphan staged v2 debris must not mask the base v1 marker.
 - Descriptor capability has an explicit unit proof and is invoked before both
   direct and MCP-preparatory collection mutation paths.
+
+## Runtime Policy Authority and Committed Receipt Follow-up
+
+The final supplied review identified three additional reachable gaps. The
+changes below keep the accepted-generation read gate as the authority and do
+not add a second lifecycle or policy pointer.
+
+| Supplied claim | Disposition | Current result |
+| --- | --- | --- |
+| Runtime-policy compatibility can stay stale after same-process input changes | Confirmed and fixed | Compatibility is derived by one function from the loaded repository profile, configured extension overlays, base ignore inputs, and the sealed policy. Profile and base-ignore mutations recompute compatibility for loaded published roots. Publication no longer marks an old sealed policy compatible merely because its durable write succeeded. Tests prove same-process ignore and profile drift fail closed and agree with restart behavior. |
+| A valid unbound staged v2 marker can override authoritative marker evidence | Confirmed and fixed | Validation no longer short-circuits through the family-wide recovery resolver. It examines only the durable policy-bound collection and the deterministic base/alternate collection authorities. Unbound staged generations remain recovery debris and cannot mask a base v1 marker or supersede a base v2 marker. |
+| Committed publication errors are understood only by background full indexing | Confirmed and fixed at final Core publication boundaries | Direct full indexing, incremental marker maintenance, and repair now share an acknowledgement helper. A committed-but-thrown receipt is accepted only after independently reproving collection, marker run, policy hash, navigation generation, and both manifest hashes. Otherwise the original error is rethrown. Successful reproving lets incremental sync clear its transient mutation target normally. Background staged publication retains its separate preservation behavior because navigation may not yet be published at that point. |
+| Direct `limit_reached` indexing must not publish policy authority | Rejected as incompatible with the product contract | Satori intentionally exposes a searchable partial index with `SEARCH_PARTIAL_INDEX` warnings while withholding navigation-rich tools. A `limit_reached` marker is therefore an accepted partial generation, not an abandoned candidate. Removing its policy binding would make the documented partial-search state impossible. |
+| Policy clear marks the durable commit too late | Already fixed before this follow-up | The committed flag is set immediately after durable removal and before runtime reconciliation. A later exception is reported with a committed clear receipt. |
+| Publish and clear receipts use incompatible token semantics | Confirmed and fixed | Receipt fields now name their actual authority: publication returns `documentDigest` and removal returns `previousDocumentDigest`, both using the persisted logical policy digest. Filesystem observation tokens remain internal cache identities. |
+| Descriptor capability preflight is missing from sync and repair entry points | Confirmed as contract hardening | `reindexByChange()` and `repairIndex()` now preflight descriptor-bound indexing support before entering their mutation flows. Full indexing and collection preparation retain their existing preflights. |
+| Policy file cache omits runtime derivation inputs | Confirmed through the compatibility defect and fixed without reparsing | Runtime input mutations explicitly recompute compatibility from the already parsed sealed policy. The file observation token remains responsible only for durable-document reloads, so unchanged policy files do not force matcher reconstruction. |
+| Parallel policy maps should be consolidated | Design recommendation, not a verified defect | The patch centralizes compatibility derivation and final publication acknowledgement without broad state-model churn. Consolidation remains a possible later refactor, not a prerequisite for the proven invariants. |
+
+### Follow-up proof
+
+- Core tests cover direct full-index, changed-file sync, and repair publication
+  callbacks that durably commit and then reject acknowledgement. Each path
+  succeeds only after the complete generation tuple is independently proven.
+- Incremental proof verifies the transient synchronizer mutation target is
+  cleared after a re-proven committed publication.
+- Runtime-policy tests cover same-process base-ignore drift, attempted
+  republication of an old sealed policy, restart parity, and repository profile
+  reload.
+- Marker-validation tests cover base v1 versus valid unbound staged v2 and base
+  v2 versus a newer valid unbound staged v2.
+- Policy removal receipts use the stored document digest, and sync and repair
+  run descriptor-capability preflight at their public mutation boundaries.
+
+## Policy Authority, Search Ownership, and TypeScript 6 Follow-up
+
+This section records the disposition of the final supplied review against the
+current worktree. The changes preserve the existing public tool surface and
+accepted-generation model.
+
+| Supplied claim | Disposition | Current result |
+| --- | --- | --- |
+| Policy clear marks durable commit after runtime reconciliation | Stale as a code claim; regression coverage added | The durable `committed` state was already set immediately after removal and before runtime reconciliation. Clear now first renames the exact policy document to a unique tombstone, marks the removal committed, verifies the logical digest from those removed bytes, then reconciles runtime state. A reconciliation failure is reported as a committed publication error. |
+| Validation falls back when the policy-bound collection is missing or markerless | Confirmed and fixed | A loaded durable policy binding is exclusive validation authority. A missing bound collection, missing marker, invalid marker, or payload mismatch returns `invalid_v2`; validation does not fall back to an older base or alternate collection. |
+| Repair trusts stale repository profile inputs | Confirmed and fixed | `repairIndex()` reloads `satori.toml` before loading and checking the sealed policy, so an external profile change makes the old generation runtime-incompatible without requiring a prior search or manual profile refresh. |
+| Cross-file owner validation occurs after grouping | Confirmed and fixed | Registry-backed owner identity now requires a normalized file match and containment of the evidence span before it can supply the grouping key. Symbol groups also include the evidence file in their key, so stale cross-file identities cannot merge chunks, gain support credit, or remove file diversity before scoring. |
+| Same-file registry promotion accepts unrelated symbols | Confirmed and fixed | Compact target promotion requires a current registry symbol in the normalized evidence file that contains the evidence span. Unrelated, boundary-only, or partially overlapping same-file symbols fall back to the evidence target and cannot supply a graph symbol ID. Byte containment is used when both spans provide byte offsets; otherwise line containment is required. |
+| Exact previews expose registry metadata as source evidence | Confirmed and fixed | Exact-registry previews are empty until a source-backed preview is available; qualified names are no longer relabeled as source evidence. |
+| Ordinary evidence reads are unbounded | Confirmed and fixed | Exact and ordinary grouped results share a deterministic 40-line first-read bound. The canonical symbol target remains complete while `evidenceSpan` and the recommended read action use the bounded window. |
+| Clear receipts can describe a different document than the one removed | Confirmed and fixed | The policy pathname is atomically renamed inside the publication callback and the receipt digest is reconstructed and verified from the tombstoned bytes. The receipt therefore identifies the document actually removed rather than a pre-read pathname observation. |
+| Runtime `require` is typed through the package import condition | Confirmed and fixed | The Oxc and Gemini CommonJS adapters use `resolution-mode: "require"` for both type-only imports and runtime `require()` casts. |
+| TypeScript-eslint raises the supported Node floor | Confirmed and fixed | Root and package engines, runtime documentation, and CI minimum-version jobs now require and test Node 22.13.0. Higher Node 24 and 26 matrix coverage remains. |
+| Built-package runtime smoke coverage is absent | Partially stale; Gemini gap fixed | Packed Core, MCP, and CLI smoke paths already existed. The packed Core smoke now also constructs the require-loaded Gemini adapter with a dummy key and performs no network request. |
+| Reproof can replace the original committed acknowledgement error | Confirmed and fixed | A throwing `resolveProvenGeneration()` no longer escapes from the acknowledgement handler. Failed or throwing reproof preserves the original `IndexPolicyPublicationError`; only a fully matching proven tuple converts the committed acknowledgement failure into success. |
+
+### Added proof
+
+- Core tests cover missing and markerless bound collections, repair after an
+  external profile edit, committed clear with runtime reconciliation failure,
+  exact removed-document digest identity, and original-error preservation when
+  generation reproof throws.
+- MCP tests cover cross-file owner splitting before support scoring, same-file
+  unrelated-symbol demotion, source-only exact previews, and bounded ordinary
+  evidence actions.
+- Packed Core smoke covers both the Oxc parser and Gemini CommonJS adapter from
+  emitted package output.
+
+## Policy Authority Closure and Ownership Hardening
+
+This section records the disposition of the final policy-authority follow-up.
+The accepted policy binding remains the exclusive generation authority; no new
+public MCP status or tool surface was added.
+
+| Supplied claim | Disposition | Current result |
+| --- | --- | --- |
+| Incremental sync can republish after an external profile change | Confirmed in a narrower form and fixed | Sync already reloaded the repository profile before final publication, so the claimed successful stale rebind was not the reachable behavior. It could still mutate vector state before the final compatibility rejection. Sync now refreshes profile, durable policy, and compatibility at its public mutation boundary and rejects an incompatible sealed policy before synchronizer or vector mutation. Final sealed-policy publication repeats the same refresh. |
+| Completion validation can report valid while active search rejects profile drift | Confirmed and fixed | Completion validation refreshes runtime policy authority and returns `runtime_policy_incompatible` when the durable accepted policy no longer matches current repository/runtime inputs. MCP maps that internal proof to the existing public `requires_reindex` response for semantic and navigation access, matching active-search authority. |
+| Same-file owner validation accepts arbitrary overlap | Confirmed and fixed | Exact registry identity now requires normalized file equality and containment of the evidence. Byte containment is used only when the chunk and symbol both carry safe, nonnegative, ordered byte pairs. Partial or malformed byte evidence fails closed rather than falling back to lines; line containment is used only when byte evidence is entirely absent. Broad file chunks, sibling-crossing chunks, and boundary-only overlaps cannot acquire a nested symbol ID. |
+| Expected-digest clear has a check-then-rename race | Confirmed and fixed | Core now serializes every policy publish and removal with one per-root filesystem lock, including direct callers that do not use an MCP mutation lease. Compare-clear first renames the selected document, verifies the expected digest from the tombstoned bytes, and restores the tombstone on conflict when the authoritative path remains absent. The publication callback remains acknowledgement/fencing integration, not proof of policy-lock ownership. |
+| Incremental sync proceeds when sealed policy authority is absent | Confirmed in the accepted-generation path and fixed | After selecting an existing, proof-bearing, explicit, or retry mutation target, sync requires a loaded runtime-compatible sealed policy before synchronizer, vector, navigation, or marker mutation. Deleted policy now fails before payload mutation; malformed JSON and invalid document digests already failed during authority refresh and have explicit no-mutation regressions. A root with no accepted collection retains the documented full-index bootstrap path. |
+| Rollback compare-clear permits a missing expected digest | Confirmed and fixed | The rollback clear API requires a SHA-256 document digest. First-generation background cleanup preserves candidate artifacts if a committed publication receipt lacks that digest instead of degrading to unconditional clear. Administrative malformed-policy removal is a separately named force-clear operation. |
+| Invalid removed-document digest skips runtime reconciliation | Confirmed and fixed | Clear captures tombstone digest-verification failure, still clears the in-process policy/binding/ignore authority and cache token, then reports the already committed removal through `IndexPolicyPublicationError`. |
+| A v1 marker under a durable v2 policy binding is legitimate legacy evidence | Confirmed as diagnostic inconsistency and fixed | A durable binding is exclusive. Missing, markerless, invalid, or v1-only evidence in its bound collection is contradictory `invalid_v2` evidence; legacy-v1 classification is reserved for roots without durable v2 policy authority. |
+| Tombstone cleanup can delete another process's active tombstone | Confirmed and fixed | Policy publish and clear remove orphan `*.removed-*` files only while holding the same Core per-root policy lock used by every durable policy writer. Startup does not perform an unfenced sweep. |
+| A crashed Core policy-lock owner wedges publication forever | Confirmed and fixed | Lock metadata now seals PID, Linux process-start identity, and owner token. A dead PID or PID-reuse mismatch is quarantined with inode and owner revalidation before replacement; live and unverified owners fail immediately rather than entering a two-second synchronous sleep loop. A child-process crash regression proves recovery. |
+| Failed compare-clear restoration can delete the only policy document | Confirmed for restoration failure or unexpected target occupancy and fixed | Pending and committed tombstones are distinct durable states. Failed restoration and occupied-target conflicts preserve the pending tombstone and report its path. Recovery restores one valid pending document when the target is absent, deletes only proven redundant or committed tombstones, and fails closed on conflicting evidence. |
+| Byte-authoritative ownership is lost during final grouped target publication | Confirmed and fixed | Registry resolution now carries an internal containment proof through grouping. Final target promotion accepts the same proven registry instance without reinterpreting contradictory line metadata; non-contained bytes still fail closed. |
+| Malformed nonempty publication receipt digests bypass artifact preservation | Confirmed as a boundary defect and fixed | Background publication accepts only exact lowercase 64-character SHA-256 receipt digests. Empty, short, uppercase, non-hex, and whitespace-padded values preserve candidate collection and navigation artifacts before cleanup. |
+| Destructive clear erases runtime policy state before acquiring the policy lock | Confirmed and fixed | `clearIndex()` acquires and holds the Core policy lock across the asynchronous destructive clear. It preserves durable and in-process policy authority until every related remote collection is confirmed absent, then establishes durable policy absence before runtime reconciliation. Lock refusal or unproven remote deletion therefore leaves accepted policy authority recoverable. |
+
+### Closure proof
+
+- Core tests cover same-process profile drift at direct sync entry before payload
+  mutation, missing/malformed/digest-invalid sealed policy before accepted-generation
+  sync mutation, validation after profile drift, contradictory bound v1 evidence,
+  post-rename expected-digest conflicts with fresh-process durable reload, shared
+  publish/clear lock contention, and malformed removed-policy reconciliation.
+- MCP completion-proof tests cover the distinct internal policy-incompatible
+  outcome and its public `requires_reindex` mapping. Ownership tests cover broad,
+  sibling-crossing, boundary-only, and contained evidence spans.
+- The Core policy lock is the crash-recoverable durable-file linearization point
+  for direct and MCP callers. The expected digest is a compare-clear intent guard,
+  while the MCP mutation lease remains the broader generation fence. Pending
+  tombstones are recovery evidence; only committed or digest-proven redundant
+  tombstones are removed under the Core lock.

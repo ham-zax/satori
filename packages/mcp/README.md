@@ -45,7 +45,7 @@ For Codex, add `--install-guidance-hook` only when you want an installer-managed
 Advanced direct execution is available through the package bin:
 
 ```bash
-npx -y @zokizuan/satori-mcp@5.0.0 --help
+npx -y @zokizuan/satori-mcp@6.0.0 --help
 ```
 
 Use direct package execution for inspection, smoke tests, or unsupported harnesses. For supported clients, prefer `satori-cli install` so startup does not depend on package-manager resolution.
@@ -71,7 +71,7 @@ Important defaults:
 - Ready/`indexed` means searchable-readable, not automatically symbol-rich. Check `manage_index status` `symbolQuality` or Ready-line `symbolQuality=…` before treating outline/graph as rich navigation evidence (`symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown` — observed registry evidence, not a parser diagnosis).
 - Index profiles still honor `.satoriignore`, `.gitignore`, `satori.toml`, and the hard denylist for secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, and database dumps.
 - `read_file` only reads under tracked searchable roots (`indexed` / `sync_completed`); it is not a general host filesystem reader. Relative paths and root escapes are denied.
-- Prefer `recommendedNextAction` when present; if `callGraphHint.supported=false`, follow `navigationFallback` args rather than inventing spans.
+- Prefer the envelope `recommendedNextAction` when present. In grouped `formatVersion: 2` output, derive navigation from `codebaseRoot` plus the canonical `target`; never reconstruct spans from prose.
 - `requires_reindex` means reindex first, then retry the original call (do not substitute `sync`).
 - `manage_index action="clear"` is destructive and should be explicit. `repair` reports structured proof across collection, snapshot, marker, fingerprint, payload, stale remote chunks, and navigation. Only no related collection routes to create; existing incompatible, incomplete, stale, malformed, or unprovable generations route to reindex. Backend failures preserve partial proof when available and should be diagnosed before retrying repair. Successful repair may write a fresh completion marker and rebuild navigation, but never re-embeds or rewrites source chunks.
 - After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, restart **all** Satori MCP clients before running `manage_index create`, `reindex`, `sync`, `clear`, or `repair`.
@@ -79,7 +79,7 @@ Important defaults:
 - On `runtime_owner_conflict`, the manage envelope lists conflicting **pids**, **versions**, and conflict reasons, plus a concrete `hints.nextStep`. MCP tools never kill other processes. Stop the listed host clients (or only orphaned Satori MCP node PIDs), leave a single package version/config running, then retry. `manage_index status` and `list_codebases` also show a compact **Runtime owners** line (live pids/versions); multi-version means mutations may block. `satori-cli doctor` reports multi-version live owners.
 - A separate canonical-root mutation lease permits multiple readers but only one create/reindex/sync/repair/clear writer across processes. Contention returns `reason="mutation_in_progress"`; `manage_index status` exposes `hints.activeMutation`. Leases do not have a time-based expiry, and a live owner is never evicted by age alone.
 - `zillizDropCollection` is fail-closed: Satori must prove the selected collection's owning codebase root and lease both affected roots before deletion. Unknown ownership or an active writer leaves the collection and local snapshot unchanged.
-- Grouped `search_codebase` results with supported call graph attach **`inboundRecovery`**: a ready-to-run `must:` search to verify callers before blast-radius edits (`call_graph` inbound stays advisory/low).
+- Every graph-ready grouped result carries `navigation.inbound="verify"`. When it also includes `callerSearchTerm`, use a separate `must:<term> <term>` search before blast-radius edits (`call_graph` inbound stays advisory/low).
 
 ## Navigation Sidecars
 
@@ -95,7 +95,7 @@ Completed full indexes write a derived symbol registry and relationship sidecar.
 
 ## Runtime Requirements
 
-Node.js 22.12 or newer is required. Parser, symbol-extractor, and relationship-builder identities are part of durable index compatibility; indexes built by the previous parser stack return `requires_reindex` and require one full rebuild.
+Node.js 22.13 or newer is required. Parser, symbol-extractor, and relationship-builder identities are part of durable index compatibility; indexes built by the previous parser stack return `requires_reindex` and require one full rebuild.
 
 Configure an embedding provider and Milvus-compatible backend before indexing. Supported embedding providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model, dimension, vector store, or schema requires a reindex because those values are part of the index fingerprint.
 
@@ -154,7 +154,7 @@ Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for 
 
 ### `search_codebase`
 
-Unified semantic search with runtime-first defaults (start with scope="runtime"), grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). For high-precision queries such as exact identifiers, quoted literal phrases, and strict path filters, search_codebase can use an exact registry fast path or add a bounded tracked-file lexical recovery pass when semantic retrieval under-delivers. Grouped results expose legacy span plus explicit previewSpan/symbolSpan metadata, structured warnings, recommendedNextAction, per-result capabilities/fallbacks, executable nextActions/navigationFallbacks, and remediation hints such as .satoriignore noise handling. Use debug:true for explainability payloads, including debugSummary, exactRegistry, phaseTimingsMs, trackedLexical, and ranking provenance.
+Unified semantic search with a runtime-first scope="runtime" default, grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Grouped formatVersion 2 results publish one canonical target, bounded source-only preview, quality evidence, and compact graph readiness; use the envelope-level recommendedNextAction first. A target with symbolId opens through read_file(open_symbol) and can be passed directly to call_graph only when navigation.graph="ready"; a target without symbolId opens through its 1-based inclusive span. Every graph-ready result carries navigation.inbound="verify"; callerSearchTerm is an optional identifier for a separate must:<term> <term> inbound-reference verification search. Follow structured warning actions and remediation hints; use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debug:true only for bounded ranking and derivation evidence.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -169,12 +169,12 @@ Unified semantic search with runtime-first defaults (start with scope="runtime")
 
 ### `call_graph`
 
-Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph): unique same-file name matches are high confidence; cross-file edges stay low unless IMPORTS/EXPORTS evidence upgrades them, or an imported module has a unique same-name target (e.g. class methods without a top-level EXPORTS record; generic names like push/get stay suppressed). Traversal is bounded (depth/limit) and incomplete by design—empty or short edge lists are not proof of “no callers.” Output is advisory navigation context, not authoritative blast-radius proof; confirm impact with search_codebase, read_file, tests, and references before editing. In successful traversal responses, sidecar.nodeCount and sidecar.edgeCount report counts returned in that response, not whole-sidecar totals.
+Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. When a grouped search result has navigation.graph="ready", pass its target directly as symbolRef and use the envelope codebaseRoot as path. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph); traversal is bounded, incomplete, advisory, and not authoritative blast-radius proof, so empty or short edge lists are not proof of no callers. Verify impact with search_codebase, read_file, tests, or direct references. In successful responses, sidecar.nodeCount and sidecar.edgeCount count only records returned in that response.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `path` | string | yes |  | ABSOLUTE filesystem path to the indexed codebase root or subdirectory (relative paths are rejected). |
-| `symbolRef` | object | yes |  | Symbol reference from a grouped search result callGraphHint. |
+| `symbolRef` | object | yes |  | Pass a graph-ready grouped search result target directly. |
 | `direction` | enum("callers", "callees", "both") | no | `"both"` | Traversal direction from the starting symbol. |
 | `depth` | integer | no | `1` | Traversal depth (max 3). |
 | `limit` | integer | no | `20` | Maximum number of returned edges. |
@@ -196,7 +196,7 @@ Return a sidecar-backed symbol outline for one file, including call_graph jump h
 
 ### `read_file`
 
-Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). Requires an absolute path whose canonical real path is inside a tracked root with status indexed or sync_completed. Supports optional 1-based inclusive line ranges and safe truncation.
+Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). For a grouped search target, resolve target.file under codebaseRoot; when target.symbolId exists, pass it as open_symbol.symbolId, otherwise pass target.span as the 1-based inclusive start_line/end_line window. The canonical real file path must stay inside a tracked root with status indexed or sync_completed.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|

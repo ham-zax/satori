@@ -47,7 +47,7 @@ Compatibility note:
 
 ### 2) Introduce one shared completion-proof validator
 Add a helper used by all relevant handlers:
-- `validateCompletionProof(effectiveRoot): { outcome: "valid" | "stale_local" | "fingerprint_mismatch" | "probe_failed"; reason?: "missing_marker_doc" | "invalid_marker_kind" | "path_mismatch" | "invalid_payload" | "fingerprint_mismatch" | "probe_failed" }`
+- `validateCompletionProof(effectiveRoot): { outcome: "valid" | "stale_local" | "fingerprint_mismatch" | "policy_incompatible" | "probe_failed"; reason?: "missing_marker_doc" | "invalid_marker_kind" | "legacy_policy_unsealed" | "path_mismatch" | "invalid_payload" | "fingerprint_mismatch" | "runtime_policy_incompatible" | "probe_failed" }`
 
 Validation semantics (single source of truth):
 - marker exists
@@ -85,6 +85,9 @@ In `handleSearchCode`, `handleFileOutline`, and `handleCallGraph`:
     - `hints.staleLocal.recommendedAction={tool:"manage_index",args:{action:"create",path:"<root>"}}`
 - If completion proof outcome is `fingerprint_mismatch`:
   - return `status:"requires_reindex", reason:"requires_reindex"` with reindex hint (not `not_indexed`)
+- If completion proof outcome is `policy_incompatible`:
+  - return `status:"requires_reindex", reason:"requires_reindex"` with reindex guidance for the accepted policy's runtime-input drift
+  - do not apply the navigation-only fingerprint exception: profile/ignore policy drift blocks semantic and navigation authority consistently
 - If completion proof outcome is `probe_failed`:
   - do not downgrade to `not_indexed` based on probe failure alone
   - non-authoritative rule: never upgrades state and never downgrades an otherwise-OK local indexed state
@@ -99,6 +102,8 @@ In `handleGetIndexingStatus`:
   - keep compatibility diagnostics in output
 - If proof outcome is `fingerprint_mismatch`:
   - surface `requires_reindex` guidance
+- If proof outcome is `policy_incompatible`:
+  - surface `requires_reindex` guidance with internal proof reason `runtime_policy_incompatible`
 - If proof outcome is `probe_failed`:
   - do not reclassify as `not_indexed`; surface probe diagnostic note only
 
@@ -165,7 +170,15 @@ Update behavior spec so it does not claim foreground handlers mutate snapshot st
 - Add regression where marker probe intermittently fails:
   - searchable roots must not flip to `not_indexed` solely from probe failure.
 - Add regression that `fingerprint_mismatch` maps to `requires_reindex` (not `not_indexed`).
+- Add regression that `runtime_policy_incompatible` maps to `requires_reindex` for semantic and navigation access.
 - Add regression that successful marker probe with empty result maps to `stale_local` (`missing_marker_doc`), not `probe_failed`.
+
+### H) Durable policy authority
+- Serialize every Core policy publish and removal through one crash-recoverable per-root filesystem lock; a dead PID or PID-start mismatch is recoverable, live or unverified ownership fails immediately without blocking the Node.js event loop, and MCP lifecycle leases remain the broader generation fence.
+- Compare-clear must verify the expected digest from the document after it has been atomically detached to a pending tombstone. A mismatch restores the detached document when possible and otherwise preserves every ambiguous document. A separate committed-tombstone state makes crash recovery deterministic.
+- Existing/proof-bearing incremental targets require a readable runtime-compatible sealed policy before synchronizer, vector, navigation, or marker mutation. No-generation sync may still enter the full-index bootstrap path.
+- Failed first-generation rollback must preserve candidate artifacts when a committed publication receipt does not carry its required document digest; it must not degrade to unconditional clear.
+- Tombstone recovery runs only while the Core policy lock is held. One valid pending tombstone is restored when the authoritative path is absent; conflicting or malformed evidence is preserved and fails closed.
 
 ## Acceptance Criteria
 1. Repeated `create -> status -> search -> list_codebases` cannot flap a repo to `not_indexed` unless a real local transition occurs.
@@ -175,7 +188,9 @@ Update behavior spec so it does not claim foreground handlers mutate snapshot st
 5. Transient cloud failures cannot cause immediate local state deletion during foreground operations.
 6. Stale-local responses preserve existing reason contract (`reason:"not_indexed"`) and never trigger protocol-failure retry paths.
 7. Marker probe transient failure does not cause response-level downgrade flapping to `not_indexed`.
-8. Fingerprint mismatch always resolves to `requires_reindex`.
+8. Fingerprint mismatch and runtime-policy incompatibility always resolve to `requires_reindex`.
+9. Durable policy publication and removal are linearized across direct Core and MCP callers.
+10. Incremental sync never mutates an accepted generation after its sealed policy is missing, malformed, digest-invalid, or runtime-incompatible.
 
 ## Non-Goals
 - No tool-surface expansion.
@@ -210,6 +225,7 @@ Update behavior spec so it does not claim foreground handlers mutate snapshot st
 - [ ] Implement stale-local warning in `manage_index status`.
 - [ ] Add structured `hints.staleLocal` payload.
 - [ ] Map `fingerprint_mismatch` to `requires_reindex` responses.
+- [x] Map `runtime_policy_incompatible` to `requires_reindex` for every access mode.
 - [ ] Ensure `probe_failed` does not downgrade classification to `not_indexed`.
 
 ### Phase 5: Reconcile Split
@@ -225,7 +241,7 @@ Update behavior spec so it does not claim foreground handlers mutate snapshot st
 ## TDD Cycles (Per Phase)
 
 ### Cycle 1: Proof Validator (Red -> Green -> Refactor)
-- Red: add tests for `missing_marker_doc`, `invalid_marker_kind`, `path_mismatch`, `fingerprint_mismatch`, `invalid_payload`, `probe_failed`.
+- Red: add tests for `missing_marker_doc`, `invalid_marker_kind`, `legacy_policy_unsealed`, `path_mismatch`, `fingerprint_mismatch`, `runtime_policy_incompatible`, `invalid_payload`, `probe_failed`.
 - Green: implement helper and pass tests with minimal changes.
 - Refactor: remove duplicated proof-check codepaths.
 

@@ -5,7 +5,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 ## Outline of Discovered Behaviors (Complete)
 - Server boot lifecycle is split into a bootstrap entrypoint (`index.ts`) and server factory (`start-server.ts`), with run-mode gates for startup loops.
 - Canonical architecture path: Core sync state + vector store + sidecar + MCP handlers + 6 MCP tools.
-- North-star agent path: plain-English `search_codebase` discovery first, then `file_outline -> call_graph -> read_file(open_symbol)` for deterministic proof with `navigationFallback` when graph is unavailable.
+- North-star agent path: plain-English `search_codebase` discovery first, then use the returned `codebaseRoot` and canonical grouped `target` with `file_outline -> call_graph -> read_file(open_symbol)` for deterministic proof.
 - Exactly six MCP tools are exposed via registry: `list_codebases`, `manage_index`, `search_codebase`, `file_outline`, `call_graph`, `read_file`.
 - `satori-cli` is a shell client of the same six MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
 - `satori-cli` also ships CLI-only `install` and `uninstall` commands for supported clients; these commands run before MCP session startup and do not widen the six-tool surface.
@@ -29,7 +29,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Rerank is policy-controlled (capability/profile + docs-scope skip), runs post-filter and pre-group, top-K bounded, deterministic rank-only boost, stable failure degradation.
 - Candidate and group sorting both use explicit deterministic tie-break chains.
 - Grouping supports `symbol` and `file`; symbol grouping prefers owner metadata when present, repairs missing owner identity from a compatible registry, and uses deterministic hashed fallback groups when symbol identity is unavailable.
-- `callGraphHint` contains supported/unsupported reasoned state; supported groups expose compact `nextActions.callGraph` args plus allowed directions, unsupported groups expose executable `navigationFallback`, and search results include `recommendedNextAction`, capability confidence, and fallbacks so agents can choose the proof path without reconstructing spans.
+- Grouped `formatVersion: 2` results expose one canonical `target`, display and quality facts, bounded preview evidence, and reasoned `navigation.graph` state. The envelope carries the only `recommendedNextAction`; consumers derive reads and graph calls from `codebaseRoot` plus `target` without repeated per-result tool arguments.
 - `file_outline` supports `resolveMode=outline|exact` with exact outcomes `ok|ambiguous|not_found`.
 - `read_file` supports `plain|annotated`; annotated mode returns `outlineStatus`, `outline`, `hasMore`, warnings/hints; `open_symbol` resolves deterministically via `file_outline exact`. Content is served only when the requested absolute path's canonical real path is inside a tracked searchable root (`indexed` or `sync_completed`); relative paths, sibling repos, symlink escapes, and `..` escapes are denied with structured `outside_indexed_root` before any content is read.
 - Reindex-compatibility gates propagate `requires_reindex` envelopes with deterministic `hints.reindex` across search/navigation tools.
@@ -68,7 +68,7 @@ North-star workflow:
 - `file_outline` locks deterministic symbol spans in-file.
 - `call_graph` traverses callers/callees for that symbol.
 - `read_file(open_symbol)` opens deterministic symbol span for editing context.
-- If call graph is unavailable for a group, `navigationFallback` provides executable `readSpan` and optional `fileOutlineWindow`.
+- If call graph is unavailable for a group, `navigation.graph` carries the reason and the same canonical target remains readable through its concrete symbol ID or validated span.
 
 Language capability contract:
 - Capability names are exposed through `packages/core/src/language/registry.ts` and keep backward-compatible aliases for existing MCP callers.
@@ -80,8 +80,8 @@ Language capability contract:
 - Parser, extractor, and relationship-builder versions are durable compatibility fields. A missing or older identity fails closed with `requires_reindex`; `sync` and `repair` cannot relabel an index built by a different analysis contract.
 - Parser or extractor failure must degrade to synthesized file-owner fallback, must not crash indexing, and must not attach stale extracted-symbol owner metadata.
 - Observed symbol quality (F9 Phase 1): `manage_index status` exposes structured `symbolQuality` derived from the compatible symbol registry (non-file symbol coverage on symbol-eligible languages). `list_codebases` Ready lines include a compact `symbolQuality=<status>` marker. Status values are `symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown` with `basis: "symbol_registry"`. This gauge does **not** claim parser fallback cause; search-only languages are not labeled `symbol_sparse`. Lifecycle `indexed` means searchable/readable, not automatically symbol-rich.
-- Language capability evidence: `manage_index status` may expose additive `languageCapabilities`, sorted by canonical language and limited to languages observed in the compatible registry. It combines the static public declaration with indexed-file and non-file-symbol evidence plus relationship-sidecar compatibility. Effective `semanticSearch`, `exactSymbol`, `outline`, and `callGraph` states are `ready|degraded|unavailable|not_applicable`; deterministic `degradationReasons` explain weaker states. A compatible relationship sidecar is evidence even when it contains zero edges. Missing or generation-incompatible sidecars fail closed and never imply call-graph readiness. This field does not alter `symbolQuality` or per-result search capabilities.
-- L1 symbol-only languages must not claim `callGraphBuild` or `callGraphQuery`, must not emit `nextActions.callGraph`, and must keep `call_graph` unsupported or not-ready even if relationship sidecars exist globally.
+- Language capability evidence: `manage_index status` may expose additive `languageCapabilities`, sorted by canonical language and limited to languages observed in the compatible registry. It combines the static public declaration with indexed-file and non-file-symbol evidence plus relationship-sidecar compatibility. Effective `semanticSearch`, `exactSymbol`, `outline`, and `callGraph` states are `ready|degraded|unavailable|not_applicable`; deterministic `degradationReasons` explain weaker states. A compatible relationship sidecar is evidence even when it contains zero edges. Missing or generation-incompatible sidecars fail closed and never imply grouped `navigation.graph="ready"`.
+- L1 symbol-only languages must not claim `callGraphBuild` or `callGraphQuery`; grouped results must carry `navigation.graph="unsupported_language"`, and direct `call_graph` must remain unsupported or not-ready even if relationship sidecars exist globally.
 - Adding extensions to the capability matrix must not silently broaden the default indexing profile. Any profile expansion requires an explicit allowlist/profile test.
 - Search-only artifact/container languages such as Vue, Svelte, Astro, CSS/SCSS, Dockerfile, Makefile, CMakeLists, and Justfile must not claim `symbols`, `owner`, `imports`, `fileOutline`, or `callGraph` until deterministic extractors exist.
 - TypeScript module extensions `.mts` and `.cts` route as TypeScript; C/C++ variants `.cc`, `.cxx`, `.hh`, `.hxx`, `.ixx` route as C++; `.kts` routes as Kotlin.
@@ -165,6 +165,10 @@ Outputs:
 - Successful `sync` responses include additive structured `syncStats` (`added`, `removed`, `modified`). Consumers must use this evidence rather than parsing `humanText` when proving that a sync detected source changes.
 - The additive optional `repairProof` field does not change the version 1 envelope. It contains `collection`, `snapshot`, `marker`, `fingerprint`, `payload`, `staleRemoteChunks`, and `navigation`; each item has `status=matched|failed|missing|unproven|not_checked`, an optional explanatory `basis`, and optional counts. Pre-proof input/provider/owner/lease/indexing refusals may omit it. Once evidence collection begins, backend and publication failures preserve the latest partial proof.
 - `repair` verifies trusted runtime fingerprint provenance, exact remote payload equality, and absence of stale remote chunks before publishing readiness. It may write a fresh completion marker and rebuild navigation, but does not re-embed or rewrite source chunks.
+- Completion proof distinguishes accepted-policy drift from malformed marker evidence. Internal `outcome:"policy_incompatible", reason:"runtime_policy_incompatible"` maps to the existing public `status:"requires_reindex", reason:"requires_reindex"` contract for semantic and navigation access. Completion validation refreshes repository profile inputs and requires the same durable policy-bound collection accepted by active search; an unbound generation, a missing or markerless bound collection, or a v1 marker under a v2 policy binding cannot prove readiness.
+- Existing-generation incremental sync requires a readable runtime-compatible sealed policy before synchronizer, vector, navigation, or marker mutation. A root with no accepted generation retains the full-index bootstrap path. Missing policy authority cannot be reconstructed from a completion marker.
+- Every Core durable policy publish, compare-clear, force-clear, and destructive index clear uses the same per-root filesystem mutation lock. Lock ownership records PID, Linux process-start identity, and an owner token; dead or PID-reused owners are quarantined and recovered, while live or unverified contention fails immediately without synchronous retry sleeps. Compare-clear verifies the expected digest from pending-tombstone bytes, restores on conflict when possible, preserves ambiguous documents otherwise, and marks successful removal with a distinct committed tombstone before cleanup. The MCP mutation lease remains the broader generation-operation fence; arbitrary publication callbacks are not policy-lock capabilities.
+- Exact grouped symbol targets retain the registry ownership proof established before grouping. Valid byte containment remains authoritative through final target publication even when line metadata disagrees; malformed, partial, or non-contained byte evidence cannot publish a symbol ID.
 
 Warnings/hints:
 - Reindex guidance text when blocked by fingerprint mismatch.
@@ -216,16 +220,17 @@ Inputs/defaults:
 - Defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `limit=capability default`, `debug=false`.
 
 Outputs:
-- JSON envelope: `status`, `path`, `query`, `scope`, `groupBy`, `resultMode`, `limit`, `freshnessDecision`, `freshnessSummary`, `results`, optional structured `warnings`, top-level `recommendedNextAction`, and `hints`.
-- Grouped results include legacy `span`, explicit `previewSpan` and optional authoritative `symbolSpan`, plus `capabilities`, optional result-level `recommendedNextAction`, optional `fallbacks`, executable `nextActions`, and `navigationFallback` only when a deterministic preview-span fallback is intentionally allowed.
-- `nextActions.openSymbol` is gated by exact symbol navigation readiness; `nextActions.callGraph` is gated separately by relationship-sidecar readiness. Search may expose `openSymbol` without exposing `callGraph`.
-- If exact symbol navigation is not ready because symbol registry readiness is missing or incompatible, search suppresses preview-span action leaks: no `navigationFallback.readSpan`, no preview-span `read_file` fallback entries, and no recommended action derived from those preview spans.
+- Every search JSON envelope carries `formatVersion: 2`; successful envelopes include `status`, requested `path`, resolved `codebaseRoot`, `query`, `scope`, `groupBy`, `resultMode`, `limit`, `freshnessDecision`, `freshnessSummary`, `results`, optional structured `warnings`, one optional top-level `recommendedNextAction`, and `hints`.
+- Grouped results contain `target`, `displayLabel`, `language`, optional `symbolKind`, six-decimal `score`, `quality`, optional `evidenceChunks` (only when at least 2), bounded source-only `preview`, optional distinct `evidenceSpan`, `navigation`, and optional bounded evidence-only `debug`. Display labels are capped at 160 UTF-8 bytes, previews at five lines and 768 bytes, and caller terms at 96 bytes without truncating identifiers. The display label is not prepended to `preview`.
+- `target.file` is normalized repo-relative, `target.span` is 1-based inclusive, and `target.symbolId` is present only for a registry-proven concrete `symbolInstanceId`. Internal group IDs, logical symbol keys, and chunk IDs never become navigation identity.
+- `navigation.graph` is `ready` only when the target is accepted directly by `call_graph.symbolRef`; every graph-ready result also carries `navigation.inbound="verify"`. `callerSearchTerm` is an optional graph-ready ASCII identifier for a separate `must:<term> <term>` inbound-reference search. Unavailable graph states omit both inbound fields and carry the precise reason in `navigation.graph`.
+- Raw result objects remain unchanged. The v2 discriminator versions the whole search envelope, not a second user-facing mode.
 - Status variants: `ok`, `not_indexed`, `requires_reindex`, `not_ready`.
 - Failed index snapshots return `status:"not_indexed"` with `reason:"index_failed"`, `indexingFailure` diagnostics, and `manage_index {action:"create"}` hints. This restarts a failed partial attempt; it is not a fingerprint `reindex` requirement.
 
 Warnings/hints:
-- Search warnings are structured objects with `code`, `severity`, `blocksUse`, `message`, and optional `action`; known codes include `FILTER_MUST_UNSATISFIED`, `SEARCH_PASS_FAILED:*`, `RERANKER_FAILED`, `SEARCH_DIRTY_WORKTREE_NOT_SYNCED`, `SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE`, and `SEARCH_CHANGED_FILES_BOOST_SKIPPED`. `SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE` means a stale dirty-path candidate was suppressed but bounded current-source evidence did not replace it; callers must narrow/read the file or synchronize before treating that path as covered.
-- `hints.navigation`, `hints.noiseMitigation`, `hints.debugSummary`, `hints.debugSearch`, `hints.reindex`, result `fallbacks`, and `navigationFallback`.
+- Search warnings are structured objects with `code`, `severity`, `blocksUse`, `message`, and optional `action`; known codes include `FILTER_MUST_UNSATISFIED`, `SEARCH_PASS_FAILED:*`, `RERANKER_FAILED`, `SEARCH_DIRTY_WORKTREE_NOT_SYNCED`, `SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE`, `SEARCH_CHANGED_FILES_BOOST_SKIPPED`, and `SEARCH_INVALID_GROUP_TARGET_OMITTED`. `SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE` means a stale dirty-path candidate was suppressed but bounded current-source evidence did not replace it; callers must narrow/read the file or synchronize before treating that path as covered. An invalid exact-registry target declines the fast path, carries the invalid-target warning into normal retrieval, and does not suppress valid lower-confidence results.
+- Envelope hints include `hints.noiseMitigation`, `hints.debugSummary`, `hints.debugSearch`, and non-ready remediation such as `hints.reindex`; grouped navigation state stays in each result's compact `navigation.graph`.
 - Backend failures return structured `not_ready` envelopes with `reason=vector_backend_unavailable`, stable diagnostic codes such as `ZILLIZ_CLUSTER_STOPPED`, and remediation in `hints.backend`.
 
 Determinism:
@@ -321,7 +326,7 @@ Determinism:
 - traversal bounded by depth/limit.
 
 Common recipes:
-1. Start from search `callGraphHint.symbolRef`.
+1. When grouped `navigation.graph="ready"`, call `call_graph(path=codebaseRoot, symbolRef=target)`.
 2. Use `direction=both, depth=1` then increase depth if needed.
 
 Behavior:
@@ -385,15 +390,15 @@ Behavior:
 2) Result modes and grouping
 - Trigger: `resultMode` and `groupBy`.
 - Effect: `raw` returns chunks; `grouped` returns collapsed groups by symbol/file. For `groupBy=symbol`, grouping prefers `ownerSymbolKey` plus `ownerSymbolInstanceId` when present, repairs missing owner identity from a compatible symbol registry by file/span containment, then falls back to deterministic file/proximity grouping.
-- Observability: `resultMode`, `results.kind`, legacy `span`, additive `previewSpan`, optional authoritative `symbolSpan`, additive `symbolKey`, `symbolInstanceId`, `symbolKind`, `confidence`, `collapsedChunkCount`, `callGraphHint`, compact readiness-gated `nextActions`, `recommendedNextAction`, `capabilities`, `fallbacks`, symbol-bounded capped `preview`, and `debug.symbolAggregation.ownerSource` (`owner_metadata|registry_repair|fallback`) when `debug:true`.
-- Oversized symbols: when `symbolSpan` line count is large (≥200), top `recommendedNextAction` prefers a plain `read_file` using `previewSpan` line range first. Primary `span` / `symbolSpan` / `nextActions.openSymbol` / `callGraphHint.symbolRef.span` stay exact full-symbol identity (exact `open_symbol` always expands to the resolved span).
+- Observability: envelope `formatVersion`, `resultMode`, `codebaseRoot`, top-level `recommendedNextAction`, and grouped `target`, `displayLabel`, `symbolKind`, `score`, `quality`, optional `evidenceChunks`, capped source-only `preview`, optional distinct `evidenceSpan`, `navigation.graph`, graph-ready `navigation.inbound="verify"`, optional `callerSearchTerm`, and `debug.symbolAggregation.ownerSource` (`owner_metadata|registry_repair|fallback`) when `debug:true`.
+- Oversized symbols: when the authoritative target span is large (at least 200 lines), top `recommendedNextAction` prefers a plain `read_file` using `evidenceSpan` first. Ordinary groups use the matched evidence span; exact-registry groups publish a same-file 40-line declaration window. `target.span` and `target.symbolId` remain the full concrete symbol identity; exact `open_symbol` always expands to the resolved symbol span.
 - Determinism: group key construction, saturated support boost, and sorted representative selection.
-- Performance: grouped mode reduces result payload/noise with capped previews and shared call-graph action args; raw mode preserves chunk detail.
+- Performance: grouped mode removes repeated action/fallback/capability trees and caps previews at five lines and 768 UTF-8 bytes; raw mode preserves chunk detail. The checked 12 KB target covers the standard 20-result fixture, while structural-overhead tests exclude unbounded canonical path and symbol-identity strings and a separate realistic-long-identity fixture guards practical monorepo payloads.
 
 3) Subdirectory `effectiveRoot` resolution
 - Trigger: `search_codebase.path` points to a subdirectory that is inside an indexed parent root.
 - Effect: search executes against the nearest indexed parent (`effectiveRoot`), but response `path` remains the original requested path.
-- Observability: logs include auto-resolve message; `navigationFallback.context.codebaseRoot` and `readSpan.args.path` resolve against `effectiveRoot`.
+- Observability: logs include the auto-resolve message; successful envelopes publish the resolved parent as `codebaseRoot`, while every grouped `target.file` stays relative to that root.
 - Determinism: parent selection uses longest-prefix parent match with deterministic sort.
 - Performance: avoids forced reindex of subdirectories by reusing parent index.
 
@@ -515,19 +520,19 @@ Recent vs legacy:
 
 ## D) Navigation + Symbol Semantics
 
-1) `callGraphHint` semantics
+1) Grouped target and graph readiness
 - Trigger: grouped search result construction.
-- Effect: returns `{supported:true,symbolRef,validated:true,validatedAt,sidecarBuiltAt}` when graph readiness is established through a compatible relationship sidecar bound to the loaded symbol registry manifest hash. On symbol-owned flows, `symbolRef.symbolId` carries the owner `symbolInstanceId`. Otherwise returns `{supported:false,reason}`.
-- Observability: `results[].callGraphHint`.
-- Determinism: supported symbolRef uses deterministic registry file/span metadata on symbol-owned flows; unsupported search hint reasons are limited to `missing_symbol`, `unsupported_language`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, and `stale_symbol_ref`. The direct `call_graph` handler keeps the public `invalid_symbol_ref` reason for malformed direct handler input, but emits it inside the normal call-graph envelope. Legacy low-level sidecar diagnostics may still use `missing_sidecar`, but current public handlers normalize unavailable navigation state to the precise registry/relationship reasons above.
-- Performance: no graph query until explicit `call_graph` call.
+- Effect: publishes one canonical `target`. A registry-proven concrete owner carries `target.symbolId=owner.symbolInstanceId`; unproven groups omit the ID. Registry identity is promoted only when its normalized file matches the representative evidence file. `navigation.graph="ready"` requires that concrete identity plus a compatible relationship sidecar bound to the loaded registry manifest and carries `navigation.inbound="verify"`. Otherwise the field carries `missing_symbol`, `unsupported_language`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `stale_symbol_ref`, or `partial_index_navigation_unavailable`.
+- Observability: `results[].target` and `results[].navigation`; graph validation timestamps and sidecar build times exist only in bounded debug evidence.
+- Determinism: a graph-ready target validates directly against the registered `call_graph.symbolRef` schema. Internal `groupId`, `symbolKey`, and chunk IDs are never aliases for the concrete symbol identity.
+- Performance: no graph query until an explicit `call_graph` call, and no graph tool arguments repeat per result.
 
-2) `navigationFallback`
-- Trigger: `callGraphHint.supported === false`.
-- Effect: emits executable fallback plan derived from `previewSpan` (`readSpan` always; `fileOutlineWindow` when sidecar-ready and extension supports outline). `symbolSpan` remains authoritative owner metadata for exact navigation when available.
-- Observability: `results[].navigationFallback`.
-- Determinism: executable fallback args are derived deterministically from representative chunk/effective root; preview-span fallback and owner-symbol span remain distinct fields in grouped results.
-- Performance: no extra backend calls; payload-only guidance.
+2) Deterministic read mapping
+- Trigger: opening any grouped result.
+- Effect: resolve `target.file` under the envelope `codebaseRoot`. When `target.symbolId` exists, call `read_file` on that absolute file path with `open_symbol.symbolId`; otherwise call it with `target.span.startLine/endLine`. The target span is 1-based inclusive. `evidenceSpan`, when present, is a bounded same-file evidence or declaration window and is not a second target identity.
+- Observability: the top-level `recommendedNextAction` applies the same mapping, except an oversized target may recommend its bounded `evidenceSpan` first.
+- Determinism: target paths are normalized repo-relative paths, spans are positive ordered safe integers, executable recommendations repeat the containment check, and malformed candidates are omitted with one `SEARCH_INVALID_GROUP_TARGET_OMITTED` warning. The envelope serializer explicitly projects every v2 field; newly added internal fields cannot escape through object spread.
+- Performance: consumers derive calls locally from canonical facts; no per-result executable fallback tree is serialized.
 
 3) `file_outline` exact resolution
 - Trigger: `resolveMode="exact"` with `symbolIdExact` or `symbolLabelExact`.
@@ -551,12 +556,13 @@ Recent vs legacy:
 - Performance: optional outline lookup; plain mode remains cheaper.
 
 **Evidence:**
-- [search-types.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-types.ts) (`CallGraphHint`, `SearchNavigationFallback*`, file outline statuses).
-- [handlers.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.ts) (`buildCallGraphHint`, `buildNavigationFallback`, `handleFileOutline`, exact mode logic).
+- [search-types.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-types.ts) (`SearchGroupedResultV2`, target/navigation contracts, file outline statuses).
+- [search-group-results.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-group-results.ts) (canonical target projection and navigation state).
+- [search-compact-contract.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-compact-contract.test.ts) (identity separation, registered schema execution, invalid-combination omission, and byte budgets).
 - [read_file.ts](/home/hamza/repo/satori/packages/mcp/src/tools/read_file.ts) (`open_symbol` resolution and ambiguous/not_found handling).
 - [handlers.file_outline.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.file_outline.test.ts) (exact `ok|ambiguous|not_found`).
 - [tools/read_file.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/read_file.test.ts) (open_symbol next steps and annotated semantics).
-- [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) (`navigationFallback` assertions incl. subdirectory root case).
+- [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) (grouped readiness and subdirectory-root assertions).
 
 ---
 
@@ -816,6 +822,7 @@ Behavior contract:
 
 3) “requires_reindex”
 - Any tool returning `status:"requires_reindex"` with `hints.reindex` should be remediated by `manage_index {action:"reindex", path:hints.reindex.args.path}`.
+- This includes accepted-policy drift reported internally as `runtime_policy_incompatible`; it is not an ignore-only sync case because the existing generation was sealed under different runtime policy inputs.
 - Re-run original tool call after reindex.
 
 4) “failed index”
@@ -830,8 +837,8 @@ Behavior contract:
 
 6) “call graph not ready”
 - If `call_graph` returns `not_ready`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, or `incompatible_relationship_sidecar`, reindex.
-- While waiting, use `search_codebase` `navigationFallback.readSpan` and optional `fileOutlineWindow` only when they are actually emitted.
-- If search emits `openSymbol` without `callGraph`, read the exact symbol first and treat graph traversal as unavailable until readiness is repaired.
+- While waiting, use the grouped result's `target` to open its exact symbol or validated span under `codebaseRoot`.
+- If `navigation.graph` is not `ready`, do not call `call_graph`; read the target first and treat traversal as unavailable until readiness is repaired.
 
 7) “partial scan detected” (core sync)
 - Observe `partialScan=true` and `unscannedDirPrefixes` in core sync diagnostics.
@@ -882,9 +889,9 @@ Behavior contract:
 | Missing reranker clamp behavior | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `rerank.enabled=false when reranker instance is missing` |
 | Rerank can alter representative chunk before grouping | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `reranker can change grouped representative chunk selection...` |
 | Noise mitigation hint deterministic payload | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `emits deterministic noiseMitigation hint...`, `omits ... runtime-dominant` |
-| Fallback groupId + navigation fallback stability | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped fallback emits stable hash groupId...` |
-| Search navigation next-step hint | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `grouped output includes compact nextActions...` |
-| Subdirectory query fallback context correctness | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) `subdirectory query builds navigationFallback from effectiveRoot...` |
+| Compact grouped v2 identity, navigation, schema execution, and payload budgets | [search-compact-contract.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-compact-contract.test.ts) all contract cases |
+| Search canonical target and envelope recommendation | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) grouped target/navigation/recommendation assertions |
+| Subdirectory query `codebaseRoot` correctness | [handlers.scope.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.scope.test.ts) subdirectory grouped-result assertions |
 | Backend diagnostics for stopped/unavailable vector backend | [setup-errors.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/setup-errors.test.ts), [search_codebase.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/search_codebase.test.ts), [manage_index.test.ts](/home/hamza/repo/satori/packages/mcp/src/tools/manage_index.test.ts) |
 | Installer postflight is exact, non-mutating, and bounded | [install-postflight.test.ts](/home/hamza/repo/satori/packages/cli/src/install-postflight.test.ts), [index.test.ts](/home/hamza/repo/satori/packages/cli/src/index.test.ts), [install.test.ts](/home/hamza/repo/satori/packages/cli/src/install.test.ts), [start-server.lifecycle.test.ts](/home/hamza/repo/satori/packages/mcp/src/server/start-server.lifecycle.test.ts) |
 | Structured repair proof and deterministic recovery | [context.test.ts](/home/hamza/repo/satori/packages/core/src/core/context.test.ts) `recommends create only when no related collection exists`, `snapshot-selected collection is missing but a related collection exists`, `reports a malformed completion marker as failed evidence`, `requires reindex when exact payload equality exceeds the query ceiling`, `missing expected chunk requires reindex with structured proof`; [manage-indexing-handlers.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/manage-indexing-handlers.test.ts) `preserves partial proof when the vector backend fails`, `preserves matched navigation proof when watcher touch fails afterward`; [handlers.manage_index_blocking.test.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.manage_index_blocking.test.ts) public proof and next-action assertions |

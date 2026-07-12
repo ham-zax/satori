@@ -195,13 +195,12 @@ Gate reasons:
 - optional `debug`: ranking breakdowns/traces
 
 Grouped search output includes:
-- stable `groupId`
-- `symbolId` / `symbolLabel` (nullable when metadata is missing)
-- `indexedAt` (aggregated max), `stalenessBucket`, `collapsedChunkCount`
-- `callGraphHint` discriminated union (`supported: true|false`); supported hints include `validatedAt` and `sidecarBuiltAt`, and stale or missing sidecar refs are downgraded to unsupported fallbacks
-- compact `nextActions.callGraph` args plus allowed `directions`; grouped previews are capped for token efficiency
+- `formatVersion: 2` at the envelope and the resolved `codebaseRoot`
+- one canonical `target` with repo-relative file, 1-based inclusive span, and optional registry-proven concrete `symbolId`
+- bounded `preview` plus optional distinct `evidenceSpan`, display data, score, and owner/semantic quality
+- compact `navigation.graph` readiness, graph-ready `navigation.inbound="verify"`, and optional `callerSearchTerm`; no repeated per-result tool argument trees
 
-`call_graph` is first-class and consumes `callGraphHint.symbolRef`:
+`call_graph` is first-class and consumes a grouped `target` directly only when `navigation.graph="ready"`:
 - TS/JS/Python supported
 - deterministic ordering for nodes/edges/notes
 - structured unsupported/not_found/requires_reindex responses

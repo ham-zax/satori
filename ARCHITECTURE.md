@@ -347,7 +347,7 @@ Readiness is layered. Snapshot status alone is **not** proof.
 |-------|-----------------|------------|
 | A. Snapshot searchable | `~/.satori` snapshot | Status is `indexed` or `sync_completed` |
 | B. Runtime fingerprint gate | Snapshot fingerprint vs current runtime | Provider, model, dimension, vector store, and `schemaVersion` match; not legacy-unverified / missing |
-| C. Completion proof | Marker doc in the vector collection (`satori_index_completion_v1`) | Shape valid, path matches, fingerprint matches runtime → `validateCompletionProof` outcome `valid` |
+| C. Completion proof | Marker doc in the vector collection (`satori_index_completion_v2`) | Shape valid, path matches, fingerprint matches runtime → `validateCompletionProof` outcome `valid`; v1 is reported as legacy policy-unsealed proof |
 | D. Collection presence | Configured vector backend | Collection for the root still exists |
 
 Implementation path: `TrackedRootReadiness.prepareTrackedRootForRead` returns `state: "ready"` only when those layers agree for the access mode.

@@ -86,7 +86,7 @@ A fixed, stable MCP tool surface agents can reliably learn — no knob sprawl, n
 - Any mismatch → `requires_reindex` (blocks search, prevents corrupt retrieval)
 - Sync-on-read for `search_codebase` (only)
 - Merkle-based incremental sync (stat-first, hash-on-change)
-- Completion proof markers in vector backend (`kind=satori_index_completion_v1`)
+- Completion proof markers in vector backend (`kind=satori_index_completion_v2`)
 - **State machine (5 states):** `not_found` (response vocab) → `indexing` → `indexed` / `indexfailed` → `sync_completed` → `requires_reindex`
 
 **Evidence:** `ARCHITECTURE.md:259-303` (state machine + fingerprint), `packages/mcp/src/core/snapshot.ts`, `packages/mcp/src/core/sync.ts:480-494` (3-min loop), `packages/core/src/sync/synchronizer.ts:350-369` (stat-first)

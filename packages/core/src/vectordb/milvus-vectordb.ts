@@ -44,6 +44,12 @@ type MilvusCollectionListPayload = {
     collections?: unknown;
 };
 
+// Zilliz serverless collection removal can legitimately take substantially
+// longer than the SDK's 15-second default. Keep the wider deadline scoped to
+// this idempotent remote mutation; verification remains owned by
+// deleteCollectionWithVerification.
+const REMOTE_COLLECTION_DELETE_TIMEOUT_MS = 120_000;
+
 type MilvusHybridSearchSingleRequest = {
     data: number[] | string;
     anns_field: string;
@@ -566,6 +572,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
         await this.client.dropCollection({
             collection_name: collectionName,
+            timeout: REMOTE_COLLECTION_DELETE_TIMEOUT_MS,
         });
     }
 

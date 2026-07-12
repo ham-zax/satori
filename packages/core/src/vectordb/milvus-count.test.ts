@@ -82,3 +82,25 @@ test('Milvus count adapters reject malformed aggregate results', async () => {
         /invalid row count/,
     );
 });
+
+test('Milvus collection deletion uses the bounded remote-mutation deadline', async () => {
+    const calls: unknown[] = [];
+    const target = {
+        ensureInitialized: async () => undefined,
+        client: {
+            dropCollection: async (request: unknown) => {
+                calls.push(request);
+            },
+        },
+    };
+
+    await MilvusVectorDatabase.prototype.dropCollection.call(
+        target as unknown as MilvusVectorDatabase,
+        'temporary_collection',
+    );
+
+    assert.deepEqual(calls, [{
+        collection_name: 'temporary_collection',
+        timeout: 120_000,
+    }]);
+});

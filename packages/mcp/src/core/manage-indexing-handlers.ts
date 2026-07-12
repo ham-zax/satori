@@ -1200,6 +1200,7 @@ export class ManageIndexingHandlers {
         const absolutePath = codebasePath;
         let lastSaveTime = 0;
         let targetCollectionName: string | undefined;
+        let navigationCandidate: import("@zokizuan/satori-core").StagedNavigationSidecarGeneration | undefined;
         let writingReceiptPublished = false;
         const assertMutationCurrent = mutationLease
             ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease)
@@ -1256,7 +1257,7 @@ export class ManageIndexingHandlers {
             : "";
         const previousIndexedFiles = previousInfo?.indexedFiles;
         const previousTotalChunks = previousInfo?.totalChunks;
-        const previousCompleteGeneration = previousInfo?.indexStatus === "completed"
+        let previousCompleteGeneration = previousInfo?.indexStatus === "completed"
             && previousInfo?.fingerprintSource === "verified"
             && previousFingerprint !== null
             && indexFingerprintsEqual(previousFingerprint, this.host.runtimeFingerprint)
@@ -1277,7 +1278,32 @@ export class ManageIndexingHandlers {
             }
             : null;
 
+        if (previousCompleteGeneration) {
+            const [provenCollectionName, marker] = await Promise.all([
+                this.host.context.getCompletionProofCollectionName(absolutePath),
+                this.host.context.getIndexCompletionMarker(absolutePath),
+            ]);
+            if (
+                provenCollectionName !== previousCompleteGeneration.collectionName
+                || !marker
+                || marker.indexStatus === "limit_reached"
+                || marker.indexedFiles !== previousCompleteGeneration.indexedFiles
+                || marker.totalChunks !== previousCompleteGeneration.totalChunks
+            ) {
+                previousCompleteGeneration = null;
+            }
+        }
+
         try {
+            for (const [capability, implementation] of [
+                ["publishCompletedIndexMarker", this.host.context.publishCompletedIndexMarker],
+                ["publishNavigationCandidate", this.host.context.publishNavigationCandidate],
+                ["discardNavigationCandidate", this.host.context.discardNavigationCandidate],
+            ] as const) {
+                if (typeof implementation !== "function") {
+                    throw new Error(`Missing required staged-index capability: Context.${capability}.`);
+                }
+            }
             if (mutationLease) {
                 this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
             }
@@ -1340,7 +1366,9 @@ export class ManageIndexingHandlers {
             }, false, {
                 assertMutationCurrent,
                 publishMutation,
+                deferFullIndexPublication: true,
             });
+            navigationCandidate = stats.navigationCandidate;
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
             if (mutationLease) {
                 this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
@@ -1384,6 +1412,17 @@ export class ManageIndexingHandlers {
                 return;
             }
 
+            if (stats.status === "limit_reached") {
+                await this.host.context.publishCompletedIndexMarker(
+                    absolutePath,
+                    stats.indexedFiles,
+                    stats.totalChunks,
+                    targetCollectionName,
+                    "limit_reached",
+                    assertMutationCurrent,
+                );
+            }
+
             await this.host.syncManager.recordCurrentIgnoreControlSignature(absolutePath, mutationLease);
             if (mutationLease) {
                 this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
@@ -1396,6 +1435,21 @@ export class ManageIndexingHandlers {
                     mutationLease
                         ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
                         : undefined,
+                );
+                if (!stats.navigationCandidate) {
+                    throw new Error(`Completed index candidate for '${absolutePath}' did not produce a navigation generation.`);
+                }
+                // Seal vector proof first. Active resolution also requires the matching
+                // navigation pointer, so the candidate remains unavailable until the
+                // pointer publication below succeeds.
+                await this.host.context.publishCompletedIndexMarker(
+                    absolutePath,
+                    stats.indexedFiles,
+                    stats.totalChunks,
+                    targetCollectionName,
+                    "completed",
+                    assertMutationCurrent,
+                    stats.navigationCandidate,
                 );
             }
             if (mutationLease) {
@@ -1414,6 +1468,13 @@ export class ManageIndexingHandlers {
                 this.host.saveSnapshotIfSupported();
             }
             this.host.setIndexingStats({ indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks });
+            if (stats.status === "completed" && stats.navigationCandidate) {
+                await this.host.context.publishNavigationCandidate(
+                    stats.navigationCandidate,
+                    assertMutationCurrent,
+                    publishMutation,
+                );
+            }
 
             try {
                 const droppedCollections = await this.host.pruneIndexedCollectionFamily(
@@ -1473,6 +1534,13 @@ export class ManageIndexingHandlers {
                     return;
                 }
                 throw cleanupError;
+            }
+            if (navigationCandidate) {
+                try {
+                    await this.host.context.discardNavigationCandidate(navigationCandidate, assertMutationCurrent);
+                } catch (navigationCleanupError) {
+                    console.warn(`[BACKGROUND-INDEX] Failed to discard navigation candidate '${navigationCandidate.generationId}': ${formatUnknownError(navigationCleanupError)}`);
+                }
             }
             assertMutationCurrent?.();
 

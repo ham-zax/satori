@@ -17,7 +17,7 @@ import {
 import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
 import { AccessGateReason, SnapshotManager } from "./snapshot.js";
-import { absolutePathOrRaw, requireAbsoluteFilesystemPath } from "../utils.js";
+import { absolutePathOrRaw } from "../utils.js";
 import { SyncManager, type FreshnessDecision } from "./sync.js";
 import {
     DEFAULT_MANAGE_RETRY_AFTER_MS,
@@ -217,6 +217,7 @@ type TrackedRootEntry = {
 type IndexCompletionMarkerContext = {
     getIndexCompletionMarker?: (codebasePath: string) => Promise<IndexCompletionMarkerDocument | null>;
     getActiveIndexedCollectionName?: (codebasePath: string) => Promise<string | null>;
+    getCompletionProofCollectionName?: (codebasePath: string) => Promise<string | null>;
     clearIndexCompletionMarker?: (codebasePath: string, assertMutationCurrent?: () => void) => Promise<void>;
     pruneIndexedCollectionFamily?: (codebasePath: string, keepCollectionName: string, options?: { assertMutationCurrent?: () => void }) => Promise<string[]>;
     pruneUnprovenStagedCollectionFamily?: (codebasePath: string, options?: { assertMutationCurrent?: () => void }) => Promise<string[]>;
@@ -1572,10 +1573,11 @@ export class ToolHandlers {
 
     private async getActiveIndexedCollectionNameForSnapshotRecovery(codebasePath: string): Promise<string | undefined> {
         const context = this.context as unknown as IndexCompletionMarkerContext;
-        if (typeof context.getActiveIndexedCollectionName !== 'function') {
+        const resolver = context.getCompletionProofCollectionName ?? context.getActiveIndexedCollectionName;
+        if (typeof resolver !== 'function') {
             return undefined;
         }
-        const collectionName = await context.getActiveIndexedCollectionName(codebasePath);
+        const collectionName = await resolver.call(context, codebasePath);
         return typeof collectionName === 'string' && collectionName.trim().length > 0
             ? collectionName.trim()
             : undefined;
@@ -2828,49 +2830,5 @@ export class ToolHandlers {
      */
     public async handleSyncCodebase(args: ToolArgs) {
         return this.manageMaintenanceHandlers.handleSyncCodebase(args);
-    }
-    public async handleReadCode(args: ToolArgs) {
-        const filePath = typeof args.path === 'string' ? args.path : '';
-
-        try {
-            const absolutePathResult = requireAbsoluteFilesystemPath(filePath, "path");
-            if (!absolutePathResult.ok) {
-                return {
-                    content: [{ type: "text", text: absolutePathResult.message }],
-                    isError: true
-                };
-            }
-            const absolutePath = absolutePathResult.absolutePath;
-
-            if (!fs.existsSync(absolutePath)) {
-                return {
-                    content: [{ type: "text", text: `Error: File '${absolutePath}' not found.` }],
-                    isError: true
-                };
-            }
-
-            const stat = fs.statSync(absolutePath);
-            if (!stat.isFile()) {
-                return {
-                    content: [{ type: "text", text: `Error: '${absolutePath}' is not a file.` }],
-                    isError: true
-                };
-            }
-
-            // Read file
-            const content = fs.readFileSync(absolutePath, 'utf-8');
-
-            return {
-                content: [{
-                    type: "text",
-                    text: content
-                }]
-            };
-        } catch (error: unknown) {
-            return {
-                content: [{ type: "text", text: `Error reading file: ${formatUnknownError(error)}` }],
-                isError: true
-            };
-        }
     }
 }

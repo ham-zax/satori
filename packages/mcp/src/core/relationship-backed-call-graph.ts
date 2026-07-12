@@ -555,6 +555,7 @@ export class RelationshipBackedCallGraph {
         } catch (error) {
             assertMutationCurrent?.();
             console.warn(`[CALL-GRAPH] Failed to rebuild sidecar after indexing '${codebasePath}': ${formatUnknownError(error)}`);
+            throw error;
         }
     }
 

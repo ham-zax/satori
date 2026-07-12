@@ -260,6 +260,7 @@ function createFailedIndexingHarness(
 ) {
     const droppedCollections: string[] = [];
     const failedSnapshots: Array<{ path: string; errorMessage: string; progress?: number }> = [];
+    const publicationEvents: string[] = [];
     let writeCollectionOverride: string | null = null;
     let indexedSnapshots = 0;
     const publishedSnapshots: Array<{ status: string; collectionName?: string }> = [];
@@ -288,9 +289,53 @@ function createFailedIndexingHarness(
             getProvider: () => "VoyageAI",
             getDimension: () => 1024,
         }),
-        indexCodebase: options.indexCodebase ?? (async () => {
-            throw new Error("boom after staged collection create");
-        }),
+        indexCodebase: async (...args: Parameters<NonNullable<typeof options.indexCodebase>>) => {
+            const result = options.indexCodebase
+                ? await options.indexCodebase(...args)
+                : await Promise.reject(new Error("boom after staged collection create"));
+            return result.status === "completed"
+                ? {
+                    ...result,
+                    navigationCandidate: {
+                        rootPath: "/tmp/navigation",
+                        normalizedRootPath: args[0],
+                        manifestHash: "manifest-hash",
+                        relationshipManifestHash: "relationship-manifest-hash",
+                        generationId: "candidate-generation",
+                        fileShardCount: 1,
+                        symbolCount: 1,
+                        relationshipCount: 0,
+                        relationshipFileShardCount: 1,
+                    },
+                }
+                : result;
+        },
+        publishCompletedIndexMarker: async (_path: string, _files: number, _chunks: number, _collection: string, status: string) => {
+            publicationEvents.push(`marker:${status}`);
+        },
+        publishNavigationCandidate: async (candidate: { generationId: string }) => {
+            publicationEvents.push(`navigation:publish:${candidate.generationId}`);
+        },
+        discardNavigationCandidate: async (candidate: { generationId: string }) => {
+            publicationEvents.push(`navigation:discard:${candidate.generationId}`);
+        },
+        getCompletionProofCollectionName: async () => (
+            typeof options.previousIndexedInfo?.collectionName === "string"
+                ? options.previousIndexedInfo.collectionName
+                : null
+        ),
+        getIndexCompletionMarker: async () => options.previousIndexedInfo
+            ? {
+                kind: "satori_index_completion_v1",
+                codebasePath: "repo",
+                fingerprint: RUNTIME_FINGERPRINT,
+                indexedFiles: Number(options.previousIndexedInfo.indexedFiles ?? 0),
+                totalChunks: Number(options.previousIndexedInfo.totalChunks ?? 0),
+                completedAt: new Date(0).toISOString(),
+                runId: "test-run",
+                indexStatus: options.previousIndexedInfo.indexStatus === "limit_reached" ? "limit_reached" : "completed",
+            }
+            : null,
     };
 
     const host = {
@@ -340,6 +385,7 @@ function createFailedIndexingHarness(
             return indexedSnapshots;
         },
         publishedSnapshots,
+        publicationEvents,
         handler: new ManageIndexingHandlers(host as unknown as ConstructorParameters<typeof ManageIndexingHandlers>[0]) as unknown as StartBackgroundIndexing,
     };
 }
@@ -687,6 +733,10 @@ test("background indexing treats watcher touch as best effort after proof", asyn
 
         assert.equal(harness.indexedSnapshots, 1);
         assert.equal(harness.failedSnapshots.length, 0);
+        assert.deepEqual(harness.publicationEvents, [
+            "marker:completed",
+            "navigation:publish:candidate-generation",
+        ]);
     });
 });
 
@@ -729,6 +779,7 @@ test("background indexing preserves the previous proven collection when navigati
         assert.deepEqual(harness.droppedCollections, [stagedCollection]);
         assert.deepEqual(harness.publishedSnapshots, [{ status: "completed", collectionName: previousCollection }]);
         assert.deepEqual(harness.failedSnapshots, []);
+        assert.deepEqual(harness.publicationEvents, ["navigation:discard:candidate-generation"]);
     });
 });
 
@@ -766,6 +817,7 @@ test("background indexing does not replace a previous complete generation with l
         assert.equal(existingCollections.has(previousCollection), true);
         assert.equal(existingCollections.has(stagedCollection), false);
         assert.deepEqual(harness.publishedSnapshots, [{ status: "completed", collectionName: previousCollection }]);
+        assert.deepEqual(harness.publicationEvents, []);
     });
 });
 

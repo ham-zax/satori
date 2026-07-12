@@ -31,6 +31,9 @@ export type ValidatedCompletionMarker = {
     completedAt: string;
     runId: string;
     indexStatus: 'completed' | 'limit_reached';
+    navigationGenerationId?: string;
+    symbolRegistryManifestHash?: string;
+    relationshipManifestHash?: string;
 };
 
 export type CompletionMarkerReader = (codebasePath: string) => Promise<unknown>;
@@ -127,6 +130,17 @@ export function parseCompletionMarker(
         && record.indexStatus !== 'limit_reached') {
         return null;
     }
+    const navigationFields = [
+        record.navigationGenerationId,
+        record.symbolRegistryManifestHash,
+        record.relationshipManifestHash,
+    ];
+    if (
+        navigationFields.some((value) => value !== undefined)
+        && !navigationFields.every((value) => typeof value === 'string' && value.length > 0)
+    ) {
+        return null;
+    }
 
     return {
         kind: 'satori_index_completion_v1',
@@ -139,6 +153,11 @@ export function parseCompletionMarker(
         indexStatus: record.indexStatus === 'limit_reached'
             ? 'limit_reached'
             : 'completed',
+        ...(typeof record.navigationGenerationId === 'string' ? {
+            navigationGenerationId: record.navigationGenerationId,
+            symbolRegistryManifestHash: record.symbolRegistryManifestHash as string,
+            relationshipManifestHash: record.relationshipManifestHash as string,
+        } : {}),
     };
 }
 

@@ -891,12 +891,22 @@ export class SnapshotManager {
         }
 
         const merged: CodebaseInfo = { ...lifecycleBase };
-        if (fields.has('callGraphSidecar')) {
+        const localRecord = localInfo as unknown as Record<string, unknown>;
+        const lifecycleRecord = lifecycleBase as unknown as Record<string, unknown>;
+        const sameIndexGeneration = localInfo.status === lifecycleBase.status
+            && localInfo.collectionName === lifecycleBase.collectionName
+            && localRecord.indexStatus === lifecycleRecord.indexStatus
+            && localRecord.indexedFiles === lifecycleRecord.indexedFiles
+            && localRecord.totalChunks === lifecycleRecord.totalChunks
+            && localInfo.indexFingerprint !== undefined
+            && lifecycleBase.indexFingerprint !== undefined
+            && indexFingerprintsEqual(localInfo.indexFingerprint, lifecycleBase.indexFingerprint);
+        if (sameIndexGeneration && fields.has('callGraphSidecar')) {
             merged.callGraphSidecar = localInfo.callGraphSidecar
                 ? structuredClone(localInfo.callGraphSidecar)
                 : undefined;
         }
-        if (fields.has('indexManifest')) {
+        if (sameIndexGeneration && fields.has('indexManifest')) {
             merged.indexManifest = localInfo.indexManifest
                 ? structuredClone(localInfo.indexManifest)
                 : undefined;

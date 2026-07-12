@@ -1,5 +1,6 @@
 import type { CallSite, LanguageAnalysisResult, ModuleBinding } from '../language-analysis';
 import { isLanguageCapabilitySupportedForLanguage } from '../language';
+import { isCallableSymbolKind } from '../symbols';
 import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from '../symbols';
 
 export type RelationshipAnalysisEvidence = Pick<LanguageAnalysisResult, 'moduleBindings' | 'callSites'>;
@@ -74,14 +75,24 @@ function resolveUnambiguousTarget(source: SymbolRecord, candidates: readonly Sym
 function buildTargetIndex(symbols: readonly SymbolRecord[]): Map<string, SymbolRecord[]> {
     const targets = new Map<string, SymbolRecord[]>();
     for (const symbol of symbols.filter((candidate) => candidate.kind !== 'file')) {
-        const key = symbol.name.toLowerCase();
+        const key = symbol.name;
         targets.set(key, [...(targets.get(key) ?? []), symbol]);
     }
     return targets;
 }
 
 function isSourceOwner(symbol: SymbolRecord): boolean {
-    return symbol.kind === 'function' || symbol.kind === 'method';
+    return isCallableSymbolKind(symbol.kind);
+}
+
+function isEligibleCallTarget(call: CallSite, symbol: SymbolRecord): boolean {
+    if (call.kind === 'direct') {
+        return isCallableSymbolKind(symbol.kind);
+    }
+    if (call.kind === 'constructor') {
+        return symbol.kind === 'class';
+    }
+    return false;
 }
 
 function ownerForCall(fileSymbols: readonly SymbolRecord[], call: CallSite): SymbolRecord | undefined {
@@ -133,11 +144,12 @@ function resolveRelativeModulePath(
     return candidates.find((candidate) => files.has(candidate));
 }
 
-function pathJoinPosix(...parts: string[]): string {
+function pathJoinPosix(...parts: string[]): string | undefined {
     const segments: string[] = [];
     for (const segment of parts.filter(Boolean).join('/').split('/')) {
         if (!segment || segment === '.') continue;
         if (segment === '..') {
+            if (segments.length === 0) return undefined;
             segments.pop();
         } else {
             segments.push(segment);
@@ -149,10 +161,25 @@ function pathJoinPosix(...parts: string[]): string {
 function resolveJsRelativeModuleCandidates(sourceFile: string, specifier: string): string[] {
     const sourceDir = sourceFile.includes('/') ? sourceFile.slice(0, sourceFile.lastIndexOf('/')) : '';
     const basePath = pathJoinPosix(sourceDir, specifier);
+    if (!basePath) return [];
+    const runtimeExtensionSubstitutions: Record<string, string[]> = {
+        '.js': ['.ts', '.tsx', '.js', '.jsx'],
+        '.mjs': ['.mts', '.mjs'],
+        '.cjs': ['.cts', '.cjs'],
+    };
+    const explicitRuntimeExtension = Object.keys(runtimeExtensionSubstitutions)
+        .find((extension) => basePath.endsWith(extension));
+    if (explicitRuntimeExtension) {
+        const withoutExtension = basePath.slice(0, -explicitRuntimeExtension.length);
+        return runtimeExtensionSubstitutions[explicitRuntimeExtension]
+            .map((extension) => `${withoutExtension}${extension}`);
+    }
     return [
         basePath,
         ...['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].map((extension) => `${basePath}.${extension}`),
-        ...['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].map((extension) => pathJoinPosix(basePath, `index.${extension}`)),
+        ...['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs']
+            .map((extension) => pathJoinPosix(basePath, `index.${extension}`))
+            .filter((candidate): candidate is string => candidate !== undefined),
     ];
 }
 
@@ -162,10 +189,14 @@ function resolvePythonRelativeModuleCandidates(sourceFile: string, specifier: st
     if (leadingDots === 0) return [];
     const sourceDir = sourceFile.includes('/') ? sourceFile.slice(0, sourceFile.lastIndexOf('/')) : '';
     const baseParts = sourceDir ? sourceDir.split('/') : [];
-    const keptParts = baseParts.slice(0, Math.max(0, baseParts.length - Math.max(0, leadingDots - 1)));
+    const parentLevels = Math.max(0, leadingDots - 1);
+    if (leadingDots > baseParts.length) return [];
+    const keptParts = baseParts.slice(0, baseParts.length - parentLevels);
     const modulePath = specifier.slice(leadingDots).replace(/\./g, '/');
     const moduleBase = pathJoinPosix(...keptParts, modulePath);
-    return [`${moduleBase}.py`, pathJoinPosix(moduleBase, '__init__.py')];
+    if (!moduleBase) return [];
+    const packageCandidate = pathJoinPosix(moduleBase, '__init__.py');
+    return [`${moduleBase}.py`, ...(packageCandidate ? [packageCandidate] : [])];
 }
 
 function relationshipSpan(binding: ModuleBinding | CallSite): { startLine: number; endLine: number } {
@@ -182,10 +213,13 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
         const evidence = getEvidence(input.analysisByFile, file.path);
         if (!evidence) continue;
         for (const call of evidence.callSites) {
+            if (call.kind !== 'direct' && call.kind !== 'constructor') continue;
             const source = ownerForCall(symbolsByFile.get(file.path) ?? [], call);
             if (!source) continue;
-            const candidates = targetIndex.get(call.calleeName.toLowerCase());
-            if (!candidates) continue;
+            const candidates = targetIndex.get(call.calleeName)?.filter((candidate) => (
+                isEligibleCallTarget(call, candidate)
+            ));
+            if (!candidates || candidates.length === 0) continue;
             const target = resolveUnambiguousTarget(source, candidates);
             if (!target) continue;
             const record: RelationshipRecord = {

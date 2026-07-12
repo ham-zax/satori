@@ -441,6 +441,123 @@ test('buildCallRelationshipsForRegistry skips ambiguous same-name targets until 
     assert.deepEqual(records, []);
 });
 
+test('buildCallRelationshipsForRegistry is case-sensitive and refuses receiver-unproven member calls', async () => {
+    const content = [
+        'function Process() {}',
+        'class Cache { save() {} }',
+        'function run(database: { save(): void }) {',
+        '  process();',
+        '  database.save();',
+        '}',
+    ].join('\n');
+    const file = 'src/case.ts';
+    const fileHash = 'hash-case';
+    const fileOwner = createSynthesizedFileSymbol({
+        relativePath: file,
+        language: 'typescript',
+        content,
+        fileHash,
+        extractorVersion: 'test-extractor-v1',
+    });
+    const symbols = [
+        createSymbol({ file, kind: 'function', name: 'Process', qualifiedName: 'Process', label: 'function Process', startLine: 1, endLine: 1, fileHash }),
+        createSymbol({ file, kind: 'method', name: 'save', qualifiedName: 'Cache.save', label: 'method save', startLine: 2, endLine: 2, fileHash, parentQualifiedNamePath: ['Cache'] }),
+        createSymbol({ file, kind: 'function', name: 'run', qualifiedName: 'run', label: 'function run', startLine: 3, endLine: 6, fileHash }),
+    ];
+    const registry = buildSymbolRegistry({
+        manifest: { ...manifest(), files: [{ path: file, hash: fileHash, language: 'typescript', symbolCount: symbols.length + 1 }] },
+        symbols: [fileOwner, ...symbols],
+    });
+
+    const records = buildCallRelationshipsForRegistry({
+        registry,
+        analysisByFile: await analyzeFiles({ [file]: content }),
+    });
+
+    assert.deepEqual(records, []);
+});
+
+test('buildCallRelationshipsForRegistry constrains targets by call kind', () => {
+    const file = 'src/targets.ts';
+    const fileHash = 'hash-target-kinds';
+    const content = 'function run() {}\n';
+    const fileOwner = createSynthesizedFileSymbol({
+        relativePath: file,
+        language: 'typescript',
+        content,
+        fileHash,
+        extractorVersion: 'test-extractor-v1',
+    });
+    const symbol = (kind: SymbolKind, name: string, line: number) => createSymbol({
+        file,
+        kind,
+        name,
+        qualifiedName: name,
+        label: `${kind} ${name}`,
+        startLine: line,
+        endLine: line,
+        fileHash,
+    });
+    const run = symbol('function', 'run', 1);
+    const helper = symbol('function', 'helper', 2);
+    const service = symbol('class', 'Service', 3);
+    const classCalledDirectly = symbol('class', 'DirectClass', 4);
+    const propertyCalledDirectly = symbol('property', 'directProperty', 5);
+    const functionConstructed = symbol('function', 'factory', 6);
+    const symbols = [fileOwner, run, helper, service, classCalledDirectly, propertyCalledDirectly, functionConstructed];
+    const registry = buildSymbolRegistry({
+        manifest: {
+            ...manifest(),
+            files: [{ path: file, hash: fileHash, language: 'typescript', symbolCount: symbols.length }],
+        },
+        symbols,
+    });
+
+    const records = buildCallRelationshipsForRegistry({
+        registry,
+        analysisByFile: new Map([[
+            file,
+            {
+                moduleBindings: [],
+                callSites: [
+                    { calleeName: 'helper', kind: 'direct', span: { startLine: 1, endLine: 1 } },
+                    { calleeName: 'Service', kind: 'constructor', span: { startLine: 1, endLine: 1 } },
+                    { calleeName: 'DirectClass', kind: 'direct', span: { startLine: 1, endLine: 1 } },
+                    { calleeName: 'directProperty', kind: 'direct', span: { startLine: 1, endLine: 1 } },
+                    { calleeName: 'factory', kind: 'constructor', span: { startLine: 1, endLine: 1 } },
+                ],
+            },
+        ]]),
+    });
+    const targetNameById = new Map(symbols.map((entry) => [entry.symbolInstanceId, entry.name]));
+
+    assert.deepEqual(
+        records.map((record) => targetNameById.get(record.targetInstanceId ?? '')).sort(),
+        ['Service', 'helper'],
+    );
+});
+
+test('buildCallRelationshipsForRegistry treats components and hooks as callable owners', async () => {
+    const file = 'src/widget.tsx';
+    const fileHash = 'hash-widget';
+    const content = 'function target() {}\nfunction Widget() { target(); }\nfunction useThing() { target(); }\n';
+    const fileOwner = createSynthesizedFileSymbol({ relativePath: file, language: 'tsx', content, fileHash, extractorVersion: 'test-extractor-v1' });
+    const target = createSymbol({ file, kind: 'function', name: 'target', qualifiedName: 'target', label: 'function target', startLine: 1, endLine: 1, fileHash, language: 'tsx' });
+    const widget = createSymbol({ file, kind: 'component', name: 'Widget', qualifiedName: 'Widget', label: 'component Widget', startLine: 2, endLine: 2, fileHash, language: 'tsx' });
+    const hook = createSymbol({ file, kind: 'hook', name: 'useThing', qualifiedName: 'useThing', label: 'hook useThing', startLine: 3, endLine: 3, fileHash, language: 'tsx' });
+    const registry = buildSymbolRegistry({
+        manifest: { ...manifest(), files: [{ path: file, hash: fileHash, language: 'tsx', symbolCount: 4 }] },
+        symbols: [fileOwner, target, widget, hook],
+    });
+
+    const records = buildCallRelationshipsForRegistry({ registry, analysisByFile: await analyzeFiles({ [file]: content }) });
+
+    assert.deepEqual(new Set(records.map((record) => record.sourceInstanceId)), new Set([
+        widget.symbolInstanceId,
+        hook.symbolInstanceId,
+    ]));
+});
+
 test('buildRelationshipsForRegistry creates conservative IMPORTS and EXPORTS file-owner records', async () => {
     const authContent = [
         'export function login(token: string) {',
@@ -726,4 +843,40 @@ test('buildRelationshipsForRegistry skips unresolved package imports and ambiguo
     });
 
     assert.deepEqual(records, []);
+});
+
+test('buildRelationshipsForRegistry resolves NodeNext source extensions and rejects root traversal', async () => {
+    const files = [
+        { path: 'src/a.ts', hash: 'hash-a', language: 'typescript', content: 'import "./b.js"; import "../../outside";' },
+        { path: 'src/b.ts', hash: 'hash-b', language: 'typescript', content: 'export const value = 1;' },
+        { path: 'outside.ts', hash: 'hash-outside', language: 'typescript', content: 'export const value = 2;' },
+        { path: 'src/pkg/a.py', hash: 'hash-py', language: 'python', content: 'from ...outside import value' },
+        { path: 'outside.py', hash: 'hash-outside-py', language: 'python', content: 'value = 1' },
+    ];
+    const owners = files.map((file) => createSynthesizedFileSymbol({
+        relativePath: file.path,
+        language: file.language,
+        content: file.content,
+        fileHash: file.hash,
+        extractorVersion: 'test-extractor-v1',
+    }));
+    const registry = buildSymbolRegistry({
+        manifest: {
+            ...manifest(),
+            files: files.map((file) => ({
+                path: file.path,
+                hash: file.hash,
+                language: file.language,
+                symbolCount: 1,
+            })),
+        },
+        symbols: owners,
+    });
+    const analyzed = await analyzeFiles(Object.fromEntries(files.map((file) => [file.path, file.content])));
+
+    const records = buildRelationshipsForRegistry({ registry, analysisByFile: analyzed });
+
+    assert.deepEqual(records.filter((record) => record.type === 'IMPORTS').map((record) => record.targetPath), [
+        'src/b.ts',
+    ]);
 });

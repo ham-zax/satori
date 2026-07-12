@@ -1,23 +1,40 @@
 export const SYMBOL_REGISTRY_SCHEMA_VERSION = 'symbol_registry_v1';
-export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v1';
+export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v2';
 
-export type SymbolKind =
-    | 'file'
-    | 'module'
-    | 'namespace'
-    | 'class'
-    | 'interface'
-    | 'type'
-    | 'enum'
-    | 'trait'
-    | 'macro'
-    | 'function'
-    | 'method'
-    | 'property'
-    | 'component'
-    | 'hook'
-    | 'config'
-    | 'test';
+export const SYMBOL_KINDS = [
+    'file',
+    'module',
+    'namespace',
+    'class',
+    'interface',
+    'type',
+    'enum',
+    'trait',
+    'macro',
+    'function',
+    'method',
+    'property',
+    'component',
+    'hook',
+    'config',
+    'test',
+] as const;
+
+export type SymbolKind = typeof SYMBOL_KINDS[number];
+
+const SYMBOL_KIND_SET = new Set<string>(SYMBOL_KINDS);
+
+export function isSymbolKind(value: unknown): value is SymbolKind {
+    return typeof value === 'string' && SYMBOL_KIND_SET.has(value);
+}
+
+export function isCallableSymbolKind(kind: SymbolKind): boolean {
+    return kind === 'function'
+        || kind === 'method'
+        || kind === 'component'
+        || kind === 'hook'
+        || kind === 'test';
+}
 
 export type RepositoryOntologyTag =
     | 'API'
@@ -108,6 +125,16 @@ export interface RelationshipManifest {
     symbolRegistryManifestHash: string;
     relationshipVersion: string;
     builtAt: string;
+    files: RelationshipManifestFile[];
+}
+
+export interface RelationshipManifestFile {
+    path: string;
+    hash: string;
+    shardPath: string;
+    shardHash: string;
+    relationshipCount: number;
+    analysisEvidencePresent: boolean;
 }
 
 export function canonicalizeSymbolSpanForHash(span: SymbolSpan): string {
@@ -139,7 +166,18 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
-    return Number.isInteger(value) && Number(value) >= 0;
+    return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+export function isRepositoryRelativePath(value: unknown): value is string {
+    if (!isNonEmptyString(value) || value.includes('\0') || value.includes('\\')) {
+        return false;
+    }
+    if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) {
+        return false;
+    }
+    const segments = value.split('/');
+    return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
 }
 
 export function isSymbolRegistryManifest(value: unknown): value is SymbolRegistryManifest {
@@ -168,19 +206,41 @@ export function isSymbolRegistryManifest(value: unknown): value is SymbolRegistr
     if (!Array.isArray(value.files)) {
         return false;
     }
+    const seenPaths = new Set<string>();
     return value.files.every((file) => (
         isRecord(file)
-        && isNonEmptyString(file.path)
+        && isRepositoryRelativePath(file.path)
         && isNonEmptyString(file.hash)
         && isNonEmptyString(file.language)
         && isNonNegativeInteger(file.symbolCount)
+        && !seenPaths.has(file.path)
+        && Boolean(seenPaths.add(file.path))
     ));
 }
 
 export function isRelationshipManifest(value: unknown): value is RelationshipManifest {
-    return isRecord(value)
+    if (!(isRecord(value)
         && value.schemaVersion === RELATIONSHIP_MANIFEST_SCHEMA_VERSION
         && isNonEmptyString(value.symbolRegistryManifestHash)
         && isNonEmptyString(value.relationshipVersion)
-        && isNonEmptyString(value.builtAt);
+        && isNonEmptyString(value.builtAt)
+        && Array.isArray(value.files))) {
+        return false;
+    }
+    const seenPaths = new Set<string>();
+    const seenShards = new Set<string>();
+    return value.files.every((file) => (
+        isRecord(file)
+        && isRepositoryRelativePath(file.path)
+        && isNonEmptyString(file.hash)
+        && isRepositoryRelativePath(file.shardPath)
+        && file.shardPath.startsWith('relationships/by-file/')
+        && isNonEmptyString(file.shardHash)
+        && isNonNegativeInteger(file.relationshipCount)
+        && typeof file.analysisEvidencePresent === 'boolean'
+        && !seenPaths.has(file.path)
+        && Boolean(seenPaths.add(file.path))
+        && !seenShards.has(file.shardPath)
+        && Boolean(seenShards.add(file.shardPath))
+    ));
 }

@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
+    SYMBOL_KINDS,
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     canonicalizeSymbolSpanForHash,
     isRelationshipManifest,
+    isSymbolKind,
     isSymbolRegistryManifest,
 } from './contracts';
 import type {
@@ -76,16 +78,32 @@ test('canonicalizeSymbolSpanForHash omits absent optional fields and preserves f
 });
 
 test('relationship manifest validates compatibility anchor', () => {
-    assert.equal(RELATIONSHIP_MANIFEST_SCHEMA_VERSION, 'relationship_v1');
+    assert.equal(RELATIONSHIP_MANIFEST_SCHEMA_VERSION, 'relationship_v2');
 
     const manifest: RelationshipManifest = {
         schemaVersion: RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
         symbolRegistryManifestHash: 'registry-manifest-hash',
         relationshipVersion: 'relationship-v1',
         builtAt: '2026-06-17T00:00:00.000Z',
+        files: [{
+            path: 'src/app.ts',
+            hash: 'file-hash',
+            shardPath: 'relationships/by-file/app.json',
+            shardHash: 'shard-hash',
+            relationshipCount: 0,
+            analysisEvidencePresent: true,
+        }],
     };
 
     assert.equal(isRelationshipManifest(manifest), true);
     assert.equal(isRelationshipManifest({ ...manifest, symbolRegistryManifestHash: '' }), false);
-    assert.equal(isRelationshipManifest({ ...manifest, schemaVersion: 'relationship_v2' }), false);
+    assert.equal(isRelationshipManifest({ ...manifest, schemaVersion: 'relationship_v1' }), false);
+    assert.equal(isRelationshipManifest({ ...manifest, files: [] }), true);
+    assert.equal(isRelationshipManifest({ ...manifest, files: [{ ...manifest.files[0], relationshipCount: -1 }] }), false);
+});
+
+test('symbol kinds have one canonical runtime contract', () => {
+    assert.equal(SYMBOL_KINDS.includes('property'), true);
+    assert.equal(isSymbolKind('method'), true);
+    assert.equal(isSymbolKind('procedure'), false);
 });

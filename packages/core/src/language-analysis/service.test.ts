@@ -80,6 +80,75 @@ test('Oxc callable expressions are navigation symbols and suppress local scalar 
     assert.equal(result.callSites.filter((call) => call.calleeName === 'helper').length, 2);
 });
 
+test('language analysis classifies direct, member, and constructor calls explicitly', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: 'run(); service.run(); new Service();',
+        language: 'typescript',
+        relativePath: 'src/calls.ts',
+    });
+
+    assert.deepEqual(result.callSites.map((call) => [call.calleeName, call.kind]), [
+        ['run', 'direct'],
+        ['run', 'member'],
+        ['Service', 'constructor'],
+    ]);
+});
+
+test('Tree-sitter emits typed member and constructor call evidence', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: 'class Example { void run() { service.save(); new Service(); } }',
+        language: 'java',
+        relativePath: 'src/Example.java',
+    });
+
+    assert.deepEqual(result.callSites.map((call) => [call.calleeName, call.kind]), [
+        ['save', 'member'],
+        ['Service', 'constructor'],
+    ]);
+});
+
+test('language analysis does not throw when input normalization fails', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const input = {
+        content: 'source remains available',
+        relativePath: 'src/unknown.txt',
+        get language(): string {
+            throw new Error('injected normalization failure');
+        },
+    };
+
+    const result = await analyzer.analyze(input);
+
+    assert.equal(result.structuralStatus, 'recovered');
+    assert.equal(result.structuralReason, 'analysis_failure');
+    assert.ok(result.chunks.some((chunk) => chunk.content.includes('source remains available')));
+});
+
+test('emergency language analysis keeps chunks bounded when the normal chunk builder fails', async () => {
+    const analyzer = createLanguageAnalysisService({
+        chunkSize: 12,
+        chunkOverlap: Symbol('invalid overlap') as unknown as number,
+    });
+    const source = 'alpha beta gamma delta epsilon';
+
+    const result = await analyzer.analyze({
+        content: source,
+        language: 'text',
+        relativePath: 'notes/recovery.txt',
+    });
+
+    assert.equal(result.backend, 'bounded_text');
+    assert.equal(result.structuralStatus, 'recovered');
+    assert.equal(result.structuralReason, 'analysis_failure');
+    assert.ok(result.chunks.length > 1);
+    assert.ok(result.chunks.every((chunk) => Buffer.byteLength(chunk.content, 'utf8') <= 12));
+    assert.ok(result.chunks.every((chunk) => chunk.metadata.filePath === 'notes/recovery.txt'));
+    assert.equal(result.chunks[0]?.metadata.startByte, 0);
+    assert.equal(result.chunks.at(-1)?.metadata.endByte, Buffer.byteLength(source, 'utf8'));
+});
+
 test('Oxc infrastructure exceptions degrade to searchable recovered text', async () => {
     const analyzer = createLanguageAnalysisService();
     let reads = 0;
@@ -238,10 +307,54 @@ test('Python decorated definitions include their decorators in the symbol span',
     assert.equal(run?.span.startByte, 0);
 });
 
+test('Python nested functions inside methods remain local functions and plain imports are retained', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'import package',
+            'import package.module as alias',
+            'class Service:',
+            '    def run(self):',
+            '        def helper():',
+            '            return 1',
+            '        return helper()',
+        ].join('\n'),
+        language: 'python',
+        relativePath: 'src/service.py',
+    });
+
+    assert.ok(result.symbols.some((symbol) => (
+        symbol.kind === 'method' && symbol.qualifiedName === 'Service.run'
+    )));
+    assert.ok(result.symbols.some((symbol) => (
+        symbol.kind === 'function' && symbol.name === 'helper'
+    )));
+    assert.ok(!result.symbols.some((symbol) => symbol.qualifiedName === 'Service.helper'));
+    assert.deepEqual(
+        result.moduleBindings
+            .filter((binding) => binding.kind === 'import')
+            .map((binding) => binding.moduleSpecifier),
+        ['package', 'package.module'],
+    );
+});
+
 test('C++ class member functions are methods owned by their class', async () => {
     const analyzer = createLanguageAnalysisService();
     const result = await analyzer.analyze({
         content: 'class Service { public: int run() { return 1; } };\n',
+        language: 'cpp',
+        relativePath: 'src/service.cpp',
+    });
+
+    assert.ok(result.symbols.some((symbol) => (
+        symbol.kind === 'method' && symbol.qualifiedName === 'Service.run'
+    )));
+});
+
+test('C++ qualified out-of-class definitions retain method ownership', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: 'class Service { public: int run(); };\nint Service::run() { return 1; }\n',
         language: 'cpp',
         relativePath: 'src/service.cpp',
     });

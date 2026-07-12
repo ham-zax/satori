@@ -120,6 +120,21 @@ function nameForNode(node: Node): string | undefined {
     return undefined;
 }
 
+function cppQualifiedCallable(node: Node): { name: string; parents: string[] } | undefined {
+    if (node.type !== 'function_definition') return undefined;
+    const qualified = node
+        .childForFieldName('declarator')
+        ?.descendantsOfType('qualified_identifier')
+        .at(0);
+    if (!qualified) return undefined;
+    const parts = qualified.text
+        .split('::')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    const name = parts.pop();
+    return name && parts.length > 0 ? { name, parents: parts } : undefined;
+}
+
 function goSymbolKind(node: Node, kind: ExtractedSymbolKind | undefined): ExtractedSymbolKind | undefined {
     if (node.type !== 'type_spec') return kind;
     const declaredType = node.childForFieldName('type');
@@ -158,22 +173,24 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         parents: readonly string[],
         insideRustImpl = false,
         parentNode?: Node,
+        insideCallable = false,
     ): void => {
         let kind: ExtractedSymbolKind | undefined = declarations[node.type];
         if (language === 'go') kind = goSymbolKind(node, kind);
-        if (language === 'python' && node.type === 'function_definition' && parents.length > 0) {
+        if (language === 'python' && node.type === 'function_definition' && parents.length > 0 && !insideCallable) {
             kind = 'method';
         }
         if (language === 'rust' && node.type === 'function_item' && insideRustImpl) {
             kind = 'method';
         }
-        if (language === 'cpp' && node.type === 'function_definition' && parents.length > 0) {
+        const cppQualified = language === 'cpp' ? cppQualifiedCallable(node) : undefined;
+        if (language === 'cpp' && node.type === 'function_definition' && (parents.length > 0 || cppQualified)) {
             kind = 'method';
         }
-        const name = kind ? nameForNode(node) : undefined;
+        const name = kind ? cppQualified?.name ?? nameForNode(node) : undefined;
         const implOwner = language === 'rust' ? rustImplOwner(node) : undefined;
         const receiverOwner = language === 'go' ? goReceiverOwner(node) : undefined;
-        const symbolParents = receiverOwner ? [...parents, receiverOwner] : parents;
+        const symbolParents = cppQualified?.parents ?? (receiverOwner ? [...parents, receiverOwner] : parents);
         const nextParents = implOwner
             ? [...parents, implOwner]
             : name && (
@@ -184,6 +201,8 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 || kind === 'module'
             )
                 ? [...parents, name]
+                : language === 'python' && name && node.type === 'function_definition'
+                    ? [...parents, name]
                 : parents;
         if (kind && name) {
             symbols.push({
@@ -207,6 +226,11 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 nextParents,
                 insideRustImpl || (language === 'rust' && node.type === 'impl_item'),
                 node,
+                insideCallable || Boolean(kind && (
+                    kind === 'function'
+                    || kind === 'method'
+                    || kind === 'constructor'
+                )),
             );
         }
     };
@@ -219,10 +243,19 @@ const CALL_NODE_TYPES = new Set([
     'call_expression',
     'invocation_expression',
     'method_invocation',
+    'object_creation_expression',
+    'new_expression',
+]);
+
+const CONSTRUCTOR_NODE_TYPES = new Set([
+    'object_creation_expression',
+    'new_expression',
 ]);
 
 function callableName(node: Node): string | undefined {
-    const callable = node.childForFieldName('function') ?? node.childForFieldName('name');
+    const callable = node.childForFieldName('function')
+        ?? node.childForFieldName('name')
+        ?? node.childForFieldName('type');
     if (!callable) return undefined;
     const leaf = callable.descendantsOfType([
         'identifier',
@@ -231,6 +264,26 @@ function callableName(node: Node): string | undefined {
         'type_identifier',
     ]).at(-1) ?? callable;
     return leaf.text.trim() || undefined;
+}
+
+function callSiteEvidence(node: Node): Pick<CallSite, 'kind' | 'receiverText' | 'qualifiedCallee'> {
+    if (CONSTRUCTOR_NODE_TYPES.has(node.type)) {
+        return { kind: 'constructor' };
+    }
+    const callable = node.childForFieldName('function') ?? node.childForFieldName('name');
+    const receiver = node.childForFieldName('object') ?? callable?.childForFieldName('object');
+    const callableType = callable?.type ?? '';
+    const member = Boolean(receiver)
+        || callableType === 'attribute'
+        || callableType === 'member_expression'
+        || callableType === 'field_expression'
+        || (node.type === 'method_invocation' && node.namedChildren.filter((child) => child.type !== 'argument_list').length > 1);
+    if (!member) return { kind: 'direct' };
+    return {
+        kind: 'member',
+        ...(receiver?.text.trim() ? { receiverText: receiver.text.trim() } : {}),
+        ...(callable?.text.trim() ? { qualifiedCallee: callable.text.trim() } : {}),
+    };
 }
 
 function nodeSpan(node: Node, sourceMap: Utf8SourceMap) {
@@ -242,7 +295,11 @@ function extractCallSites(root: Node, sourceMap: Utf8SourceMap): CallSite[] {
     const visit = (node: Node): void => {
         if (CALL_NODE_TYPES.has(node.type)) {
             const name = callableName(node);
-            if (name) calls.push({ calleeName: name, span: nodeSpan(node, sourceMap) });
+            if (name) calls.push({
+                calleeName: name,
+                ...callSiteEvidence(node),
+                span: nodeSpan(node, sourceMap),
+            });
         }
         for (const child of node.namedChildren) visit(child);
     };
@@ -277,6 +334,18 @@ function extractPythonModuleBindings(
             bindings.push({
                 kind: 'import',
                 moduleSpecifier: moduleName,
+                typeOnly: false,
+                span: nodeSpan(node, sourceMap),
+            });
+        }
+    }
+    for (const node of root.descendantsOfType('import_statement')) {
+        for (const moduleName of node.descendantsOfType('dotted_name')) {
+            const moduleSpecifier = moduleName.text.trim();
+            if (!moduleSpecifier) continue;
+            bindings.push({
+                kind: 'import',
+                moduleSpecifier,
                 typeOnly: false,
                 span: nodeSpan(node, sourceMap),
             });

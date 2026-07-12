@@ -49,6 +49,10 @@ export interface ModuleBinding {
 
 export interface CallSite {
     readonly calleeName: string;
+    /** Missing only on legacy persisted evidence; current adapters always set this. */
+    readonly kind?: 'direct' | 'member' | 'constructor';
+    readonly receiverText?: string;
+    readonly qualifiedCallee?: string;
     readonly span: SourceSpan;
 }
 

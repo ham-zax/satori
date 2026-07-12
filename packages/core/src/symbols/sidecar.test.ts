@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import {
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveNavigationSidecarRoot,
+    writeNavigationSidecarGeneration,
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
 } from './sidecar';
@@ -123,13 +125,15 @@ async function writeSingleRelationshipFixture(stateRoot: string): Promise<{
         files: registry.manifest.files,
         records: [record],
     });
-    const byFileDir = path.join(registryResult.rootPath, 'relationships', 'by-file');
-    const shardFile = (await fs.promises.readdir(byFileDir)).find((file) => file.endsWith('.json'));
+    const relationshipManifest = await readJsonFile<{ files: Array<{ path: string; shardPath: string }> }>(
+        path.join(registryResult.rootPath, 'relationships', 'manifest.json'),
+    );
+    const shardFile = relationshipManifest.files.find((file) => file.path === record.file)?.shardPath;
     assert.ok(shardFile);
     return {
         registryResult,
         record,
-        shardPath: path.join(byFileDir, shardFile),
+        shardPath: path.join(registryResult.rootPath, shardFile),
     };
 }
 
@@ -212,17 +216,13 @@ test('writeSymbolRegistrySidecar writes sharding-ready registry files and read r
         assert.equal(index.manifestHash, result.manifestHash);
         const authShardPath = path.join(result.rootPath, index.files.find((file: { path: string }) => file.path === 'src/auth.ts').shardPath);
         assert.equal(JSON.parse(await fs.promises.readFile(authShardPath, 'utf8')).symbols[0].file, 'src/auth.ts');
-        assert.equal(await fs.promises.stat(path.join(result.rootPath, 'relationships', 'by-file')).then((stat) => stat.isDirectory()), true);
-
         const relationships = await readRelationshipSidecar({
             stateRoot,
             normalizedRootPath: '/repo',
             expectedSymbolRegistryManifestHash: result.manifestHash,
         });
 
-        assert.equal(relationships.status, 'ok');
-        assert.equal(relationships.manifest?.symbolRegistryManifestHash, result.manifestHash);
-        assert.deepEqual(relationships.records, []);
+        assert.equal(relationships.status, 'missing');
 
         const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
 
@@ -247,10 +247,11 @@ test('readRelationshipSidecar reports missing and incompatible relationship stat
         await fs.promises.writeFile(
             path.join(rootPath, 'relationships', 'manifest.json'),
             JSON.stringify({
-                schemaVersion: 'relationship_v1',
+                schemaVersion: 'relationship_v2',
                 symbolRegistryManifestHash: 'other-manifest-hash',
                 relationshipVersion: 'relationship-v1',
                 builtAt: '2026-06-17T00:00:00.000Z',
+                files: [],
             }),
             'utf8'
         );
@@ -461,7 +462,7 @@ test('readRelationshipSidecar rejects duplicate shard paths', async () => {
         });
 
         assert.equal(loaded.status, 'incompatible');
-        assert.match(loaded.reason || '', /duplicate relationship shard path/);
+        assert.match(loaded.reason || '', /shard set.*manifest/);
     });
 });
 
@@ -821,6 +822,47 @@ test('clearSymbolRegistrySidecar removes stale navigation state', async () => {
     });
 });
 
+test('clearSymbolRegistrySidecar checks the mutation fence immediately before deletion', async () => {
+    await withTempDir(async (stateRoot) => {
+        await writeSingleSymbolRegistryFixture(stateRoot);
+        const rootPath = resolveNavigationSidecarRoot(stateRoot, '/repo');
+
+        await assert.rejects(
+            () => clearSymbolRegistrySidecar({
+                stateRoot,
+                normalizedRootPath: '/repo',
+                beforeDelete: () => {
+                    throw new Error('lease lost before delete');
+                },
+            }),
+            /lease lost before delete/,
+        );
+        assert.equal(fs.existsSync(rootPath), true);
+    });
+});
+
+test('clearSymbolRegistrySidecar atomically detaches only the generation owned by the caller', async () => {
+    await withTempDir(async (stateRoot) => {
+        await writeSingleSymbolRegistryFixture(stateRoot);
+        const rootPath = resolveNavigationSidecarRoot(stateRoot, '/repo');
+        let publicationCalls = 0;
+
+        await clearSymbolRegistrySidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            publishMutation: (publish) => {
+                publicationCalls += 1;
+                publish();
+                fs.mkdirSync(rootPath, { recursive: true });
+                fs.writeFileSync(path.join(rootPath, 'new-generation'), 'new', 'utf8');
+            },
+        });
+
+        assert.equal(publicationCalls, 1);
+        assert.equal(fs.readFileSync(path.join(rootPath, 'new-generation'), 'utf8'), 'new');
+    });
+});
+
 test('readSymbolRegistrySidecar reports missing and incompatible registry states without retrieval chunks', async () => {
     await withTempDir(async (stateRoot) => {
         const missing = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
@@ -1088,10 +1130,22 @@ test('sidecar readers tolerate unknown extra fields in valid shard records', asy
 
         const { registryResult, record, shardPath: relationshipShardPath } = await writeSingleRelationshipFixture(stateRoot);
         const relationshipShard = await readJsonFile<{ manifestHash: string; relationships: unknown[] }>(relationshipShardPath);
-        await writeJsonFile(relationshipShardPath, {
+        const updatedRelationshipShard = {
             ...relationshipShard,
             relationships: [{ ...record, extraContractField: 'ignored' }],
-        });
+        };
+        await writeJsonFile(relationshipShardPath, updatedRelationshipShard);
+        const relationshipManifestPath = path.join(registryResult.rootPath, 'relationships', 'manifest.json');
+        const relationshipManifest = await readJsonFile<{
+            files: Array<{ path: string; shardHash: string }>;
+        }>(relationshipManifestPath);
+        const relationshipManifestFile = relationshipManifest.files.find((file) => file.path === record.file);
+        assert.ok(relationshipManifestFile);
+        relationshipManifestFile.shardHash = crypto
+            .createHash('sha256')
+            .update(`${JSON.stringify(updatedRelationshipShard, null, 2)}\n`, 'utf8')
+            .digest('hex');
+        await writeJsonFile(relationshipManifestPath, relationshipManifest);
 
         const loadedRelationships = await readRelationshipSidecar({
             stateRoot,
@@ -1124,5 +1178,123 @@ test('writeSymbolRegistrySidecar keeps manifest hash stable across deterministic
         assert.equal(first.manifestHash, second.manifestHash);
         assert.equal(first.fileShardCount, second.fileShardCount);
         assert.equal(first.symbolCount, second.symbolCount);
+    });
+});
+
+test('readSymbolRegistrySidecar rejects an index that does not exactly match the manifest', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { result } = await writeSingleSymbolRegistryFixture(stateRoot);
+        const indexPath = path.join(result.rootPath, 'symbols', 'index.json');
+        const index = await readJsonFile<{ files: Array<Record<string, unknown>> }>(indexPath);
+        index.files[0].shardPath = '../outside.json';
+        await writeJsonFile(indexPath, index);
+
+        const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+        assert.equal(loaded.status, 'incompatible');
+        assert.match(loaded.reason || '', /index.*(?:manifest|invalid|incompatible)|deterministic shard/i);
+    });
+});
+
+test('readSymbolRegistrySidecar verifies actual shard symbol counts', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { shardPath } = await writeSingleSymbolRegistryFixture(stateRoot);
+        const shard = await readJsonFile<Record<string, unknown>>(shardPath);
+        await writeJsonFile(shardPath, { ...shard, symbols: [] });
+
+        const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+        assert.equal(loaded.status, 'incompatible');
+        assert.match(loaded.reason || '', /symbol count/i);
+    });
+});
+
+test('relationship manifest proves every expected shard exists', async () => {
+    await withTempDir(async (stateRoot) => {
+        const { registryResult } = await writeSingleRelationshipFixture(stateRoot);
+        const manifestPath = path.join(registryResult.rootPath, 'relationships', 'manifest.json');
+        const relationshipManifest = await readJsonFile<{ files: Array<{ shardPath: string }> }>(manifestPath);
+        assert.ok(relationshipManifest.files.length > 0);
+        await fs.promises.rm(path.join(registryResult.rootPath, relationshipManifest.files[0].shardPath));
+
+        const loaded = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: registryResult.manifestHash,
+        });
+        assert.equal(loaded.status, 'incompatible');
+        assert.match(loaded.reason || '', /relationship shard.*(?:missing|set)|ENOENT/i);
+    });
+});
+
+test('writeRelationshipSidecar rejects records outside the supplied registry manifest', async () => {
+    await withTempDir(async (stateRoot) => {
+        await assert.rejects(
+            () => writeRelationshipSidecar({
+                stateRoot,
+                normalizedRootPath: '/repo',
+                symbolRegistryManifestHash: 'manifest-hash',
+                relationshipVersion: 'relationship-v1',
+                builtAt: '2026-06-17T00:00:00.000Z',
+                files: [{ path: 'src/tracked.ts', hash: 'tracked-hash', language: 'typescript', symbolCount: 0 }],
+                records: [{
+                    sourceKey: 'source',
+                    targetPath: 'src/target.ts',
+                    type: 'IMPORTS',
+                    file: 'src/foreign.ts',
+                    confidence: 'high',
+                }],
+            }),
+            /outside the supplied symbol manifest/i,
+        );
+    });
+});
+
+test('writeNavigationSidecarGeneration publishes symbols and relationships through one generation pointer', async () => {
+    await withTempDir(async (stateRoot) => {
+        const firstSymbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth-v1',
+            extractorVersion: 'extractor-v1',
+        });
+        const firstRegistry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth-v1', language: 'typescript', symbolCount: 1 }]),
+            symbols: [firstSymbol],
+        });
+        const first = await writeNavigationSidecarGeneration({
+            stateRoot,
+            registry: firstRegistry,
+            records: [],
+            analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
+        });
+
+        const secondSymbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = false;\n',
+            fileHash: 'hash-auth-v2',
+            extractorVersion: 'extractor-v1',
+        });
+        const secondRegistry = buildSymbolRegistry({
+            manifest: { ...firstRegistry.manifest, builtAt: '2026-06-18T00:00:00.000Z', files: [{ path: 'src/auth.ts', hash: 'hash-auth-v2', language: 'typescript', symbolCount: 1 }] },
+            symbols: [secondSymbol],
+        });
+        await assert.rejects(
+            () => writeNavigationSidecarGeneration({
+                stateRoot,
+                registry: secondRegistry,
+                records: [],
+                analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
+                publishMutation: () => {
+                    throw new Error('lease lost before generation publication');
+                },
+            }),
+            /lease lost before generation publication/,
+        );
+
+        const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+        assert.equal(loaded.status, 'ok');
+        assert.equal(loaded.manifestHash, first.manifestHash);
+        assert.equal(loaded.registry?.manifest.files[0].hash, 'hash-auth-v1');
     });
 });

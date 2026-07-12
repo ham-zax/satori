@@ -67,6 +67,120 @@ function fallbackResult(
     return { ...evidence, structuralStatus, structuralReason };
 }
 
+function readInputField(
+    input: LanguageAnalysisInput,
+    field: keyof LanguageAnalysisInput,
+    fallback: string,
+): string {
+    try {
+        return input[field];
+    } catch {
+        try {
+            return input[field];
+        } catch {
+            return fallback;
+        }
+    }
+}
+
+function emergencyChunkBound(value: number | undefined, fallback: number): number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : fallback;
+}
+
+function alignEmergencyByteBoundary(
+    bytes: Buffer,
+    offset: number,
+    direction: 'backward' | 'forward',
+): number {
+    let aligned = Math.max(0, Math.min(offset, bytes.length));
+    const isContinuation = (byte: number | undefined): boolean => (
+        byte !== undefined && (byte & 0xc0) === 0x80
+    );
+    if (direction === 'backward') {
+        while (aligned > 0 && isContinuation(bytes[aligned])) aligned -= 1;
+    } else {
+        while (aligned < bytes.length && isContinuation(bytes[aligned])) aligned += 1;
+    }
+    return aligned;
+}
+
+function emergencyPosition(bytes: Buffer, offset: number): { line: number; column: number } {
+    const prefix = bytes.subarray(0, offset).toString('utf8');
+    const lines = prefix.split('\n');
+    return {
+        line: lines.length,
+        column: lines.at(-1)?.length ?? 0,
+    };
+}
+
+function emergencyFallbackResult(
+    input: LanguageAnalysisInput,
+    options: { chunkSize?: number; chunkOverlap?: number },
+): LanguageAnalysisResult {
+    const content = readInputField(input, 'content', '');
+    const relativePath = readInputField(input, 'relativePath', '<unknown>');
+    const bytes = Buffer.from(content, 'utf8');
+    const chunkSize = emergencyChunkBound(options.chunkSize, 2500);
+    const requestedOverlap = typeof options.chunkOverlap === 'number'
+        && Number.isFinite(options.chunkOverlap)
+        ? Math.max(0, Math.floor(options.chunkOverlap))
+        : 0;
+    const chunkOverlap = Math.min(requestedOverlap, Math.max(0, chunkSize - 1));
+    const chunks: Array<LanguageAnalysisResult['chunks'][number]> = [];
+
+    for (let startByte = 0; startByte < bytes.length;) {
+        let endByte = alignEmergencyByteBoundary(
+            bytes,
+            Math.min(bytes.length, startByte + chunkSize),
+            'backward',
+        );
+        if (endByte <= startByte) {
+            endByte = alignEmergencyByteBoundary(
+                bytes,
+                Math.min(bytes.length, startByte + chunkSize),
+                'forward',
+            );
+        }
+        if (endByte <= startByte) break;
+
+        const start = emergencyPosition(bytes, startByte);
+        const end = emergencyPosition(bytes, endByte);
+        chunks.push({
+            content: bytes.subarray(startByte, endByte).toString('utf8'),
+            metadata: {
+                startLine: start.line,
+                endLine: end.line,
+                startByte,
+                endByte,
+                startColumn: start.column,
+                endColumn: end.column,
+                language: 'text',
+                filePath: relativePath,
+            },
+        });
+
+        if (endByte === bytes.length) break;
+        const nextStart = alignEmergencyByteBoundary(
+            bytes,
+            Math.max(startByte + 1, endByte - chunkOverlap),
+            'backward',
+        );
+        startByte = nextStart > startByte ? nextStart : endByte;
+    }
+
+    return {
+        backend: 'bounded_text',
+        structuralStatus: 'recovered',
+        structuralReason: 'analysis_failure',
+        symbols: [],
+        moduleBindings: [],
+        callSites: [],
+        chunks,
+    };
+}
+
 export function createLanguageAnalysisService(
     options: LanguageAnalysisServiceOptions = {},
 ): LanguageAnalysisPort {
@@ -77,20 +191,22 @@ export function createLanguageAnalysisService(
 
     return {
         async analyze(input: LanguageAnalysisInput): Promise<LanguageAnalysisResult> {
-            const normalizedLanguage = normalizeLanguageId(input.language);
-            const strategy = strategyForLanguage(normalizedLanguage);
-            if (strategy.backend === 'bounded_text') {
-                return fallbackResult(
-                    { ...input, language: normalizedLanguage },
-                    strategy.backend,
-                    'unsupported',
-                    'unsupported_language',
-                    chunkOptions,
-                );
-            }
-
             try {
-                const normalizedInput = { ...input, language: normalizedLanguage };
+                const normalizedInput = {
+                    content: input.content,
+                    relativePath: input.relativePath,
+                    language: normalizeLanguageId(input.language),
+                };
+                const strategy = strategyForLanguage(normalizedInput.language);
+                if (strategy.backend === 'bounded_text') {
+                    return fallbackResult(
+                        normalizedInput,
+                        strategy.backend,
+                        'unsupported',
+                        'unsupported_language',
+                        chunkOptions,
+                    );
+                }
                 const evidence = strategy.backend === 'oxc'
                     ? analyzeWithOxc(normalizedInput)
                     : await analyzeWithTreeSitter(normalizedInput, options.assetRoot);
@@ -118,13 +234,23 @@ export function createLanguageAnalysisService(
                     ),
                 };
             } catch {
-                return fallbackResult(
-                    { ...input, language: normalizedLanguage },
-                    strategy.backend,
-                    'recovered',
-                    'analysis_failure',
-                    chunkOptions,
-                );
+                try {
+                    const fallbackLanguage = normalizeLanguageId(readInputField(input, 'language', 'text'));
+                    const fallbackBackend = strategyForLanguage(fallbackLanguage).backend;
+                    return fallbackResult(
+                        {
+                            content: readInputField(input, 'content', ''),
+                            relativePath: readInputField(input, 'relativePath', '<unknown>'),
+                            language: fallbackLanguage,
+                        },
+                        fallbackBackend,
+                        'recovered',
+                        'analysis_failure',
+                        chunkOptions,
+                    );
+                } catch {
+                    return emergencyFallbackResult(input, chunkOptions);
+                }
             }
         },
         getDescription(): string {

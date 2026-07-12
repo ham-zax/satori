@@ -588,12 +588,6 @@ export function buildSymbolRegistry(input: BuildSymbolRegistryInput): SymbolRegi
         appendToMap(symbolsByQualifiedName, symbol.qualifiedName, symbol);
     }
 
-    for (const [symbolKey, candidates] of symbolsByKey) {
-        if (candidates.length > 1) {
-            warnings.push(`Duplicate symbolKey '${symbolKey}' has ${candidates.length} candidates`);
-        }
-    }
-
     return {
         manifest: input.manifest,
         symbols,

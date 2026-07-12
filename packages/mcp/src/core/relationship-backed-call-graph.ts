@@ -22,33 +22,6 @@ import {
 } from "./python-call-fallback.js";
 import { buildInboundNotesOnlySearchQuery } from "./search-response-helpers.js";
 
-const DUPLICATE_SYMBOL_KEY_WARNING_RE = /^Duplicate symbolKey '([^']+)' has (\d+) candidates$/;
-
-/**
- * Collapse per-key registry duplicate warnings into one count + sample line.
- * Presentation-only: registry build still retains full diagnostics.
- */
-export function collapseRegistryDuplicateKeyWarnings(warnings: readonly string[]): string[] {
-    const samples: string[] = [];
-    let dupCount = 0;
-    const rest: string[] = [];
-    for (const warning of warnings) {
-        const match = DUPLICATE_SYMBOL_KEY_WARNING_RE.exec(warning);
-        if (match) {
-            dupCount += 1;
-            samples.push(match[1]);
-            continue;
-        }
-        rest.push(warning);
-    }
-    if (dupCount > 0) {
-        samples.sort(compareContractStrings);
-        const sample = samples.slice(0, 3).join(",");
-        rest.push(`DUPLICATE_SYMBOL_KEY:${dupCount}${sample ? ` sample=${sample}` : ""}`);
-    }
-    return rest;
-}
-
 type RelationshipBackedCallGraphHost = {
     navigationStore: NavigationStore;
     callGraphManager: CallGraphSidecarManager;
@@ -471,7 +444,6 @@ export class RelationshipBackedCallGraph {
             [...nodeById.values()].filter((node) => referencedNodeIds.has(node.symbolId))
         );
         const warnings = [...new Set([
-            ...collapseRegistryDuplicateKeyWarnings(input.registry.warnings),
             ...neighbors.warnings,
             ...(droppedEdgesOutsideSourceSpan > 0 ? [`CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:${droppedEdgesOutsideSourceSpan}`] : []),
             ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),

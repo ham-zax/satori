@@ -90,7 +90,7 @@ test('synthesized file symbol has deterministic fallback-owner shape', () => {
     });
 });
 
-test('symbol registry builds deterministic reverse indexes and duplicate warnings', () => {
+test('symbol registry treats logical-key multiplicity as candidates, not corruption', () => {
     const fileOwner = createSynthesizedFileSymbol({
         relativePath: 'src/auth.ts',
         language: 'typescript',
@@ -131,8 +131,7 @@ test('symbol registry builds deterministic reverse indexes and duplicate warning
         'method-overload-instance',
     ]);
     assert.equal(registry.symbolsByKey.get(method.symbolKey)?.length, 2);
-    assert.equal(registry.warnings.length, 1);
-    assert.match(registry.warnings[0], /Duplicate symbolKey/);
+    assert.deepEqual(registry.warnings, []);
 });
 
 test('symbol registry manifest hash is stable across file order and ignores display path timing churn', () => {

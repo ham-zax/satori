@@ -247,9 +247,7 @@ symbolsByLabel: Map<string, SymbolRecord[]>;
 symbolsByQualifiedName: Map<string, SymbolRecord[]>;
 ```
 
-`symbolKey` lookup may return multiple records across snapshots, overloads, or stale-compatible cases. Callers must disambiguate with `symbolInstanceId`, file hash, manifest compatibility, exact file constraints, or exact label constraints.
-
-Within one compatible registry snapshot, duplicate `symbolKey` records are allowed only for language-supported overloads or extractor-declared ambiguity. Unexpected duplicate keys must emit a registry warning.
+`symbolKey` lookup may return multiple records for overloads, repeated lexical bindings, or other logical-name ambiguity. Multiplicity is candidate state, not registry corruption. Callers must disambiguate with `symbolInstanceId`, file hash, manifest compatibility, exact file constraints, or exact label constraints; unresolved logical lookups return an explicit ambiguous outcome. Duplicate `symbolInstanceId` remains invalid registry state.
 
 Persistence model:
 

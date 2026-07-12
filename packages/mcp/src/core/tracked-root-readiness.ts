@@ -1,4 +1,4 @@
-import { compareContractStrings } from "@zokizuan/satori-core";
+import { compareContractStrings, type ProvenGenerationReceipt } from "@zokizuan/satori-core";
 import type { CodebaseInfo } from "../config.js";
 import type { CallGraphDirection, CallGraphSymbolRef } from "./call-graph.js";
 import type {
@@ -65,7 +65,14 @@ type CallGraphContext = {
 };
 
 export type TrackedRootReadinessState =
-    | { state: "ready"; root: TrackedRootEntry; proofDebugHint?: CompletionProbeDebugHint }
+    | {
+        state: "ready";
+        root: TrackedRootEntry;
+        proofDebugHint?: CompletionProbeDebugHint;
+        generationReceipt?: ProvenGenerationReceipt;
+        navigationStatus?: CompletionProofValidationResult['navigationStatus'];
+        preparedObservation?: string;
+    }
     | { state: "requires_reindex"; codebasePath: string; message?: string }
     | { state: "indexing"; codebasePath: string }
     | { state: "index_failed"; codebasePath: string; info: TrackedCodebaseInfo }
@@ -74,6 +81,7 @@ export type TrackedRootReadinessState =
     | { state: "missing_collection"; codebasePath: string; collectionName?: string; proofDebugHint?: CompletionProbeDebugHint };
 
 export type TrackedRootReadinessHost = {
+    onReadinessPhase?(phase: ReadinessPhase, durationMs: number): void;
     refreshSnapshotStateFromDisk(): void;
     isPathWithinCodebase(targetPath: string, rootPath: string): boolean;
     getTrackedRootEntryForPath(codebasePath: string): TrackedRootEntry | null;
@@ -95,8 +103,45 @@ export type TrackedRootReadinessHost = {
     buildStaleLocalMessage(codebasePath: string, requestedPath: string, reason: CompletionProofReason): string;
 };
 
+export type ReadinessPhase =
+    | "snapshot_reload"
+    | "tracked_root_resolution"
+    | "fingerprint_gate"
+    | "completion_proof"
+    | "collection_probe";
+
 export class TrackedRootReadiness {
     constructor(private readonly host: TrackedRootReadinessHost) {}
+
+    private measurePhase<T>(
+        phase: ReadinessPhase,
+        run: () => T,
+        onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
+    ): T {
+        const startedAt = performance.now();
+        try {
+            return run();
+        } finally {
+            const durationMs = Math.max(0, performance.now() - startedAt);
+            this.host.onReadinessPhase?.(phase, durationMs);
+            onPhase?.(phase, durationMs);
+        }
+    }
+
+    private async measureAsyncPhase<T>(
+        phase: ReadinessPhase,
+        run: () => Promise<T>,
+        onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
+    ): Promise<T> {
+        const startedAt = performance.now();
+        try {
+            return await run();
+        } finally {
+            const durationMs = Math.max(0, performance.now() - startedAt);
+            this.host.onReadinessPhase?.(phase, durationMs);
+            onPhase?.(phase, durationMs);
+        }
+    }
 
     private resolveTrackedRoot(
         absolutePath: string,
@@ -336,10 +381,20 @@ export class TrackedRootReadiness {
     public async prepareTrackedRootForRead(
         absolutePath: string,
         accessMode: "semantic" | "navigation" = "semantic",
+        onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
     ): Promise<TrackedRootReadinessState> {
-        this.host.refreshSnapshotStateFromDisk();
+        this.measurePhase("snapshot_reload", () => this.host.refreshSnapshotStateFromDisk(), onPhase);
 
-        const blockedRoot = this.host.getMatchingBlockedRoot(absolutePath);
+        const { blockedRoot, searchableRoot, indexingRoot, failedRoot } = this.measurePhase(
+            "tracked_root_resolution",
+            () => ({
+                blockedRoot: this.host.getMatchingBlockedRoot(absolutePath),
+                searchableRoot: this.resolveTrackedRoot(absolutePath, ["indexed", "sync_completed"]),
+                indexingRoot: this.resolveTrackedRoot(absolutePath, ["indexing"]),
+                failedRoot: this.resolveTrackedRoot(absolutePath, ["indexfailed"]),
+            }),
+            onPhase,
+        );
         if (blockedRoot) {
             return {
                 state: "requires_reindex",
@@ -347,10 +402,6 @@ export class TrackedRootReadiness {
                 message: blockedRoot.message,
             };
         }
-
-        const searchableRoot = this.resolveTrackedRoot(absolutePath, ["indexed", "sync_completed"]);
-        const indexingRoot = this.resolveTrackedRoot(absolutePath, ["indexing"]);
-        const failedRoot = this.resolveTrackedRoot(absolutePath, ["indexfailed"]);
 
         if (
             failedRoot
@@ -378,7 +429,11 @@ export class TrackedRootReadiness {
         }
 
         const effectiveRoot = searchableRoot.path;
-        const gateResult = this.host.enforceFingerprintGate(effectiveRoot);
+        const gateResult = this.measurePhase(
+            "fingerprint_gate",
+            () => this.host.enforceFingerprintGate(effectiveRoot),
+            onPhase,
+        );
         if (gateResult.blockedResponse) {
             if (accessMode === "navigation" && gateResult.reason === "fingerprint_mismatch") {
                 // Navigation sidecars are source-backed and can still be safe under a runtime-model mismatch.
@@ -391,7 +446,11 @@ export class TrackedRootReadiness {
             }
         }
 
-        const completionProof = await this.host.validateCompletionProof(effectiveRoot);
+        const completionProof = await this.measureAsyncPhase(
+            "completion_proof",
+            () => this.host.validateCompletionProof(effectiveRoot),
+            onPhase,
+        );
         if (completionProof.outcome === "policy_incompatible") {
             return {
                 state: "requires_reindex",
@@ -428,7 +487,13 @@ export class TrackedRootReadiness {
             }
             : undefined;
 
-        const collectionState = await this.host.probeLocalSearchCollectionState(effectiveRoot);
+        const collectionState = completionProof.outcome === "valid" && completionProof.collectionName
+            ? { state: "ready" as const, collectionName: completionProof.collectionName }
+            : await this.measureAsyncPhase(
+                "collection_probe",
+                () => this.host.probeLocalSearchCollectionState(effectiveRoot),
+                onPhase,
+            );
         if (collectionState.state === "missing") {
             return {
                 state: "missing_collection",
@@ -442,6 +507,8 @@ export class TrackedRootReadiness {
             state: "ready",
             root: searchableRoot,
             proofDebugHint,
+            ...(completionProof.generationReceipt ? { generationReceipt: completionProof.generationReceipt } : {}),
+            ...(completionProof.navigationStatus ? { navigationStatus: completionProof.navigationStatus } : {}),
         };
     }
 }

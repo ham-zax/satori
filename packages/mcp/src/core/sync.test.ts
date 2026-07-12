@@ -23,6 +23,10 @@ type SyncManagerTestAccess = {
     isIgnoreRuleControlFile(relativePath: string): boolean;
     touchWatchedCodebase(codebasePath: string): Promise<void>;
     unwatchCodebase(codebasePath: string): Promise<void>;
+    lastSyncTimes: Map<string, number>;
+    ignoreRulesVersions: Map<string, number>;
+    freshnessEpochs: Map<string, number>;
+    handleWatcherError(codebasePath: string, error: unknown): Promise<void>;
 };
 
 function wait(ms: number): Promise<void> {
@@ -1491,4 +1495,62 @@ test('touchWatchedCodebase registers only explicitly touched codebases and unwat
     await manager.stopWatcherMode();
     fs.rmSync(codebasePathA, { recursive: true, force: true });
     fs.rmSync(codebasePathB, { recursive: true, force: true });
+});
+
+test('prepared read observation fails closed on watcher activity and root eviction clears passive state', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const manager = new SyncManager(
+        createContext() as unknown as SyncContext,
+        createSnapshot(statusByPath) as unknown as SyncSnapshotManager,
+        { watchEnabled: true, watchDebounceMs: 60_000 },
+    );
+    const access = manager as unknown as SyncManagerTestAccess;
+
+    await manager.startWatcherMode();
+    await manager.touchWatchedCodebase(codebasePath);
+    access.lastSyncTimes.set(codebasePath, 1);
+    access.ignoreRulesVersions.set(codebasePath, 2);
+
+    const before = manager.getPreparedReadObservation(codebasePath);
+    assert.deepEqual(before, { freshnessEpoch: 0, watcherHealthy: true });
+
+    manager.scheduleWatcherSync(codebasePath);
+    assert.equal(manager.getPreparedReadObservation(codebasePath), null);
+
+    await manager.unwatchCodebase(codebasePath);
+    assert.equal(access.lastSyncTimes.has(codebasePath), false);
+    assert.equal(access.ignoreRulesVersions.has(codebasePath), false);
+    assert.equal(manager.getPreparedReadObservation(codebasePath), null);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('prepared read observation fails closed after a watcher error', async (t) => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const manager = new SyncManager(
+        createContext() as unknown as SyncContext,
+        createSnapshot(statusByPath) as unknown as SyncSnapshotManager,
+        { watchEnabled: true, watchDebounceMs: 60_000 },
+    );
+    const access = manager as unknown as SyncManagerTestAccess;
+    t.mock.method(console, 'error', () => undefined);
+
+    await manager.startWatcherMode();
+    await manager.touchWatchedCodebase(codebasePath);
+    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
+        freshnessEpoch: 0,
+        watcherHealthy: true,
+    });
+
+    await access.handleWatcherError(codebasePath, new Error('watcher failed'));
+
+    assert.equal(manager.getPreparedReadObservation(codebasePath), null);
+    assert.equal(access.watchers.has(codebasePath), false);
+    assert.equal(access.freshnessEpochs.get(codebasePath), 1);
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
 });

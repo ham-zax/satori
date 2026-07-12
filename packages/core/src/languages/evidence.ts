@@ -165,7 +165,7 @@ export async function resolveLanguageCapabilityEvidence(input: {
     if (registry.status !== 'ok' || !registry.registry) {
         return computeLanguageCapabilityEvidence({
             searchable: input.searchable,
-            registryStatus: registry.status,
+            registryStatus: registry.status === 'corrupt' ? 'incompatible' : registry.status,
             relationshipStatus: 'not_checked',
             files: [],
             symbols: [],
@@ -180,7 +180,9 @@ export async function resolveLanguageCapabilityEvidence(input: {
     return computeLanguageCapabilityEvidence({
         searchable: input.searchable,
         registryStatus: 'compatible',
-        relationshipStatus: relationships.status === 'ok' ? 'compatible' : relationships.status,
+        relationshipStatus: relationships.status === 'ok'
+            ? 'compatible'
+            : relationships.status === 'corrupt' ? 'incompatible' : relationships.status,
         files: registry.registry.manifest.files,
         symbols: registry.registry.symbols,
     });

@@ -15,6 +15,7 @@ import type {
     TrackedRootEntry,
     TrackedRootReadinessState,
 } from "./tracked-root-readiness.js";
+import type { ProvenGenerationReceipt } from "@zokizuan/satori-core";
 
 type SearchFrontDoorContext = Pick<
     SearchRequestInput,
@@ -31,6 +32,9 @@ export type SearchFrontDoorReady = {
     freshnessDecision: FreshnessDecision;
     partialIndexSearchWarnings: string[];
     proofDebugHint?: CompletionProbeDebugHint;
+    generationReceipt?: ProvenGenerationReceipt;
+    navigationStatus?: "valid" | "missing" | "incompatible" | "corrupt";
+    preparedObservation?: string;
 };
 
 export type SearchFrontDoorBlocked = {
@@ -48,6 +52,7 @@ export type SearchFrontDoorHost = {
     >;
     prepareInitialTrackedRootRead: (absolutePath: string) => Promise<TrackedRootReadinessState>;
     preparePostFreshnessTrackedRootRead: (absolutePath: string) => Promise<TrackedRootReadinessState>;
+    getPreparedReadObservation?: (canonicalRoot: string) => string | null;
     ensureSearchFreshness: (effectiveRoot: string) => Promise<FreshnessDecision>;
     noteFreshnessMode: (mode: FreshnessDecision["mode"]) => void;
     buildInvalidSearchRequestPayload: (
@@ -101,6 +106,18 @@ function buildPartialIndexWarnings(host: SearchFrontDoorHost, root: TrackedRootE
     return host.isPartialIndexNavigationUnavailable(root.info)
         ? [...host.partialIndexWarnings]
         : [];
+}
+
+function buildReadinessWarnings(
+    host: SearchFrontDoorHost,
+    state: Extract<TrackedRootReadinessState, { state: "ready" }>,
+): string[] {
+    return [
+        ...buildPartialIndexWarnings(host, state.root),
+        ...(state.navigationStatus && state.navigationStatus !== "valid"
+            ? ["NAVIGATION_REPAIR_REQUIRED"]
+            : []),
+    ];
 }
 
 function buildBlockedReadinessPayload(
@@ -263,14 +280,28 @@ export async function runSearchFrontDoor(
     let searchableRoot = trackedRootState.state === "ready" ? trackedRootState.root : null;
     let effectiveRoot = searchableRoot?.path || (trackedRootState.state === "stale_local" ? trackedRootState.codebasePath : absolutePath);
     let proofDebugHint = trackedRootState.state === "ready" ? trackedRootState.proofDebugHint : undefined;
-    let partialIndexSearchWarnings = searchableRoot ? buildPartialIndexWarnings(host, searchableRoot) : [];
+    let partialIndexSearchWarnings = trackedRootState.state === "ready"
+        ? buildReadinessWarnings(host, trackedRootState)
+        : [];
+    let generationReceipt = trackedRootState.state === "ready" ? trackedRootState.generationReceipt : undefined;
+    let navigationStatus = trackedRootState.state === "ready" ? trackedRootState.navigationStatus : undefined;
 
     for (let freshnessAttempt = 0; freshnessAttempt < 2; freshnessAttempt += 1) {
         const freshnessRoot = effectiveRoot;
+        const observationBeforeFreshness = host.getPreparedReadObservation?.(freshnessRoot) ?? null;
         const freshnessDecision = await host.ensureSearchFreshness(freshnessRoot);
         host.noteFreshnessMode(freshnessDecision.mode);
 
-        const postFreshnessRootState = await host.preparePostFreshnessTrackedRootRead(absolutePath);
+        const observationAfterFreshness = host.getPreparedReadObservation?.(freshnessRoot) ?? null;
+        const canReuseInitialReadiness = freshnessAttempt === 0
+            && trackedRootState.state === "ready"
+            && freshnessDecision.mode === "skipped_recent"
+            && observationBeforeFreshness !== null
+            && trackedRootState.preparedObservation === observationBeforeFreshness
+            && observationBeforeFreshness === observationAfterFreshness;
+        const postFreshnessRootState = canReuseInitialReadiness
+            ? trackedRootState
+            : await host.preparePostFreshnessTrackedRootRead(absolutePath);
         const readinessBlockedPayload = buildBlockedReadinessPayload(postFreshnessRootState, searchContext, host);
         if (readinessBlockedPayload) {
             return { kind: "blocked", payload: readinessBlockedPayload };
@@ -287,7 +318,9 @@ export async function runSearchFrontDoor(
             searchableRoot = postFreshnessRootState.root;
             effectiveRoot = observedRoot;
             proofDebugHint = postFreshnessRootState.proofDebugHint;
-            partialIndexSearchWarnings = buildPartialIndexWarnings(host, searchableRoot);
+            generationReceipt = postFreshnessRootState.generationReceipt;
+            navigationStatus = postFreshnessRootState.navigationStatus;
+            partialIndexSearchWarnings = buildReadinessWarnings(host, postFreshnessRootState);
             continue;
         }
 
@@ -303,7 +336,9 @@ export async function runSearchFrontDoor(
         searchableRoot = postFreshnessRootState.root;
         effectiveRoot = observedRoot;
         proofDebugHint = postFreshnessRootState.proofDebugHint;
-        partialIndexSearchWarnings = buildPartialIndexWarnings(host, searchableRoot);
+        generationReceipt = postFreshnessRootState.generationReceipt;
+        navigationStatus = postFreshnessRootState.navigationStatus;
+        partialIndexSearchWarnings = buildReadinessWarnings(host, postFreshnessRootState);
         return {
             kind: "ready",
             absolutePath,
@@ -312,6 +347,9 @@ export async function runSearchFrontDoor(
             freshnessDecision,
             partialIndexSearchWarnings,
             proofDebugHint,
+            generationReceipt,
+            navigationStatus,
+            preparedObservation: postFreshnessRootState.preparedObservation,
         };
     }
 

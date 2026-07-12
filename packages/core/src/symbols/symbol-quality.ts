@@ -3,10 +3,11 @@
  * Does not claim parser/fallback cause; does not re-run parsers or splitters.
  */
 import { getLanguageCapabilityDeclaration } from '../languages/capabilities';
-import type { SymbolKind, SymbolRecord, SymbolRegistryManifestFile } from './contracts';
+import type { SymbolKind, SymbolRecord, SymbolRegistryManifest, SymbolRegistryManifestFile } from './contracts';
 import type { SymbolRegistry } from './registry';
-import { readSymbolRegistrySidecar } from './sidecar';
-import type { ReadSymbolRegistrySidecarResult } from './sidecar';
+import { readSymbolRegistryManifest } from './sidecar';
+import type { ReadSymbolRegistryManifestResult, ReadSymbolRegistrySidecarResult } from './sidecar';
+import type { NavigationSymbolQualityAggregate } from './sidecar';
 
 export type SymbolQualityStatus =
     | 'symbol_rich'
@@ -33,6 +34,7 @@ export interface SymbolQualitySummary {
     nonFileSymbolCount: number;
     languages: SymbolQualityLanguageBreakdown[];
     message: string;
+    evidenceAvailability?: 'ready' | 'missing' | 'corrupt' | 'incompatible' | 'unverified';
 }
 
 export interface SymbolQualityFileInput {
@@ -247,6 +249,88 @@ export function computeSymbolQualitySummaryFromRegistry(registry: SymbolRegistry
     });
 }
 
+export function computeSymbolQualitySummaryFromManifest(
+    manifest: SymbolRegistryManifest,
+): SymbolQualitySummary {
+    const summary = computeSymbolQualitySummary({
+        files: manifest.files.map((file) => ({ path: file.path, language: file.language })),
+        symbols: manifest.files
+            .filter((file) => file.symbolCount > 1)
+            .map((file) => ({ file: file.path, kind: 'function' })),
+    });
+    return {
+        ...summary,
+        nonFileSymbolCount: manifest.files.reduce(
+            (count, file) => count + Math.max(0, file.symbolCount - 1),
+            0,
+        ),
+    };
+}
+
+export function computeSymbolQualitySummaryFromAggregate(
+    aggregate: NavigationSymbolQualityAggregate,
+): SymbolQualitySummary {
+    let eligibleFiles = 0;
+    let filesWithNonFileSymbols = 0;
+    let fileOwnerOnlyFiles = 0;
+    let nonFileSymbolCount = 0;
+    let searchOnlyFiles = 0;
+    let unclassifiedFiles = 0;
+    const languages = aggregate.languages.map((entry) => {
+        const eligibility = isLanguageSymbolEligible(entry.language);
+        const observedEligible = eligibility === true || (eligibility === null && entry.nonFileSymbolCount > 0);
+        if (observedEligible) {
+            eligibleFiles += entry.indexedFiles;
+            filesWithNonFileSymbols += entry.filesWithNonFileSymbols;
+            fileOwnerOnlyFiles += entry.indexedFiles - entry.filesWithNonFileSymbols;
+        } else if (eligibility === false) {
+            searchOnlyFiles += entry.indexedFiles;
+        } else {
+            unclassifiedFiles += entry.indexedFiles;
+        }
+        nonFileSymbolCount += entry.nonFileSymbolCount;
+        return {
+            language: entry.language,
+            eligibleFiles: observedEligible ? entry.indexedFiles : 0,
+            filesWithNonFileSymbols: observedEligible ? entry.filesWithNonFileSymbols : 0,
+            status: observedEligible
+                ? statusFromRatio(entry.indexedFiles, entry.filesWithNonFileSymbols)
+                : eligibility === false ? 'search_only' as const : 'unknown' as const,
+        };
+    });
+    const status = aggregate.indexedFileCount === 0
+        ? 'unknown'
+        : eligibleFiles > 0
+            ? statusFromRatio(eligibleFiles, filesWithNonFileSymbols)
+            : searchOnlyFiles > 0 && unclassifiedFiles === 0 ? 'search_only' : 'unknown';
+    return {
+        status,
+        basis: 'symbol_registry',
+        eligibleFiles,
+        filesWithNonFileSymbols,
+        fileOwnerOnlyFiles,
+        nonFileSymbolCount,
+        languages,
+        message: messageForStatus(status),
+    };
+}
+
+export function computeSymbolQualitySummaryFromManifestRead(
+    read: ReadSymbolRegistryManifestResult,
+): SymbolQualitySummary {
+    if (read.status !== 'ok') {
+        return unknownSymbolQualitySummary(
+            read.status === 'missing'
+                ? 'Observed symbol quality unavailable (symbol registry missing).'
+                : `Observed symbol quality unavailable (${read.reason || 'registry unreadable'}).`,
+        );
+    }
+    if (read.manifest.files.length === 0) {
+        return unknownSymbolQualitySummary('Observed symbol quality unavailable (empty registry).');
+    }
+    return computeSymbolQualitySummaryFromManifest(read.manifest);
+}
+
 export function unknownSymbolQualitySummary(message?: string): SymbolQualitySummary {
     return {
         status: 'unknown',
@@ -284,11 +368,11 @@ export async function resolveSymbolQualitySummary(input: {
     normalizedRootPath: string;
     stateRoot?: string;
 }): Promise<SymbolQualitySummary> {
-    const read = await readSymbolRegistrySidecar({
+    const read = await readSymbolRegistryManifest({
         stateRoot: input.stateRoot,
         normalizedRootPath: input.normalizedRootPath,
     });
-    return computeSymbolQualitySummaryFromSidecarRead(read);
+    return computeSymbolQualitySummaryFromManifestRead(read);
 }
 
 /** Compact marker for list_codebases / log lines. */

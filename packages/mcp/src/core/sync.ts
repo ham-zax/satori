@@ -60,6 +60,11 @@ export interface FreshnessDecision {
     operation?: IndexOperationReceipt;
 }
 
+export type PreparedReadObservation = {
+    freshnessEpoch: number;
+    watcherHealthy: true;
+};
+
 interface SyncExecutionOutcome {
     mode: Exclude<FreshnessDecisionMode, 'coalesced' | 'skipped_recent'>;
     stats?: SyncStats;
@@ -148,6 +153,7 @@ export class SyncManager {
     private ignoreRulesVersions: Map<string, number> = new Map();
     private pendingIgnoreChangeEdits: Map<string, number> = new Map();
     private activeIgnoreReconciles: Map<string, Promise<FreshnessDecision>> = new Map();
+    private freshnessEpochs: Map<string, number> = new Map();
     private readonly now: () => number;
     private readonly onSyncCompleted?: SyncManagerOptions['onSyncCompleted'];
     private readonly mutationLeaseCoordinator?: MutationLeaseCoordinator;
@@ -160,6 +166,27 @@ export class SyncManager {
         this.now = options.now || (() => Date.now());
         this.onSyncCompleted = options.onSyncCompleted;
         this.mutationLeaseCoordinator = options.mutationLeaseCoordinator;
+    }
+
+    private bumpFreshnessEpoch(codebasePath: string): void {
+        this.freshnessEpochs.set(codebasePath, (this.freshnessEpochs.get(codebasePath) ?? 0) + 1);
+    }
+
+    public getPreparedReadObservation(codebasePath: string): PreparedReadObservation | null {
+        if (
+            !this.watchEnabled
+            || !this.watcherModeStarted
+            || !this.watchers.has(codebasePath)
+            || this.debounceTimers.has(codebasePath)
+            || this.activeSyncs.has(codebasePath)
+            || this.activeIgnoreReconciles.has(codebasePath)
+        ) {
+            return null;
+        }
+        return {
+            freshnessEpoch: this.freshnessEpochs.get(codebasePath) ?? 0,
+            watcherHealthy: true,
+        };
     }
 
     private persistOwnedOperationStart(lease: RootMutationLease | undefined, ownsLease: boolean): IndexOperationReceipt | undefined {
@@ -351,6 +378,7 @@ export class SyncManager {
         // 3. Execution Gate
         // console.log(`[SYNC] 🔄 Triggering Sync for '${codebasePath}' (Threshold: ${thresholdMs}ms)`);
 
+        this.bumpFreshnessEpoch(codebasePath);
         const syncPromise = (async () => {
             try {
                 return await this.syncCodebase(
@@ -364,6 +392,7 @@ export class SyncManager {
                 throw e;
             } finally {
                 this.activeSyncs.delete(codebasePath);
+                this.bumpFreshnessEpoch(codebasePath);
             }
         })();
 
@@ -996,6 +1025,8 @@ export class SyncManager {
             return;
         }
 
+        this.bumpFreshnessEpoch(codebasePath);
+
         const activeTimer = this.debounceTimers.get(codebasePath);
         if (activeTimer) {
             clearTimeout(activeTimer);
@@ -1043,6 +1074,8 @@ export class SyncManager {
         }
 
         console.error(`[SYNC-WATCH] Watcher error for '${codebasePath}':`, error);
+        this.bumpFreshnessEpoch(codebasePath);
+        await this.unregisterCodebaseWatcher(codebasePath);
     }
 
     public async touchWatchedCodebase(codebasePath: string): Promise<void> {
@@ -1056,6 +1089,10 @@ export class SyncManager {
     public async unwatchCodebase(codebasePath: string): Promise<void> {
         this.watchedCodebases.delete(codebasePath);
         await this.unregisterCodebaseWatcher(codebasePath);
+        this.lastSyncTimes.delete(codebasePath);
+        this.ignoreRulesVersions.delete(codebasePath);
+        this.freshnessEpochs.delete(codebasePath);
+        this.activeIgnoreReconciles.delete(codebasePath);
     }
 
     public async registerCodebaseWatcher(codebasePath: string): Promise<void> {
@@ -1189,6 +1226,10 @@ export class SyncManager {
         this.watcherIgnoreMatchers.clear();
         this.pendingIgnoreChangeEdits.clear();
         this.activeIgnoreReconciles.clear();
+        this.lastSyncTimes.clear();
+        this.ignoreRulesVersions.clear();
+        this.freshnessEpochs.clear();
+        this.watchedCodebases.clear();
 
         const watchers = Array.from(this.watchers.values());
         this.watchers.clear();

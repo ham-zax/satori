@@ -233,11 +233,13 @@ function buildGraphEvidence(callGraphHint: CallGraphHint): NonNullable<SearchGro
 
 export function buildExactRegistryGroupResult(input: {
     symbol: SymbolRecord;
+    preview?: string;
     spanRepair?: PythonSourceBackedSpanRepair;
     indexedAt: string | null;
     navigationState: SearchNavigationState;
     graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
     debug: boolean;
+    debugDetail?: "ranking" | "full";
     now: () => number;
     previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
@@ -296,7 +298,7 @@ export function buildExactRegistryGroupResult(input: {
             }),
             semantic: "medium",
         },
-        preview: "",
+        preview: input.preview ?? "",
         ...(exactEvidenceSpan ? { evidenceSpan: exactEvidenceSpan } : {}),
         navigation: buildSearchGraphNavigation(
             callGraphHint,
@@ -319,11 +321,13 @@ export function buildExactRegistryGroupResult(input: {
                 agentFitReason: "exact_registry",
                 matchesMust: true,
                 exactLexicalMatch: true,
-                freshness: {
-                    newestChunkIndexedAt: input.indexedAt,
-                    ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
-                },
-                ...(graphEvidence ? { graphEvidence } : {}),
+                ...(input.debugDetail !== "ranking" ? {
+                    freshness: {
+                        newestChunkIndexedAt: input.indexedAt,
+                        ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
+                    },
+                    ...(graphEvidence ? { graphEvidence } : {}),
+                } : {}),
                 provenance: {
                     retrievalPasses: ["exact_registry"],
                     backendScoreKinds: [],
@@ -353,6 +357,7 @@ export function buildGroupedSymbolSearchResult(input: {
     navigationState: SearchNavigationState;
     graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
     debug: boolean;
+    debugDetail?: "ranking" | "full";
     now: () => number;
     previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
@@ -476,11 +481,13 @@ export function buildGroupedSymbolSearchResult(input: {
                     evidenceChunkCount: input.chunkCount,
                     supportBoost,
                 },
-                freshness: {
-                    newestChunkIndexedAt: input.indexedAt,
-                    ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
-                },
-                ...(graphEvidence ? { graphEvidence } : {}),
+                ...(input.debugDetail !== "ranking" ? {
+                    freshness: {
+                        newestChunkIndexedAt: input.indexedAt,
+                        ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
+                    },
+                    ...(graphEvidence ? { graphEvidence } : {}),
+                } : {}),
                 provenance: buildSearchCandidateProvenance(input.representative, effectiveOwnerSource),
             },
         } : {}),
@@ -499,6 +506,7 @@ export function buildVisibleGroupedSearchResults(input: {
     navigationState: SearchNavigationState;
     graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
     debug: boolean;
+    debugDetail?: "ranking" | "full";
     now: () => number;
     previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
@@ -645,6 +653,7 @@ export function buildVisibleGroupedSearchResults(input: {
             navigationState: input.navigationState,
             graphUnavailableReasonOverride: input.graphUnavailableReasonOverride,
             debug: input.debug,
+            debugDetail: input.debugDetail,
             now: input.now,
             previewMaxBytes: input.previewMaxBytes,
             navigationHelpers: input.navigationHelpers,

@@ -26,9 +26,10 @@ import type {
     CallGraphHint,
     SearchDebugHint,
     SearchFreshnessSummary,
+    SearchResponseHints,
     SearchResponseEnvelope,
 } from "./search-types.js";
-import { SEARCH_GROUP_PREVIEW_MAX_BYTES } from "./search-response-helpers.js";
+import { buildSearchDebugSummary, SEARCH_GROUP_PREVIEW_MAX_BYTES } from "./search-response-helpers.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import type { FreshnessDecision } from "./sync.js";
 import type { ExactRegistryLookupDebug } from "./search/exact-registry.js";
@@ -70,7 +71,7 @@ type FinalizeSearchResultsInput = {
     groupBy: SearchGroupBy;
     resultMode: SearchResultMode;
     limit: number;
-    debug: boolean;
+    debugMode: "none" | "summary" | "ranking" | "freshness" | "full";
     rankingMode: "default" | "auto_changed_first";
     freshnessDecision: FreshnessDecision;
     freshnessSummary: SearchFreshnessSummary;
@@ -167,8 +168,7 @@ export async function finalizeSearchResults(
     const mustApplied = input.parsedOperators.must.length > 0;
     const mustSatisfied = !mustApplied || scored.length > 0;
 
-    const debugHintBase: SearchDebugHint | undefined = input.debug
-        ? {
+    const buildRankingDebug = (diversitySummary?: SearchDebugHint["diversitySummary"]) => ({
             queryIntent: {
                 classification: input.queryPlan.intent,
                 confidence: input.queryPlan.confidence,
@@ -184,7 +184,6 @@ export async function finalizeSearchResults(
             rankingProvenance,
             ...(trackedLexicalDebug ? { trackedLexical: trackedLexicalDebug } : {}),
             ...(input.exactRegistryDebug ? { exactRegistry: input.exactRegistryDebug } : {}),
-            phaseTimingsMs: input.phaseTimings,
             passesUsed: Array.from(passesUsed).sort(),
             candidateLimit,
             mustRetry: {
@@ -206,9 +205,7 @@ export async function finalizeSearchResults(
                 multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
                 boostedCandidates,
             },
-            ...(debugChangedFilesState ? {
-                changedCode: host.buildChangedCodeDebug(input.effectiveRoot, debugChangedFilesState),
-            } : {}),
+            ...(diversitySummary ? { diversitySummary } : {}),
             rerank: {
                 enabledByPolicy: rerankDecision.enabledByPolicy,
                 skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
@@ -230,14 +227,66 @@ export async function finalizeSearchResults(
                 docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
                 ...(rerankerFailurePhase ? { errorCode: "RERANKER_FAILED" as const, failurePhase: rerankerFailurePhase } : {}),
             },
-        }
-        : undefined;
+        });
+    const buildDebugProjection = (diversitySummary?: SearchDebugHint["diversitySummary"]): {
+        debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
+        debugSearch?: NonNullable<SearchResponseHints["debugSearch"]>;
+    } => {
+        if (input.debugMode === "none") return {};
+        const rankingDebug = input.debugMode === "ranking" || input.debugMode === "full"
+            ? buildRankingDebug(diversitySummary)
+            : undefined;
+        const changedCode = debugChangedFilesState && (input.debugMode === "freshness" || input.debugMode === "full")
+            ? host.buildChangedCodeDebug(input.effectiveRoot, debugChangedFilesState)
+            : undefined;
+        const debugSummary = buildSearchDebugSummary({
+            passesUsed: Array.from(passesUsed).sort(),
+            rankingProvenance,
+            retrieval: {
+                mode: input.queryPlan.retrievalMode,
+                scorePolicyKind: input.queryPlan.scorePolicyKind,
+                backendScoreKinds: Array.from(backendScoreKinds).sort(),
+            },
+            rerank: rankingDebug?.rerank ?? {
+                enabledByPolicy: rerankDecision.enabledByPolicy,
+                skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
+                skippedByIdentifierIntent: rerankDecision.skippedByIdentifierIntent,
+                skippedByExactPin,
+                capabilityPresent: rerankDecision.capabilityPresent,
+                rerankerPresent: rerankDecision.rerankerPresent,
+                enabled: rerankDecision.enabled && !skippedByExactPin,
+                attempted: rerankerAttempted,
+                applied: rerankerApplied,
+                exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
+                exactMatchPinningApplied,
+                candidatesIn: rerankerCandidatesIn,
+                candidatesReranked: rerankerCandidatesReranked,
+                topK: SEARCH_RERANK_TOP_K,
+                rankK: SEARCH_RERANK_RRF_K,
+                weight: SEARCH_RERANK_WEIGHT,
+                docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
+                docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+            },
+            ...(changedCode ? { changedCode } : {}),
+        }, freshnessSummary);
+        const debugSearch = input.debugMode === "full"
+            ? { ...rankingDebug!, phaseTimingsMs: input.phaseTimings, ...(changedCode ? { changedCode } : {}) }
+            : input.debugMode === "ranking"
+                ? rankingDebug
+                : input.debugMode === "freshness"
+                    ? { phaseTimingsMs: input.phaseTimings, ...(changedCode ? { changedCode } : {}) }
+                    : undefined;
+        return {
+            ...(debugSummary ? { debugSummary } : {}),
+            ...(debugSearch ? { debugSearch } : {}),
+        };
+    };
 
     if (input.resultMode === "raw") {
         const rawResults = buildRawSearchResultsHelper({
             scored,
             limit: input.limit,
-            debug: input.debug,
+            debug: input.debugMode === "ranking" || input.debugMode === "full",
             now: host.now,
         });
         const noiseMitigationHint = host.searchQuerySupport.buildNoiseMitigationHint(
@@ -262,7 +311,7 @@ export async function finalizeSearchResults(
             freshnessDecision: input.freshnessDecision,
             freshnessSummary,
             warnings: finalizedSearchWarnings,
-            debugHint: debugHintBase,
+            ...buildDebugProjection(),
             proofDebugHint: input.proofDebugHint,
             noiseMitigationHint,
             generatedArtifactsHint,
@@ -334,7 +383,8 @@ export async function finalizeSearchResults(
         )
             ? "partial_index_navigation_unavailable"
             : undefined,
-        debug: input.debug,
+        debug: input.debugMode === "ranking" || input.debugMode === "full",
+        debugDetail: input.debugMode === "full" ? "full" : "ranking",
         now: host.now,
         previewMaxBytes: SEARCH_GROUP_PREVIEW_MAX_BYTES,
         navigationHelpers: host.getSearchNavigationHelpers(),
@@ -367,13 +417,6 @@ export async function finalizeSearchResults(
             span: result.target.span,
         })),
     );
-    const groupedDebugHint = debugHintBase
-        ? {
-            ...debugHintBase,
-            diversitySummary: groupedSearchResults.diversitySummary,
-        } satisfies SearchDebugHint
-        : undefined;
-
     return buildGroupedSearchEnvelopeHelper({
         codebaseRoot: input.effectiveRoot,
         absolutePath: input.absolutePath,
@@ -384,7 +427,7 @@ export async function finalizeSearchResults(
         freshnessDecision: input.freshnessDecision,
         freshnessSummary,
         warnings: finalizedSearchWarnings,
-        debugHint: groupedDebugHint,
+        ...buildDebugProjection(groupedSearchResults.diversitySummary),
         proofDebugHint: input.proofDebugHint,
         noiseMitigationHint,
         generatedArtifactsHint,

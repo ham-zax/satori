@@ -124,6 +124,23 @@ test("active lease inspection reports only a live current owner", async () => {
     });
 });
 
+test("lock-free mutation observation retains generation across release", async () => {
+    await withTempDir((tempDir) => {
+        const root = path.join(tempDir, "repo");
+        fs.mkdirSync(root);
+        const processes = new Map<number, MutationLeaseProcessSnapshot>([[101, snapshot(101)]]);
+        const owner = coordinator(path.join(tempDir, "state"), snapshot(101), processes, "owner-a");
+
+        assert.deepEqual(owner.observe(root), { generation: 0, mutationActive: false });
+        const acquired = owner.acquire(root, "sync");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+        assert.deepEqual(owner.observe(root), { generation: 1, mutationActive: true });
+        owner.release(acquired.lease);
+        assert.deepEqual(owner.observe(root), { generation: 1, mutationActive: false });
+    });
+});
+
 test("live owner is not evicted based on lease age", async () => {
     await withTempDir((tempDir) => {
         const root = path.join(tempDir, "repo");

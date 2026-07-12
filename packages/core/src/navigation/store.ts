@@ -173,7 +173,11 @@ function buildFailure(rootPath: string, reason: string, status: 'missing' | 'inc
 async function readRegistryState(input: NavigationStoreInput): Promise<NavigationRegistryState> {
     const result = await readSymbolRegistrySidecar(input);
     if (result.status !== 'ok') {
-        return buildFailure(result.rootPath, result.reason, result.status);
+        return buildFailure(
+            result.rootPath,
+            result.reason,
+            result.status === 'corrupt' ? 'incompatible' : result.status,
+        );
     }
     return {
         status: 'ok',
@@ -201,7 +205,11 @@ async function readRelationshipState(input: NavigationRelationshipsQueryInput): 
         expectedSymbolRegistryManifestHash: expectedManifestHash,
     });
     if (result.status !== 'ok') {
-        return buildFailure(result.rootPath, result.reason, result.status);
+        return buildFailure(
+            result.rootPath,
+            result.reason,
+            result.status === 'corrupt' ? 'incompatible' : result.status,
+        );
     }
 
     const direction = input.direction || 'both';

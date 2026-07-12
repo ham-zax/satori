@@ -3,8 +3,10 @@ import type { FreshnessDecision } from "./sync.js";
 import type {
     SearchChunkResult,
     SearchDebugHint,
+    SearchFreshnessDebugHint,
     SearchFreshnessSummary,
     SearchGroupResult,
+    SearchRankingDebugHint,
     SearchGroupedDebugV2,
     SearchGroupedResultV2,
     SearchResponseEnvelope,
@@ -12,7 +14,6 @@ import type {
 import { SEARCH_RESPONSE_FORMAT_VERSION } from "./search-types.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import {
-    buildSearchDebugSummary,
     buildSearchWarningDetails,
     buildTopRecommendedRawSearchAction,
     buildTopRecommendedSearchAction,
@@ -29,7 +30,8 @@ type SearchResponseCommonInput = {
     freshnessDecision: FreshnessDecision;
     freshnessSummary: SearchFreshnessSummary;
     warnings: string[];
-    debugHint?: SearchDebugHint;
+    debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
+    debugSearch?: SearchDebugHint | SearchRankingDebugHint | SearchFreshnessDebugHint;
     proofDebugHint?: CompletionProbeDebugHint;
     noiseMitigationHint?: unknown;
     generatedArtifactsHint?: unknown;
@@ -46,9 +48,11 @@ function buildSearchResponseHints(input: SearchResponseCommonInput): { hints?: R
             generatedArtifacts: input.generatedArtifactsHint,
         };
     }
-    if (input.debugHint) {
-        responseHints.debugSearch = input.debugHint;
-        responseHints.debugSummary = buildSearchDebugSummary(input.debugHint, input.freshnessSummary);
+    if (input.debugSummary) {
+        responseHints.debugSummary = input.debugSummary;
+    }
+    if (input.debugSearch) {
+        responseHints.debugSearch = input.debugSearch;
     }
     if (input.proofDebugHint) {
         responseHints.debugProofCheck = input.proofDebugHint;

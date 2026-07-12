@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -98,6 +99,13 @@ type SearchFreshnessDecisionPayload = {
     };
     recommendedNextAction?: { tool?: string; args?: { action?: string } };
     results: SearchPayloadResultView[];
+};
+type DebugProjectionPayload = {
+    hints?: {
+        debugSummary?: unknown;
+        debugSearch?: Record<string, unknown>;
+    };
+    results?: Array<{ debug?: Record<string, unknown> }>;
 };
 type MutableHandlerContext = HandlerContext & {
     semanticSearch: (...args: unknown[]) => Promise<SearchFixtureResult[]> | SearchFixtureResult[];
@@ -214,7 +222,7 @@ async function writeSearchSymbolRegistry(input: {
     }>;
     extractedSymbols?: Parameters<typeof buildSymbolRecordsForFile>[0]['extractedSymbols'];
 }) {
-    const fileHash = 'test-search-file-hash';
+    const fileHash = crypto.createHash('sha256').update(input.content, 'utf8').digest('hex');
     const language = input.language || 'typescript';
     const symbols = buildSymbolRecordsForFile({
         relativePath: input.relativePath,
@@ -290,7 +298,7 @@ async function writeSearchSymbolRegistryForFiles(input: {
     const allSymbols: SymbolRecord[] = [];
     const manifestFiles: SymbolRegistryManifest['files'] = [];
     for (const file of input.files) {
-        const fileHash = `test-search-file-hash-${file.relativePath}`;
+        const fileHash = crypto.createHash('sha256').update(file.content, 'utf8').digest('hex');
         const language = file.language || 'typescript';
         const symbols = buildSymbolRecordsForFile({
             relativePath: file.relativePath,
@@ -545,6 +553,76 @@ function parseSemanticSearchInvocation(args: unknown[]): ParsedSemanticSearchInv
         request: null
     };
 }
+
+function assertClosedDebugProjection(
+    payload: DebugProjectionPayload,
+    mode: 'none' | 'summary' | 'ranking' | 'freshness' | 'full',
+): void {
+    const hints = payload.hints;
+    const resultDebug = payload.results?.[0]?.debug;
+    if (mode === 'none') {
+        assert.equal(hints?.debugSummary, undefined);
+        assert.equal(hints?.debugSearch, undefined);
+        assert.equal(resultDebug, undefined);
+        return;
+    }
+    assert.ok(hints?.debugSummary);
+    if (mode === 'summary') {
+        assert.equal(hints?.debugSearch, undefined);
+        assert.equal(resultDebug, undefined);
+        return;
+    }
+    assert.ok(hints?.debugSearch);
+    if (mode === 'ranking') {
+        assert.equal(hints.debugSearch.phaseTimingsMs, undefined);
+        assert.equal(hints.debugSearch.changedCode, undefined);
+        assert.ok(resultDebug);
+        assert.equal(resultDebug.freshness, undefined);
+        assert.equal(resultDebug.graphEvidence, undefined);
+        return;
+    }
+    if (mode === 'freshness') {
+        assert.ok(hints.debugSearch.phaseTimingsMs);
+        assert.equal(hints.debugSearch.queryIntent, undefined);
+        assert.equal(hints.debugSearch.rankingProvenance, undefined);
+        assert.equal(resultDebug, undefined);
+        return;
+    }
+    assert.ok(hints.debugSearch.phaseTimingsMs);
+    assert.ok(hints.debugSearch.queryIntent);
+    assert.ok(resultDebug);
+}
+
+test('handleSearchCode semantic path publishes closed debug projections for every mode', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_auth_validate',
+            symbolLabel: 'method validateSession(token: string)',
+            breadcrumbs: ['class SessionManager', 'method validateSession(token: string)'],
+        }]);
+        for (const mode of ['none', 'summary', 'ranking', 'freshness', 'full'] as const) {
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'where is session validation handled',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                ...(mode === 'none' ? {} : { debugMode: mode }),
+            });
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assertClosedDebugProjection(payload, mode);
+        }
+    });
+});
 
 test('handleSearchCode grouped output omits unproven chunk identity from its compact target', async () => {
     await withTempRepo(async (repoPath) => {
@@ -1336,6 +1414,8 @@ test('handleSearchCode exact registry fast path returns a grouped symbol despite
             assert.equal(rerankCalls, 0);
             assert.equal(payload.results.length, 1);
             assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
+            assert.match(payload.results[0].preview, /return path/);
+            assert.doesNotMatch(payload.results[0].preview, /export class ToolHandlers/);
             assert.equal(typeof payload.results[0].navigation?.graph, 'string');
             assert.equal(payload.results[0].recommendedNextAction, undefined);
             assert.equal(payload.recommendedNextAction?.tool, 'read_file');
@@ -1352,6 +1432,22 @@ test('handleSearchCode exact registry fast path returns a grouped symbol despite
             assert.equal(phaseTimings.semanticSearch, 0);
             assert.equal(phaseTimings.trackedLexical, 0);
             assert.equal(phaseTimings.rerank, 0);
+
+            for (const mode of ['none', 'summary', 'ranking', 'freshness', 'full'] as const) {
+                const modeResponse = await handlers.handleSearchCode({
+                    path: repoPath,
+                    query: 'prepareTrackedRootForRead',
+                    scope: 'runtime',
+                    resultMode: 'grouped',
+                    groupBy: 'symbol',
+                    limit: 5,
+                    ...(mode === 'none' ? {} : { debugMode: mode }),
+                });
+                const modePayload = JSON.parse(modeResponse.content[0]?.text || '{}');
+                assert.equal(modePayload.status, 'ok');
+                assert.equal(modePayload.results[0].target.symbolId, owner.symbolInstanceId);
+                assertClosedDebugProjection(modePayload, mode);
+            }
         });
     });
 });
@@ -1408,6 +1504,7 @@ test('handleSearchCode exact registry fast path repairs a dirty symbol span from
             assert.equal(payload.status, 'ok');
             assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
             assert.deepEqual(payload.results[0].target.span, { startLine: 3, endLine: 5 });
+            assert.equal(payload.results[0].preview, '');
         });
     });
 });

@@ -197,3 +197,138 @@ test('search front door rejects a second root change while freshness remains blo
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 });
+
+test('search front door reuses initial readiness when the proof observation remains stable', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-search-frontdoor-reuse-'));
+    let postReads = 0;
+    const ready = {
+        state: 'ready' as const,
+        root: { path: tempRoot, info: { status: 'indexed' as const } },
+        preparedObservation: 'generation=7;epoch=3',
+    };
+    const host = {
+        prepareInitialTrackedRootRead: async () => ready,
+        preparePostFreshnessTrackedRootRead: async () => {
+            postReads += 1;
+            return ready;
+        },
+        getPreparedReadObservation: () => 'generation=7;epoch=3',
+        ensureSearchFreshness: async () => ({
+            mode: 'skipped_recent' as const,
+            checkedAt: 'now',
+            thresholdMs: 60_000,
+        }),
+        noteFreshnessMode: () => undefined,
+        buildFreshnessBlockedSearchPayload: () => null,
+        isPartialIndexNavigationUnavailable: () => false,
+        partialIndexWarnings: [],
+        canSyncStaleLocal: () => false,
+        trackedRootReadiness: {},
+    } as unknown as SearchFrontDoorHost;
+    try {
+        const result = await runSearchFrontDoor({
+            path: tempRoot,
+            query: 'owner',
+            scope: 'runtime',
+            groupBy: 'symbol',
+            resultMode: 'grouped',
+            limit: 5,
+        }, host);
+        assert.equal(result.kind, 'ready');
+        assert.equal(postReads, 0);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('search front door reproves readiness when the observation changes', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-search-frontdoor-reprove-'));
+    let observation = 'generation=7;epoch=3';
+    let postReads = 0;
+    const ready = {
+        state: 'ready' as const,
+        root: { path: tempRoot, info: { status: 'indexed' as const } },
+        preparedObservation: 'generation=7;epoch=3',
+    };
+    const host = {
+        prepareInitialTrackedRootRead: async () => ready,
+        preparePostFreshnessTrackedRootRead: async () => {
+            postReads += 1;
+            return ready;
+        },
+        getPreparedReadObservation: () => observation,
+        ensureSearchFreshness: async () => {
+            observation = 'generation=7;epoch=4';
+            return { mode: 'skipped_recent' as const, checkedAt: 'now', thresholdMs: 60_000 };
+        },
+        noteFreshnessMode: () => undefined,
+        buildFreshnessBlockedSearchPayload: () => null,
+        isPartialIndexNavigationUnavailable: () => false,
+        partialIndexWarnings: [],
+        canSyncStaleLocal: () => false,
+        trackedRootReadiness: {},
+    } as unknown as SearchFrontDoorHost;
+    try {
+        await runSearchFrontDoor({
+            path: tempRoot,
+            query: 'owner',
+            scope: 'runtime',
+            groupBy: 'symbol',
+            resultMode: 'grouped',
+            limit: 5,
+        }, host);
+        assert.equal(postReads, 1);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('search front door reproves readiness when a mutation completed after cached receipt validation', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-search-frontdoor-rebased-'));
+    let postReads = 0;
+    const staleReady = {
+        state: 'ready' as const,
+        root: { path: tempRoot, info: { status: 'indexed' as const } },
+        preparedObservation: 'generation=7;epoch=3',
+    };
+    const currentReady = {
+        ...staleReady,
+        preparedObservation: 'generation=8;epoch=4',
+    };
+    const host = {
+        prepareInitialTrackedRootRead: async () => staleReady,
+        preparePostFreshnessTrackedRootRead: async () => {
+            postReads += 1;
+            return currentReady;
+        },
+        getPreparedReadObservation: () => 'generation=8;epoch=4',
+        ensureSearchFreshness: async () => ({
+            mode: 'skipped_recent' as const,
+            checkedAt: 'now',
+            thresholdMs: 60_000,
+        }),
+        noteFreshnessMode: () => undefined,
+        buildFreshnessBlockedSearchPayload: () => null,
+        isPartialIndexNavigationUnavailable: () => false,
+        partialIndexWarnings: [],
+        canSyncStaleLocal: () => false,
+        trackedRootReadiness: {},
+    } as unknown as SearchFrontDoorHost;
+    try {
+        const result = await runSearchFrontDoor({
+            path: tempRoot,
+            query: 'owner',
+            scope: 'runtime',
+            groupBy: 'symbol',
+            resultMode: 'grouped',
+            limit: 5,
+        }, host);
+        assert.equal(result.kind, 'ready');
+        assert.equal(postReads, 1);
+        if (result.kind === 'ready') {
+            assert.equal(result.preparedObservation, 'generation=8;epoch=4');
+        }
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});

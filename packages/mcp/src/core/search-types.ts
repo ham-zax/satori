@@ -277,6 +277,11 @@ export interface SearchDebugHint {
     };
     phaseTimingsMs?: {
         prepareRead: number;
+        snapshotReload: number;
+        trackedRootResolution: number;
+        fingerprintGate: number;
+        completionProof: number;
+        collectionProbe: number;
         ensureFreshness: number;
         exactRegistry: number;
         semanticSearch: number;
@@ -374,10 +379,28 @@ export interface SearchDebugHint {
     };
 }
 
+export type SearchRankingDebugHint = Pick<SearchDebugHint,
+    | "queryIntent"
+    | "retrieval"
+    | "rankingProvenance"
+    | "trackedLexical"
+    | "exactRegistry"
+    | "passesUsed"
+    | "candidateLimit"
+    | "mustRetry"
+    | "operatorSummary"
+    | "filterSummary"
+    | "diversitySummary"
+    | "changedFilesBoost"
+    | "rerank"
+>;
+
+export type SearchFreshnessDebugHint = Pick<SearchDebugHint, "phaseTimingsMs" | "changedCode">;
+
 export interface SearchResponseHints extends Record<string, unknown> {
     version?: 1;
     noiseMitigation?: SearchNoiseMitigationHint;
-    debugSearch?: SearchDebugHint;
+    debugSearch?: SearchDebugHint | SearchRankingDebugHint | SearchFreshnessDebugHint;
     debugSummary?: {
         retrieval: string;
         freshness: FreshnessDecision["mode"] | "skipped_requires_reindex" | "skipped_indexing" | "unknown";
@@ -468,6 +491,7 @@ export interface SearchRequestInput {
     rankingMode: SearchRankingMode;
     limit: number;
     debug?: boolean;
+    debugMode?: "none" | "summary" | "ranking" | "freshness" | "full";
 }
 
 export interface FileOutlineInput {

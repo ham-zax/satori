@@ -15,14 +15,20 @@ import { buildExactRegistryHitEnvelope } from "./search-exact-registry-hit.js";
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
 import type { ParsedSearchOperators } from "./search-query-planning.js";
 import type { SearchQuerySupport } from "./search-query-support.js";
-import { validateCurrentSourceSymbolSpans } from "./current-source-symbols.js";
+import {
+    readCurrentSourceEvidence,
+    sliceHashMatchedCurrentSourceSymbolContent,
+    validateCurrentSourceSymbolSpansWithEvidence,
+} from "./current-source-symbols.js";
 import type {
     SearchDebugHint,
     SearchFreshnessSummary,
+    SearchResponseHints,
     SearchResponseEnvelope,
 } from "./search-types.js";
 import type { FreshnessDecision } from "./sync.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
+import { buildSearchDebugSummary, buildSearchGroupPreview } from "./search-response-helpers.js";
 import { WARNING_CODES } from "./warnings.js";
 import {
     findExactRegistryMatch,
@@ -63,7 +69,7 @@ type SearchExactFastPathInput = {
     groupBy: SearchGroupBy;
     resultMode: SearchResultMode;
     limit: number;
-    debug: boolean;
+    debugMode: "none" | "summary" | "ranking" | "freshness" | "full";
     rankingMode: "default" | "auto_changed_first";
     semanticQuery: string;
     parsedOperators: ParsedSearchOperators;
@@ -204,17 +210,20 @@ export async function runExactRegistryFastPath(
 
     let exactRegistrySymbol = exactRegistryMatch.symbol;
     const normalizedExactPath = exactRegistrySymbol.file.replace(/\\/g, "/").replace(/^\/+/, "");
+    let currentSourceEvidence;
     if (
         input.dirtyFilesNotFreshened
         && input.observedChangedFilesState.files.has(normalizedExactPath)
     ) {
-        const [validation] = await host.measureSearchPhase(
+        const validationResult = await host.measureSearchPhase(
             "navigationValidation",
-            () => validateCurrentSourceSymbolSpans({
+            () => validateCurrentSourceSymbolSpansWithEvidence({
                 codebaseRoot: input.effectiveRoot,
                 symbols: [exactRegistrySymbol],
             }),
         );
+        const [validation] = validationResult.validations;
+        currentSourceEvidence = validationResult.evidence;
         if (!validation || (validation.match !== "matched" && validation.match !== "not_applicable")) {
             return {
                 kind: "continue",
@@ -236,22 +245,63 @@ export async function runExactRegistryFastPath(
         }),
     );
 
-    const envelope = buildExactRegistryHitEnvelope({
-        codebaseRoot: input.effectiveRoot,
-        absolutePath: input.absolutePath,
-        query: input.query,
-        scope: input.scope,
-        groupBy: input.groupBy,
-        limit: input.limit,
-        freshnessDecision: input.freshnessDecision,
-        freshnessSummary: input.freshnessSummary,
-        proofDebugHint: input.proofDebugHint,
-        symbol: exactRegistrySymbol,
-        indexedAt: registryState.registry.manifest.builtAt || null,
-        navigationState: callGraphNavigationState,
-        navigationWarning: callGraphNavigationState.warning,
-        debug: input.debug,
-        debugInput: {
+    currentSourceEvidence ??= await readCurrentSourceEvidence(
+        input.effectiveRoot,
+        exactRegistrySymbol.file,
+    );
+    const exactSourceContent = currentSourceEvidence
+        ? sliceHashMatchedCurrentSourceSymbolContent(
+            currentSourceEvidence,
+            currentSourceEvidence.canonicalRoot,
+            exactRegistrySymbol,
+        )
+        : undefined;
+    const exactPreview = exactSourceContent === undefined
+        ? ""
+        : buildSearchGroupPreview(
+            exactRegistrySymbol.label,
+            exactSourceContent,
+            input.previewMaxBytes,
+        );
+    const debugRankingProvenance = input.debugMode !== "none"
+        ? {
+            ...input.rankingProvenance,
+            semanticPassesUsed: [],
+            lexicalPassesUsed: [],
+            livePathSupplementUsed: false,
+            lexicalFileScanUsed: false,
+            rerankApplied: false,
+            exactMatchPinningApplied: false,
+            registryRepairGroupCount: 0,
+        }
+        : undefined;
+    const debugRerank = input.debugMode !== "none"
+        ? {
+            enabledByPolicy: rerankDecision.enabledByPolicy,
+            skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
+            skippedByIdentifierIntent: rerankDecision.skippedByIdentifierIntent,
+            skippedByExactPin: false,
+            capabilityPresent: rerankDecision.capabilityPresent,
+            rerankerPresent: rerankDecision.rerankerPresent,
+            enabled: false,
+            attempted: false,
+            applied: false,
+            exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
+            exactMatchPinningApplied: false,
+            candidatesIn: 1,
+            candidatesReranked: 0,
+            topK: SEARCH_RERANK_TOP_K,
+            rankK: SEARCH_RERANK_RRF_K,
+            weight: SEARCH_RERANK_WEIGHT,
+            docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
+            docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+        }
+        : undefined;
+    const changedCode = input.debugChangedFilesState && (input.debugMode === "freshness" || input.debugMode === "full")
+        ? host.buildChangedCodeDebug(input.effectiveRoot, input.debugChangedFilesState)
+        : undefined;
+    const rankingDebug = input.debugMode === "ranking" || input.debugMode === "full"
+        ? {
             queryIntent: {
                 classification: input.queryPlan.intent,
                 confidence: input.queryPlan.confidence,
@@ -264,20 +314,17 @@ export async function runExactRegistryFastPath(
                 scorePolicyKind: input.queryPlan.scorePolicyKind,
                 backendScoreKinds: [],
             },
-            rankingProvenance: {
-                ...input.rankingProvenance,
-                semanticPassesUsed: [],
-                lexicalPassesUsed: [],
-                livePathSupplementUsed: false,
-                lexicalFileScanUsed: false,
-                rerankApplied: false,
-                exactMatchPinningApplied: false,
-                registryRepairGroupCount: 0,
-            },
-            phaseTimingsMs: input.phaseTimings,
+            rankingProvenance: debugRankingProvenance!,
+            exactRegistry: exactRegistryDebug,
+            passesUsed: ["exact_registry"],
             candidateLimit: input.candidateLimit,
-            mustRetryApplied: input.parsedOperators.must.length > 0,
-            maxAttempts: input.maxAttempts,
+            mustRetry: {
+                attempts: 0,
+                maxAttempts: input.maxAttempts,
+                applied: input.parsedOperators.must.length > 0,
+                satisfied: true,
+                finalCount: 1,
+            },
             operatorSummary: input.operatorSummary,
             filterSummary: input.filterSummary,
             changedFilesBoost: {
@@ -290,32 +337,49 @@ export async function runExactRegistryFastPath(
                 multiplier: SEARCH_CHANGED_FIRST_MULTIPLIER,
                 boostedCandidates: 0,
             },
-            ...(input.debugChangedFilesState ? {
-                changedCode: host.buildChangedCodeDebug(input.effectiveRoot, input.debugChangedFilesState),
-            } : {}),
-            rerank: {
-                enabledByPolicy: rerankDecision.enabledByPolicy,
-                skippedByScopeDocs: rerankDecision.skippedByScopeDocs,
-                skippedByIdentifierIntent: rerankDecision.skippedByIdentifierIntent,
-                // Exact-registry path never enables rerank; do not misreport as exact-pin skip.
-                skippedByExactPin: false,
-                capabilityPresent: rerankDecision.capabilityPresent,
-                rerankerPresent: rerankDecision.rerankerPresent,
-                enabled: false,
-                attempted: false,
-                applied: false,
-                exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
-                exactMatchPinningApplied: false,
-                candidatesIn: 1,
-                candidatesReranked: 0,
-                topK: SEARCH_RERANK_TOP_K,
-                rankK: SEARCH_RERANK_RRF_K,
-                weight: SEARCH_RERANK_WEIGHT,
-                docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
-                docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+            rerank: debugRerank!,
+        }
+        : undefined;
+    const debugSummary = input.debugMode !== "none"
+        ? buildSearchDebugSummary({
+            passesUsed: ["exact_registry"],
+            rankingProvenance: debugRankingProvenance!,
+            retrieval: {
+                mode: input.queryPlan.retrievalMode,
+                scorePolicyKind: input.queryPlan.scorePolicyKind,
+                backendScoreKinds: [],
             },
-            exactRegistry: exactRegistryDebug,
-        },
+            rerank: debugRerank,
+            ...(changedCode ? { changedCode } : {}),
+        }, input.freshnessSummary)
+        : undefined;
+    const debugSearch: NonNullable<SearchResponseHints["debugSearch"]> | undefined = input.debugMode === "full"
+        ? { ...rankingDebug!, phaseTimingsMs: input.phaseTimings, ...(changedCode ? { changedCode } : {}) }
+        : input.debugMode === "ranking"
+            ? rankingDebug
+            : input.debugMode === "freshness"
+                ? { phaseTimingsMs: input.phaseTimings, ...(changedCode ? { changedCode } : {}) }
+                : undefined;
+
+    const envelope = buildExactRegistryHitEnvelope({
+        codebaseRoot: input.effectiveRoot,
+        absolutePath: input.absolutePath,
+        query: input.query,
+        scope: input.scope,
+        groupBy: input.groupBy,
+        limit: input.limit,
+        freshnessDecision: input.freshnessDecision,
+        freshnessSummary: input.freshnessSummary,
+        proofDebugHint: input.proofDebugHint,
+        symbol: exactRegistrySymbol,
+        preview: exactPreview,
+        indexedAt: registryState.registry.manifest.builtAt || null,
+        navigationState: callGraphNavigationState,
+        navigationWarning: callGraphNavigationState.warning,
+        debug: input.debugMode === "ranking" || input.debugMode === "full",
+        debugDetail: input.debugMode === "full" ? "full" : "ranking",
+        ...(debugSummary ? { debugSummary } : {}),
+        ...(debugSearch ? { debugSearch } : {}),
         now: host.now,
         previewMaxBytes: input.previewMaxBytes,
         navigationHelpers: host.getSearchNavigationHelpers(),

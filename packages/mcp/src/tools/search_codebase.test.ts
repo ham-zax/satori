@@ -60,6 +60,108 @@ test('search_codebase rejects relative path without CWD resolve', async () => {
     assert.doesNotMatch(response.content[0].text, /handler must not run/);
 });
 
+test('search_codebase normalizes backward-compatible debug selectors', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const calls: Array<Record<string, unknown>> = [];
+    const ctx = {
+        capabilities,
+        toolHandlers: {
+            handleSearchCode: async (args: Record<string, unknown>) => {
+                calls.push(args);
+                return {
+                    content: [{
+                        type: 'text' as const,
+                        text: JSON.stringify({
+                            formatVersion: 2,
+                            status: 'ok',
+                            path: '/repo',
+                            codebaseRoot: '/repo',
+                            query: 'auth',
+                            scope: 'runtime',
+                            groupBy: 'symbol',
+                            resultMode: 'grouped',
+                            limit: 10,
+                            freshnessDecision: { mode: 'skipped_recent' },
+                            freshnessSummary: {
+                                syncMode: 'skipped_recent',
+                                lastSyncAt: null,
+                                changedFileCount: 0,
+                                gitDirtyFilesConsidered: false,
+                                changedFilesBoostApplied: false,
+                                changedFilesBoostSkippedForLargeChangeSet: false,
+                            },
+                            results: [],
+                        }),
+                    }],
+                };
+            },
+        },
+    } as unknown as ToolContext;
+
+    await searchCodebaseTool.execute({ path: '/repo', query: 'auth' }, ctx);
+    await searchCodebaseTool.execute({ path: '/repo', query: 'auth', debug: true }, ctx);
+    await searchCodebaseTool.execute({ path: '/repo', query: 'auth', debugMode: 'freshness' }, ctx);
+    await searchCodebaseTool.execute({ path: '/repo', query: 'auth', debug: true, debugMode: 'ranking' }, ctx);
+
+    assert.equal(calls[0]?.debug, false);
+    assert.equal(calls[0]?.debugMode, 'none');
+    assert.equal(calls[1]?.debug, true);
+    assert.equal(calls[1]?.debugMode, 'full');
+    assert.equal(calls[2]?.debug, true);
+    assert.equal(calls[2]?.debugMode, 'freshness');
+    assert.equal(calls[3]?.debug, true);
+    assert.equal(calls[3]?.debugMode, 'ranking');
+});
+
+test('search_codebase rejects explicit debug false with debugMode', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const response = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        debug: false,
+        debugMode: 'summary',
+    }, { capabilities } as unknown as ToolContext);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /debug.*false.*debugMode|debugMode.*debug.*false/i);
+});
+
+test('search_codebase delegates debug projection to the handler without reparsing its response', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const ctx = {
+        capabilities,
+        toolHandlers: {
+            handleSearchCode: async () => ({
+                content: [{
+                    type: 'text' as const,
+                    text: JSON.stringify({
+                        formatVersion: 2,
+                        status: 'ok',
+                        hints: {
+                            version: 1,
+                            debugSummary: { path: 'exact_registry', totalLatencyMs: 4 },
+                            debugSearch: { phaseTimingsMs: { prepareRead: 3 }, candidates: ['large'] },
+                        },
+                        results: [{ target: { file: 'src/a.ts' }, debug: { score: 1 } }],
+                    }),
+                }],
+            }),
+        },
+    } as unknown as ToolContext;
+
+    const response = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        debugMode: 'summary',
+    }, ctx);
+    const payload = JSON.parse(response.content[0]?.text ?? '{}');
+
+    assert.deepEqual(payload.hints.debugSummary, { path: 'exact_registry', totalLatencyMs: 4 });
+    assert.deepEqual(payload.hints.debugSearch, { phaseTimingsMs: { prepareRead: 3 }, candidates: ['large'] });
+    assert.deepEqual(payload.results[0].debug, { score: 1 });
+    assert.equal(Buffer.byteLength(response.content[0]?.text ?? '', 'utf8') < 8 * 1024, true);
+});
+
 test('search_codebase emits telemetry with diagnostics from handler meta', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const responseText = JSON.stringify({

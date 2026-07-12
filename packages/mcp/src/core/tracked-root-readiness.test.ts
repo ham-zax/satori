@@ -52,3 +52,44 @@ test("runtime policy incompatibility blocks navigation despite its fingerprint m
     assert.equal(result.state, "requires_reindex");
     assert.match(result.state === "requires_reindex" ? result.message ?? "" : "", /runtime policy inputs/i);
 });
+
+test("tracked root readiness reports bounded phase timings", async () => {
+    const phases: string[] = [];
+    const host = createHost();
+    host.validateCompletionProof = async () => ({ outcome: "valid" });
+    host.onReadinessPhase = (phase, durationMs) => {
+        phases.push(phase);
+        assert.equal(Number.isFinite(durationMs), true);
+        assert.equal(durationMs >= 0, true);
+    };
+    const readiness = new TrackedRootReadiness(host);
+
+    const result = await readiness.prepareTrackedRootForRead("/repo/src/index.ts", "semantic");
+
+    assert.equal(result.state, "ready");
+    assert.deepEqual(phases, [
+        "snapshot_reload",
+        "tracked_root_resolution",
+        "fingerprint_gate",
+        "completion_proof",
+        "collection_probe",
+    ]);
+});
+
+test("validated bound collection proof avoids a duplicate collection probe", async () => {
+    let collectionProbes = 0;
+    const host = createHost();
+    host.validateCompletionProof = async () => ({
+        outcome: "valid",
+        collectionName: "bound-generation",
+    });
+    host.probeLocalSearchCollectionState = async () => {
+        collectionProbes += 1;
+        return { state: "ready", collectionName: "bound-generation" };
+    };
+
+    const result = await new TrackedRootReadiness(host).prepareTrackedRootForRead("/repo", "semantic");
+
+    assert.equal(result.state, "ready");
+    assert.equal(collectionProbes, 0);
+});

@@ -66,6 +66,53 @@ test("manage_index public action enum includes repair and full lifecycle set", (
     assert.equal(rejected.success, false);
 });
 
+test("manage_index status defaults detail to summary and forwards explicit detail", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const calls: Array<Record<string, unknown>> = [];
+    const statusHandlers = {
+        handleGetIndexingStatus: async (args: Record<string, unknown>) => {
+            calls.push(args);
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        tool: "manage_index",
+                        version: 1,
+                        action: "status",
+                        path: args.path,
+                        detail: args.detail,
+                        status: "ok",
+                        message: "indexed",
+                        humanText: "indexed",
+                    }),
+                }],
+            };
+        },
+    };
+    const ctx = {
+        capabilities,
+        toolHandlers: statusHandlers,
+    } as unknown as ToolContext;
+
+    await manageIndexTool.execute({ action: "status", path: "/repo" }, ctx);
+    await manageIndexTool.execute({ action: "status", path: "/repo", detail: "diagnostics" }, ctx);
+
+    assert.equal(calls[0]?.detail, "summary");
+    assert.equal(calls[1]?.detail, "diagnostics");
+});
+
+test("manage_index rejects status detail on non-status actions", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const response = await manageIndexTool.execute({
+        action: "sync",
+        path: "/repo",
+        detail: "full",
+    }, { capabilities } as unknown as ToolContext);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || "", /detail.*status/i);
+});
+
 test("manage_index tool description lists actions and durable receipt semantics", () => {
     const description = manageIndexTool.description({} as ToolContext);
     for (const action of MANAGE_INDEX_ACTIONS) {
@@ -412,6 +459,7 @@ test("manage_index status prefers missing_provider_config over fingerprint requi
     assert.equal(payload.status, "not_ready");
     assert.equal(payload.reason, "missing_provider_config");
     assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
+    assert.equal(payload.detail, "summary");
     assert.deepEqual(payload.hints.setup.missingEnv, ["MILVUS_ADDRESS", "VOYAGEAI_API_KEY"]);
     assert.deepEqual(payload.hints.activeMutation, { action: "create", generation: 7, operationId: "op-7", pid: 42 });
     assert.doesNotMatch(payload.message, /fingerprint/i);

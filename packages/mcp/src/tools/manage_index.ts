@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { MANAGE_INDEX_ACTIONS } from "../core/manage-types.js";
+import {
+    MANAGE_INDEX_ACTIONS,
+    MANAGE_INDEX_STATUS_DETAILS,
+} from "../core/manage-types.js";
 import { requireAbsoluteFilesystemPath } from "../utils.js";
 import {
     McpTool,
@@ -28,13 +31,22 @@ const manageIndexInputSchema = z.object({
     allowUnnecessaryReindex: z.boolean().optional().describe("Only for action='reindex'. Override preflight block when reindex is detected as unnecessary ignore-only churn."),
     customExtensions: z.array(z.string()).optional().describe("Only for action='create'. Additional file extensions to include."),
     ignorePatterns: z.array(z.string()).optional().describe("Only for action='create'. Additional ignore patterns to apply."),
-    zillizDropCollection: z.string().min(1).optional().describe("Only for action='create'. Zilliz-only: drop this Satori-managed collection before creating the new index.")
+    zillizDropCollection: z.string().min(1).optional().describe("Only for action='create'. Zilliz-only: drop this Satori-managed collection before creating the new index."),
+    detail: z.enum(MANAGE_INDEX_STATUS_DETAILS).optional().describe("Only for action='status'. Response projection: summary, capabilities, diagnostics, or full. Defaults to summary."),
+}).superRefine((value, ctx) => {
+    if (value.action !== "status" && value.detail !== undefined) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["detail"],
+            message: "detail is only valid for action='status'.",
+        });
+    }
 });
 
 export const manageIndexTool: McpTool = {
     name: "manage_index",
     description: () =>
-        "Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for a codebase path. repair rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match. Repair responses may include optional `repairProof` evidence for collection, snapshot, marker, fingerprint, payload, staleRemoteChunks, and navigation. No related collection routes to create; an existing incompatible, incomplete, stale, malformed, or unprovable generation routes to reindex; backend failures preserve partial proof when collection began and should be diagnosed before retrying repair. Successful repair may write a fresh completion marker and rebuild navigation, but it does not re-embed or rewrite source chunks. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action=\"sync\" for immediate convergence and action=\"reindex\" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). Successful sync responses include `syncStats` with `added`, `removed`, and `modified` counts; consume those fields instead of parsing `humanText`. create/reindex return the kickoff response immediately and do not poll to terminal state; use action=\"status\" to observe progress. Status may include `languageCapabilities`, which combines declared claims with compatible symbol-registry and relationship-sidecar evidence for indexed languages. Mutation responses may include a durable `operation` receipt with `id`, canonical root, generation, accepted time, current phase, last durable transition, runtime fingerprint, and writer identity. Status returns the latest persisted receipt after restart. In a status envelope, top-level `action` remains `status` while `operation.action` names the observed mutation. Terminal phases are `completed`, `failed`, and `blocked`; `operation` is absent when no durable operation exists or contention was rejected before lease acquisition.",
+        "Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for a codebase path. repair rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match. Repair responses may include optional `repairProof` evidence for collection, snapshot, marker, fingerprint, payload, staleRemoteChunks, and navigation. No related collection routes to create; an existing incompatible, incomplete, stale, malformed, or unprovable generation routes to reindex; backend failures preserve partial proof when collection began and should be diagnosed before retrying repair. Successful repair may write a fresh completion marker and rebuild navigation, but it does not re-embed or rewrite source chunks. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action=\"sync\" for immediate convergence and action=\"reindex\" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). Successful sync responses include `syncStats` with `added`, `removed`, and `modified` counts; consume those fields instead of parsing `humanText`. create/reindex return the kickoff response immediately and do not poll to terminal state; use action=\"status\" to observe progress. Status defaults to detail=summary; use capabilities for full symbol/language evidence, diagnostics for compatibility/runtime-owner evidence, or full for both. Mutation responses may include a durable `operation` receipt with `id`, canonical root, generation, accepted time, current phase, last durable transition, runtime fingerprint, and writer identity. Status returns the latest persisted receipt after restart. In a status envelope, top-level `action` remains `status` while `operation.action` names the observed mutation. Terminal phases are `completed`, `failed`, and `blocked`; `operation` is absent when no durable operation exists or contention was rejected before lease acquisition.",
     inputSchemaZod: () => manageIndexInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = manageIndexInputSchema.safeParse(args || {});
@@ -59,9 +71,13 @@ export const manageIndexTool: McpTool = {
             };
         }
 
+        const statusDetail = parsed.data.detail ?? "summary";
         const input = {
             ...parsed.data,
             path: absolutePathResult.absolutePath,
+            ...(parsed.data.action === "status"
+                ? { detail: statusDetail }
+                : {}),
         };
         const providerOperation = input.action === "clear" || input.action === "status"
             ? "vector_only"
@@ -117,6 +133,7 @@ export const manageIndexTool: McpTool = {
                             statusProviderIssue,
                         );
                     }
+                    response = withStatusDetail(response, statusDetail);
                     break;
                 case 'clear':
                     response = await executionContext.toolHandlers.handleClearIndex(input);
@@ -139,10 +156,36 @@ export const manageIndexTool: McpTool = {
             if (!diagnostic) {
                 throw error;
             }
-            return formatManageVectorBackendError(input.action, input.path, diagnostic);
+            const response = formatManageVectorBackendError(input.action, input.path, diagnostic);
+            return input.action === "status"
+                ? withStatusDetail(response, statusDetail)
+                : response;
         }
     }
 };
+
+function withStatusDetail(
+    response: ToolResponse,
+    detail: (typeof MANAGE_INDEX_STATUS_DETAILS)[number],
+): ToolResponse {
+    const text = response.content?.[0]?.text;
+    if (typeof text !== "string" || text.trim().length === 0) {
+        return response;
+    }
+    try {
+        const payload = JSON.parse(text) as Record<string, unknown>;
+        return {
+            ...response,
+            content: [{
+                ...response.content[0],
+                type: "text",
+                text: JSON.stringify({ ...payload, detail }),
+            }, ...response.content.slice(1)],
+        };
+    } catch {
+        return response;
+    }
+}
 
 /**
  * When provider config is incomplete, status may still load snapshot fingerprints and
@@ -190,6 +233,7 @@ function preferProviderIncompleteForStatus(
                 action: "status",
                 path: typeof payload.path === "string" ? payload.path : path,
                 status: "not_ready",
+                detail: typeof payload.detail === "string" ? payload.detail : "summary",
                 reason: "missing_provider_config",
                 code: issue.code,
                 message: issue.message,

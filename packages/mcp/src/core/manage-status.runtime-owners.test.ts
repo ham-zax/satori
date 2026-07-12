@@ -107,7 +107,7 @@ test("handleGetIndexingStatus includes runtimeOwners hint and status line", asyn
         };
 
         const handlers = new ManageMaintenanceHandlers(host as never);
-        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath, detail: "diagnostics" });
         const envelope = parseManageEnvelope(response);
 
         assert.equal(summaryCalls, 1);
@@ -119,6 +119,8 @@ test("handleGetIndexingStatus includes runtimeOwners hint and status line", asyn
 
 test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns null", async () => {
     await withTempRepo(async (repoPath) => {
+        let ownerSummaryCalls = 0;
+        let compatibilityCalls = 0;
         const host = {
             context: { clearIndex: async () => undefined },
             snapshotManager: { removeCodebaseCompletely: () => undefined },
@@ -177,7 +179,10 @@ test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns nu
             unwatchCodebase: async () => undefined,
             refreshSnapshotStateFromDisk: () => undefined,
             buildReindexInstruction: () => "reindex",
-            buildCompatibilityStatusLines: () => "",
+            buildCompatibilityStatusLines: () => {
+                compatibilityCalls += 1;
+                return "\nCOMPATIBILITY_DIAGNOSTIC";
+            },
             buildManageRequiresReindexHints: () => ({}),
             buildSyncHint: (p: string) => ({ tool: "manage_index", args: { action: "sync", path: p } }),
             buildStaleLocalHint: () => ({}),
@@ -187,14 +192,39 @@ test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns nu
             buildReindexHint: (p: string) => ({ tool: "manage_index", args: { action: "reindex", path: p } }),
             touchWatchedCodebase: async () => undefined,
             manageVectorBackendResponse: () => ({ content: [{ type: "text" as const, text: "{}" }] }),
-            getLiveOwnersSummary: async () => null,
+            getLiveOwnersSummary: async () => {
+                ownerSummaryCalls += 1;
+                return null;
+            },
         };
 
         const handlers = new ManageMaintenanceHandlers(host as never);
         const response = await handlers.handleGetIndexingStatus({ path: repoPath });
         const envelope = parseManageEnvelope(response);
         assert.equal(envelope.status, "ok");
+        assert.equal(envelope.detail, "summary");
+        assert.equal(ownerSummaryCalls, 0);
+        assert.equal(compatibilityCalls, 0);
+        assert.equal(envelope.languageCapabilities, undefined);
+        assert.deepEqual(Object.keys(envelope.symbolQuality as Record<string, unknown>).sort(), [
+            "basis",
+            "message",
+            "status",
+        ]);
         assert.doesNotMatch(String(envelope.humanText || ""), /Runtime owners:/);
         assert.doesNotMatch(String(envelope.humanText || ""), /none live/);
+        assert.doesNotMatch(String(envelope.humanText || ""), /COMPATIBILITY_DIAGNOSTIC/);
+        assert.equal(Buffer.byteLength(response.content[0]?.text ?? "", "utf8") < 4 * 1024, true);
+
+        const capabilitiesResponse = await handlers.handleGetIndexingStatus({
+            path: repoPath,
+            detail: "capabilities",
+        });
+        const capabilitiesEnvelope = parseManageEnvelope(capabilitiesResponse);
+        assert.equal(capabilitiesEnvelope.detail, "capabilities");
+        assert.ok(capabilitiesEnvelope.languageCapabilities);
+        assert.ok((capabilitiesEnvelope.symbolQuality as Record<string, unknown>).languages);
+        assert.equal(ownerSummaryCalls, 0);
+        assert.equal(compatibilityCalls, 0);
     });
 });

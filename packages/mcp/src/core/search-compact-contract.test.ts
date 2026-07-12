@@ -9,6 +9,7 @@ import {
 } from "./search-response-envelopes.js";
 import { buildVisibleGroupedSearchResults } from "./search-group-results.js";
 import type {
+    SearchDebugHint,
     SearchChunkResult,
     SearchGroupResult,
     SearchGroupedResultV2,
@@ -139,6 +140,61 @@ function collectKeys(value: unknown, keys = new Set<string>()): Set<string> {
     }
     return keys;
 }
+
+test("debug modes are projected from explicit source-level whitelists", () => {
+    const fullDebug = {
+        queryIntent: { classification: "identifier", confidence: "high", reasons: [], lexicalTerms: ["owner"], semanticQuery: "owner" },
+        retrieval: { mode: "hybrid", scorePolicyKind: "hybrid", backendScoreKinds: ["rrf"] },
+        rankingProvenance: { semanticPassesUsed: ["primary"], lexicalPassesUsed: [], livePathSupplementUsed: false, lexicalFileScanUsed: false, rerankApplied: false, exactMatchPinningApplied: false, registryRepairGroupCount: 0 },
+        phaseTimingsMs: { prepareRead: 4 },
+        passesUsed: ["primary"],
+        candidateLimit: 32,
+        mustRetry: { attempts: 1, maxAttempts: 1, applied: false, satisfied: true, finalCount: 1 },
+        operatorSummary: {},
+        filterSummary: {},
+        changedFilesBoost: { enabled: true, applied: false, available: true, changedCount: 1, maxChangedFilesForBoost: 40, skippedForLargeChangeSet: false, multiplier: 1.1, boostedCandidates: 0 },
+        changedCode: { files: ["src/a.ts"], truncated: false },
+        rerank: { enabledByPolicy: false, skippedByScopeDocs: false, skippedByIdentifierIntent: true, capabilityPresent: true, rerankerPresent: true, enabled: false, attempted: false, applied: false, exactMatchPinningEnabled: true, exactMatchPinningApplied: false, candidatesIn: 1, candidatesReranked: 0, topK: 10, rankK: 60, weight: 0.5, docMaxLines: 40, docMaxChars: 4000 },
+    } as unknown as SearchDebugHint;
+    const build = (debugMode: "summary" | "ranking" | "freshness" | "full") => buildGroupedSearchEnvelope({
+        codebaseRoot: ROOT,
+        absolutePath: ROOT,
+        query: "owner",
+        scope: "runtime",
+        groupBy: "symbol",
+        limit: 1,
+        freshnessDecision: FRESHNESS_DECISION,
+        freshnessSummary: FRESHNESS_SUMMARY,
+        warnings: [],
+        debugSummary: { retrieval: "primary", freshness: "skipped_recent", dirtyFiles: 0, rerank: "skipped" },
+        ...(debugMode === "full" ? { debugSearch: fullDebug } : {}),
+        ...(debugMode === "ranking" ? { debugSearch: {
+            queryIntent: fullDebug.queryIntent,
+            retrieval: fullDebug.retrieval,
+            rankingProvenance: fullDebug.rankingProvenance,
+            passesUsed: fullDebug.passesUsed,
+            candidateLimit: fullDebug.candidateLimit,
+            mustRetry: fullDebug.mustRetry,
+            operatorSummary: fullDebug.operatorSummary,
+            filterSummary: fullDebug.filterSummary,
+            changedFilesBoost: fullDebug.changedFilesBoost,
+            rerank: fullDebug.rerank,
+        } } : {}),
+        ...(debugMode === "freshness" ? { debugSearch: {
+            phaseTimingsMs: fullDebug.phaseTimingsMs,
+            changedCode: fullDebug.changedCode,
+        } } : {}),
+        results: [],
+    });
+
+    assert.equal(build("summary").hints?.debugSearch, undefined);
+    assert.deepEqual(Object.keys(build("freshness").hints?.debugSearch ?? {}).sort(), ["changedCode", "phaseTimingsMs"]);
+    const rankingKeys = Object.keys(build("ranking").hints?.debugSearch ?? {});
+    assert.equal(rankingKeys.includes("phaseTimingsMs"), false);
+    assert.equal(rankingKeys.includes("changedCode"), false);
+    assert.equal(rankingKeys.includes("rankingProvenance"), true);
+    assert.equal((build("full").hints?.debugSearch as SearchDebugHint).changedCode?.files[0], "src/a.ts");
+});
 
 test("grouped v2 keeps concrete symbol instances distinct and removes internal grouping identities", () => {
     const envelope = buildGroupedEnvelope([

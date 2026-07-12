@@ -88,10 +88,12 @@ test('search_codebase schema exposes scoped grouped/raw controls', () => {
     assert.ok(properties.groupBy);
     assert.ok(properties.rankingMode);
     assert.ok(properties.debug);
+    assert.ok(properties.debugMode);
     assert.equal(properties.scope.default, 'runtime');
     assert.equal(properties.resultMode.default, 'grouped');
     assert.equal(properties.groupBy.default, 'symbol');
     assert.equal(properties.rankingMode.default, 'auto_changed_first');
+    assert.deepEqual(properties.debugMode.enum, ['summary', 'ranking', 'freshness', 'full']);
     assert.equal(Object.prototype.hasOwnProperty.call(properties, 'useReranker'), false);
 
     const required = searchTool!.inputSchema.required as string[];
@@ -126,6 +128,7 @@ test('manage_index schema does not expose deprecated splitter knob', () => {
     const properties = manageIndexTool!.inputSchema.properties as Record<string, SchemaProperty>;
     assert.equal(Object.prototype.hasOwnProperty.call(properties, 'splitter'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(properties, 'allowUnnecessaryReindex'), true);
+    assert.deepEqual(properties.detail.enum, ['summary', 'capabilities', 'diagnostics', 'full']);
 });
 
 test('file_outline schema exposes path/file and line window controls', () => {

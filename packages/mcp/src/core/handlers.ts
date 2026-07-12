@@ -6,6 +6,7 @@ import {
     Context,
     COLLECTION_LIMIT_MESSAGE,
     type IndexCompletionMarkerDocument,
+    type ProvenGenerationReceipt,
     createRuntimeNavigationStore,
     type NavigationStore,
     VoyageAIReranker,
@@ -108,13 +109,18 @@ import {
     shouldIncludeCategoryInScope,
 } from "./search-ranking-policy.js";
 import { SearchQuerySupport } from "./search-query-support.js";
-import { TrackedRootReadiness } from "./tracked-root-readiness.js";
+import {
+    TrackedRootReadiness,
+    type ReadinessPhase,
+    type TrackedRootReadinessState,
+} from "./tracked-root-readiness.js";
 import { NavigationHandlers } from "./navigation-handlers.js";
 import { ManageMaintenanceHandlers } from "./manage-maintenance-handlers.js";
 import { ManageIndexingHandlers } from "./manage-indexing-handlers.js";
 import { VectorBackendMaintenance } from "./vector-backend-maintenance.js";
 import { RelationshipBackedCallGraph } from "./relationship-backed-call-graph.js";
 import { ToolResponseBuilders } from "./tool-response-builders.js";
+import { PreparedReadCache } from "./prepared-read-cache.js";
 import {
     evaluateReindexPreflight as evaluateReindexPreflightHelper,
     getChangedFilesForCodebase as getChangedFilesForCodebaseHelper,
@@ -172,6 +178,11 @@ const STALE_INDEXING_RECOVERY_GRACE_MS = 2 * 60_000;
 
 type SearchPhaseTimingKey =
     | 'prepareRead'
+    | 'snapshotReload'
+    | 'trackedRootResolution'
+    | 'fingerprintGate'
+    | 'completionProof'
+    | 'collectionProbe'
     | 'ensureFreshness'
     | 'exactRegistry'
     | 'semanticSearch'
@@ -263,6 +274,10 @@ type ContextLifecycleCapabilities = IndexCompletionMarkerContext & {
     getIndexedExtensionsForCodebase?: (codebasePath: string) => string[];
     getIndexedExtensions?: () => string[];
     getTrackedRelativePaths?: (codebasePath: string) => string[];
+    revalidateProvenGeneration?: (
+        codebasePath: string,
+        receipt: ProvenGenerationReceipt,
+    ) => Promise<ProvenGenerationReceipt | null>;
 };
 
 type SnapshotAccessGateResult = {
@@ -409,6 +424,7 @@ export class ToolHandlers {
     private readonly navigationStore: NavigationStore;
     private readonly changedFilesCache = new Map<string, ChangedFilesCacheEntry>();
     private readonly rootGitignoreMatcherCache = new Map<string, GitignoreMatcherCacheEntry>();
+    private readonly preparedReadCache = new PreparedReadCache<Extract<TrackedRootReadinessState, { state: 'ready' }>>();
     private readonly gitignoreForceReloadEveryN: number;
     private readonly searchQuerySupport: SearchQuerySupport;
     private readonly trackedRootReadiness: TrackedRootReadiness;
@@ -602,6 +618,7 @@ export class ToolHandlers {
             recoverStaleIndexingStateIfNeeded: this.recoverStaleIndexingStateIfNeeded.bind(this),
             manageResponse: this.toolResponseBuilders.manageResponse.bind(this.toolResponseBuilders),
             buildCreateHint: this.buildCreateHint.bind(this),
+            buildRepairHint: this.buildRepairHint.bind(this),
             buildManageActionBlockedMessage: this.buildManageActionBlockedMessage.bind(this),
             buildStatusHint: this.buildStatusHint.bind(this),
             getManageRetryAfterMs: this.getManageRetryAfterMs.bind(this),
@@ -716,6 +733,11 @@ export class ToolHandlers {
     private createSearchPhaseTimings(): SearchPhaseTimings {
         return {
             prepareRead: 0,
+            snapshotReload: 0,
+            trackedRootResolution: 0,
+            fingerprintGate: 0,
+            completionProof: 0,
+            collectionProbe: 0,
             ensureFreshness: 0,
             exactRegistry: 0,
             semanticSearch: 0,
@@ -858,6 +880,7 @@ export class ToolHandlers {
     }
 
     private async unwatchCodebase(codebasePath: string): Promise<void> {
+        this.preparedReadCache.evict(codebasePath);
         const syncManager = this.syncManager as unknown as {
             unwatchCodebase?: (path: string) => Promise<void> | void;
             unregisterCodebaseWatcher?: (path: string) => Promise<void> | void;
@@ -869,6 +892,87 @@ export class ToolHandlers {
         if (typeof syncManager.unregisterCodebaseWatcher === 'function') {
             await syncManager.unregisterCodebaseWatcher(codebasePath);
         }
+    }
+
+    private getPreparedReadObservation(codebasePath: string): string | null {
+        try {
+            const syncObservation = this.syncManager.getPreparedReadObservation(codebasePath);
+            const mutationObservation = this.mutationLeaseCoordinator?.observe(codebasePath);
+            const authorityObservation = this.context.getIndexAuthorityObservation(codebasePath);
+            if (!syncObservation || !mutationObservation || mutationObservation.mutationActive || !authorityObservation) {
+                return null;
+            }
+            return JSON.stringify({
+                authorityObservation,
+                freshnessEpoch: syncObservation.freshnessEpoch,
+                mutationGeneration: mutationObservation.generation,
+            });
+        } catch {
+            return null;
+        }
+    }
+
+    private async getCachedPreparedRead(absolutePath: string): Promise<Extract<TrackedRootReadinessState, { state: 'ready' }> | null> {
+        const cached = this.preparedReadCache.get(
+            absolutePath,
+            this.now(),
+            (targetPath, root) => this.isPathWithinCodebase(targetPath, root),
+            (root) => this.getPreparedReadObservation(root),
+        );
+        if (!cached?.generationReceipt) return null;
+        const root = cached.root.path;
+        const observationBefore = this.getPreparedReadObservation(root);
+        const revalidate = this.contextLifecycle().revalidateProvenGeneration;
+        if (!observationBefore || typeof revalidate !== 'function') {
+            this.preparedReadCache.evict(root);
+            return null;
+        }
+        const receipt = await revalidate.call(this.context, root, cached.generationReceipt).catch(() => null);
+        const observationAfter = this.getPreparedReadObservation(root);
+        if (!receipt || observationAfter !== observationBefore) {
+            this.preparedReadCache.evict(root);
+            return null;
+        }
+        return { ...cached, generationReceipt: receipt, preparedObservation: observationBefore };
+    }
+
+    private seedPreparedRead(state: Extract<TrackedRootReadinessState, { state: 'ready' }>): void {
+        const root = state.root.path;
+        if (!state.generationReceipt || !state.preparedObservation) {
+            this.preparedReadCache.evict(root);
+            return;
+        }
+        const observation = this.getPreparedReadObservation(root);
+        if (observation !== state.preparedObservation) {
+            this.preparedReadCache.evict(root);
+            return;
+        }
+        this.preparedReadCache.seed(root, state, state.preparedObservation, this.now());
+    }
+
+    private async prepareTrackedRootReadWithObservation(
+        absolutePath: string,
+        onPhase: (phase: ReadinessPhase, durationMs: number) => void,
+    ): Promise<TrackedRootReadinessState> {
+        const initialState = await this.trackedRootReadiness.prepareTrackedRootForRead(
+            absolutePath,
+            'semantic',
+            onPhase,
+        );
+        if (initialState.state !== 'ready') return initialState;
+        const root = initialState.root.path;
+        const observationBefore = this.getPreparedReadObservation(root);
+        if (!observationBefore) return initialState;
+        const provenState = await this.trackedRootReadiness.prepareTrackedRootForRead(
+            root,
+            'semantic',
+            onPhase,
+        );
+        if (provenState.state !== 'ready') return provenState;
+        const preparedObservation = this.getPreparedReadObservation(root);
+        return preparedObservation === observationBefore
+            ? { ...provenState, preparedObservation }
+            : provenState;
     }
 
     private getSyncWatchDebounceMs(): number {
@@ -2401,6 +2505,12 @@ export class ToolHandlers {
         const groupBy = (typeof args.groupBy === 'string' ? args.groupBy : 'symbol') as SearchGroupBy;
         const rankingMode = (typeof args.rankingMode === 'string' ? args.rankingMode : 'auto_changed_first') as SearchRankingMode;
         const debug = args?.debug === true;
+        const debugMode = args.debugMode === 'summary'
+            || args.debugMode === 'ranking'
+            || args.debugMode === 'freshness'
+            || args.debugMode === 'full'
+            ? args.debugMode
+            : debug ? 'full' : 'none';
         const rawLimit = typeof args.limit === 'number' ? args.limit : Number(args.limit);
         const input: SearchRequestInput = {
             path: typeof args.path === 'string' ? args.path : '',
@@ -2411,6 +2521,7 @@ export class ToolHandlers {
             rankingMode,
             limit: Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : 10,
             debug,
+            debugMode,
         };
 
         const isScopeValid = input.scope === 'runtime' || input.scope === 'mixed' || input.scope === 'docs';
@@ -2450,6 +2561,14 @@ export class ToolHandlers {
         };
         const phaseTimings = this.createSearchPhaseTimings();
 
+        const readinessPhaseToSearchPhase = {
+            snapshot_reload: 'snapshotReload',
+            tracked_root_resolution: 'trackedRootResolution',
+            fingerprint_gate: 'fingerprintGate',
+            completion_proof: 'completionProof',
+            collection_probe: 'collectionProbe',
+        } as const;
+
         try {
             const frontDoor = await runSearchFrontDoor({
                 path: input.path,
@@ -2461,16 +2580,29 @@ export class ToolHandlers {
             }, {
                 trackedRootReadiness: this.trackedRootReadiness,
                 prepareInitialTrackedRootRead: async (absolutePath) => {
+                    const cached = await this.getCachedPreparedRead(absolutePath);
+                    if (cached) return cached;
                     const prepareReadStartedAtMs = this.searchPhaseNowMs();
-                    const trackedRootState = await this.trackedRootReadiness.prepareTrackedRootForRead(absolutePath);
+                    const trackedRootState = await this.prepareTrackedRootReadWithObservation(
+                        absolutePath,
+                        (phase, durationMs) => {
+                            phaseTimings[readinessPhaseToSearchPhase[phase]] += durationMs;
+                        },
+                    );
                     this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
                     return trackedRootState;
                 },
                 preparePostFreshnessTrackedRootRead: (absolutePath) => this.measureSearchPhase(
                     phaseTimings,
                     'prepareRead',
-                    () => this.trackedRootReadiness.prepareTrackedRootForRead(absolutePath)
+                    () => this.prepareTrackedRootReadWithObservation(
+                        absolutePath,
+                        (phase, durationMs) => {
+                            phaseTimings[readinessPhaseToSearchPhase[phase]] += durationMs;
+                        },
+                    )
                 ),
+                getPreparedReadObservation: (canonicalRoot) => this.getPreparedReadObservation(canonicalRoot),
                 ensureSearchFreshness: (effectiveRoot) => this.measureSearchPhase(
                     phaseTimings,
                     'ensureFreshness',
@@ -2537,6 +2669,9 @@ export class ToolHandlers {
                 proofDebugHint,
                 partialIndexSearchWarnings,
                 freshnessDecision,
+                generationReceipt,
+                navigationStatus,
+                preparedObservation,
             } = frontDoor;
 
             if (searchableRoot.path !== absolutePath) {
@@ -2568,7 +2703,9 @@ export class ToolHandlers {
             const initialChangedFilesState = input.rankingMode === 'auto_changed_first'
                 ? initialObservedChangedFilesState
                 : { available: initialObservedChangedFilesState.available, files: new Set<string>() };
-            const initialDebugChangedFilesState = input.debug ? initialObservedChangedFilesState : undefined;
+            const initialDebugChangedFilesState = debugMode === 'freshness' || debugMode === 'full'
+                ? initialObservedChangedFilesState
+                : undefined;
             const initialChangedFilesCount = initialChangedFilesState.files.size;
             const initialObservedChangedFilesCount = initialObservedChangedFilesState.files.size;
             const initialChangedFilesBoostSkippedForLargeChangeSet = input.rankingMode === 'auto_changed_first'
@@ -2603,7 +2740,7 @@ export class ToolHandlers {
                 groupBy: input.groupBy,
                 resultMode: input.resultMode,
                 limit: input.limit,
-                debug: Boolean(input.debug),
+                debugMode,
                 rankingMode: input.rankingMode,
                 semanticQuery,
                 parsedOperators,
@@ -2642,6 +2779,14 @@ export class ToolHandlers {
 
             if (exactFastPath.kind === 'handled') {
                 await this.touchWatchedCodebaseBestEffort(effectiveRoot);
+                this.seedPreparedRead({
+                    state: 'ready',
+                    root: searchableRoot,
+                    proofDebugHint,
+                    generationReceipt,
+                    navigationStatus,
+                    preparedObservation,
+                });
                 return {
                     content: [{ type: "text", text: this.stringifyToolJson(exactFastPath.envelope) }],
                     meta: {
@@ -2662,7 +2807,7 @@ export class ToolHandlers {
                 scope: input.scope,
                 rankingMode: input.rankingMode,
                 limit: input.limit,
-                debug: Boolean(input.debug),
+                debug: debugMode === 'ranking' || debugMode === 'full',
                 semanticQuery,
                 parsedOperators,
                 queryPlan,
@@ -2727,7 +2872,7 @@ export class ToolHandlers {
                 groupBy: input.groupBy,
                 resultMode: input.resultMode,
                 limit: input.limit,
-                debug: Boolean(input.debug),
+                debugMode,
                 rankingMode: input.rankingMode,
                 freshnessDecision,
                 freshnessSummary: {
@@ -2759,6 +2904,14 @@ export class ToolHandlers {
             });
 
             await this.touchWatchedCodebaseBestEffort(effectiveRoot);
+            this.seedPreparedRead({
+                state: 'ready',
+                root: searchableRoot,
+                proofDebugHint,
+                generationReceipt,
+                navigationStatus,
+                preparedObservation,
+            });
             return {
                 content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                 meta: { searchDiagnostics }

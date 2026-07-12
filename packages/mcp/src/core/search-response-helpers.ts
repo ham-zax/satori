@@ -126,6 +126,15 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
             action: "Open the symbol first; use lexical search or tests to verify inbound impact.",
         };
     }
+    if (code === WARNING_CODES.NAVIGATION_REPAIR_REQUIRED) {
+        return {
+            code,
+            severity: "degraded",
+            blocksUse: false,
+            message: "The vector generation remains proven, but its local symbol or relationship navigation evidence needs repair.",
+            action: "Run manage_index repair for this codebase; do not reindex unless the repair proof explicitly requires it.",
+        };
+    }
     if (code === SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING) {
         return {
             code,
@@ -198,7 +207,7 @@ export function buildOutlineSpanWarningCodes(repair: PythonSourceBackedSpanRepai
 }
 
 export function buildSearchDebugSummary(
-    debugHint: SearchDebugHint | undefined,
+    debugHint: Pick<SearchDebugHint, "passesUsed" | "rankingProvenance" | "retrieval" | "rerank" | "changedCode"> | undefined,
     freshnessSummary: SearchFreshnessSummary,
 ): NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]> | undefined {
     if (!debugHint) {

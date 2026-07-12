@@ -66,7 +66,7 @@ test('handleGetIndexingStatus includes fingerprint diagnostics for requires_rein
         const syncManager = {} as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath, detail: 'diagnostics' });
         const text = response.content[0]?.text || '';
 
         assert.match(text, /restart Satori with VoyageAI\/voyage-4-lite\/1024\/Milvus\/dense_v3/i);
@@ -103,7 +103,7 @@ test('handleGetIndexingStatus keeps rich humanText but emits compact machine JSO
         const syncManager = {} as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath, detail: 'diagnostics' });
         const rawText = response.content[0]?.text || '';
         const payload = JSON.parse(rawText) as StatusPayload;
 
@@ -148,7 +148,7 @@ test('handleGetIndexingStatus includes fingerprint diagnostics when access gate 
         const syncManager = {} as unknown as HandlerSyncManager;
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath, detail: 'diagnostics' });
         const text = response.content[0]?.text || '';
 
         assert.match(text, /Legacy v2 index detected/i);

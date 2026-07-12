@@ -25,6 +25,32 @@ function marker(overrides: Record<string, unknown> = {}) {
     };
 }
 
+function generationReceipt(overrides: Record<string, unknown> = {}) {
+    return {
+        collectionName: 'generation-b',
+        marker: marker({ indexStatus: 'completed' }),
+        policy: {
+            canonicalRoot: '/repo/a',
+            profile: 'default',
+            customExtensions: [],
+            customIgnorePatterns: [],
+            fileBasedIgnorePatterns: [],
+            supportedExtensions: ['.ts'],
+            effectiveIgnorePatterns: [],
+            policyHash: 'policy-hash',
+        },
+        policyDocumentDigest: 'a'.repeat(64),
+        exactPayloadCount: 25,
+        navigation: null,
+        observations: {
+            profileFileToken: null,
+            policyFileToken: 'policy-token',
+            navigationToken: null,
+        },
+        ...overrides,
+    };
+}
+
 test('validateCompletionProof rejects coerced marker count values', async () => {
     const invalidValues = ['', null, true, 1.5, -1];
 
@@ -55,6 +81,57 @@ test('validateCompletionProof accepts non-negative integer marker counts', async
     });
 
     assert.equal(result.outcome, 'valid');
+});
+
+test('validateCompletionProof preserves the proven bound collection identity', async () => {
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        getIndexCompletionMarker: async () => ({
+            status: 'valid_v2',
+            collectionName: 'generation-b',
+            marker: marker(),
+        }),
+    });
+
+    assert.equal(result.outcome, 'valid');
+    assert.equal(result.collectionName, 'generation-b');
+});
+
+test('validateCompletionProof accepts only a fully bound cloned generation receipt', async () => {
+    const supplied = generationReceipt();
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        getIndexCompletionMarker: async () => ({
+            status: 'valid_v2',
+            collectionName: 'generation-b',
+            marker: marker(),
+            generationReceipt: supplied,
+        }),
+    });
+    assert.equal(result.outcome, 'valid');
+    assert.ok(result.generationReceipt);
+    assert.notEqual(result.generationReceipt, supplied);
+    (supplied.policy.customExtensions as string[]).push('.forged');
+    assert.deepEqual(result.generationReceipt?.policy.customExtensions, []);
+
+    for (const malformed of [
+        generationReceipt({ collectionName: 'generation-c' }),
+        generationReceipt({ exactPayloadCount: 24 }),
+        generationReceipt({ policy: { ...generationReceipt().policy, canonicalRoot: '/repo/other' } }),
+        generationReceipt({ marker: {} }),
+    ]) {
+        const rejected = await validateCompletionProof({
+            codebasePath: '/repo/a',
+            getIndexCompletionMarker: async () => ({
+                status: 'valid_v2',
+                collectionName: 'generation-b',
+                marker: marker(),
+                generationReceipt: malformed,
+            }),
+        });
+        assert.equal(rejected.outcome, 'valid');
+        assert.equal(rejected.generationReceipt, undefined);
+    }
 });
 
 test('validateCompletionProof classifies v1 markers as legacy policy-unsealed proof', async () => {

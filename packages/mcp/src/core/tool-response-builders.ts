@@ -92,6 +92,7 @@ export class ToolResponseBuilders {
             hints?: Record<string, unknown>;
             preflight?: ReindexPreflightResult;
             message?: string;
+            detail?: ManageIndexResponseEnvelope["detail"];
             symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
             languageCapabilities?: ManageIndexResponseEnvelope["languageCapabilities"];
             syncStats?: ManageIndexResponseEnvelope["syncStats"];
@@ -110,6 +111,9 @@ export class ToolResponseBuilders {
         };
         if (options.reason) {
             envelope.reason = options.reason;
+        }
+        if (action === "status" && options.detail) {
+            envelope.detail = options.detail;
         }
         if (options.code) {
             envelope.code = options.code;
@@ -168,6 +172,7 @@ export class ToolResponseBuilders {
             hints?: Record<string, unknown>;
             preflight?: ReindexPreflightResult;
             message?: string;
+            detail?: ManageIndexResponseEnvelope["detail"];
             symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
             languageCapabilities?: ManageIndexResponseEnvelope["languageCapabilities"];
             syncStats?: ManageIndexResponseEnvelope["syncStats"];

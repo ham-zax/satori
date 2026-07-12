@@ -33,6 +33,27 @@ const BACKUP_ENTRY_PREFIX = '.satori-backup-';
 const GENERATIONS_DIR_NAME = 'generations';
 const CURRENT_GENERATION_FILE_NAME = 'current.json';
 const CURRENT_GENERATION_SCHEMA_VERSION = 'navigation_current_v2';
+const NAVIGATION_GENERATION_SEAL_SCHEMA_VERSION = 'navigation_generation_seal_v1';
+const NAVIGATION_GENERATION_SEAL_FILE_NAME = 'seal.json';
+
+export interface NavigationSymbolQualityAggregate {
+    indexedFileCount: number;
+    languages: Array<{
+        language: string;
+        indexedFiles: number;
+        filesWithNonFileSymbols: number;
+        nonFileSymbolCount: number;
+    }>;
+}
+
+export interface NavigationGenerationSeal {
+    schemaVersion: typeof NAVIGATION_GENERATION_SEAL_SCHEMA_VERSION;
+    generationId: string;
+    symbolRegistryManifestHash: string;
+    relationshipManifestHash: string;
+    artifactSetHash: string;
+    symbolQuality: NavigationSymbolQualityAggregate;
+}
 
 interface SymbolIndexFileEntry {
     path: string;
@@ -120,6 +141,10 @@ export interface CurrentNavigationGeneration {
     relationshipManifestHash: string;
 }
 
+export type ReadNavigationGenerationSealResult =
+    | { status: 'ok'; rootPath: string; seal: NavigationGenerationSeal }
+    | { status: 'missing' | 'incompatible' | 'corrupt'; rootPath: string; reason: string };
+
 export interface ReadSymbolRegistrySidecarInput {
     normalizedRootPath: string;
     stateRoot?: string;
@@ -134,12 +159,25 @@ export type ReadSymbolRegistrySidecarResult =
         warnings: string[];
     }
     | {
-        status: 'missing' | 'incompatible';
+        status: 'missing' | 'incompatible' | 'corrupt';
         rootPath: string;
         reason: string;
         registry?: undefined;
         warnings?: undefined;
         manifestHash?: undefined;
+    };
+
+export type ReadSymbolRegistryManifestResult =
+    | {
+        status: 'ok';
+        rootPath: string;
+        manifestHash: string;
+        manifest: SymbolRegistryManifest;
+    }
+    | {
+        status: 'missing' | 'incompatible' | 'corrupt';
+        rootPath: string;
+        reason: string;
     };
 
 export interface ReadRelationshipSidecarInput {
@@ -159,7 +197,7 @@ export type ReadRelationshipSidecarResult =
         reason?: undefined;
     }
     | {
-        status: 'missing' | 'incompatible';
+        status: 'missing' | 'incompatible' | 'corrupt';
         rootPath: string;
         reason: string;
         manifest?: undefined;
@@ -574,6 +612,54 @@ export async function stageNavigationSidecarGeneration(
         await fs.promises.mkdir(path.dirname(generationRoot), { recursive: true });
         await fs.promises.rename(builtRoot, generationRoot);
 
+        const symbolIndex = await readJson(path.join(generationRoot, SYMBOLS_DIR_NAME, 'index.json'));
+        const relationshipManifest = await readJson(path.join(generationRoot, RELATIONSHIPS_DIR_NAME, 'manifest.json'));
+        if (!isSymbolIndexFile(symbolIndex) || !isRelationshipManifest(relationshipManifest)) {
+            throw new Error('Staged navigation generation cannot be sealed because its artifact manifests are invalid.');
+        }
+        const artifactSet = [
+            ...symbolIndex.files.map((file) => ({ path: file.shardPath, hash: file.shardHash })),
+            ...relationshipManifest.files.map((file) => ({ path: file.shardPath, hash: file.shardHash })),
+        ].sort((left, right) => compareStrings(left.path, right.path));
+        const nonFileSymbolsByPath = new Map<string, number>();
+        for (const symbol of input.registry.symbols) {
+            if (symbol.kind !== 'file') {
+                nonFileSymbolsByPath.set(symbol.file, (nonFileSymbolsByPath.get(symbol.file) ?? 0) + 1);
+            }
+        }
+        const languageStats = new Map<string, {
+            language: string;
+            indexedFiles: number;
+            filesWithNonFileSymbols: number;
+            nonFileSymbolCount: number;
+        }>();
+        for (const file of input.registry.manifest.files) {
+            const language = file.language.trim().toLowerCase() || 'unknown';
+            const stats = languageStats.get(language) ?? {
+                language,
+                indexedFiles: 0,
+                filesWithNonFileSymbols: 0,
+                nonFileSymbolCount: 0,
+            };
+            const nonFileSymbolCount = nonFileSymbolsByPath.get(file.path) ?? 0;
+            stats.indexedFiles += 1;
+            stats.filesWithNonFileSymbols += nonFileSymbolCount > 0 ? 1 : 0;
+            stats.nonFileSymbolCount += nonFileSymbolCount;
+            languageStats.set(language, stats);
+        }
+        const seal: NavigationGenerationSeal = {
+            schemaVersion: NAVIGATION_GENERATION_SEAL_SCHEMA_VERSION,
+            generationId,
+            symbolRegistryManifestHash: symbolResult.manifestHash,
+            relationshipManifestHash: relationshipResult.manifestHash,
+            artifactSetHash: hashSerializedJson(artifactSet),
+            symbolQuality: {
+                indexedFileCount: input.registry.manifest.files.length,
+                languages: [...languageStats.values()].sort((left, right) => compareStrings(left.language, right.language)),
+            },
+        };
+        await writeJson(path.join(generationRoot, NAVIGATION_GENERATION_SEAL_FILE_NAME), seal);
+
         return {
             rootPath,
             normalizedRootPath: input.registry.manifest.normalizedRootPath,
@@ -815,6 +901,62 @@ function isCurrentGenerationPointer(value: unknown): value is {
         && isNonEmptyString(value.relationshipManifestHash);
 }
 
+function isNavigationGenerationSeal(value: unknown): value is NavigationGenerationSeal {
+    if (!isRecord(value)) return false;
+    const quality = value.symbolQuality;
+    return value.schemaVersion === NAVIGATION_GENERATION_SEAL_SCHEMA_VERSION
+        && isNonEmptyString(value.generationId)
+        && /^[a-zA-Z0-9_-]+$/.test(value.generationId)
+        && typeof value.symbolRegistryManifestHash === 'string'
+        && /^symmanifest_[a-f0-9]{32}$/.test(value.symbolRegistryManifestHash)
+        && typeof value.relationshipManifestHash === 'string'
+        && /^[a-f0-9]{64}$/.test(value.relationshipManifestHash)
+        && typeof value.artifactSetHash === 'string'
+        && /^[a-f0-9]{64}$/.test(value.artifactSetHash)
+        && isRecord(quality)
+        && isNonNegativeInteger(quality.indexedFileCount)
+        && Array.isArray(quality.languages)
+        && quality.languages.every((entry) => isRecord(entry)
+            && isNonEmptyString(entry.language)
+            && isNonNegativeInteger(entry.indexedFiles)
+            && isNonNegativeInteger(entry.filesWithNonFileSymbols)
+            && entry.filesWithNonFileSymbols <= entry.indexedFiles
+            && isNonNegativeInteger(entry.nonFileSymbolCount));
+}
+
+export async function readNavigationGenerationSeal(
+    stateRoot: string | undefined,
+    normalizedRootPath: string,
+): Promise<ReadNavigationGenerationSealResult> {
+    const rootPath = resolveNavigationSidecarRoot(stateRoot, normalizedRootPath);
+    let generation: CurrentNavigationGeneration | null;
+    try {
+        generation = await resolveCurrentNavigationGeneration(stateRoot, normalizedRootPath);
+    } catch (error) {
+        return { status: 'corrupt', rootPath, reason: error instanceof Error ? error.message : String(error) };
+    }
+    if (!generation) return { status: 'missing', rootPath, reason: 'navigation generation pointer is missing' };
+    let value: unknown;
+    try {
+        value = await readJson(path.join(generation.generationRoot, NAVIGATION_GENERATION_SEAL_FILE_NAME));
+    } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ENOENT'
+            ? { status: 'missing', rootPath, reason: 'navigation generation seal is missing' }
+            : { status: 'corrupt', rootPath, reason: error instanceof Error ? error.message : String(error) };
+    }
+    if (!isNavigationGenerationSeal(value)) {
+        return { status: 'corrupt', rootPath, reason: 'navigation generation seal is invalid' };
+    }
+    if (
+        value.generationId !== generation.generationId
+        || value.symbolRegistryManifestHash !== generation.symbolRegistryManifestHash
+        || value.relationshipManifestHash !== generation.relationshipManifestHash
+    ) {
+        return { status: 'incompatible', rootPath, reason: 'navigation generation seal does not match current pointer' };
+    }
+    return { status: 'ok', rootPath, seal: value };
+}
+
 export async function resolveCurrentNavigationGeneration(
     stateRoot: string | undefined,
     normalizedRootPath: string,
@@ -889,7 +1031,9 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
         const rawManifest = await readJson(manifestPath);
         if (!isSymbolRegistryManifest(rawManifest)) {
             return {
-                status: 'incompatible',
+                status: isRecord(rawManifest) && typeof rawManifest.schemaVersion === 'string'
+                    ? 'incompatible'
+                    : 'corrupt',
                 rootPath,
                 reason: 'symbol registry manifest is invalid or incompatible',
             };
@@ -899,7 +1043,7 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
         const rawIndex = await readJson(indexPath);
         if (!isSymbolIndexFile(rawIndex)) {
             return {
-                status: 'incompatible',
+                status: 'corrupt',
                 rootPath,
                 reason: 'symbol registry index is invalid or incompatible',
             };
@@ -907,7 +1051,7 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
         indexFile = rawIndex;
     } catch (error) {
         return {
-            status: 'incompatible',
+            status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
             rootPath,
             reason: error instanceof Error ? error.message : String(error),
         };
@@ -1017,11 +1161,50 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
         };
     } catch (error) {
         return {
-            status: 'incompatible',
+            status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
             rootPath,
             reason: error instanceof Error ? error.message : String(error),
         };
     }
+}
+
+export async function readSymbolRegistryManifest(
+    input: ReadSymbolRegistrySidecarInput,
+): Promise<ReadSymbolRegistryManifestResult> {
+    const rootPath = resolveNavigationSidecarRoot(input.stateRoot, input.normalizedRootPath);
+    let readableRoot: string;
+    let generation: CurrentNavigationGeneration | null;
+    try {
+        ({ readableRoot, generation } = await resolveReadableNavigationRoot(input.stateRoot, input.normalizedRootPath));
+    } catch (error) {
+        return { status: 'incompatible', rootPath, reason: error instanceof Error ? error.message : String(error) };
+    }
+    const manifestPath = path.join(readableRoot, 'manifest.json');
+    let manifest: SymbolRegistryManifest;
+    try {
+        const rawManifest = await readJson(manifestPath);
+        if (!isSymbolRegistryManifest(rawManifest)) {
+            return { status: 'corrupt', rootPath, reason: 'symbol registry manifest is invalid or incompatible' };
+        }
+        manifest = rawManifest;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return { status: 'missing', rootPath, reason: 'symbol registry manifest is missing' };
+        }
+        return {
+            status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
+            rootPath,
+            reason: error instanceof Error ? error.message : String(error),
+        };
+    }
+    const manifestHash = computeSymbolRegistryManifestHash(manifest);
+    if (generation && generation.symbolRegistryManifestHash !== manifestHash) {
+        return { status: 'incompatible', rootPath, reason: 'navigation generation pointer hash does not match symbol registry manifest' };
+    }
+    if (normalizeRootPath(manifest.normalizedRootPath) !== normalizeRootPath(input.normalizedRootPath)) {
+        return { status: 'incompatible', rootPath, reason: 'symbol registry manifest root does not match requested codebase root' };
+    }
+    return { status: 'ok', rootPath, manifestHash, manifest };
 }
 
 export function isRelationshipRecord(value: unknown): value is RelationshipRecord {
@@ -1099,6 +1282,7 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
     let manifest: RelationshipManifest;
     try {
         const serializedManifest = await fs.promises.readFile(manifestPath, 'utf8');
+        const rawManifest = JSON.parse(serializedManifest) as unknown;
         if (
             generation
             && crypto.createHash('sha256').update(serializedManifest, 'utf8').digest('hex') !== generation.relationshipManifestHash
@@ -1109,10 +1293,11 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                 reason: 'navigation generation pointer hash does not match relationship manifest',
             };
         }
-        const rawManifest = JSON.parse(serializedManifest) as unknown;
         if (!isRelationshipManifest(rawManifest)) {
             return {
-                status: 'incompatible',
+                status: isRecord(rawManifest) && typeof rawManifest.schemaVersion === 'string'
+                    ? 'incompatible'
+                    : 'corrupt',
                 rootPath,
                 reason: 'relationship manifest is invalid or incompatible',
             };
@@ -1120,7 +1305,7 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
         manifest = rawManifest;
     } catch (error) {
         return {
-            status: 'incompatible',
+            status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
             rootPath,
             reason: error instanceof Error ? error.message : String(error),
         };
@@ -1244,7 +1429,7 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
         }
     } catch (error) {
         return {
-            status: 'incompatible',
+            status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
             rootPath,
             reason: error instanceof Error ? error.message : String(error),
         };

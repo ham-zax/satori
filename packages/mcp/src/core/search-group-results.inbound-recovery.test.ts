@@ -63,6 +63,26 @@ function groupedCandidate() {
     };
 }
 
+test("ranking result diagnostics omit freshness and graph evidence until full mode", () => {
+    const build = (debugDetail: "ranking" | "full") => buildExactRegistryGroupResult({
+        symbol: makeSymbol(),
+        indexedAt: "2026-01-01T00:00:00.000Z",
+        navigationState: navState,
+        debug: true,
+        debugDetail,
+        now: helpers.now,
+        previewMaxBytes: 200,
+        navigationHelpers: helpers,
+    });
+    const ranking = build("ranking");
+    const full = build("full");
+    assert.ok(ranking?.debug);
+    assert.equal(ranking.debug.freshness, undefined);
+    assert.equal(ranking.debug.graphEvidence, undefined);
+    assert.ok(full?.debug?.freshness);
+    assert.ok(full?.debug?.graphEvidence);
+});
+
 test("exact registry result publishes one concrete target and compact graph verification term", () => {
     const result = buildExactRegistryGroupResult({
         symbol: makeSymbol(),
@@ -234,9 +254,10 @@ test("oversized exact registry symbols publish a bounded first-read window", () 
     );
 });
 
-test("exact registry previews never use registry metadata as source evidence", () => {
+test("exact registry previews use only caller-supplied current source evidence", () => {
     const result = buildExactRegistryGroupResult({
         symbol: makeSymbol({ qualifiedName: "Gate.checkMutation" }),
+        preview: "return currentSource;",
         indexedAt: "2026-01-01T00:00:00.000Z",
         navigationState: navState,
         debug: false,
@@ -246,7 +267,8 @@ test("exact registry previews never use registry metadata as source evidence", (
     });
 
     assert.ok(result);
-    assert.equal(result.preview, "");
+    assert.equal(result.preview, "return currentSource;");
+    assert.doesNotMatch(result.preview, /Gate\.checkMutation/);
 });
 
 test("debug graph evidence is omitted when navigation is explicitly suppressed", () => {

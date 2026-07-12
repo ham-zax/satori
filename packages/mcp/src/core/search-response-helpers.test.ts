@@ -43,6 +43,14 @@ test("buildSearchWarningDetails sorts warning codes with contract order (localeC
     }
 });
 
+test("navigation repair warning preserves vector usability and recommends repair", () => {
+    const [warning] = buildSearchWarningDetails(["NAVIGATION_REPAIR_REQUIRED"]);
+    assert.equal(warning?.blocksUse, false);
+    assert.equal(warning?.severity, "degraded");
+    assert.match(warning?.action ?? "", /^Run manage_index repair/i);
+    assert.match(warning?.action ?? "", /do not reindex/i);
+});
+
 function baseGroup(partial: Partial<SearchGroupResult> = {}): SearchGroupResult {
     return {
         target: {

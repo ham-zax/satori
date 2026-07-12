@@ -167,6 +167,20 @@ export class MutationLeaseCoordinator {
         });
     }
 
+    /**
+     * Lock-free read observation for readiness-cache invalidation. State files are
+     * published by atomic rename, so readers see either the prior or next complete
+     * generation. Malformed state throws and callers must fail closed.
+     */
+    public observe(root: string): { generation: number; mutationActive: boolean } {
+        const canonicalRoot = canonicalizeRoot(root);
+        const state = this.readState(canonicalRoot);
+        return {
+            generation: state.generation,
+            mutationActive: Boolean(state.lease && this.isOwnerLive(state.lease)),
+        };
+    }
+
     public assertCurrent(lease: RootMutationLease): void {
         if (!this.isCurrent(lease)) {
             throw new MutationLeaseLostError(lease);

@@ -16,31 +16,14 @@ import {
     buildSearchSpanWarningCodes,
 } from "./search-response-helpers.js";
 import type {
-    SearchDebugHint,
     SearchFreshnessSummary,
+    SearchResponseHints,
     SearchResponseEnvelope,
     SearchSpan,
 } from "./search-types.js";
-import type { ExactRegistryLookupDebug } from "./search/exact-registry.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import type { FreshnessDecision } from "./sync.js";
 import { WARNING_CODES } from "./warnings.js";
-
-type ExactRegistryHitDebugInput = {
-    queryIntent: SearchDebugHint["queryIntent"];
-    retrieval: SearchDebugHint["retrieval"];
-    rankingProvenance: SearchDebugHint["rankingProvenance"];
-    phaseTimingsMs: NonNullable<SearchDebugHint["phaseTimingsMs"]>;
-    candidateLimit: number;
-    mustRetryApplied: boolean;
-    maxAttempts: number;
-    operatorSummary: SearchDebugHint["operatorSummary"];
-    filterSummary: SearchDebugHint["filterSummary"];
-    changedFilesBoost: SearchDebugHint["changedFilesBoost"];
-    rerank: NonNullable<SearchDebugHint["rerank"]>;
-    changedCode?: SearchDebugHint["changedCode"];
-    exactRegistry: ExactRegistryLookupDebug;
-};
 
 export type BuildExactRegistryHitEnvelopeInput = {
     codebaseRoot: string;
@@ -53,11 +36,14 @@ export type BuildExactRegistryHitEnvelopeInput = {
     freshnessSummary: SearchFreshnessSummary;
     proofDebugHint?: CompletionProbeDebugHint;
     symbol: SymbolRecord;
+    preview?: string;
     indexedAt: string | null;
     navigationState: SearchNavigationState;
     navigationWarning?: string;
     debug: boolean;
-    debugInput: ExactRegistryHitDebugInput;
+    debugDetail?: "ranking" | "full";
+    debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
+    debugSearch?: NonNullable<SearchResponseHints["debugSearch"]>;
     now: () => number;
     previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
@@ -93,32 +79,6 @@ function buildExactRegistryWarnings(input: {
     return Array.from(new Set(warnings)).sort();
 }
 
-function buildExactRegistryDebugHint(
-    input: ExactRegistryHitDebugInput,
-): SearchDebugHint {
-    return {
-        queryIntent: input.queryIntent,
-        retrieval: input.retrieval,
-        rankingProvenance: input.rankingProvenance,
-        exactRegistry: input.exactRegistry,
-        phaseTimingsMs: input.phaseTimingsMs,
-        passesUsed: ["exact_registry"],
-        candidateLimit: input.candidateLimit,
-        mustRetry: {
-            attempts: 0,
-            maxAttempts: input.maxAttempts,
-            applied: input.mustRetryApplied,
-            satisfied: true,
-            finalCount: 1,
-        },
-        operatorSummary: input.operatorSummary,
-        filterSummary: input.filterSummary,
-        changedFilesBoost: input.changedFilesBoost,
-        ...(input.changedCode ? { changedCode: input.changedCode } : {}),
-        rerank: input.rerank,
-    } satisfies SearchDebugHint;
-}
-
 export function buildExactRegistryHitEnvelope(
     input: BuildExactRegistryHitEnvelopeInput,
 ): SearchResponseEnvelope | undefined {
@@ -136,6 +96,7 @@ export function buildExactRegistryHitEnvelope(
 
     const exactGroup = buildExactRegistryGroupResult({
         symbol: exactRegistrySymbolRepair.symbol,
+        preview: input.preview,
         spanRepair: exactRegistrySymbolRepair,
         indexedAt: input.indexedAt,
         navigationState: input.navigationState,
@@ -145,6 +106,7 @@ export function buildExactRegistryHitEnvelope(
             ? "partial_index_navigation_unavailable"
             : undefined,
         debug: input.debug,
+        debugDetail: input.debugDetail,
         now: input.now,
         previewMaxBytes: input.previewMaxBytes,
         navigationHelpers: input.navigationHelpers,
@@ -162,10 +124,6 @@ export function buildExactRegistryHitEnvelope(
             span: result.target.span,
         })),
     );
-    const debugSearchHint = input.debug
-        ? buildExactRegistryDebugHint(input.debugInput)
-        : undefined;
-
     return buildGroupedSearchEnvelope({
         codebaseRoot: input.codebaseRoot,
         absolutePath: input.absolutePath,
@@ -176,7 +134,8 @@ export function buildExactRegistryHitEnvelope(
         freshnessDecision: input.freshnessDecision,
         freshnessSummary: input.freshnessSummary,
         warnings: finalizedSearchWarnings,
-        debugHint: debugSearchHint,
+        ...(input.debugSummary ? { debugSummary: input.debugSummary } : {}),
+        ...(input.debugSearch ? { debugSearch: input.debugSearch } : {}),
         proofDebugHint: input.proofDebugHint,
         noiseMitigationHint,
         generatedArtifactsHint,

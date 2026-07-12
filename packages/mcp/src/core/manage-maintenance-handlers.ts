@@ -2,9 +2,13 @@ import * as fs from "fs";
 import {
     COLLECTION_LIMIT_MESSAGE,
     RemoteCollectionDeletePendingError,
+    computeSymbolQualitySummaryFromAggregate,
+    computeSymbolQualitySummaryFromManifestRead,
     computeSymbolQualitySummaryFromSidecarRead,
     formatSymbolQualityMarker,
+    readSymbolRegistryManifest,
     readSymbolRegistrySidecar,
+    readNavigationGenerationSeal,
     resolveLanguageCapabilityEvidence,
     type Context,
     type LanguageCapabilityEvidenceSummary,
@@ -27,6 +31,7 @@ import type {
     ManageIndexAction,
     ManageIndexReason,
     ManageIndexStatus,
+    ManageIndexStatusDetail,
 } from "./manage-types.js";
 import {
     formatRuntimeOwnersStatusLine,
@@ -76,6 +81,7 @@ type ManageMaintenanceHandlersHost = {
         options?: Record<string, unknown>,
     ): ToolTextResponse;
     buildCreateHint(codebasePath: string): Record<string, unknown>;
+    buildRepairHint(codebasePath: string): Record<string, unknown>;
     buildManageActionBlockedMessage(
         codebasePath: string,
         action: Extract<RuntimeOwnerMutationAction, "clear" | "sync">,
@@ -420,9 +426,17 @@ export class ManageMaintenanceHandlers {
 
     public async handleGetIndexingStatus(args: ToolArgs): Promise<ToolTextResponse> {
         const codebasePath = typeof args.path === "string" ? args.path : "";
+        const requestedDetail = args.detail;
+        const detail: ManageIndexStatusDetail = requestedDetail === "capabilities"
+            || requestedDetail === "diagnostics"
+            || requestedDetail === "full"
+            ? requestedDetail
+            : "summary";
+        const includeCapabilities = detail === "capabilities" || detail === "full";
+        const includeDiagnostics = detail === "diagnostics" || detail === "full";
         const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
         if (!absolutePathResult.ok) {
-            return this.host.manageResponse("status", codebasePath, "error", absolutePathResult.message);
+            return this.host.manageResponse("status", codebasePath, "error", absolutePathResult.message, { detail });
         }
         const requestedPath = absolutePathResult.absolutePath;
 
@@ -436,13 +450,14 @@ export class ManageMaintenanceHandlers {
 
             if (!fs.existsSync(absolutePath)) {
                 return this.host.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`, {
+                    detail,
                     ...(latestOperation ? { operation: latestOperation } : {}),
                 });
             }
 
             const stat = fs.statSync(absolutePath);
             if (!stat.isDirectory()) {
-                return this.host.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`);
+                return this.host.manageResponse("status", absolutePath, "error", `Error: Path '${absolutePath}' is not a directory`, { detail });
             }
 
             const snapshotCorruptionWarning = this.host.getSnapshotCorruptionWarning();
@@ -454,7 +469,9 @@ export class ManageMaintenanceHandlers {
                     ? this.host.snapshotManager.getLatestOperation(trackedRootState.codebasePath)
                     : undefined;
                 const statusMessage = this.host.buildReindexInstruction(trackedRootState.codebasePath, trackedRootState.message);
-                const compatibilityStatus = this.host.buildCompatibilityStatusLines(trackedRootState.codebasePath);
+                const compatibilityStatus = includeDiagnostics
+                    ? this.host.buildCompatibilityStatusLines(trackedRootState.codebasePath)
+                    : "";
                 const activeMutation = this.host.mutationLeaseCoordinator?.getActiveLease(trackedRootState.codebasePath);
                 const activeMutationLine = activeMutation ? `\n${formatActiveMutationStatusLine(activeMutation)}` : "";
                 const pathInfo = codebasePath !== trackedRootState.codebasePath
@@ -466,6 +483,7 @@ export class ManageMaintenanceHandlers {
                     "requires_reindex",
                     statusMessage + compatibilityStatus + activeMutationLine + pathInfo,
                     {
+                        detail,
                         reason: "requires_reindex",
                         hints: {
                             ...this.host.buildManageRequiresReindexHints(trackedRootState.codebasePath),
@@ -611,30 +629,68 @@ export class ManageMaintenanceHandlers {
                 statusMessage += `\n⚠️ Completion proof check is temporarily unavailable (probe_failed); keeping local status.`;
                 warnings.push(WARNING_CODES.IGNORE_POLICY_PROBE_FAILED);
             }
+            if (
+                trackedRootState.state === "ready"
+                && trackedRootState.navigationStatus
+                && trackedRootState.navigationStatus !== "valid"
+            ) {
+                warnings.push(WARNING_CODES.NAVIGATION_REPAIR_REQUIRED);
+                envelopeHints = {
+                    ...(envelopeHints || {}),
+                    repair: this.host.buildRepairHint(trackedRootState.root.path),
+                    navigation: {
+                        status: trackedRootState.navigationStatus,
+                        action: "Run manage_index repair to rebuild local navigation from the proven vector generation.",
+                    },
+                };
+                statusMessage += `\n⚠️ Local navigation is ${trackedRootState.navigationStatus}; vector search remains proven, but symbol navigation requires manage_index repair.`;
+            }
 
             // F9: observed symbol quality from registry (not parser-cause diagnosis).
             let symbolQuality: SymbolQualitySummary | undefined;
             let languageCapabilities: LanguageCapabilityEvidenceSummary | undefined;
             // Attach observed quality for lifecycle statuses that refer to a real root path.
             if (envelopeStatus === "ok" || envelopeStatus === "not_ready" || envelopeStatus === "not_indexed") {
-                const registryRead = await readSymbolRegistrySidecar({
-                    normalizedRootPath: envelopePath,
-                });
-                symbolQuality = computeSymbolQualitySummaryFromSidecarRead(registryRead);
-                languageCapabilities = await resolveLanguageCapabilityEvidence({
-                    normalizedRootPath: envelopePath,
-                    searchable: envelopeStatus === "ok",
-                    registryRead,
-                });
+                if (includeCapabilities) {
+                    const registryRead = await readSymbolRegistrySidecar({
+                        normalizedRootPath: envelopePath,
+                    });
+                    symbolQuality = computeSymbolQualitySummaryFromSidecarRead(registryRead);
+                    languageCapabilities = await resolveLanguageCapabilityEvidence({
+                        normalizedRootPath: envelopePath,
+                        searchable: envelopeStatus === "ok",
+                        registryRead,
+                    });
+                } else {
+                    const sealRead = await readNavigationGenerationSeal(undefined, envelopePath);
+                    const compactSymbolQuality = sealRead.status === 'ok'
+                        ? computeSymbolQualitySummaryFromAggregate(sealRead.seal.symbolQuality)
+                        : computeSymbolQualitySummaryFromManifestRead(
+                            await readSymbolRegistryManifest({ normalizedRootPath: envelopePath }),
+                        );
+                    symbolQuality = {
+                        ...compactSymbolQuality,
+                        evidenceAvailability: trackedRootState.state === 'ready'
+                            ? trackedRootState.navigationStatus === 'valid'
+                                ? 'ready'
+                                : trackedRootState.navigationStatus ?? 'unverified'
+                            : 'unverified',
+                    };
+                }
                 if (envelopeStatus === "ok") {
-                    statusMessage += `\n🧭 ${formatSymbolQualityMarker(symbolQuality)}: ${symbolQuality.message}`;
+                    const observedSymbolQuality = symbolQuality;
+                    if (observedSymbolQuality) {
+                        statusMessage += `\n🧭 ${formatSymbolQualityMarker(observedSymbolQuality)}: ${observedSymbolQuality.message}`;
+                    }
                 }
             }
 
             const pathInfo = codebasePath !== envelopePath
                 ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${envelopePath}'`
                 : "";
-            const compatibilityStatus = this.host.buildCompatibilityStatusLines(envelopePath);
+            const compatibilityStatus = includeDiagnostics
+                ? this.host.buildCompatibilityStatusLines(envelopePath)
+                : "";
             const snapshotWarningText = snapshotCorruptionWarning
                 ? `\nWARNING: Snapshot state was recovered after a corrupt snapshot was quarantined. Tracked codebases may be incomplete.`
                 + `\nSnapshot path: ${snapshotCorruptionWarning.snapshotPath}`
@@ -649,7 +705,7 @@ export class ManageMaintenanceHandlers {
             }
 
             let runtimeOwnersLine = "";
-            if (typeof this.host.getLiveOwnersSummary === "function") {
+            if (includeDiagnostics && typeof this.host.getLiveOwnersSummary === "function") {
                 try {
                     const ownersSummary = await this.host.getLiveOwnersSummary();
                     if (ownersSummary) {
@@ -683,17 +739,26 @@ export class ManageMaintenanceHandlers {
                 envelopeStatus,
                 statusMessage + compatibilityStatus + pathInfo + snapshotWarningText + runtimeOwnersLine + activeMutationLine,
                 {
+                    detail,
                     reason: envelopeReason,
                     hints: envelopeHints,
                     warnings,
-                    ...(symbolQuality ? { symbolQuality } : {}),
+                    ...(symbolQuality ? {
+                        symbolQuality: includeCapabilities
+                            ? symbolQuality
+                            : {
+                                status: symbolQuality.status,
+                                basis: symbolQuality.basis,
+                                message: symbolQuality.message,
+                            },
+                    } : {}),
                     ...(languageCapabilities ? { languageCapabilities } : {}),
                     ...(operation ? { operation } : {}),
                     ...(envelopeMessage ? { message: envelopeMessage } : {}),
                 },
             );
         } catch (error: unknown) {
-            return this.host.manageResponse("status", requestedPath, "error", `Error getting indexing status: ${formatUnknownError(error)}`);
+            return this.host.manageResponse("status", requestedPath, "error", `Error getting indexing status: ${formatUnknownError(error)}`, { detail });
         }
     }
 

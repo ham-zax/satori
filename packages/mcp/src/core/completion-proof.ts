@@ -5,6 +5,7 @@ import {
     parseIndexFingerprint,
     type IndexFingerprint,
 } from "../config.js";
+import type { ProvenGenerationReceipt } from "@zokizuan/satori-core";
 
 export type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mismatch" | "policy_incompatible" | "probe_failed";
 
@@ -22,6 +23,9 @@ export type CompletionProofValidationResult = {
     outcome: CompletionProofOutcome;
     reason?: CompletionProofReason;
     marker?: ValidatedCompletionMarker;
+    collectionName?: string;
+    generationReceipt?: ProvenGenerationReceipt;
+    navigationStatus?: "valid" | "missing" | "incompatible" | "corrupt";
 };
 
 export type ValidatedCompletionMarker = {
@@ -42,7 +46,13 @@ export type ValidatedCompletionMarker = {
 export type CompletionMarkerReader = (codebasePath: string) => Promise<unknown>;
 
 type CompletionMarkerEvidence =
-    | { status: 'valid_v2'; marker: unknown }
+    | {
+        status: 'valid_v2';
+        marker: unknown;
+        collectionName?: string;
+        generationReceipt?: unknown;
+        navigationStatus?: "valid" | "missing" | "incompatible" | "corrupt";
+    }
     | { status: 'invalid_v2' }
     | { status: 'runtime_policy_incompatible' }
     | { status: 'legacy_v1'; marker: unknown }
@@ -76,7 +86,19 @@ function parseCompletionMarkerEvidence(value: unknown): CompletionMarkerEvidence
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
     if (record.status === 'valid_v2' && 'marker' in record) {
-        return { status: 'valid_v2', marker: record.marker };
+        return {
+            status: 'valid_v2',
+            marker: record.marker,
+            ...(typeof record.collectionName === 'string' && record.collectionName.length > 0
+                ? { collectionName: record.collectionName }
+                : {}),
+            ...(record.generationReceipt !== undefined
+                ? { generationReceipt: record.generationReceipt }
+                : {}),
+            ...(isNavigationStatus((record.navigationProof as { status?: unknown } | undefined)?.status)
+                ? { navigationStatus: (record.navigationProof as { status: "valid" | "missing" | "incompatible" | "corrupt" }).status }
+                : {}),
+        };
     }
     if (record.status === 'invalid_v2') {
         return { status: 'invalid_v2' };
@@ -89,6 +111,65 @@ function parseCompletionMarkerEvidence(value: unknown): CompletionMarkerEvidence
     }
     if (record.status === 'missing') return { status: 'missing' };
     return null;
+}
+
+function isNavigationStatus(value: unknown): value is "valid" | "missing" | "incompatible" | "corrupt" {
+    return value === "valid" || value === "missing" || value === "incompatible" || value === "corrupt";
+}
+
+function cloneProvenGenerationReceipt(
+    value: unknown,
+    expectedCodebasePath: string,
+    expectedCollectionName: string,
+    expectedMarker: ValidatedCompletionMarker,
+): ProvenGenerationReceipt | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    const policy = record.policy as Record<string, unknown> | undefined;
+    const observations = record.observations as Record<string, unknown> | undefined;
+    const receiptMarker = parseCompletionMarker(record.marker);
+    const stringArrays = [
+        policy?.customExtensions,
+        policy?.customIgnorePatterns,
+        policy?.fileBasedIgnorePatterns,
+        policy?.supportedExtensions,
+        policy?.effectiveIgnorePatterns,
+    ];
+    if (
+        record.collectionName !== expectedCollectionName
+        || typeof record.policyDocumentDigest !== "string"
+        || !/^[a-f0-9]{64}$/.test(record.policyDocumentDigest)
+        || !Number.isSafeInteger(record.exactPayloadCount)
+        || Number(record.exactPayloadCount) !== expectedMarker.totalChunks
+        || !receiptMarker
+        || JSON.stringify(receiptMarker) !== JSON.stringify(expectedMarker)
+        || !policy
+        || typeof policy.canonicalRoot !== "string"
+        || canonicalizeCodebasePath(policy.canonicalRoot) !== canonicalizeCodebasePath(expectedCodebasePath)
+        || (policy.profile !== "default" && policy.profile !== "minimal" && policy.profile !== "all-text")
+        || typeof policy.policyHash !== "string"
+        || policy.policyHash !== expectedMarker.indexPolicyHash
+        || !stringArrays.every((array) => Array.isArray(array) && array.every((entry) => typeof entry === "string"))
+        || !observations
+        || (observations.profileFileToken !== null && typeof observations.profileFileToken !== "string")
+        || typeof observations.policyFileToken !== "string"
+        || (observations.navigationToken !== null && typeof observations.navigationToken !== "string")
+    ) return null;
+    const navigation = record.navigation as Record<string, unknown> | null | undefined;
+    if (expectedMarker.navigationGenerationId) {
+        if (
+            !navigation
+            || navigation.generationId !== expectedMarker.navigationGenerationId
+            || navigation.symbolRegistryManifestHash !== expectedMarker.symbolRegistryManifestHash
+            || navigation.relationshipManifestHash !== expectedMarker.relationshipManifestHash
+            || typeof navigation.generationRoot !== "string"
+            || navigation.generationRoot.length === 0
+            || typeof observations.navigationToken !== "string"
+        ) return null;
+    } else if (navigation !== null || observations.navigationToken !== null) {
+        return null;
+    }
+    return structuredClone(value) as ProvenGenerationReceipt;
 }
 
 function trimTrailingSeparators(inputPath: string): string {
@@ -281,8 +362,28 @@ export async function validateCompletionProof(args: {
         };
     }
 
+    const generationReceipt = evidence?.status === "valid_v2"
+        && evidence.collectionName
+        && evidence.generationReceipt !== undefined
+        ? cloneProvenGenerationReceipt(
+            evidence.generationReceipt,
+            codebasePath,
+            evidence.collectionName,
+            markerShape.marker,
+        )
+        : null;
+
     return {
         outcome: "valid",
         marker: markerShape.marker,
+        ...(evidence?.status === "valid_v2" && evidence.collectionName
+            ? { collectionName: evidence.collectionName }
+            : {}),
+        ...(generationReceipt
+            ? { generationReceipt }
+            : {}),
+        ...(evidence?.status === "valid_v2" && evidence.navigationStatus
+            ? { navigationStatus: evidence.navigationStatus }
+            : {}),
     };
 }

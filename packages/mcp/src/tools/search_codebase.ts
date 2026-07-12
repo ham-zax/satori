@@ -29,6 +29,8 @@ interface SearchDiagnostics {
     rerankerUsed?: boolean;
 }
 
+type PublicSearchDebugMode = "none" | "summary" | "ranking" | "freshness" | "full";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
 }
@@ -154,13 +156,22 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
     groupBy: z.enum(["symbol", "file"]).default("symbol").optional().describe("Grouping strategy in grouped mode."),
     rankingMode: z.enum(["default", "auto_changed_first"]).default("auto_changed_first").optional().describe("Ranking policy. auto_changed_first boosts files changed in the current git working tree when available."),
     limit: z.number().int().positive().max(ctx.capabilities.getMaxSearchLimit()).default(ctx.capabilities.getDefaultSearchLimit()).optional().describe("Maximum groups (grouped mode) or chunks (raw mode)."),
-    debug: z.boolean().default(false).optional().describe("Optional debug payload toggle for score and fusion breakdowns."),
+    debug: z.boolean().optional().describe("Backward-compatible debug toggle. true selects full diagnostics when debugMode is omitted."),
+    debugMode: z.enum(["summary", "ranking", "freshness", "full"]).optional().describe("Bounded diagnostic projection. May be used without debug; debug=true remains an alias for full."),
+}).superRefine((value, refinementContext) => {
+    if (value.debug === false && value.debugMode !== undefined) {
+        refinementContext.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["debugMode"],
+            message: "debugMode cannot be combined with explicit debug=false.",
+        });
+    }
 });
 
 export const searchCodebaseTool: McpTool = {
     name: "search_codebase",
     description: () =>
-        "Unified semantic search with a runtime-first scope=\"runtime\" default, grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\\\ to keep literals). Grouped formatVersion 2 results publish one canonical target, bounded source-only preview, quality evidence, and compact graph readiness; use the envelope-level recommendedNextAction first. A target with symbolId opens through read_file(open_symbol) and can be passed directly to call_graph only when navigation.graph=\"ready\"; a target without symbolId opens through its 1-based inclusive span. Every graph-ready result carries navigation.inbound=\"verify\"; callerSearchTerm is an optional identifier for a separate must:<term> <term> inbound-reference verification search. Follow structured warning actions and remediation hints; use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debug:true only for bounded ranking and derivation evidence.",
+        "Unified semantic search with a runtime-first scope=\"runtime\" default, grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\\\ to keep literals). Grouped formatVersion 2 results publish one canonical target, bounded source-only preview, quality evidence, and compact graph readiness; use the envelope-level recommendedNextAction first. A target with symbolId opens through read_file(open_symbol) and can be passed directly to call_graph only when navigation.graph=\"ready\"; a target without symbolId opens through its 1-based inclusive span. Every graph-ready result carries navigation.inbound=\"verify\"; callerSearchTerm is an optional identifier for a separate must:<term> <term> inbound-reference verification search. Follow structured warning actions and remediation hints; use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debugMode=summary|ranking|freshness|full for bounded diagnostics; debug:true remains a backward-compatible alias for full.",
     inputSchemaZod: (ctx: ToolContext) => buildSearchSchema(ctx),
     execute: async (args: unknown, ctx: ToolContext) => {
         const schema = buildSearchSchema(ctx);
@@ -186,6 +197,8 @@ export const searchCodebaseTool: McpTool = {
             };
         }
 
+        const normalizedDebugMode: PublicSearchDebugMode = parsed.data.debugMode
+            ?? (parsed.data.debug === true ? "full" : "none");
         const input = {
             ...parsed.data,
             path: absolutePathResult.absolutePath,
@@ -193,6 +206,8 @@ export const searchCodebaseTool: McpTool = {
             resultMode: parsed.data.resultMode ?? "grouped",
             groupBy: parsed.data.groupBy ?? "symbol",
             rankingMode: parsed.data.rankingMode ?? "auto_changed_first",
+            debug: normalizedDebugMode !== "none",
+            debugMode: normalizedDebugMode,
         };
         const startedAt = Date.now();
         const limit = Math.max(1, Math.min(ctx.capabilities.getMaxSearchLimit(), input.limit ?? ctx.capabilities.getDefaultSearchLimit()));

@@ -6,6 +6,8 @@ import {
     createLanguageAnalysisService,
     normalizeLanguageId,
     openRegularFileInsideRoot,
+    readFileHandleExactly,
+    verifyStableFileObservation,
     type SymbolRecord,
     type LanguageAnalysisPort,
 } from "@zokizuan/satori-core";
@@ -17,12 +19,22 @@ export type CurrentSourceSymbolValidation = PythonSourceBackedSpanRepair & {
     match: "matched" | "missing" | "ambiguous" | "unavailable" | "not_applicable";
 };
 
+export type CurrentSourceEvidence = {
+    canonicalRoot: string;
+    relativeFile: string;
+    source: string;
+    observedHash: string;
+};
+
 function isInsideRoot(candidate: string, root: string): boolean {
     const relative = path.relative(root, candidate);
     return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-async function readCurrentSource(codebaseRoot: string, relativeFile: string): Promise<string | undefined> {
+export async function readCurrentSourceEvidence(
+    codebaseRoot: string,
+    relativeFile: string,
+): Promise<CurrentSourceEvidence | undefined> {
     let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
     try {
         const canonicalRoot = await fs.realpath(codebaseRoot);
@@ -35,22 +47,69 @@ async function readCurrentSource(codebaseRoot: string, relativeFile: string): Pr
         if (stat.size > CURRENT_SOURCE_MAX_BYTES) {
             return undefined;
         }
-        const buffer = Buffer.allocUnsafe(CURRENT_SOURCE_MAX_BYTES + 1);
-        let offset = 0;
-        while (offset < buffer.length) {
-            const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
-            if (bytesRead === 0) break;
-            offset += bytesRead;
-        }
-        if (offset > CURRENT_SOURCE_MAX_BYTES) {
-            return undefined;
-        }
-        return buffer.subarray(0, offset).toString("utf8");
+        const content = (await readFileHandleExactly(handle, stat.size)).toString("utf8");
+        await verifyStableFileObservation(handle, logicalFile, canonicalRoot, stat);
+        return {
+            canonicalRoot,
+            relativeFile,
+            source: content,
+            observedHash: crypto.createHash("sha256").update(content, "utf8").digest("hex"),
+        };
     } catch {
         return undefined;
     } finally {
         await handle?.close().catch(() => undefined);
     }
+}
+
+/**
+ * Read only the current source owned by one persisted symbol. The descriptor-bound
+ * read and full-file digest prevent registry metadata from being presented as
+ * current source after the file changes.
+ */
+export async function readHashMatchedCurrentSourceSymbolContent(input: {
+    codebaseRoot: string;
+    symbol: SymbolRecord;
+}): Promise<string | undefined> {
+    const expectedHash = input.symbol.fileHash;
+    if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
+        return undefined;
+    }
+    const evidence = await readCurrentSourceEvidence(input.codebaseRoot, input.symbol.file);
+    if (!evidence) {
+        return undefined;
+    }
+    return sliceHashMatchedCurrentSourceSymbolContent(evidence, evidence.canonicalRoot, input.symbol);
+}
+
+export function sliceHashMatchedCurrentSourceSymbolContent(
+    evidence: CurrentSourceEvidence,
+    expectedCanonicalRoot: string,
+    symbol: SymbolRecord,
+): string | undefined {
+    if (
+        path.resolve(evidence.canonicalRoot) !== path.resolve(expectedCanonicalRoot)
+        || evidence.relativeFile !== symbol.file
+        || evidence.observedHash !== symbol.fileHash
+    ) {
+        return undefined;
+    }
+
+    const { startLine, endLine } = symbol.span;
+    if (
+        !Number.isSafeInteger(startLine)
+        || !Number.isSafeInteger(endLine)
+        || startLine < 1
+        || endLine < startLine
+    ) {
+        return undefined;
+    }
+    const lines = evidence.source.split(/\r\n?|\n/);
+    if (startLine > lines.length || endLine > lines.length) {
+        return undefined;
+    }
+    const content = lines.slice(startLine - 1, endLine).join("\n");
+    return content.length > 0 ? content : undefined;
 }
 
 function unchangedValidation(symbol: SymbolRecord, match: CurrentSourceSymbolValidation["match"]): CurrentSourceSymbolValidation {
@@ -121,8 +180,16 @@ export async function validateCurrentSourceSymbolSpans(input: {
     symbols: SymbolRecord[];
     languageAnalyzer?: LanguageAnalysisPort;
 }): Promise<CurrentSourceSymbolValidation[]> {
+    return (await validateCurrentSourceSymbolSpansWithEvidence(input)).validations;
+}
+
+export async function validateCurrentSourceSymbolSpansWithEvidence(input: {
+    codebaseRoot: string;
+    symbols: SymbolRecord[];
+    languageAnalyzer?: LanguageAnalysisPort;
+}): Promise<{ validations: CurrentSourceSymbolValidation[]; evidence?: CurrentSourceEvidence }> {
     if (input.symbols.length === 0) {
-        return [];
+        return { validations: [] };
     }
 
     const language = normalizeLanguageId(input.symbols[0].language);
@@ -131,23 +198,24 @@ export async function validateCurrentSourceSymbolSpans(input: {
         chunkOverlap: 0,
     });
     if (!languageAnalyzer.getStrategyForLanguage(language).structural) {
-        return input.symbols.map((symbol) => unchangedValidation(symbol, "not_applicable"));
+        return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "not_applicable")) };
     }
 
     const relativeFile = input.symbols[0].file;
     if (input.symbols.some((symbol) => symbol.file !== relativeFile || normalizeLanguageId(symbol.language) !== language)) {
-        return input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable"));
+        return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")) };
     }
 
-    const source = await readCurrentSource(input.codebaseRoot, relativeFile);
-    if (source === undefined) {
-        return input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable"));
+    const evidence = await readCurrentSourceEvidence(input.codebaseRoot, relativeFile);
+    if (!evidence) {
+        return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")) };
     }
+    const source = evidence.source;
 
     try {
         const analysis = await languageAnalyzer.analyze({ content: source, language, relativePath: relativeFile });
         if (analysis.structuralStatus !== "complete") {
-            return input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable"));
+            return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")), evidence };
         }
         const fileHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
         const extractorVersion = input.symbols[0].extractorVersion;
@@ -222,7 +290,7 @@ export async function validateCurrentSourceSymbolSpans(input: {
             }
         }
 
-        return input.symbols.map((symbol) => {
+        const validations: CurrentSourceSymbolValidation[] = input.symbols.map((symbol): CurrentSourceSymbolValidation => {
             const matches = currentByKey.get(symbol.symbolKey) || [];
             if (matches.length === 0) {
                 return unchangedValidation(symbol, "missing");
@@ -247,7 +315,8 @@ export async function validateCurrentSourceSymbolSpans(input: {
                 match: "matched",
             };
         });
+        return { validations, evidence };
     } catch {
-        return input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable"));
+        return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")), evidence };
     }
 }

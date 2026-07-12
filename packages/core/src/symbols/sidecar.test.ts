@@ -13,6 +13,8 @@ import {
 import {
     clearSymbolRegistrySidecar,
     readRelationshipSidecar,
+    readNavigationGenerationSeal,
+    readSymbolRegistryManifest,
     readSymbolRegistrySidecar,
     resolveNavigationSidecarRoot,
     stageNavigationSidecarGeneration,
@@ -148,6 +150,23 @@ async function writeSingleRelationshipFixture(stateRoot: string): Promise<{
         shardPath: path.join(registryResult.rootPath, shardFile),
     };
 }
+
+test('readSymbolRegistryManifest does not deserialize or require symbol shards', async () => {
+    await withTempDir(async (stateRoot) => {
+        const fixture = await writeSingleSymbolRegistryFixture(stateRoot);
+        await fs.promises.rm(fixture.shardPath);
+
+        const result = await readSymbolRegistryManifest({
+            stateRoot,
+            normalizedRootPath: '/repo',
+        });
+        assert.equal(result.status, 'ok');
+        if (result.status === 'ok') {
+            assert.equal(result.manifest.files.length, 1);
+            assert.equal(result.manifest.files[0]?.symbolCount, 1);
+        }
+    });
+});
 
 test('resolveNavigationSidecarRoot is deterministic and rooted under navigation state', () => {
     const first = resolveNavigationSidecarRoot('/tmp/state', '/repo');
@@ -1195,7 +1214,7 @@ test('writeSymbolRegistrySidecar keeps manifest hash stable across deterministic
     });
 });
 
-test('readSymbolRegistrySidecar rejects an index that does not exactly match the manifest', async () => {
+test('readSymbolRegistrySidecar classifies an unsafe index path as corrupt', async () => {
     await withTempDir(async (stateRoot) => {
         const { result } = await writeSingleSymbolRegistryFixture(stateRoot);
         const indexPath = path.join(result.rootPath, 'symbols', 'index.json');
@@ -1204,7 +1223,7 @@ test('readSymbolRegistrySidecar rejects an index that does not exactly match the
         await writeJsonFile(indexPath, index);
 
         const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
-        assert.equal(loaded.status, 'incompatible');
+        assert.equal(loaded.status, 'corrupt');
         assert.match(loaded.reason || '', /index.*(?:manifest|invalid|incompatible)|deterministic shard/i);
     });
 });
@@ -1281,6 +1300,20 @@ test('writeNavigationSidecarGeneration publishes symbols and relationships throu
             records: [],
             analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
         });
+        const seal = await readNavigationGenerationSeal(stateRoot, '/repo');
+        assert.equal(seal.status, 'ok');
+        if (seal.status === 'ok') {
+            assert.equal(seal.seal.generationId, first.generationId);
+            assert.deepEqual(seal.seal.symbolQuality, {
+                indexedFileCount: 1,
+                languages: [{
+                    language: 'typescript',
+                    indexedFiles: 1,
+                    filesWithNonFileSymbols: 0,
+                    nonFileSymbolCount: 0,
+                }],
+            });
+        }
 
         const secondSymbol = createSynthesizedFileSymbol({
             relativePath: 'src/auth.ts',

@@ -10,7 +10,12 @@ import {
     type LanguageAnalysisPort,
     type SymbolRecord,
 } from "@zokizuan/satori-core";
-import { validateCurrentSourceSymbolSpans } from "./current-source-symbols.js";
+import {
+    readHashMatchedCurrentSourceSymbolContent,
+    readCurrentSourceEvidence,
+    sliceHashMatchedCurrentSourceSymbolContent,
+    validateCurrentSourceSymbolSpans,
+} from "./current-source-symbols.js";
 
 function testSymbol(file = "src/runtime.ts"): SymbolRecord {
     return {
@@ -152,6 +157,83 @@ test("current-source validation bounds exact source reads", async () => {
         const [result] = await validateCurrentSourceSymbolSpans({ codebaseRoot: root, symbols: [testSymbol()] });
         assert.equal(result.match, "unavailable");
         assert.equal(result.validated, false);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("hash-matched current-source content is restricted to the exact symbol span", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-preview-"));
+    const relativeFile = "src/runtime.ts";
+    const source = [
+        "const unrelatedBefore = true;",
+        "export function currentOwner() {",
+        "  return 'current';",
+        "}",
+        "const unrelatedAfter = true;",
+    ].join("\n");
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), source);
+    try {
+        const content = await readHashMatchedCurrentSourceSymbolContent({
+            codebaseRoot: root,
+            symbol: {
+                ...testSymbol(relativeFile),
+                fileHash: crypto.createHash("sha256").update(source, "utf8").digest("hex"),
+                span: { startLine: 2, endLine: 4 },
+            },
+        });
+        assert.equal(content, [
+            "export function currentOwner() {",
+            "  return 'current';",
+            "}",
+        ].join("\n"));
+        assert.doesNotMatch(content || "", /unrelated/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("current-source content is omitted when the durable file hash does not match", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-preview-stale-"));
+    const relativeFile = "src/runtime.ts";
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), "export function currentOwner() { return false; }\n");
+    try {
+        const content = await readHashMatchedCurrentSourceSymbolContent({
+            codebaseRoot: root,
+            symbol: {
+                ...testSymbol(relativeFile),
+                fileHash: "0".repeat(64),
+                span: { startLine: 1, endLine: 1 },
+            },
+        });
+        assert.equal(content, undefined);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("descriptor-bound source evidence can be reused without reopening the file", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-evidence-"));
+    const relativeFile = "src/runtime.ts";
+    const source = "export function currentOwner() {\n  return true;\n}\n";
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), source);
+    try {
+        const evidence = await readCurrentSourceEvidence(root, relativeFile);
+        assert.ok(evidence);
+        fs.rmSync(path.join(root, relativeFile));
+        assert.equal(sliceHashMatchedCurrentSourceSymbolContent(evidence, root, {
+            ...testSymbol(relativeFile),
+            fileHash: evidence.observedHash,
+            span: { startLine: 1, endLine: 3 },
+        }), "export function currentOwner() {\n  return true;\n}");
+        assert.equal(sliceHashMatchedCurrentSourceSymbolContent(evidence, path.join(root, "other-root"), {
+            ...testSymbol(relativeFile),
+            fileHash: evidence.observedHash,
+            span: { startLine: 1, endLine: 3 },
+        }), undefined);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

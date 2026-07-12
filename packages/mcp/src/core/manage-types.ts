@@ -26,6 +26,15 @@ export type ManageIndexStatus =
     | "blocked"
     | "error";
 
+export const MANAGE_INDEX_STATUS_DETAILS = [
+    "summary",
+    "capabilities",
+    "diagnostics",
+    "full",
+] as const;
+
+export type ManageIndexStatusDetail = (typeof MANAGE_INDEX_STATUS_DETAILS)[number];
+
 export type ManageIndexReason =
     | "indexing"
     | "not_indexed"
@@ -58,12 +67,19 @@ export interface ManageIndexToolHint {
     args: Record<string, unknown>;
 }
 
+export type ManageCompactSymbolQuality = Pick<
+    SymbolQualitySummary,
+    "status" | "basis" | "message"
+>;
+
 export interface ManageIndexResponseEnvelope {
     tool: "manage_index";
     version: 1;
     action: ManageIndexAction;
     path: string;
     status: ManageIndexStatus;
+    /** Projection returned for status responses. */
+    detail?: ManageIndexStatusDetail;
     reason?: ManageIndexReason;
     code?: "MISSING_PROVIDER_CONFIG" | VectorBackendResponseCode;
     message: string;
@@ -78,7 +94,7 @@ export interface ManageIndexResponseEnvelope {
     operation?: IndexOperationReceipt;
     repairProof?: RepairProof;
     /** Observed symbol quality from registry (F9); not parser-cause diagnosis. */
-    symbolQuality?: SymbolQualitySummary;
+    symbolQuality?: SymbolQualitySummary | ManageCompactSymbolQuality;
     /** Declared claims combined with compatible per-language navigation evidence. */
     languageCapabilities?: LanguageCapabilityEvidenceSummary;
     /** Deterministic filesystem changes observed by a completed sync. */

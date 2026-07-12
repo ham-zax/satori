@@ -59,3 +59,16 @@ test("manage status response preserves additive language capability evidence", (
 
     assert.deepEqual(envelope.languageCapabilities, languageCapabilities);
 });
+
+test("manage status response echoes the selected detail projection", () => {
+    const builders = new ToolResponseBuilders({} as never);
+    const envelope = builders.buildManageResponseEnvelope(
+        "status",
+        "/repo",
+        "ok",
+        "indexed",
+        { detail: "diagnostics" },
+    );
+
+    assert.equal(envelope.detail, "diagnostics");
+});

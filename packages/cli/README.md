@@ -25,6 +25,8 @@ The installer only manages Satori-owned config and the first-party workflow skil
 
 After a repo is indexed, Satori keeps the public MCP surface fixed (six tools) while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer verifies wiring but does not run indexing or provider-backed work during setup.
 
+Grouped search responses use `formatVersion: 2`: each result has one canonical `target`, bounded source evidence, quality, and compact graph readiness. Use the envelope `codebaseRoot` with that target for `read_file` or graph-ready `call_graph` calls; graph-ready results explicitly require inbound verification, and the removed per-result action/fallback trees are not part of the 6.0 contract.
+
 ## Commands
 
 ```bash
@@ -111,7 +113,7 @@ After changing embedding/vector runtime config or the installed Satori package v
 
 ## Runtime Requirements
 
-Node.js 22.12 or newer is required.
+Node.js 22.13 or newer is required.
 
 Indexing and search require an embedding provider plus a Milvus-compatible backend. MCP startup and `tools list` do not require those credentials; provider-backed tool calls return `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 

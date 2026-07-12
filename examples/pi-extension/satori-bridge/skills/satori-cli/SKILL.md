@@ -29,13 +29,12 @@ Use exactly these 6 tools:
 2. Run Satori retrieval first (not grep-first); exact identifier-like queries may return from the registry before semantic/vector search:
    - `search_codebase(path, query, scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`
 3. Use symbol-aware navigation from grouped results:
-   - if `callGraphHint.supported=true`, call `call_graph(path, symbolRef=callGraphHint.symbolRef, direction="both", depth=1)`
-   - if unsupported, execute `navigationFallback.readSpan.args` exactly
+   - if `navigation.graph="ready"`, call `call_graph(path=codebaseRoot, symbolRef=target, direction="both", depth=1)`
+   - otherwise open `codebaseRoot + target.file` with `open_symbol.symbolId` when present or the 1-based inclusive `target.span`
 4. Lock spans deterministically:
    - `file_outline(path=<codebaseRootAbs>, file=<relative file path>, resolveMode="exact", symbolIdExact|symbolLabelExact)`
    - `read_file(path=<absolute file path>, open_symbol={...})`
-   - Use `file` from grouped result metadata or `navigationFallback.fileOutlineWindow.args.file`.
-   - Use absolute read path from `navigationFallback.readSpan.args.path` when available; otherwise derive from codebase root + relative file.
+   - Use `target.file` from the grouped result and derive its absolute read path from the envelope `codebaseRoot`.
 
 ## Query Strategy
 
@@ -52,9 +51,10 @@ Use exactly these 6 tools:
 
 ## Symbol Reference Features (must use)
 
-- In grouped results, treat `callGraphHint.symbolRef` as canonical call-graph input.
-- Treat `navigationFallback` as authoritative when call graph is unavailable.
-- Do not invent spans; use returned spans/args directly.
+- In grouped `formatVersion: 2` results, treat a graph-ready `target` as canonical `call_graph.symbolRef` input.
+- Graph-ready results carry `navigation.inbound="verify"`; use optional `callerSearchTerm` in a separate `must:<term> <term>` search before relying on inbound impact.
+- When graph navigation is unavailable, use the target's exact symbol or span read mapping.
+- Do not invent spans; use returned target spans directly.
 
 ## Gating + Reason Contract
 

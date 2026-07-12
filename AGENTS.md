@@ -40,9 +40,9 @@ Only these public tools exist:
 |------|----------|
 | `list_codebases` | Plain-text readiness buckets; deterministic ordering. Ready roots include compact `symbolQuality=<status>` (observed registry evidence). Incomplete provider config surfaces as Failed reason `provider_incomplete:…` (not fake missing-marker); fingerprint mismatch stays Requires Reindex. |
 | `manage_index` | JSON envelope serialized in MCP text content for lifecycle actions `create\|reindex\|sync\|status\|clear\|repair`. `path` must be an absolute filesystem path (relative paths rejected). `clear` is destructive and requires explicit user request. `repair` rebuilds local readiness only when vector payload and trusted fingerprint proof match; otherwise use create/reindex. `status` may include structured `symbolQuality` (observed symbol richness from the registry — not parser-cause diagnosis). |
-| `search_codebase` | JSON envelope with status, results, structured warnings, freshnessDecision, recommended actions, capabilities/fallbacks, optional debug. Default path for discovery. `path` must be an absolute filesystem path (relative paths rejected; not CWD-resolved). |
+| `search_codebase` | `formatVersion: 2` JSON envelope with status, `codebaseRoot`, structured warnings, freshness, one optional envelope recommendation, and grouped canonical targets or unchanged raw chunks. Default path for discovery. `path` must be absolute (relative paths rejected; not CWD-resolved). |
 | `file_outline` | JSON envelope for deterministic file symbols; exact mode must return `ok`, `ambiguous`, or `not_found` without guessing. `path` is absolute codebase root; `file` is repo-relative under that root only. |
-| `call_graph` | JSON envelope over `callGraphHint.symbolRef`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. `path` absolute; `symbolRef.file` repo-relative under that root. CALLS v0 is name-based/heuristic with confidence notes — not sole authority for blast radius or edit scope; verify with `rg`, tests, or direct references. |
+| `call_graph` | JSON envelope over a graph-ready grouped result `target`; bounded traversal, deterministic sorting, explicit not-ready/unsupported states. `path` uses the search envelope `codebaseRoot`; `symbolRef.file` is repo-relative under that root. CALLS v0 is name-based/heuristic with confidence notes — not sole authority for blast radius or edit scope; verify with `rg`, tests, or direct references. |
 | `read_file` | Reads files only under tracked searchable codebase roots (`indexed` / `sync_completed`); not a general host filesystem reader. Plain text by default; annotated mode returns JSON. `open_symbol` resolves exactly and must not guess on ambiguity. Paths must be absolute; symlink/`..` escapes outside the root are denied. |
 
 Do not invent tools, parameters, write capabilities, rerank knobs, or output shapes.
@@ -51,16 +51,17 @@ Do not invent tools, parameters, write capabilities, rerank knobs, or output sha
 - Default feature-navigation path: `search_codebase` -> `file_outline` -> `call_graph` when supported -> `read_file(open_symbol)`.
 - `indexed` / ready lifecycle means searchable-readable, not automatically symbol-rich. Check `manage_index status` `symbolQuality` (or list_codebases `symbolQuality=…`) before treating outline/call_graph as rich navigation evidence. Values are observed registry evidence (`symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown`), not a diagnosis of tree-sitter fallback cause.
 - `call_graph` is advisory context only: do not treat inbound/outbound edges as sole blast-radius authority; confirm impact with scoped search, tests, or direct references before editing.
-- If a grouped search result has `callGraphHint.supported=false`, treat `navigationFallback` as authoritative and call tools from its args. Do not reconstruct spans from prose.
-- Prefer `recommendedNextAction` when present; inspect `warnings[].action`, `capabilities`, and result `fallbacks` before deciding the next proof step.
+- Prefer the envelope `recommendedNextAction` when present and inspect every `warnings[].action` before deciding the next proof step.
+- For grouped results, derive reads only from `codebaseRoot` plus `target`: use `read_file(open_symbol.symbolId)` when `target.symbolId` exists, otherwise use the 1-based inclusive `target.span`. Do not reconstruct spans from prose.
+- Call `call_graph(path=codebaseRoot, symbolRef=target)` only when `navigation.graph="ready"`; that state always carries `navigation.inbound="verify"`. When `callerSearchTerm` exists, verify inbound references separately with `must:<term> <term>` because graph traversal remains advisory.
 - If any tool returns `requires_reindex` or `hints.reindex`, stop normal navigation and report the exact proof failure. Provider-backed `create` and `reindex` are expensive full rebuilds and require explicit user approval before invocation; do not substitute `sync` for a required rebuild.
 - If `list_codebases` or `manage_index status` reports `provider_incomplete` / `missing_provider_config` / `MISSING_PROVIDER_CONFIG`, set the missing env vars and restart the MCP server before treating fingerprint or marker failures as index truth.
 - `search_codebase` is the sync-on-read freshness tool. Other tools may run compatibility gates but do not imply the same freshness behavior.
 - `search_codebase` defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `debug=false`.
 - Search operators are limited to deterministic prefix operators: `lang:`, `path:`, `-path:`, `must:`, `exclude:`. Path matching is gitignore-style against normalized repo-relative paths.
 - Filtering order is fixed: scope -> lang -> path include -> path exclude -> must -> exclude.
-- Warnings mean usable-but-degraded unless `blocksUse=true`. Compensate with the warning's `action`, deeper reads, result fallbacks, or debug payloads.
-- For subdirectory searches, pass the user's requested path to `search_codebase`, then follow returned spans/fallbacks exactly.
+- Warnings mean usable-but-degraded unless `blocksUse=true`. Compensate with the warning's action, deeper target-derived reads, or bounded debug evidence.
+- For subdirectory searches, pass the user's requested path to `search_codebase`, but derive navigation from the returned `codebaseRoot` and repo-relative `target.file`.
 - For noise mitigation, prefer `.satoriignore` and `manage_index(action="sync")` for immediate convergence after ignore changes.
 
 ## Architecture Law

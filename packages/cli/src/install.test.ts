@@ -260,12 +260,17 @@ test("install writes managed Codex config block and copies packaged skill", () =
         assert.equal(codexInstructions.includes("Start with plain-English behavior or ownership queries"), true);
         assert.equal(codexInstructions.includes("recommendedNextAction"), true);
         assert.equal(codexInstructions.includes("warnings[].action"), true);
-        assert.equal(codexInstructions.includes("capabilities"), true);
+        assert.equal(codexInstructions.includes("canonical `target`"), true);
+        assert.equal(codexInstructions.includes("navigation.graph=\"ready\""), true);
+        assert.equal(codexInstructions.includes("navigationFallback"), false);
         assert.equal(codexInstructions.includes("Do not treat call_graph inbound results as sole authority"), true);
         const codexSkill = readFile(path.join(homeDir, ".codex", "skills", "satori", "SKILL.md"));
         assert.equal(codexSkill.includes("plain-English semantic code discovery"), true);
         assert.equal(codexSkill.includes("recommendedNextAction"), true);
         assert.equal(codexSkill.includes("warnings[]"), true);
+        assert.equal(codexSkill.includes('navigation.inbound="verify"'), true);
+        assert.equal(codexSkill.includes("callerSearchTerm"), true);
+        assert.equal(codexSkill.includes("callGraphHint"), false);
         assert.equal(codexSkill.includes("Do not treat call_graph inbound results as sole authority"), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori-search")), false);
     });
@@ -1132,6 +1137,7 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(codexInstructions.includes("Use Satori primarily for semantic code exploration"), true);
         assert.equal(codexInstructions.includes("recommendedNextAction"), true);
         assert.equal(codexInstructions.includes("warnings[].action"), true);
+        assert.equal(codexInstructions.includes("navigation.graph=\"ready\""), true);
         assert.equal(codexInstructions.includes("Do not treat call_graph inbound results as sole authority"), true);
 
         const claudeConfig = JSON.parse(readFile(path.join(homeDir, ".claude.json")));
@@ -1156,6 +1162,8 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(opencodeInstructions.includes("search_codebase"), true);
         assert.equal(opencodeInstructions.includes("recommendedNextAction"), true);
         assert.equal(opencodeInstructions.includes("warnings[].action"), true);
+        assert.equal(opencodeInstructions.includes('navigation.inbound="verify"'), true);
+        assert.equal(opencodeInstructions.includes("callerSearchTerm"), true);
     });
 });
 

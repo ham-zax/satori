@@ -54,7 +54,7 @@ const CODEX_ENV_TEMPLATE_LINES = [
     "# MILVUS_TOKEN = \"your-zilliz-token\"",
     CODEX_ENV_TEMPLATE_END,
 ] as const;
-const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: use search_codebase for semantic ownership/context discovery, then file_outline/call_graph/read_file for proof. Use exact ids/constants with operators when known; verify inbound impact with rg/tests. Reindex only on requires_reindex/hints.reindex; trust navigationFallback.";
+const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: use search_codebase for semantic ownership/context discovery, then use the returned codebaseRoot and canonical target for call_graph/read_file proof. Use exact ids/constants with operators when known; verify inbound impact with rg/tests. Reindex only on requires_reindex/hints.reindex.";
 const CODEX_GUIDANCE_HOOK_SCRIPT = [
     `msg=${JSON.stringify(CODEX_GUIDANCE_HOOK_MESSAGE)}`,
     'key=$(printf "%s" "$PWD" | sed "s#[^A-Za-z0-9_.-]#_#g" | cut -c1-120)',
@@ -89,10 +89,10 @@ This project uses Satori MCP for semantic-first code exploration, freshness-awar
 - Switch to exact identifiers, constants, warning codes, and path-scoped operators when narrowing or proving a candidate result.
 
 ## Verification Rules
-- Treat \`navigationFallback\` as authoritative. Do not reconstruct spans from prose.
-- Treat \`recommendedNextAction\` as the default next move unless the user requested a different proof path.
-- Read \`warnings[].action\` and \`capabilities\` before trusting graph/navigation depth; warnings are degraded, not fatal, unless \`blocksUse=true\`.
-- Follow result \`fallbacks\` when graph traversal is unavailable, empty, or low confidence.
+- Treat the envelope \`recommendedNextAction\` as the default next move unless the user requested a different proof path.
+- Read every \`warnings[].action\`; warnings are degraded, not fatal, unless \`blocksUse=true\`.
+- Grouped \`formatVersion: 2\` results expose one canonical \`target\`. Use \`codebaseRoot + target.file\` with \`read_file(open_symbol)\` when \`target.symbolId\` exists, or read the 1-based inclusive \`target.span\` otherwise.
+- Pass \`target\` directly to \`call_graph\` only when \`navigation.graph="ready"\`; that state always carries \`navigation.inbound="verify"\`. Use optional \`callerSearchTerm\` in a separate \`must:<term> <term>\` search to verify inbound references.
 - If any tool returns \`requires_reindex\` or \`hints.reindex\`, stop and run \`manage_index(action="reindex")\`; do not substitute \`sync\`.
 - Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with rg, tests, or direct references.
 - For ultra-fast exact literal lookup, local lexical search may still be faster; use Satori when semantic ownership or freshness-aware navigation matters.
@@ -111,10 +111,10 @@ This project uses Satori MCP for plain-English semantic code discovery, determin
 ## Rules
 - Prefer Satori for semantic code discovery before grep/glob.
 - Start with plain-English behavior questions; switch to exact ids, constants, and operators for proof.
-- Prefer \`recommendedNextAction\`, inspect \`warnings[].action\`, and use \`capabilities\` to judge whether opening, semantic match, or graph traversal is strong.
-- Follow result \`fallbacks\` when call graph evidence is unavailable, empty, or low confidence.
+- Prefer the envelope \`recommendedNextAction\` and inspect every \`warnings[].action\`.
+- In grouped \`formatVersion: 2\` output, derive reads from \`codebaseRoot\` plus \`target\`; pass \`target\` to \`call_graph\` only when \`navigation.graph="ready"\`.
+- Treat graph-ready \`navigation.inbound="verify"\` as mandatory caller verification. Use optional \`callerSearchTerm\` with a separate \`must:<term> <term>\` search before treating inbound graph results as complete.
 - If a tool returns \`requires_reindex\`, run \`manage_index(action="reindex")\` and retry the original call.
-- Treat \`navigationFallback\` as authoritative when call graph is unavailable.
 - Read the relevant implementation and call sites before editing behavior.
 `;
 

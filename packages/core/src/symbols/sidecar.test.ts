@@ -15,6 +15,8 @@ import {
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveNavigationSidecarRoot,
+    stageNavigationSidecarGeneration,
+    publishNavigationSidecarGeneration,
     writeNavigationSidecarGeneration,
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
@@ -50,6 +52,16 @@ async function readJsonFile<T>(filePath: string): Promise<T> {
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
     await fs.promises.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+async function resealSymbolShard(shardPath: string): Promise<void> {
+    const serialized = await fs.promises.readFile(shardPath, 'utf8');
+    const indexPath = path.join(path.dirname(path.dirname(shardPath)), 'index.json');
+    const index = await readJsonFile<{ files: Array<{ shardPath: string; shardHash: string }> }>(indexPath);
+    const entry = index.files.find((file) => path.basename(file.shardPath) === path.basename(shardPath));
+    assert.ok(entry);
+    entry.shardHash = crypto.createHash('sha256').update(serialized, 'utf8').digest('hex');
+    await writeJsonFile(indexPath, index);
 }
 
 async function writeSingleSymbolRegistryFixture(stateRoot: string): Promise<{
@@ -941,7 +953,7 @@ test('readSymbolRegistrySidecar rejects malformed symbol shard records', async (
             const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
 
             assert.equal(loaded.status, 'incompatible', item.name);
-            assert.match(loaded.reason || '', /symbol registry shard record is invalid/);
+            assert.match(loaded.reason || '', /symbol registry shard (?:hash does not match index|record is invalid)/);
         });
     }
 });
@@ -964,6 +976,7 @@ test('readSymbolRegistrySidecar accepts multi-line spans whose end column preced
                 },
             }],
         });
+        await resealSymbolShard(shardPath);
 
         const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
 
@@ -1000,7 +1013,7 @@ test('readSymbolRegistrySidecar rejects malformed symbol shard metadata', async 
             const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
 
             assert.equal(loaded.status, 'incompatible', item.name);
-            assert.match(loaded.reason || '', /symbol registry shard is invalid/);
+            assert.match(loaded.reason || '', /symbol registry shard (?:hash does not match index|is invalid)/);
         });
     }
 });
@@ -1122,6 +1135,7 @@ test('sidecar readers tolerate unknown extra fields in valid shard records', asy
             ...symbolShard,
             symbols: [{ ...symbol, extraContractField: 'ignored' }],
         });
+        await resealSymbolShard(symbolShardPath);
 
         const loadedRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
 
@@ -1203,7 +1217,7 @@ test('readSymbolRegistrySidecar verifies actual shard symbol counts', async () =
 
         const loaded = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
         assert.equal(loaded.status, 'incompatible');
-        assert.match(loaded.reason || '', /symbol count/i);
+        assert.match(loaded.reason || '', /symbol count|shard hash/i);
     });
 });
 
@@ -1296,5 +1310,34 @@ test('writeNavigationSidecarGeneration publishes symbols and relationships throu
         assert.equal(loaded.status, 'ok');
         assert.equal(loaded.manifestHash, first.manifestHash);
         assert.equal(loaded.registry?.manifest.files[0].hash, 'hash-auth-v1');
+    });
+});
+
+test('staged navigation remains unreadable until its generation pointer is published', async () => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 }]),
+            symbols: [symbol],
+        });
+
+        const candidate = await stageNavigationSidecarGeneration({
+            stateRoot,
+            registry,
+            records: [],
+            analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
+        });
+
+        assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' })).status, 'missing');
+        await publishNavigationSidecarGeneration(candidate);
+        const published = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
+        assert.equal(published.status, 'ok');
+        assert.equal(published.manifestHash, candidate.manifestHash);
     });
 });

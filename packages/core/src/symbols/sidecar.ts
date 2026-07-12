@@ -27,12 +27,12 @@ import type { RelationshipAnalysisEvidence } from '../relationships';
 const NAVIGATION_DIR_NAME = 'navigation';
 const SYMBOLS_DIR_NAME = 'symbols';
 const RELATIONSHIPS_DIR_NAME = 'relationships';
-const SYMBOL_INDEX_SCHEMA_VERSION = 'symbol_index_v1';
+const SYMBOL_INDEX_SCHEMA_VERSION = 'symbol_index_v2';
 const TEMP_ENTRY_PREFIX = '.satori-tmp-';
 const BACKUP_ENTRY_PREFIX = '.satori-backup-';
 const GENERATIONS_DIR_NAME = 'generations';
 const CURRENT_GENERATION_FILE_NAME = 'current.json';
-const CURRENT_GENERATION_SCHEMA_VERSION = 'navigation_current_v1';
+const CURRENT_GENERATION_SCHEMA_VERSION = 'navigation_current_v2';
 
 interface SymbolIndexFileEntry {
     path: string;
@@ -40,6 +40,7 @@ interface SymbolIndexFileEntry {
     language: string;
     symbolCount: number;
     shardPath: string;
+    shardHash: string;
 }
 
 interface SymbolIndexFile {
@@ -75,6 +76,7 @@ export interface WriteRelationshipSidecarInput {
 
 export interface WriteRelationshipSidecarResult {
     rootPath: string;
+    manifestHash: string;
     fileShardCount: number;
     relationshipCount: number;
 }
@@ -101,10 +103,16 @@ export interface WriteNavigationSidecarGenerationResult extends WriteSymbolRegis
     relationshipFileShardCount: number;
 }
 
+export interface StagedNavigationSidecarGeneration extends WriteNavigationSidecarGenerationResult {
+    normalizedRootPath: string;
+    relationshipManifestHash: string;
+}
+
 export interface CurrentNavigationGeneration {
     generationId: string;
     generationRoot: string;
     symbolRegistryManifestHash: string;
+    relationshipManifestHash: string;
 }
 
 export interface ReadSymbolRegistrySidecarInput {
@@ -268,7 +276,11 @@ function groupSymbolsByFile(symbols: SymbolRecord[]): Map<string, SymbolRecord[]
     return grouped;
 }
 
-function buildSymbolIndex(manifest: SymbolRegistryManifest, manifestHash: string): SymbolIndexFile {
+function buildSymbolIndex(
+    manifest: SymbolRegistryManifest,
+    manifestHash: string,
+    shardHashes: ReadonlyMap<string, string>,
+): SymbolIndexFile {
     return {
         schemaVersion: SYMBOL_INDEX_SCHEMA_VERSION,
         manifestHash,
@@ -279,6 +291,7 @@ function buildSymbolIndex(manifest: SymbolRegistryManifest, manifestHash: string
                 language: file.language,
                 symbolCount: file.symbolCount,
                 shardPath: path.posix.join(SYMBOLS_DIR_NAME, 'by-file', fileShardName(file.path, file.hash)),
+                shardHash: shardHashes.get(file.path) ?? '',
             }))
             .sort((a, b) => compareStrings(a.path, b.path)),
     };
@@ -354,17 +367,20 @@ export async function writeSymbolRegistrySidecar(input: WriteSymbolRegistrySidec
         await fs.promises.mkdir(rootPath, { recursive: true });
         await fs.promises.mkdir(byFileDir, { recursive: true });
 
-        await writeJson(path.join(temporarySymbolsDir, 'index.json'), buildSymbolIndex(input.registry.manifest, manifestHash));
+        const shardHashes = new Map<string, string>();
         for (const file of input.registry.manifest.files) {
             const symbols = groupedSymbols.get(file.path) || [];
-            await writeJson(path.join(byFileDir, fileShardName(file.path, file.hash)), {
+            const shard = {
                 manifestHash,
                 path: file.path,
                 hash: file.hash,
                 language: file.language,
                 symbols,
-            });
+            };
+            shardHashes.set(file.path, hashSerializedJson(shard));
+            await writeJson(path.join(byFileDir, fileShardName(file.path, file.hash)), shard);
         }
+        await writeJson(path.join(temporarySymbolsDir, 'index.json'), buildSymbolIndex(input.registry.manifest, manifestHash, shardHashes));
 
         await replaceDirectoryWithRollback(
             symbolsDir,
@@ -409,6 +425,7 @@ export async function writeRelationshipSidecar(input: WriteRelationshipSidecarIn
         }
     }
 
+    let manifestHash = '';
     try {
         await fs.promises.mkdir(rootPath, { recursive: true });
         await fs.promises.mkdir(relationshipByFileDir, { recursive: true });
@@ -439,15 +456,14 @@ export async function writeRelationshipSidecar(input: WriteRelationshipSidecarIn
             });
         }
 
-        await writeJson(
-            path.join(temporaryRelationshipsDir, 'manifest.json'),
-            buildRelationshipManifest(
-                input.symbolRegistryManifestHash,
-                input.relationshipVersion,
-                input.builtAt,
-                manifestFiles,
-            )
+        const manifest = buildRelationshipManifest(
+            input.symbolRegistryManifestHash,
+            input.relationshipVersion,
+            input.builtAt,
+            manifestFiles,
         );
+        manifestHash = hashSerializedJson(manifest);
+        await writeJson(path.join(temporaryRelationshipsDir, 'manifest.json'), manifest);
 
         await replaceDirectoryWithRollback(relationshipsDir, temporaryRelationshipsDir, undefined, input.beforePublish);
     } catch (error) {
@@ -457,6 +473,7 @@ export async function writeRelationshipSidecar(input: WriteRelationshipSidecarIn
 
     return {
         rootPath,
+        manifestHash,
         fileShardCount: shardPaths.size,
         relationshipCount: input.records.length,
     };
@@ -468,6 +485,7 @@ async function publishCurrentGenerationPointer(
         schemaVersion: typeof CURRENT_GENERATION_SCHEMA_VERSION;
         generationId: string;
         symbolRegistryManifestHash: string;
+        relationshipManifestHash: string;
     },
     beforePublish?: () => void,
     publishMutation?: (publish: () => void) => void,
@@ -476,14 +494,19 @@ async function publishCurrentGenerationPointer(
     const pointerPath = path.join(rootPath, CURRENT_GENERATION_FILE_NAME);
     const temporaryPath = path.join(rootPath, uniqueSidecarEntryName(TEMP_ENTRY_PREFIX));
     let published = false;
+    let publicationCount = 0;
     try {
         await fs.promises.writeFile(temporaryPath, serializeJson(pointer), 'utf8');
         if (publishMutation) {
             publishMutation(() => {
+                publicationCount += 1;
+                if (publicationCount > 1) {
+                    throw new Error('Navigation generation publication callback invoked publish more than once.');
+                }
                 fs.renameSync(temporaryPath, pointerPath);
                 published = true;
             });
-            if (!published) {
+            if (!published || publicationCount !== 1) {
                 throw new Error('Navigation generation publication callback returned without publishing the pointer.');
             }
         } else {
@@ -501,6 +524,17 @@ async function publishCurrentGenerationPointer(
 export async function writeNavigationSidecarGeneration(
     input: WriteNavigationSidecarGenerationInput,
 ): Promise<WriteNavigationSidecarGenerationResult> {
+    const staged = await stageNavigationSidecarGeneration(input);
+    await publishNavigationSidecarGeneration(staged, {
+        beforePublish: input.beforePublish,
+        publishMutation: input.publishMutation,
+    });
+    return staged;
+}
+
+export async function stageNavigationSidecarGeneration(
+    input: Omit<WriteNavigationSidecarGenerationInput, 'beforePublish' | 'publishMutation'>,
+): Promise<StagedNavigationSidecarGeneration> {
     const rootPath = resolveNavigationSidecarRoot(
         input.stateRoot,
         input.registry.manifest.normalizedRootPath,
@@ -535,29 +569,48 @@ export async function writeNavigationSidecarGeneration(
         await fs.promises.mkdir(path.dirname(generationRoot), { recursive: true });
         await fs.promises.rename(builtRoot, generationRoot);
 
-        await publishCurrentGenerationPointer(
-            rootPath,
-            {
-                schemaVersion: CURRENT_GENERATION_SCHEMA_VERSION,
-                generationId,
-                symbolRegistryManifestHash: symbolResult.manifestHash,
-            },
-            input.beforePublish,
-            input.publishMutation,
-        );
-
         return {
             rootPath,
+            normalizedRootPath: input.registry.manifest.normalizedRootPath,
             manifestHash: symbolResult.manifestHash,
             fileShardCount: symbolResult.fileShardCount,
             symbolCount: symbolResult.symbolCount,
             generationId,
+            relationshipManifestHash: relationshipResult.manifestHash,
             relationshipCount: relationshipResult.relationshipCount,
             relationshipFileShardCount: relationshipResult.fileShardCount,
         };
     } finally {
         await fs.promises.rm(buildStateRoot, { recursive: true, force: true }).catch(() => undefined);
     }
+}
+
+export async function publishNavigationSidecarGeneration(
+    candidate: StagedNavigationSidecarGeneration,
+    options: Pick<WriteNavigationSidecarGenerationInput, 'beforePublish' | 'publishMutation'> = {},
+): Promise<void> {
+    await publishCurrentGenerationPointer(
+        candidate.rootPath,
+        {
+            schemaVersion: CURRENT_GENERATION_SCHEMA_VERSION,
+            generationId: candidate.generationId,
+            symbolRegistryManifestHash: candidate.manifestHash,
+            relationshipManifestHash: candidate.relationshipManifestHash,
+        },
+        options.beforePublish,
+        options.publishMutation,
+    );
+}
+
+export async function discardNavigationSidecarGeneration(
+    candidate: StagedNavigationSidecarGeneration,
+    beforeDelete?: () => void,
+): Promise<void> {
+    beforeDelete?.();
+    await fs.promises.rm(
+        path.join(candidate.rootPath, GENERATIONS_DIR_NAME, candidate.generationId),
+        { recursive: true, force: true },
+    );
 }
 
 export async function clearSymbolRegistrySidecar(input: ClearSymbolRegistrySidecarInput): Promise<void> {
@@ -602,6 +655,8 @@ function isSymbolIndexFile(value: unknown): value is SymbolIndexFile {
             && isNonEmptyString(file.language)
             && isNonNegativeInteger(file.symbolCount)
             && isRepositoryRelativePath(file.shardPath)
+            && typeof file.shardHash === 'string'
+            && /^[a-f0-9]{64}$/.test(file.shardHash)
         ));
 }
 
@@ -610,7 +665,11 @@ function symbolIndexMatchesManifest(
     manifest: SymbolRegistryManifest,
     manifestHash: string,
 ): boolean {
-    const expected = buildSymbolIndex(manifest, manifestHash);
+    const expected = buildSymbolIndex(
+        manifest,
+        manifestHash,
+        new Map(indexFile.files.map((file) => [file.path, file.shardHash])),
+    );
     if (
         indexFile.schemaVersion !== expected.schemaVersion
         || indexFile.manifestHash !== expected.manifestHash
@@ -741,12 +800,14 @@ function isCurrentGenerationPointer(value: unknown): value is {
     schemaVersion: typeof CURRENT_GENERATION_SCHEMA_VERSION;
     generationId: string;
     symbolRegistryManifestHash: string;
+    relationshipManifestHash: string;
 } {
     return isRecord(value)
         && value.schemaVersion === CURRENT_GENERATION_SCHEMA_VERSION
         && isNonEmptyString(value.generationId)
         && /^[a-zA-Z0-9_-]+$/.test(value.generationId)
-        && isNonEmptyString(value.symbolRegistryManifestHash);
+        && isNonEmptyString(value.symbolRegistryManifestHash)
+        && isNonEmptyString(value.relationshipManifestHash);
 }
 
 export async function resolveCurrentNavigationGeneration(
@@ -778,6 +839,7 @@ export async function resolveCurrentNavigationGeneration(
         generationId: rawPointer.generationId,
         generationRoot,
         symbolRegistryManifestHash: rawPointer.symbolRegistryManifestHash,
+        relationshipManifestHash: rawPointer.relationshipManifestHash,
     };
 }
 
@@ -890,7 +952,15 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
         const symbols: SymbolRecord[] = [];
         for (const file of indexFile.files) {
             const shardPath = path.join(readableRoot, file.shardPath);
-            const shard = await readJson(shardPath) as {
+            const serializedShard = await fs.promises.readFile(shardPath, 'utf8');
+            if (crypto.createHash('sha256').update(serializedShard, 'utf8').digest('hex') !== file.shardHash) {
+                return {
+                    status: 'incompatible',
+                    rootPath,
+                    reason: `symbol registry shard hash does not match index for ${file.path}`,
+                };
+            }
+            const shard = JSON.parse(serializedShard) as {
                 manifestHash?: unknown;
                 path?: unknown;
                 hash?: unknown;
@@ -997,8 +1067,9 @@ function isRelationshipAnalysisEvidence(value: unknown): value is RelationshipAn
 export async function readRelationshipSidecar(input: ReadRelationshipSidecarInput): Promise<ReadRelationshipSidecarResult> {
     const rootPath = resolveNavigationSidecarRoot(input.stateRoot, input.normalizedRootPath);
     let readableRoot: string;
+    let generation: CurrentNavigationGeneration | null;
     try {
-        ({ readableRoot } = await resolveReadableNavigationRoot(input.stateRoot, input.normalizedRootPath));
+        ({ readableRoot, generation } = await resolveReadableNavigationRoot(input.stateRoot, input.normalizedRootPath));
     } catch (error) {
         return {
             status: 'incompatible',
@@ -1022,7 +1093,18 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
 
     let manifest: RelationshipManifest;
     try {
-        const rawManifest = await readJson(manifestPath);
+        const serializedManifest = await fs.promises.readFile(manifestPath, 'utf8');
+        if (
+            generation
+            && crypto.createHash('sha256').update(serializedManifest, 'utf8').digest('hex') !== generation.relationshipManifestHash
+        ) {
+            return {
+                status: 'incompatible',
+                rootPath,
+                reason: 'navigation generation pointer hash does not match relationship manifest',
+            };
+        }
+        const rawManifest = JSON.parse(serializedManifest) as unknown;
         if (!isRelationshipManifest(rawManifest)) {
             return {
                 status: 'incompatible',

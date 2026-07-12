@@ -44,10 +44,14 @@ import {
     computeSymbolRegistryManifestHash,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
+    resolveCurrentNavigationGeneration,
     resolveOwnerSymbolForChunk,
-    writeNavigationSidecarGeneration,
+    discardNavigationSidecarGeneration,
+    publishNavigationSidecarGeneration,
+    stageNavigationSidecarGeneration,
 } from '../symbols';
 import type {
+    StagedNavigationSidecarGeneration,
     SymbolRecord,
     SymbolRegistry,
     SymbolRegistryManifestFile,
@@ -116,6 +120,14 @@ type ReindexByChangeOptions = {
 type MutationGuardOptions = {
     assertMutationCurrent?: () => void;
     publishMutation?: (publish: () => void) => void;
+    deferFullIndexPublication?: boolean;
+};
+
+export type IndexCodebaseResult = {
+    indexedFiles: number;
+    totalChunks: number;
+    status: 'completed' | 'limit_reached';
+    navigationCandidate?: StagedNavigationSidecarGeneration;
 };
 
 function chunksWithTrustedRelativePath(
@@ -479,16 +491,17 @@ export class Context {
         if (!parsed || parsed.kind !== 'satori_index_completion_v1') {
             return null;
         }
-        if (typeof parsed.codebasePath !== 'string' || typeof parsed.runId !== 'string') {
+        if (typeof parsed.codebasePath !== 'string' || typeof parsed.runId !== 'string' || parsed.runId.trim().length === 0) {
             return null;
         }
         if (!parsed.fingerprint || typeof parsed.fingerprint !== 'object') {
             return null;
         }
 
-        const indexedFiles = Number(parsed.indexedFiles);
-        const totalChunks = Number(parsed.totalChunks);
-        if (!Number.isFinite(indexedFiles) || !Number.isFinite(totalChunks)) {
+        const indexedFiles = parsed.indexedFiles;
+        const totalChunks = parsed.totalChunks;
+        if (!Number.isSafeInteger(indexedFiles) || Number(indexedFiles) < 0
+            || !Number.isSafeInteger(totalChunks) || Number(totalChunks) < 0) {
             return null;
         }
         if (typeof parsed.completedAt !== 'string' || Number.isNaN(Date.parse(parsed.completedAt))) {
@@ -504,16 +517,32 @@ export class Context {
         const indexStatus = parsed.indexStatus === 'limit_reached' || parsed.indexStatus === 'completed'
             ? parsed.indexStatus
             : undefined;
+        const navigationFields = [
+            parsed.navigationGenerationId,
+            parsed.symbolRegistryManifestHash,
+            parsed.relationshipManifestHash,
+        ];
+        if (
+            navigationFields.some((value) => value !== undefined)
+            && !navigationFields.every((value) => typeof value === 'string' && value.length > 0)
+        ) {
+            return null;
+        }
 
         return {
             kind: 'satori_index_completion_v1',
             codebasePath: parsedCodebasePath,
             fingerprint: parsed.fingerprint as IndexCompletionFingerprint,
-            indexedFiles,
-            totalChunks,
+            indexedFiles: Number(indexedFiles),
+            totalChunks: Number(totalChunks),
             completedAt: parsed.completedAt,
             runId: parsed.runId,
             ...(indexStatus ? { indexStatus } : {}),
+            ...(typeof parsed.navigationGenerationId === 'string' ? {
+                navigationGenerationId: parsed.navigationGenerationId,
+                symbolRegistryManifestHash: parsed.symbolRegistryManifestHash as string,
+                relationshipManifestHash: parsed.relationshipManifestHash as string,
+            } : {}),
         };
     }
 
@@ -635,7 +664,14 @@ export class Context {
         collectionName?: string,
         indexStatus: 'completed' | 'limit_reached' = 'completed',
         assertMutationCurrent?: () => void,
+        navigationCandidate?: StagedNavigationSidecarGeneration,
     ): Promise<void> {
+        const currentNavigation = indexStatus === 'completed' && !navigationCandidate
+            ? await resolveCurrentNavigationGeneration(
+                this.symbolRegistryStateRoot,
+                this.canonicalizeCodebasePath(codebasePath),
+            ).catch(() => null)
+            : null;
         await this.writeIndexCompletionMarker(codebasePath, {
             kind: 'satori_index_completion_v1',
             codebasePath: this.canonicalizeCodebasePath(codebasePath),
@@ -645,6 +681,15 @@ export class Context {
             completedAt: new Date().toISOString(),
             runId: crypto.randomUUID(),
             indexStatus,
+            ...(navigationCandidate ? {
+                navigationGenerationId: navigationCandidate.generationId,
+                symbolRegistryManifestHash: navigationCandidate.manifestHash,
+                relationshipManifestHash: navigationCandidate.relationshipManifestHash,
+            } : currentNavigation ? {
+                navigationGenerationId: currentNavigation.generationId,
+                symbolRegistryManifestHash: currentNavigation.symbolRegistryManifestHash,
+                relationshipManifestHash: currentNavigation.relationshipManifestHash,
+            } : {}),
         }, collectionName, assertMutationCurrent);
     }
 
@@ -674,6 +719,20 @@ export class Context {
             }
             if (!(await this.collectionHasIndexedPayload(collectionName, marker))) {
                 continue;
+            }
+            if (marker.navigationGenerationId) {
+                const currentNavigation = await resolveCurrentNavigationGeneration(
+                    this.symbolRegistryStateRoot,
+                    this.canonicalizeCodebasePath(codebasePath),
+                ).catch(() => null);
+                if (
+                    !currentNavigation
+                    || currentNavigation.generationId !== marker.navigationGenerationId
+                    || currentNavigation.symbolRegistryManifestHash !== marker.symbolRegistryManifestHash
+                    || currentNavigation.relationshipManifestHash !== marker.relationshipManifestHash
+                ) {
+                    continue;
+                }
             }
 
             const familyPriority = this.isRelatedCollectionName(collectionName, activeFamilyName)
@@ -731,6 +790,28 @@ export class Context {
     public async getActiveIndexedCollectionName(codebasePath: string): Promise<string | null> {
         const active = await this.resolveActiveIndexedCollection(codebasePath);
         return active?.collectionName || null;
+    }
+
+    private async resolveCompletionProofCollection(
+        codebasePath: string,
+    ): Promise<{ collectionName: string; marker: IndexCompletionMarkerDocument } | null> {
+        const candidates: Array<{ collectionName: string; marker: IndexCompletionMarkerDocument }> = [];
+        for (const collectionName of await this.listRelatedCollectionNames(codebasePath)) {
+            const marker = await this.resolveCompletionMarkerForCollection(codebasePath, collectionName);
+            if (!marker || !(await this.collectionHasIndexedPayload(collectionName, marker))) {
+                continue;
+            }
+            candidates.push({ collectionName, marker });
+        }
+        candidates.sort((left, right) => (
+            Date.parse(right.marker.completedAt) - Date.parse(left.marker.completedAt)
+            || left.collectionName.localeCompare(right.collectionName)
+        ));
+        return candidates[0] ?? null;
+    }
+
+    public async getCompletionProofCollectionName(codebasePath: string): Promise<string | null> {
+        return (await this.resolveCompletionProofCollection(codebasePath))?.collectionName ?? null;
     }
 
     public async pruneIndexedCollectionFamily(
@@ -793,7 +874,7 @@ export class Context {
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
         forceReindex: boolean = false,
         options: MutationGuardOptions = {},
-    ): Promise<{ indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' }> {
+    ): Promise<IndexCodebaseResult> {
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
         console.log(`[Context] 🚀 Starting to index codebase with ${searchType}: ${codebasePath}`);
@@ -817,21 +898,21 @@ export class Context {
         console.log(`[Context] 📁 Found ${codeFiles.length} code files`);
 
         if (codeFiles.length === 0) {
-            await this.clearSymbolRegistryForCodebase(
+            const navigationCandidate = await this.writeSymbolRegistryForCompletedIndex(
                 codebasePath,
+                [],
+                [],
                 options.assertMutationCurrent,
+                new Map(),
                 options.publishMutation,
+                options.deferFullIndexPublication === true,
             );
-            await this.writeCompletedIndexMarker(codebasePath, 0, 0, undefined, 'completed', options.assertMutationCurrent);
+            if (!options.deferFullIndexPublication) {
+                await this.writeCompletedIndexMarker(codebasePath, 0, 0, undefined, 'completed', options.assertMutationCurrent, navigationCandidate);
+            }
             progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
-            return { indexedFiles: 0, totalChunks: 0, status: 'completed' };
+            return { indexedFiles: 0, totalChunks: 0, status: 'completed', ...(navigationCandidate ? { navigationCandidate } : {}) };
         }
-
-        await this.clearSymbolRegistryForCodebase(
-            codebasePath,
-            options.assertMutationCurrent,
-            options.publishMutation,
-        );
 
         // 3. Process each file with streaming chunk processing
         // Reserve 10% for preparation, 90% for actual indexing
@@ -860,23 +941,29 @@ export class Context {
 
         console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
 
+        let navigationCandidate: StagedNavigationSidecarGeneration | undefined;
         if (result.status === 'completed') {
-            await this.writeSymbolRegistryForCompletedIndex(
+            navigationCandidate = await this.writeSymbolRegistryForCompletedIndex(
                 codebasePath,
                 result.symbolRecords,
                 result.symbolManifestFiles,
                 options.assertMutationCurrent,
                 result.analysisByFile,
                 options.publishMutation,
+                options.deferFullIndexPublication === true,
             );
-            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed', options.assertMutationCurrent);
+            if (!options.deferFullIndexPublication) {
+                await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed', options.assertMutationCurrent, navigationCandidate);
+            }
         } else {
             // limit_reached: do not publish complete navigation sidecars, but seal partial vector
             // proof so MCP readiness can allow warned partial search (not "missing marker" stale_local).
             // indexStatus must stay on the marker so interrupted-index recovery does not promote as fully completed.
             console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
-            await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'limit_reached', options.assertMutationCurrent);
-            console.warn('[Context] ⚠️  Wrote completion marker for limit_reached partial index (navigation remains unpublished).');
+            if (!options.deferFullIndexPublication) {
+                await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'limit_reached', options.assertMutationCurrent);
+                console.warn('[Context] ⚠️  Wrote completion marker for limit_reached partial index (navigation remains unpublished).');
+            }
         }
 
         progressCallback?.({
@@ -889,7 +976,8 @@ export class Context {
         return {
             indexedFiles: result.processedFiles,
             totalChunks: result.totalChunks,
-            status: result.status
+            status: result.status,
+            ...(navigationCandidate ? { navigationCandidate } : {}),
         };
     }
 
@@ -974,6 +1062,18 @@ export class Context {
         } else {
             const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
             collectionName = activeCollectionName;
+            if (!collectionName) {
+                const proofCollection = await this.resolveCompletionProofCollection(codebasePath);
+                if (
+                    proofCollection
+                    && this.indexCompletionFingerprintsMatch(
+                        proofCollection.marker.fingerprint,
+                        this.buildIndexCompletionFingerprint(),
+                    )
+                ) {
+                    collectionName = proofCollection.collectionName;
+                }
+            }
             if (!collectionName && synchronizerAlreadyExisted) {
                 const retryCollectionName = this.synchronizerMutationTargets.get(synchronizerKey);
                 if (retryCollectionName && await this.vectorDatabase.hasCollection(retryCollectionName)) {
@@ -1034,6 +1134,7 @@ export class Context {
             }
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
             console.log('[Context] ✅ No file changes detected.');
+            this.synchronizerMutationTargets.delete(synchronizerKey);
             return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: targetCollectionName };
         }
 
@@ -1261,6 +1362,7 @@ export class Context {
                     });
                 }
             }
+            this.synchronizerMutationTargets.delete(synchronizerKey);
         }
 
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
@@ -1595,8 +1697,7 @@ export class Context {
     }
 
     async getIndexCompletionMarker(codebasePath: string): Promise<IndexCompletionMarkerDocument | null> {
-        const active = await this.resolveActiveIndexedCollection(codebasePath);
-        return active?.marker || null;
+        return (await this.resolveCompletionProofCollection(codebasePath))?.marker ?? null;
     }
 
     /**
@@ -2954,7 +3055,8 @@ export class Context {
         assertMutationCurrent?: () => void,
         suppliedAnalysisByFile?: Map<string, RelationshipAnalysisEvidence>,
         publishMutation?: (publish: () => void) => void,
-    ): Promise<void> {
+        deferPublication: boolean = false,
+    ): Promise<StagedNavigationSidecarGeneration | undefined> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const manifestFiles = [...symbolManifestFiles].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
         const registry = buildSymbolRegistry({
@@ -2974,9 +3076,6 @@ export class Context {
 
         const analysisByFile = new Map(suppliedAnalysisByFile ?? []);
         for (const file of manifestFiles) {
-            if (analysisByFile.has(file.path)) {
-                continue;
-            }
             const absoluteFile = path.resolve(canonicalRoot, file.path);
             const relativeFromRoot = path.relative(canonicalRoot, absoluteFile);
             if (!relativeFromRoot || relativeFromRoot.startsWith('..') || path.isAbsolute(relativeFromRoot)) {
@@ -2986,6 +3085,9 @@ export class Context {
             const observedHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
             if (observedHash !== file.hash) {
                 throw new Error(`Source changed before navigation publication for '${file.path}'.`);
+            }
+            if (analysisByFile.has(file.path)) {
+                continue;
             }
             const analysis = await this.languageAnalyzer.analyze({
                 content,
@@ -2999,15 +3101,35 @@ export class Context {
         }
         const relationshipRecords = buildRelationshipsForRegistry({ registry, analysisByFile });
         assertMutationCurrent?.();
-        const result = await writeNavigationSidecarGeneration({
+        const result = await stageNavigationSidecarGeneration({
             stateRoot: this.symbolRegistryStateRoot,
             registry,
             records: relationshipRecords,
             analysisByFile,
+        });
+        console.log(`[Context] 🧭 Staged navigation generation '${result.generationId}' with ${result.symbolCount} symbols across ${result.fileShardCount} symbol shards and ${result.relationshipCount} relationships across ${result.relationshipFileShardCount} relationship shards`);
+        if (!deferPublication) {
+            await this.publishNavigationCandidate(result, assertMutationCurrent, publishMutation);
+        }
+        return result;
+    }
+
+    public async publishNavigationCandidate(
+        candidate: StagedNavigationSidecarGeneration,
+        assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
+    ): Promise<void> {
+        const canonicalRoot = candidate.normalizedRootPath;
+        const previousGeneration = await resolveCurrentNavigationGeneration(
+            this.symbolRegistryStateRoot,
+            canonicalRoot,
+        ).catch(() => null);
+        assertMutationCurrent?.();
+        await publishNavigationSidecarGeneration(candidate, {
             beforePublish: assertMutationCurrent,
             publishMutation,
         });
-        console.log(`[Context] 🧭 Published navigation generation '${result.generationId}' with ${result.symbolCount} symbols across ${result.fileShardCount} symbol shards and ${result.relationshipCount} relationships across ${result.relationshipFileShardCount} relationship shards`);
+        console.log(`[Context] 🧭 Published navigation generation '${candidate.generationId}'.`);
         assertMutationCurrent?.();
         try {
             const sqliteResult = await importNavigationToSqlite({
@@ -3026,6 +3148,50 @@ export class Context {
             }
             console.warn(`[Context] ⚠️  Failed to import navigation sqlite cache for ${canonicalRoot}: ${error instanceof Error ? error.message : String(error)}`);
         }
+        try {
+            const retainedGenerationIds = new Set([
+                candidate.generationId,
+                ...(previousGeneration ? [previousGeneration.generationId] : []),
+            ]);
+            const generationsRoot = path.join(candidate.rootPath, 'generations');
+            const generations = await fs.promises.readdir(generationsRoot, { withFileTypes: true });
+            for (const obsolete of generations
+                .filter((entry) => entry.isDirectory() && !retainedGenerationIds.has(entry.name))
+                .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)) {
+                assertMutationCurrent?.();
+                await fs.promises.rm(path.join(generationsRoot, obsolete.name), { recursive: true, force: true });
+            }
+        } catch (error) {
+            assertMutationCurrent?.();
+            console.warn(`[Context] ⚠️  Failed to collect obsolete navigation generations for ${canonicalRoot}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    public async discardNavigationCandidate(
+        candidate: StagedNavigationSidecarGeneration,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
+        await discardNavigationSidecarGeneration(candidate, assertMutationCurrent);
+    }
+
+    public async publishCompletedIndexMarker(
+        codebasePath: string,
+        indexedFiles: number,
+        totalChunks: number,
+        collectionName: string,
+        indexStatus: 'completed' | 'limit_reached',
+        assertMutationCurrent?: () => void,
+        navigationCandidate?: StagedNavigationSidecarGeneration,
+    ): Promise<void> {
+        await this.writeCompletedIndexMarker(
+            codebasePath,
+            indexedFiles,
+            totalChunks,
+            collectionName,
+            indexStatus,
+            assertMutationCurrent,
+            navigationCandidate,
+        );
     }
 
     private async clearSymbolRegistryForCodebase(

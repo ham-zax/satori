@@ -6,6 +6,7 @@ import {
     isRelationshipManifest,
     isSymbolRegistryManifest,
     resolveNavigationSidecarRoot,
+    resolveCurrentNavigationGeneration,
     resolveOwnerSymbolForChunk,
 } from '../symbols';
 import type {
@@ -36,7 +37,7 @@ import type {
 } from './store';
 
 const NAVIGATION_SQLITE_FILE_NAME = 'navigation.sqlite';
-const NAVIGATION_SQLITE_SCHEMA_VERSION = 'navigation_sqlite_v1';
+const NAVIGATION_SQLITE_SCHEMA_VERSION = 'navigation_sqlite_v2';
 
 type DatabaseSync = import('node:sqlite').DatabaseSync;
 type DatabaseSyncConstructor = typeof import('node:sqlite').DatabaseSync;
@@ -437,6 +438,8 @@ function readExistingRegistryState(input: NavigationStoreInput, rootPath: string
         if (schemaVersion !== NAVIGATION_SQLITE_SCHEMA_VERSION) {
             return buildFailure(rootPath, `navigation sqlite schema is incompatible: ${schemaVersion}`, 'incompatible');
         }
+        const generationMismatch = validateStoredGenerationIdentity(manifest, input, rootPath);
+        if (generationMismatch) return generationMismatch;
 
         const rawManifest = ensureManifestValue(manifest, 'registry_manifest_json', rootPath);
         if (typeof rawManifest !== 'string') {
@@ -546,6 +549,8 @@ function readRelationshipStateFromSqlite(input: NavigationRelationshipsQueryInpu
         if (schemaVersion !== NAVIGATION_SQLITE_SCHEMA_VERSION) {
             return buildFailure(rootPath, `navigation sqlite schema is incompatible: ${schemaVersion}`, 'incompatible');
         }
+        const generationMismatch = validateStoredGenerationIdentity(manifest, input, rootPath);
+        if (generationMismatch) return generationMismatch;
 
         const relationshipStatusRaw = ensureManifestValue(manifest, 'relationship_status', rootPath);
         if (typeof relationshipStatusRaw !== 'string') {
@@ -652,6 +657,35 @@ export function resolveNavigationSqlitePath(stateRoot: string | undefined, norma
     return path.join(resolveNavigationSidecarRoot(stateRoot, normalizedRootPath), NAVIGATION_SQLITE_FILE_NAME);
 }
 
+function validateStoredGenerationIdentity(
+    manifest: Map<string, string>,
+    input: NavigationStoreInput,
+    rootPath: string,
+): ReturnType<typeof buildFailure> | null {
+    try {
+        const pointerPath = path.join(
+            resolveNavigationSidecarRoot(input.stateRoot, input.normalizedRootPath),
+            'current.json',
+        );
+        const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')) as Record<string, unknown>;
+        if (
+            manifest.get('navigation_generation_id') !== pointer.generationId
+            || manifest.get('registry_manifest_hash') !== pointer.symbolRegistryManifestHash
+            || manifest.get('relationship_manifest_hash') !== pointer.relationshipManifestHash
+        ) {
+            return buildFailure(rootPath, 'navigation sqlite generation does not match the active navigation pointer', 'incompatible');
+        }
+        return null;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return manifest.get('navigation_generation_id') === 'standalone'
+                ? null
+                : buildFailure(rootPath, 'navigation sqlite is not bound to an active generation', 'incompatible');
+        }
+        return buildFailure(rootPath, `cannot validate navigation sqlite generation: ${error instanceof Error ? error.message : String(error)}`, 'incompatible');
+    }
+}
+
 export interface ImportNavigationToSqliteInput extends NavigationStoreInput {
     sourceStore?: NavigationStore;
     beforePublish?: () => void;
@@ -670,6 +704,7 @@ export async function importNavigationToSqlite(input: ImportNavigationToSqliteIn
     const rootPath = resolveNavigationSidecarRoot(input.stateRoot, input.normalizedRootPath);
     const sqlitePath = resolveNavigationSqlitePath(input.stateRoot, input.normalizedRootPath);
     const sourceStore = input.sourceStore || new JsonNavigationStore();
+    const activeGeneration = await resolveCurrentNavigationGeneration(input.stateRoot, input.normalizedRootPath);
     const registryState = await sourceStore.getManifest(input);
     if (registryState.status !== 'ok') {
         throw new Error(`Cannot import navigation sqlite without a compatible registry: ${registryState.reason}`);
@@ -694,6 +729,8 @@ export async function importNavigationToSqlite(input: ImportNavigationToSqliteIn
         insertManifestValue(database, 'schema_version', NAVIGATION_SQLITE_SCHEMA_VERSION);
         insertManifestValue(database, 'normalized_root_path', registryState.registry.manifest.normalizedRootPath);
         insertManifestValue(database, 'registry_manifest_hash', registryState.manifestHash);
+        insertManifestValue(database, 'navigation_generation_id', activeGeneration?.generationId ?? 'standalone');
+        insertManifestValue(database, 'relationship_manifest_hash', activeGeneration?.relationshipManifestHash ?? 'standalone');
         insertManifestValue(database, 'registry_manifest_json', JSON.stringify(registryState.registry.manifest));
         insertManifestValue(database, 'imported_at', new Date().toISOString());
 

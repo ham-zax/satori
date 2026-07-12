@@ -981,10 +981,11 @@ test('Context advances a complete navigation generation through the supplied mut
     const stateRoot = path.join(tempRoot, 'state');
     const codebasePath = path.join(tempRoot, 'repo');
     const relativePath = 'src/auth.ts';
+    const content = 'export const auth = true;\n';
 
     try {
         fs.mkdirSync(path.join(codebasePath, 'src'), { recursive: true });
-        fs.writeFileSync(path.join(codebasePath, relativePath), 'export const auth = true;\n', 'utf8');
+        fs.writeFileSync(path.join(codebasePath, relativePath), content, 'utf8');
         const context = new Context({
             embedding: new TestEmbedding(),
             vectorDatabase: new InMemoryVectorDatabase(),
@@ -995,7 +996,7 @@ test('Context advances a complete navigation generation through the supplied mut
         await (context as unknown as ContextWithNavigationPublisher).writeSymbolRegistryForCompletedIndex(
             codebasePath,
             [],
-            [{ path: relativePath, hash: 'hash-auth', language: 'typescript', symbolCount: 0 }],
+            [{ path: relativePath, hash: crypto.createHash('sha256').update(content, 'utf8').digest('hex'), language: 'typescript', symbolCount: 0 }],
             undefined,
             new Map([[relativePath, { moduleBindings: [], callSites: [] }]]),
             (publish) => {

@@ -108,6 +108,9 @@ export interface IndexCompletionMarkerDocument extends VectorDocumentMetadata {
      * `limit_reached` means partial vector proof only (no complete navigation seal).
      */
     indexStatus?: 'completed' | 'limit_reached';
+    navigationGenerationId?: string;
+    symbolRegistryManifestHash?: string;
+    relationshipManifestHash?: string;
 }
 
 export const INDEX_COMPLETION_MARKER_DOC_ID = '__satori_index_completion_marker_v1__';

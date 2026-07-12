@@ -75,11 +75,7 @@ function readInputField(
     try {
         return input[field];
     } catch {
-        try {
-            return input[field];
-        } catch {
-            return fallback;
-        }
+        return fallback;
     }
 }
 

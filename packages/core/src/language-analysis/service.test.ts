@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { Parser } from 'web-tree-sitter';
 
 import { createLanguageAnalysisService } from './service';
 import { getLanguageCapabilityDeclarations } from '../languages/capabilities';
@@ -111,10 +112,12 @@ test('Tree-sitter emits typed member and constructor call evidence', async () =>
 
 test('language analysis does not throw when input normalization fails', async () => {
     const analyzer = createLanguageAnalysisService();
+    let languageReads = 0;
     const input = {
         content: 'source remains available',
         relativePath: 'src/unknown.txt',
         get language(): string {
+            languageReads += 1;
             throw new Error('injected normalization failure');
         },
     };
@@ -124,6 +127,7 @@ test('language analysis does not throw when input normalization fails', async ()
     assert.equal(result.structuralStatus, 'recovered');
     assert.equal(result.structuralReason, 'analysis_failure');
     assert.ok(result.chunks.some((chunk) => chunk.content.includes('source remains available')));
+    assert.equal(languageReads, 2);
 });
 
 test('invalid overlap input still produces bounded searchable chunks', async () => {
@@ -486,6 +490,27 @@ test('Tree-sitter retries a language load after a transient asset failure', asyn
         assert.ok(recovered.symbols.some((symbol) => symbol.name === 'run'));
     } finally {
         fs.rmSync(assetRoot, { recursive: true, force: true });
+    }
+});
+
+test('Tree-sitter parse exceptions degrade as analysis failures', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const originalParse = Parser.prototype.parse;
+    Parser.prototype.parse = function injectedParseFailure(): never {
+        throw new Error('injected parse failure');
+    };
+
+    try {
+        const result = await analyzer.analyze({
+            content: 'def run():\n    return 1\n',
+            language: 'python',
+            relativePath: 'src/service.py',
+        });
+
+        assert.equal(result.structuralStatus, 'recovered');
+        assert.equal(result.structuralReason, 'analysis_failure');
+    } finally {
+        Parser.prototype.parse = originalParse;
     }
 });
 

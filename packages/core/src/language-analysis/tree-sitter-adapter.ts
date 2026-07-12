@@ -393,12 +393,10 @@ export async function analyzeWithTreeSitter(
             callSites: [],
         };
     }
-    let parser: Parser | undefined;
-    let tree: ReturnType<Parser['parse']>;
+    let parser!: Parser;
     try {
         parser = new Parser();
         parser.setLanguage(language);
-        tree = parser.parse(input.content);
     } catch {
         parser?.delete();
         return {
@@ -409,10 +407,14 @@ export async function analyzeWithTreeSitter(
             callSites: [],
         };
     }
-    if (!parser) {
+    let tree: ReturnType<Parser['parse']>;
+    try {
+        tree = parser.parse(input.content);
+    } catch {
+        parser.delete();
         return {
             complete: false,
-            reason: 'parser_unavailable',
+            reason: 'analysis_failure',
             symbols: [],
             moduleBindings: [],
             callSites: [],

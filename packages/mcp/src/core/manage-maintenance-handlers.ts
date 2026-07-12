@@ -482,6 +482,7 @@ export class ManageMaintenanceHandlers {
             let envelopeReason: ManageIndexReason | undefined;
             let envelopeHints: Record<string, unknown> | undefined;
             let proofDebugHint: CompletionProbeDebugHint | undefined;
+            let envelopeMessage: string | undefined;
 
             if (trackedRootState.state === "not_indexed") {
                 envelopeStatus = "not_indexed";
@@ -545,6 +546,7 @@ export class ManageMaintenanceHandlers {
                 if (typeof failedInfo.errorMessage === "string") {
                     statusMessage = `❌ Codebase '${trackedRootState.codebasePath}' indexing failed.`;
                     statusMessage += `\n🚨 Error: ${failedInfo.errorMessage}`;
+                    envelopeMessage = `Codebase '${trackedRootState.codebasePath}' indexing failed: ${failedInfo.errorMessage}`;
                     if (typeof failedInfo.lastAttemptedPercentage === "number" && Number.isFinite(failedInfo.lastAttemptedPercentage)) {
                         statusMessage += `\n📊 Failed at: ${failedInfo.lastAttemptedPercentage.toFixed(1)}% progress`;
                     }
@@ -687,6 +689,7 @@ export class ManageMaintenanceHandlers {
                     ...(symbolQuality ? { symbolQuality } : {}),
                     ...(languageCapabilities ? { languageCapabilities } : {}),
                     ...(operation ? { operation } : {}),
+                    ...(envelopeMessage ? { message: envelopeMessage } : {}),
                 },
             );
         } catch (error: unknown) {

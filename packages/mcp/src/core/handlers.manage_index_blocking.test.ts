@@ -762,6 +762,7 @@ test('handleGetIndexingStatus recovers stale indexing state to failed when compl
         assert.deepEqual(receipts.persistedPhases, ['accepted', 'proving', 'failed']);
         assert.equal(envelope.operation?.action, 'repair');
         assert.equal(envelope.operation?.phase, 'failed');
+        assert.match(envelope.message, /Interrupted indexing detected without completion marker proof/i);
         assert.match(text, /indexing failed/i);
         assert.match(text, /Interrupted indexing detected without completion marker proof/i);
     });

@@ -18,6 +18,7 @@ import type {
     SearchRecommendedNextAction,
     SearchResponseEnvelope,
 } from "./search-types.js";
+import { SEARCH_RESPONSE_FORMAT_VERSION } from "./search-types.js";
 
 type CodebaseStatus = CodebaseInfo["status"];
 
@@ -154,6 +155,7 @@ export class TrackedRootReadiness {
         collectionName?: string,
     ): SearchResponseEnvelope {
         return {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status: "not_indexed",
             reason: "not_indexed",
             codebasePath,
@@ -210,6 +212,7 @@ export class TrackedRootReadiness {
         info: TrackedCodebaseInfo,
     ): SearchResponseEnvelope {
         return {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
             status: "not_indexed",
             reason: "index_failed",
             codebasePath,
@@ -389,6 +392,13 @@ export class TrackedRootReadiness {
         }
 
         const completionProof = await this.host.validateCompletionProof(effectiveRoot);
+        if (completionProof.outcome === "policy_incompatible") {
+            return {
+                state: "requires_reindex",
+                codebasePath: effectiveRoot,
+                message: "The accepted index policy is incompatible with the repository's current runtime policy inputs.",
+            };
+        }
         if (completionProof.outcome === "fingerprint_mismatch") {
             if (accessMode === "navigation") {
                 // Completion proof mismatch blocks semantic/vector search, not source-backed navigation.

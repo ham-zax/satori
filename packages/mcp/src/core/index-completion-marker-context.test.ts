@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
     Context,
     Embedding,
@@ -221,7 +224,7 @@ test('Context marker lifecycle writes, reads, and clears completion marker doc',
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
     });
-    const codebasePath = '/repo/app';
+    const codebasePath = '/repo/completion-marker-lifecycle';
     const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
@@ -229,6 +232,7 @@ test('Context marker lifecycle writes, reads, and clears completion marker doc',
 
     await context.writeIndexCompletionMarker(codebasePath, {
         ...buildMarker(policy.policyHash),
+        codebasePath,
         indexedFiles: 1,
         totalChunks: 1,
     });
@@ -248,7 +252,7 @@ test('Context-backed completion proof classifies a stored v1 marker as legacy po
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
     });
-    const codebasePath = '/repo/app';
+    const codebasePath = '/repo/completion-legacy-v1';
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
     await db.insertHybrid(collectionName, [
@@ -285,7 +289,7 @@ test('Context-backed completion proof reports invalid v2 evidence before unrelat
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
     });
-    const codebasePath = '/repo/app';
+    const codebasePath = '/repo/completion-invalid-v2-precedence';
     const familyCollectionName = context.resolveCollectionName(codebasePath);
     const legacyCollectionName = `${familyCollectionName}__gen_legacy`;
     await db.createHybridCollection(familyCollectionName, 4);
@@ -334,7 +338,7 @@ test('Context-backed completion proof does not let an orphan staged v2 mask the 
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
     });
-    const codebasePath = '/repo/app';
+    const codebasePath = '/repo/completion-orphan-invalid-v2';
     const familyCollectionName = context.resolveCollectionName(codebasePath);
     const orphanCollectionName = `${familyCollectionName}__gen_orphan`;
     await db.createHybridCollection(familyCollectionName, 4);
@@ -365,6 +369,50 @@ test('Context-backed completion proof does not let an orphan staged v2 mask the 
             indexedFiles: 'invalid',
         },
     }]);
+
+    const result = await validateCompletionProof({
+        codebasePath,
+        getIndexCompletionMarker: getCompletionMarkerReader(context),
+    });
+
+    assert.deepEqual(result, {
+        outcome: 'stale_local',
+        reason: 'legacy_policy_unsealed',
+    });
+});
+
+test('Context-backed completion proof does not let a valid unbound staged v2 mask the base legacy marker', async () => {
+    const { db } = createInMemoryVectorDb();
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+    });
+    const codebasePath = '/repo/completion-orphan-valid-v2';
+    const familyCollectionName = context.resolveCollectionName(codebasePath);
+    const orphanCollectionName = `${familyCollectionName}__gen_orphan_valid`;
+    await db.createHybridCollection(familyCollectionName, 4);
+    await db.createHybridCollection(orphanCollectionName, 4);
+    await db.insertHybrid(familyCollectionName, [{
+        id: INDEX_COMPLETION_MARKER_DOC_ID,
+        vector: [0, 0, 0, 0],
+        content: 'legacy marker',
+        relativePath: '.__satori__/index_completion_marker.json',
+        startLine: 0,
+        endLine: 0,
+        fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+        metadata: {
+            kind: 'satori_index_completion_v1',
+            codebasePath,
+        },
+    }]);
+    await db.insertHybrid(orphanCollectionName, [
+        buildChunkDoc('orphan_chunk', 'src/orphan.ts'),
+        buildMarkerDoc({
+            ...buildMarker('orphan-policy'),
+            completedAt: '2026-07-12T00:00:00.000Z',
+            runId: 'run_orphan_valid',
+        }),
+    ]);
 
     const result = await validateCompletionProof({
         codebasePath,
@@ -412,6 +460,82 @@ test('Context getIndexCompletionMarker selects the newest proven staged generati
     assert.ok(marker);
     assert.equal(marker?.runId, 'run_newer');
     assert.equal(marker?.completedAt, '2026-02-28T23:57:10.000Z');
+});
+
+test('Context-backed validation prefers a base v2 generation over a newer unbound staged v2', async () => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-completion-bound-base-'));
+    const { db } = createInMemoryVectorDb();
+    const context = new Context({
+        embedding: new FakeEmbedding(),
+        vectorDatabase: db,
+        indexPolicyStateRoot: stateRoot,
+    });
+    const codebasePath = '/repo/completion-bound-base-v2';
+    const familyCollectionName = context.resolveCollectionName(codebasePath);
+    const stagedCollectionName = `${familyCollectionName}__gen_newer_unbound`;
+    await db.createHybridCollection(familyCollectionName, 4);
+    await db.createHybridCollection(stagedCollectionName, 4);
+    const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
+    await db.insertHybrid(familyCollectionName, [
+        buildChunkDoc('base_chunk', 'src/base.ts'),
+        buildMarkerDoc({
+            ...buildMarker(policy.policyHash),
+            codebasePath,
+            runId: 'run_base_authoritative',
+        }),
+    ]);
+    await db.insertHybrid(stagedCollectionName, [
+        buildChunkDoc('staged_chunk', 'src/staged.ts'),
+        buildMarkerDoc({
+            ...buildMarker('staged-policy'),
+            completedAt: '2026-07-12T00:00:00.000Z',
+            runId: 'run_staged_newer',
+        }),
+    ]);
+    context.publishResolvedIndexPolicy(policy, { collectionName: familyCollectionName });
+
+    try {
+        const evidence = await context.getIndexCompletionMarkerForValidation(codebasePath);
+
+        assert.equal(evidence.status, 'valid_v2');
+        assert.equal(evidence.status === 'valid_v2' ? evidence.marker.runId : null, 'run_base_authoritative');
+    } finally {
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context-backed completion proof reports runtime policy incompatibility after profile drift', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-completion-profile-drift-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        const { db } = createInMemoryVectorDb();
+        const context = new Context({
+            embedding: new FakeEmbedding(),
+            vectorDatabase: db,
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+            symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
+        });
+        await context.indexCodebase(codebasePath);
+        fs.writeFileSync(
+            path.join(codebasePath, 'satori.toml'),
+            '[index]\nprofile = "minimal"\n',
+            'utf8',
+        );
+
+        const result = await validateCompletionProof({
+            codebasePath,
+            getIndexCompletionMarker: getCompletionMarkerReader(context),
+        });
+
+        assert.deepEqual(result, {
+            outcome: 'policy_incompatible',
+            reason: 'runtime_policy_incompatible',
+        });
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
 });
 
 test('Context getIndexCompletionMarker ignores a newer marker-only staged generation with missing payload', async () => {

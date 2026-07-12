@@ -70,6 +70,19 @@ test('validateCompletionProof classifies v1 markers as legacy policy-unsealed pr
     assert.equal(result.reason, 'legacy_policy_unsealed');
 });
 
+test('validateCompletionProof distinguishes runtime policy incompatibility from marker corruption', async () => {
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => ({ status: 'runtime_policy_incompatible' }),
+    });
+
+    assert.deepEqual(result, {
+        outcome: 'policy_incompatible',
+        reason: 'runtime_policy_incompatible',
+    });
+});
+
 test('validateCompletionProof rejects unsafe marker counts', async () => {
     const result = await validateCompletionProof({
         codebasePath: '/repo/a',

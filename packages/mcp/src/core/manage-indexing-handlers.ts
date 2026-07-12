@@ -68,6 +68,10 @@ type IndexProfileView = {
     configPath?: string;
 };
 
+function isIndexPolicyDocumentDigest(value: unknown): value is string {
+    return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
 function classifyRepairSnapshotEvidence(info: Record<string, unknown> | undefined): RepairSnapshotEvidence {
     const fingerprint = info?.indexFingerprint;
     if (!fingerprint || typeof fingerprint !== "object") {
@@ -501,6 +505,22 @@ export class ManageIndexingHandlers {
             const isIndexedInSnapshot = this.host.getSnapshotIndexedCodebases().includes(absolutePath);
             if (!forceReindex && !isIndexedInSnapshot) {
                 const proof = await this.host.validateCompletionProof(absolutePath);
+                if (proof.outcome === "policy_incompatible") {
+                    return this.host.manageResponse(
+                        manageAction,
+                        absolutePath,
+                        "requires_reindex",
+                        this.host.buildReindexInstruction(
+                            absolutePath,
+                            "The accepted index policy is incompatible with the repository's current runtime policy inputs.",
+                        ),
+                        operationOptions("blocked", {
+                            ...preflightOptions,
+                            reason: "requires_reindex",
+                            hints: this.host.buildManageRequiresReindexHints(absolutePath),
+                        }),
+                    );
+                }
                 if (
                     mutationLease
                     && await this.host.recoverIndexedSnapshotFromCompletionProof(
@@ -538,6 +558,22 @@ export class ManageIndexingHandlers {
 
             if (!forceReindex && isIndexedInSnapshot) {
                 const proof = await this.host.validateCompletionProof(absolutePath);
+                if (proof.outcome === "policy_incompatible") {
+                    return this.host.manageResponse(
+                        manageAction,
+                        absolutePath,
+                        "requires_reindex",
+                        this.host.buildReindexInstruction(
+                            absolutePath,
+                            "The accepted index policy is incompatible with the repository's current runtime policy inputs.",
+                        ),
+                        operationOptions("blocked", {
+                            ...preflightOptions,
+                            reason: "requires_reindex",
+                            hints: this.host.buildManageRequiresReindexHints(absolutePath),
+                        }),
+                    );
+                }
                 if (proof.outcome === "valid") {
                     return this.host.manageResponse(
                         manageAction,
@@ -1266,6 +1302,7 @@ export class ManageIndexingHandlers {
         let previousPolicy: ResolvedIndexPolicy | null = null;
         let candidatePolicy: ResolvedIndexPolicy | null = null;
         let candidatePolicyPublished = false;
+        let candidatePolicyDocumentDigest: string | null = null;
         let writingReceiptPublished = false;
         const assertMutationCurrent = mutationLease
             ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease)
@@ -1489,12 +1526,16 @@ export class ManageIndexingHandlers {
             }
 
             if (stats.status === "limit_reached") {
-                this.host.context.publishResolvedIndexPolicy(
+                const policyReceipt = this.host.context.publishResolvedIndexPolicy(
                     candidatePolicy,
                     { collectionName: targetCollectionName },
                     publishMutation,
                 );
                 candidatePolicyPublished = true;
+                candidatePolicyDocumentDigest = policyReceipt?.operation === "publish"
+                    && isIndexPolicyDocumentDigest(policyReceipt.documentDigest)
+                    ? policyReceipt.documentDigest
+                    : null;
                 await this.host.context.publishCompletedIndexMarker(
                     absolutePath,
                     stats.indexedFiles,
@@ -1546,7 +1587,7 @@ export class ManageIndexingHandlers {
                 console.warn(`[BACKGROUND-INDEX] Failed to refresh watcher for '${absolutePath}' after index proof: ${formatUnknownError(watcherError)}`);
             }
             if (stats.status === "completed" && stats.navigationCandidate) {
-                this.host.context.publishResolvedIndexPolicy(
+                const policyReceipt = this.host.context.publishResolvedIndexPolicy(
                     candidatePolicy,
                     {
                         collectionName: targetCollectionName,
@@ -1555,6 +1596,10 @@ export class ManageIndexingHandlers {
                     publishMutation,
                 );
                 candidatePolicyPublished = true;
+                candidatePolicyDocumentDigest = policyReceipt?.operation === "publish"
+                    && isIndexPolicyDocumentDigest(policyReceipt.documentDigest)
+                    ? policyReceipt.documentDigest
+                    : null;
                 await this.host.context.publishNavigationCandidate(
                     stats.navigationCandidate,
                     assertMutationCurrent,
@@ -1600,6 +1645,17 @@ export class ManageIndexingHandlers {
             if (error instanceof IndexPolicyPublicationError && error.committed) {
                 console.error(
                     `[BACKGROUND-INDEX] Policy publication for '${absolutePath}' committed before acknowledgement failed; preserving candidate artifacts for the current owner or startup recovery.`,
+                );
+                return;
+            }
+
+            if (
+                candidatePolicyPublished
+                && !candidatePolicyDocumentDigest
+                && (!previousPolicy || !previousCompleteGeneration)
+            ) {
+                console.error(
+                    `[BACKGROUND-INDEX] Policy publication for '${absolutePath}' committed without an authoritative document digest; preserving candidate artifacts because the absent prior policy state cannot be safely restored with compare-and-clear.`,
                 );
                 return;
             }
@@ -1667,7 +1723,17 @@ export class ManageIndexingHandlers {
                             publishMutation,
                         );
                     } else {
-                        this.host.context.clearPublishedIndexPolicy(absolutePath, publishMutation);
+                        if (!publishMutation) {
+                            throw new Error(`Cannot restore absent policy state for '${absolutePath}' without a fenced policy mutation.`);
+                        }
+                        if (!candidatePolicyDocumentDigest) {
+                            throw new Error(`Cannot restore absent policy state for '${absolutePath}' without the committed candidate policy document digest.`);
+                        }
+                        this.host.context.clearPublishedIndexPolicy(
+                            absolutePath,
+                            publishMutation,
+                            candidatePolicyDocumentDigest,
+                        );
                     }
                 } catch (policyRestoreError) {
                     console.error(`[BACKGROUND-INDEX] Failed to restore previous index policy state for '${absolutePath}': ${formatUnknownError(policyRestoreError)}`);

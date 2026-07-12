@@ -20,6 +20,8 @@ export interface SemanticSearchResult {
     relativePath: string;
     startLine: number;
     endLine: number;
+    startByte?: number;
+    endByte?: number;
     language: string;
     score: number;
     breadcrumbs?: string[];

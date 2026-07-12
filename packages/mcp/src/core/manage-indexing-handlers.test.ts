@@ -263,11 +263,14 @@ function createFailedIndexingHarness(
         initialCustomExtensions?: string[];
         initialCustomIgnorePatterns?: string[];
         failPolicyPublicationAfterCommit?: boolean;
+        omitPolicyPublicationDocumentDigest?: boolean;
+        policyPublicationDocumentDigest?: string;
     } = {},
 ) {
     const droppedCollections: string[] = [];
     const failedSnapshots: Array<{ path: string; errorMessage: string; progress?: number }> = [];
     const publicationEvents: string[] = [];
+    const clearedExpectedDocumentDigests: Array<string | undefined> = [];
     let publishedCustomExtensions = [...(options.initialCustomExtensions ?? [])];
     let publishedCustomIgnorePatterns = [...(options.initialCustomIgnorePatterns ?? [])];
     let writeCollectionOverride: string | null = null;
@@ -297,30 +300,52 @@ function createFailedIndexingHarness(
             effectiveIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
             policyHash: JSON.stringify(update),
         }),
-        publishResolvedIndexPolicy: (policy: { canonicalRoot: string; policyHash: string; customExtensions: string[]; customIgnorePatterns: string[] }, binding: { collectionName: string; navigationGenerationId?: string }) => {
-            publishedCustomExtensions = [...policy.customExtensions];
-            publishedCustomIgnorePatterns = [...policy.customIgnorePatterns];
-            publicationEvents.push('policy:publish');
+        publishResolvedIndexPolicy: (
+            policy: { canonicalRoot: string; policyHash: string; customExtensions: string[]; customIgnorePatterns: string[] },
+            binding: { collectionName: string; navigationGenerationId?: string },
+            publishMutation?: (publish: () => void) => void,
+        ) => {
+            const receipt = {
+                status: 'committed' as const,
+                operation: 'publish' as const,
+                canonicalRoot: policy.canonicalRoot,
+                ...(options.omitPolicyPublicationDocumentDigest
+                    ? {}
+                    : { documentDigest: options.policyPublicationDocumentDigest ?? 'a'.repeat(64) }),
+                policyHash: policy.policyHash,
+                collectionName: binding.collectionName,
+                ...(binding.navigationGenerationId ? { navigationGenerationId: binding.navigationGenerationId } : {}),
+            };
+            const publish = () => {
+                publishedCustomExtensions = [...policy.customExtensions];
+                publishedCustomIgnorePatterns = [...policy.customIgnorePatterns];
+                publicationEvents.push('policy:publish');
+            };
+            if (publishMutation) {
+                publishMutation(publish);
+            } else {
+                publish();
+            }
             if (options.failPolicyPublicationAfterCommit) {
                 throw new IndexPolicyPublicationError(
                     'policy committed before acknowledgement failed',
-                    {
-                        status: 'committed',
-                        operation: 'publish',
-                        canonicalRoot: policy.canonicalRoot,
-                        documentToken: 'candidate-document-token',
-                        policyHash: policy.policyHash,
-                        collectionName: binding.collectionName,
-                        ...(binding.navigationGenerationId ? { navigationGenerationId: binding.navigationGenerationId } : {}),
-                    },
+                    receipt,
                     new Error('publication wrapper rejected receipt'),
                 );
             }
+            return receipt;
         },
-        clearPublishedIndexPolicy: () => {
-            publishedCustomExtensions = [];
-            publishedCustomIgnorePatterns = [];
-            publicationEvents.push('policy:clear');
+        clearPublishedIndexPolicy: (
+            _canonicalRoot: string,
+            publishMutation: (publish: () => void) => void,
+            expectedDocumentDigest?: string,
+        ) => {
+            clearedExpectedDocumentDigests.push(expectedDocumentDigest);
+            publishMutation(() => {
+                publishedCustomExtensions = [];
+                publishedCustomIgnorePatterns = [];
+                publicationEvents.push('policy:clear');
+            });
         },
         getCurrentNavigationGeneration: async () => null,
         restoreNavigationGeneration: async () => {
@@ -469,6 +494,7 @@ function createFailedIndexingHarness(
         },
         publishedSnapshots,
         publicationEvents,
+        clearedExpectedDocumentDigests,
         get publishedCustomExtensions() {
             return publishedCustomExtensions;
         },
@@ -998,27 +1024,40 @@ test("background indexing restores the sealed previous policy when navigation po
 
 test("background indexing restores absent policy state when first navigation publication fails", async () => {
     await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), "initial-policy-rollback-leases"),
+            ownerId: "initial-policy-rollback-owner",
+        });
+        const acquired = coordinator.acquire(repoPath, "create");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
         const collectionName = `${resolveCollectionName(repoPath)}__gen_initial`;
         const existingCollections = new Set<string>();
         const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
             indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
             publishNavigationCandidate: async () => {
                 throw new Error("initial navigation pointer publication failed");
             },
         });
 
-        await harness.handler.startBackgroundIndexing(
-            repoPath,
-            false,
-            collectionName,
-            undefined,
-            undefined,
-            { customIgnorePatterns: ['generated/**'] },
-        );
+        try {
+            await harness.handler.startBackgroundIndexing(
+                repoPath,
+                false,
+                collectionName,
+                acquired.lease,
+                undefined,
+                { customIgnorePatterns: ['generated/**'] },
+            );
+        } finally {
+            coordinator.release(acquired.lease);
+        }
 
         assert.equal(existingCollections.has(collectionName), false);
         assert.deepEqual(harness.publishedCustomExtensions, []);
         assert.deepEqual(harness.publishedCustomIgnorePatterns, []);
+        assert.deepEqual(harness.clearedExpectedDocumentDigests, ['a'.repeat(64)]);
         assert.deepEqual(harness.publicationEvents, [
             'marker:completed',
             'policy:publish',
@@ -1027,6 +1066,101 @@ test("background indexing restores absent policy state when first navigation pub
             'policy:clear',
         ]);
     });
+});
+
+test("background indexing preserves candidate artifacts when a committed policy receipt lacks its digest", async () => {
+    await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), "missing-policy-digest-leases"),
+            ownerId: "missing-policy-digest-owner",
+        });
+        const acquired = coordinator.acquire(repoPath, "create");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+        const collectionName = `${resolveCollectionName(repoPath)}__gen_initial`;
+        const existingCollections = new Set<string>();
+        const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
+            omitPolicyPublicationDocumentDigest: true,
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            publishNavigationCandidate: async () => {
+                throw new Error("initial navigation pointer publication failed");
+            },
+        });
+
+        try {
+            await harness.handler.startBackgroundIndexing(
+                repoPath,
+                false,
+                collectionName,
+                acquired.lease,
+                undefined,
+                { customIgnorePatterns: ['generated/**'] },
+            );
+        } finally {
+            coordinator.release(acquired.lease);
+        }
+
+        assert.equal(existingCollections.has(collectionName), true);
+        assert.deepEqual(harness.publishedCustomIgnorePatterns, ['generated/**']);
+        assert.deepEqual(harness.clearedExpectedDocumentDigests, []);
+        assert.deepEqual(harness.publicationEvents, [
+            'marker:completed',
+            'policy:publish',
+            'navigation:publish:candidate-generation',
+        ]);
+        assert.deepEqual(harness.failedSnapshots, []);
+    });
+});
+
+test("background indexing preserves candidate artifacts for every malformed policy receipt digest", async (t) => {
+    const invalidDigests = [
+        "",
+        "abc",
+        "A".repeat(64),
+        "g".repeat(64),
+        ` ${"a".repeat(64)} `,
+    ];
+    for (const invalidDigest of invalidDigests) {
+        await t.test(JSON.stringify(invalidDigest), async () => {
+            await withTempRepo(async (repoPath) => {
+                const coordinator = new MutationLeaseCoordinator({
+                    stateDir: path.join(path.dirname(repoPath), `invalid-policy-digest-${invalidDigest.length}`),
+                    ownerId: `invalid-policy-digest-owner-${invalidDigest.length}`,
+                });
+                const acquired = coordinator.acquire(repoPath, "create");
+                assert.equal(acquired.acquired, true);
+                if (!acquired.acquired) return;
+                const collectionName = `${resolveCollectionName(repoPath)}__gen_initial`;
+                const existingCollections = new Set<string>();
+                const harness = createFailedIndexingHarness(existingCollections, {
+                    mutationLeaseCoordinator: coordinator,
+                    policyPublicationDocumentDigest: invalidDigest,
+                    indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+                    publishNavigationCandidate: async () => {
+                        throw new Error("initial navigation pointer publication failed");
+                    },
+                });
+
+                try {
+                    await harness.handler.startBackgroundIndexing(
+                        repoPath,
+                        false,
+                        collectionName,
+                        acquired.lease,
+                        undefined,
+                        { customIgnorePatterns: ["generated/**"] },
+                    );
+                } finally {
+                    coordinator.release(acquired.lease);
+                }
+
+                assert.equal(existingCollections.has(collectionName), true);
+                assert.deepEqual(harness.clearedExpectedDocumentDigests, []);
+                assert.equal(harness.publicationEvents.includes("navigation:discard:candidate-generation"), false);
+            });
+        });
+    }
 });
 
 test("background indexing preserves an existing candidate when policy commits before acknowledgement fails", async () => {

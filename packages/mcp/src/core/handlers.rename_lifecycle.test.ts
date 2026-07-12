@@ -51,18 +51,13 @@ type OutlineSymbol = {
 };
 
 type SearchGroup = {
-    file?: string;
-    symbolId?: string;
-    symbolInstanceId?: string;
-    symbolLabel?: string | null;
-    callGraphHint?: {
-        symbolRef?: {
-            file: string;
-            symbolId: string;
-            symbolLabel?: string;
-        };
+    target: {
+        file: string;
+        span: { startLine: number; endLine: number };
+        symbolId: string;
     };
-    nextActions?: unknown;
+    displayLabel: string;
+    navigation: { graph: string; callerSearchTerm?: string };
 };
 
 class TestEmbedding implements Embedding {
@@ -260,8 +255,8 @@ function findSearchGroup(searchPayload: JsonObject, relativePath: string, symbol
     const match = results.find((result): result is SearchGroup =>
         typeof result === 'object'
         && result !== null
-        && (result as SearchGroup).file === relativePath
-        && String((result as SearchGroup).symbolLabel || '').includes(symbolName)
+        && (result as SearchGroup).target?.file === relativePath
+        && String((result as SearchGroup).displayLabel || '').includes(symbolName)
     );
     assert.ok(match, `expected grouped result for ${relativePath}:${symbolName}`);
     return match;
@@ -347,12 +342,10 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         assert.equal(JSON.stringify(searchPayload).includes(oldSymbolInstanceId), false);
 
         const newLoginGroup = findSearchGroup(searchPayload, newRelativePath, 'login');
-        assert.equal(typeof newLoginGroup.symbolId, 'string');
-        assert.equal(newLoginGroup.symbolId, newLoginGroup.symbolInstanceId);
-        assert.notEqual(newLoginGroup.symbolId, oldSymbolInstanceId);
-        assert.equal(newLoginGroup.callGraphHint?.symbolRef?.symbolId, newLoginGroup.symbolId);
-        assert.equal(JSON.stringify(newLoginGroup.callGraphHint).includes(oldSymbolInstanceId), false);
-        assert.equal(JSON.stringify(newLoginGroup.nextActions || {}).includes(oldSymbolInstanceId), false);
+        assert.equal(typeof newLoginGroup.target.symbolId, 'string');
+        assert.notEqual(newLoginGroup.target.symbolId, oldSymbolInstanceId);
+        assert.equal(newLoginGroup.navigation.graph, 'ready');
+        assert.equal(JSON.stringify(newLoginGroup).includes(oldSymbolInstanceId), false);
 
         const oldOutline = parsePayload(await handlers.handleFileOutline({
             path: repoPath,
@@ -366,7 +359,7 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         }));
         assert.equal(newOutline.status, 'ok');
         const newLoginSymbol = findSymbol(newOutline, 'login');
-        assert.equal(newLoginSymbol.symbolId, newLoginGroup.symbolId);
+        assert.equal(newLoginSymbol.symbolId, newLoginGroup.target.symbolId);
 
         const oldExactOutline = parsePayload(await handlers.handleFileOutline({
             path: repoPath,
@@ -380,11 +373,11 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
             path: repoPath,
             file: newRelativePath,
             resolveMode: 'exact',
-            symbolIdExact: newLoginGroup.symbolId,
+            symbolIdExact: newLoginGroup.target.symbolId,
         }));
         assert.equal(newExactOutline.status, 'ok');
         const newExactSymbols = (newExactOutline.outline as { symbols?: OutlineSymbol[] }).symbols || [];
-        assert.equal(newExactSymbols[0]?.symbolId, newLoginGroup.symbolId);
+        assert.equal(newExactSymbols[0]?.symbolId, newLoginGroup.target.symbolId);
 
         const toolContext = createToolContext(repoPath, handlers);
         const oldReadResponse = await readFileTool.execute({
@@ -400,7 +393,7 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         const newReadResponse = await readFileTool.execute({
             path: newFilePath,
             open_symbol: {
-                symbolId: newLoginGroup.symbolId,
+                symbolId: newLoginGroup.target.symbolId,
             },
         }, toolContext);
         assert.equal(newReadResponse.isError, undefined);
@@ -423,7 +416,7 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
 
         const newCallGraph = parsePayload(await handlers.handleCallGraph({
             path: repoPath,
-            symbolRef: newLoginGroup.callGraphHint.symbolRef,
+            symbolRef: newLoginGroup.target,
             direction: 'both',
             depth: 1,
             limit: 10,
@@ -433,7 +426,7 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         const newCallGraphNodes = newCallGraph.nodes as Array<{ symbolId?: string }> | undefined;
         assert.ok(Array.isArray(newCallGraphNodes));
         assert.equal(
-            newCallGraphNodes.some((node) => node.symbolId === newLoginGroup.symbolId),
+            newCallGraphNodes.some((node) => node.symbolId === newLoginGroup.target.symbolId),
             true,
         );
     });
@@ -543,17 +536,17 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
         assert.equal(JSON.stringify(searchPayload).includes(oldSymbolInstanceId), false);
 
         const freshGroup = findSearchGroup(searchPayload, relativePath, 'runFresh');
-        assert.equal(typeof freshGroup.symbolId, 'string');
-        assert.notEqual(freshGroup.symbolId, oldSymbolInstanceId);
+        assert.equal(typeof freshGroup.target.symbolId, 'string');
+        assert.notEqual(freshGroup.target.symbolId, oldSymbolInstanceId);
 
         const freshExactOutline = parsePayload(await handlers.handleFileOutline({
             path: repoPath,
             file: relativePath,
             resolveMode: 'exact',
-            symbolIdExact: freshGroup.symbolId,
+            symbolIdExact: freshGroup.target.symbolId,
         }));
         assert.equal(freshExactOutline.status, 'ok');
         const freshExactSymbols = (freshExactOutline.outline as { symbols?: OutlineSymbol[] }).symbols || [];
-        assert.equal(freshExactSymbols[0]?.symbolId, freshGroup.symbolId);
+        assert.equal(freshExactSymbols[0]?.symbolId, freshGroup.target.symbolId);
     });
 });

@@ -6,7 +6,7 @@ import {
     type IndexFingerprint,
 } from "../config.js";
 
-export type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mismatch" | "probe_failed";
+export type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mismatch" | "policy_incompatible" | "probe_failed";
 
 export type CompletionProofReason =
     | "missing_marker_doc"
@@ -15,6 +15,7 @@ export type CompletionProofReason =
     | "path_mismatch"
     | "invalid_payload"
     | "fingerprint_mismatch"
+    | "runtime_policy_incompatible"
     | "probe_failed";
 
 export type CompletionProofValidationResult = {
@@ -43,6 +44,7 @@ export type CompletionMarkerReader = (codebasePath: string) => Promise<unknown>;
 type CompletionMarkerEvidence =
     | { status: 'valid_v2'; marker: unknown }
     | { status: 'invalid_v2' }
+    | { status: 'runtime_policy_incompatible' }
     | { status: 'legacy_v1'; marker: unknown }
     | { status: 'missing' };
 
@@ -78,6 +80,9 @@ function parseCompletionMarkerEvidence(value: unknown): CompletionMarkerEvidence
     }
     if (record.status === 'invalid_v2') {
         return { status: 'invalid_v2' };
+    }
+    if (record.status === 'runtime_policy_incompatible') {
+        return { status: 'runtime_policy_incompatible' };
     }
     if (record.status === 'legacy_v1' && 'marker' in record) {
         return { status: 'legacy_v1', marker: record.marker };
@@ -246,6 +251,9 @@ export async function validateCompletionProof(args: {
     const evidence = parseCompletionMarkerEvidence(marker);
     if (evidence?.status === 'invalid_v2') {
         return { outcome: 'stale_local', reason: 'invalid_payload' };
+    }
+    if (evidence?.status === 'runtime_policy_incompatible') {
+        return { outcome: 'policy_incompatible', reason: 'runtime_policy_incompatible' };
     }
     if (evidence?.status === 'missing') {
         marker = null;

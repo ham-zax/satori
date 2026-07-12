@@ -441,7 +441,10 @@ test('integration: normalization SSOT applies to snapshot keys and diff outputs 
     ];
 
     const dirtySnapshot = {
-      snapshotVersion: 2,
+      // Legacy snapshots are normalized during migration. Current-format v2
+      // snapshots are strict contracts and reject non-canonical paths, invalid
+      // digests, or an inconsistent Merkle root instead of repairing silently.
+      snapshotVersion: 1,
       fileHashes: [
         ...normalizationFixtures.map(({ raw, expected }) => [raw, `hash-${expected}`]),
         ...rejectedFixtures.map((raw) => [raw, `hash-rejected-${raw}`]),

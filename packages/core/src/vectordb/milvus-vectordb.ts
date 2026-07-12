@@ -753,6 +753,16 @@ export class MilvusVectorDatabase implements VectorDatabase {
         }
     }
 
+    async count(collectionName: string, filter: string): Promise<number> {
+        const rows = await this.query(collectionName, filter, ['count(*)']);
+        const rawCount = rows[0]?.['count(*)'] ?? rows[0]?.count;
+        const count = Number(rawCount);
+        if (!Number.isSafeInteger(count) || count < 0) {
+            throw new Error(`Milvus returned an invalid row count for collection '${collectionName}'.`);
+        }
+        return count;
+    }
+
     async createHybridCollection(collectionName: string, dimension: number, description?: string): Promise<void> {
         await this.ensureInitialized();
 

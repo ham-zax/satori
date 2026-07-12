@@ -46,7 +46,10 @@ function isAllowedExtensionlessFilename(relativePath: string): boolean {
     return INDEXABLE_EXTENSIONLESS_FILENAMES.some((filename) => filename.toLowerCase() === basename);
 }
 
-async function isUtf8TextFileUnderLimit(absolutePath: string, size: number): Promise<boolean> {
+async function isUtf8TextObservationUnderLimit(
+    size: number,
+    readProbe: () => Promise<Buffer>,
+): Promise<boolean> {
     if (size > getAllTextMaxBytes()) {
         return false;
     }
@@ -54,11 +57,8 @@ async function isUtf8TextFileUnderLimit(absolutePath: string, size: number): Pro
         return true;
     }
 
-    const handle = await fsp.open(absolutePath, 'r');
     try {
-        const buffer = Buffer.alloc(Math.min(size, TEXT_PROBE_BYTES));
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        const view = buffer.subarray(0, bytesRead);
+        const view = await readProbe();
         if (view.includes(0)) {
             return false;
         }
@@ -66,16 +66,14 @@ async function isUtf8TextFileUnderLimit(absolutePath: string, size: number): Pro
         return true;
     } catch {
         return false;
-    } finally {
-        await handle.close();
     }
 }
 
-export async function isIndexableFileByPolicy(
+export async function isIndexableFileObservationByPolicy(
     relativePath: string,
-    absolutePath: string,
     size: number,
-    supportedExtensions: string[]
+    supportedExtensions: string[],
+    readProbe: () => Promise<Buffer>,
 ): Promise<boolean> {
     const normalizedExtensions = normalizeSupportedExtensions(supportedExtensions);
     const extensionSet = new Set(normalizedExtensions);
@@ -84,14 +82,35 @@ export async function isIndexableFileByPolicy(
     if (extension && extensionSet.has(extension)) {
         return true;
     }
-
     if (!extension && isAllowedExtensionlessFilename(relativePath)) {
         return true;
     }
-
     if (!extensionSet.has(ALL_TEXT_INDEX_MARKER)) {
         return false;
     }
+    return isUtf8TextObservationUnderLimit(size, readProbe);
+}
 
-    return isUtf8TextFileUnderLimit(absolutePath, size);
+export async function isIndexableFileByPolicy(
+    relativePath: string,
+    absolutePath: string,
+    size: number,
+    supportedExtensions: string[]
+): Promise<boolean> {
+    let handle: fsp.FileHandle | undefined;
+    try {
+        return await isIndexableFileObservationByPolicy(
+            relativePath,
+            size,
+            supportedExtensions,
+            async () => {
+                handle ??= await fsp.open(absolutePath, 'r');
+                const buffer = Buffer.alloc(Math.min(size, TEXT_PROBE_BYTES));
+                const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+                return buffer.subarray(0, bytesRead);
+            },
+        );
+    } finally {
+        await handle?.close();
+    }
 }

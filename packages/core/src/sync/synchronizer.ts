@@ -9,6 +9,7 @@ import { compareContractStrings } from '../utils/compare-contract-strings';
 import { DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
 import {
     isIndexableFileByPolicy,
+    isIndexableFileObservationByPolicy,
     normalizeSupportedExtensions,
 } from '../config/index-policy';
 import {
@@ -82,7 +83,11 @@ export interface FileChangeResult {
 
 export interface PreparedFileChangeSet {
     readonly changes: FileChangeResult;
-    commit(assertMutationCurrent?: () => void): Promise<void>;
+    readonly fileHashes: ReadonlyMap<string, string>;
+    commit(
+        assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
+    ): Promise<void>;
 }
 
 const SNAPSHOT_VERSION = 2;
@@ -274,15 +279,55 @@ export class FileSynchronizer {
         return this.parsePositiveInt(process.env.SATORI_SYNC_FULL_HASH_EVERY_N, 0, 0, 1000000);
     }
 
-    private async hashFileBytes(filePath: string): Promise<string> {
+    private async hashFileBytes(filePath: string): Promise<{
+        hash: string;
+        signature: FileStatSignature;
+        indexable: boolean;
+    }> {
         const handle = await openRegularFileInsideRoot(filePath, this.rootDir);
         try {
+            const before = await handle.stat();
+            if (!before.isFile()) {
+                throw new Error(`Opened descriptor is not a regular file: ${filePath}`);
+            }
+            const relativePath = this.normalizeRelPath(path.relative(this.rootDir, filePath));
+            if (!relativePath) {
+                throw new Error(`Opened descriptor path is outside the synchronizer root: ${filePath}`);
+            }
+            const indexable = await isIndexableFileObservationByPolicy(
+                relativePath,
+                before.size,
+                [...this.supportedExtensions],
+                async () => {
+                    const buffer = Buffer.alloc(Math.min(before.size, 8192));
+                    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+                    return buffer.subarray(0, bytesRead);
+                },
+            );
             const hasher = crypto.createHash('sha256');
-            const stream = handle.createReadStream();
+            const stream = handle.createReadStream({ autoClose: false });
             for await (const chunk of stream) {
                 hasher.update(chunk as Buffer);
             }
-            return hasher.digest('hex');
+            const after = await handle.stat();
+            if (
+                after.dev !== before.dev
+                || after.ino !== before.ino
+                || after.size !== before.size
+                || after.mtimeMs !== before.mtimeMs
+                || after.ctimeMs !== before.ctimeMs
+            ) {
+                throw new Error(`File changed while being hashed: ${filePath}`);
+            }
+            return {
+                hash: hasher.digest('hex'),
+                signature: {
+                    size: after.size,
+                    mtimeMs: Number(after.mtimeMs),
+                    ctimeMs: Number(after.ctimeMs),
+                },
+                indexable,
+            };
         } finally {
             await handle.close().catch(() => undefined);
         }
@@ -457,8 +502,13 @@ export class FileSynchronizer {
 
                 const candidate = result.hashCandidates[currentIndex];
                 try {
-                    const hash = await this.hashFileBytes(candidate.absolutePath);
-                    result.scannedHashes.set(candidate.relativePath, hash);
+                    const observation = await this.hashFileBytes(candidate.absolutePath);
+                    if (!observation.indexable) {
+                        result.scannedStats.delete(candidate.relativePath);
+                        continue;
+                    }
+                    result.scannedHashes.set(candidate.relativePath, observation.hash);
+                    result.scannedStats.set(candidate.relativePath, observation.signature);
                     hashedCount += 1;
                 } catch (error: unknown) {
                     result.unreadableFiles.add(candidate.relativePath);
@@ -578,9 +628,14 @@ export class FileSynchronizer {
     private async saveSnapshot(
         state?: SynchronizerCheckpointState,
         assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
+        afterPublish?: () => void,
     ): Promise<void> {
         const merkleDir = path.dirname(this.snapshotPath);
         assertMutationCurrent?.();
+        if (assertMutationCurrent && !publishMutation) {
+            throw new Error('[Synchronizer] A mutation-fenced snapshot write requires an atomic publication callback.');
+        }
         await fsp.mkdir(merkleDir, { recursive: true });
 
         const checkpoint = state ?? {
@@ -607,18 +662,99 @@ export class FileSynchronizer {
         const tempSnapshotPath = `${this.snapshotPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         try {
             await fsp.writeFile(tempSnapshotPath, JSON.stringify(payload), 'utf-8');
-            assertMutationCurrent?.();
-            await fsp.rename(tempSnapshotPath, this.snapshotPath);
+            if (publishMutation) {
+                publishMutation(() => {
+                    fsSync.renameSync(tempSnapshotPath, this.snapshotPath);
+                    afterPublish?.();
+                });
+            } else {
+                await fsp.rename(tempSnapshotPath, this.snapshotPath);
+                afterPublish?.();
+            }
         } finally {
             await fsp.unlink(tempSnapshotPath).catch(() => undefined);
         }
         console.log(`Saved snapshot to ${this.snapshotPath}`);
     }
 
+    private assertValidCurrentSnapshot(snapshot: Partial<SnapshotV2>): void {
+        const invalid = (reason: string): never => {
+            throw new Error(`[Synchronizer] Invalid current-format snapshot: ${reason}`);
+        };
+        const rawFileHashes = snapshot.fileHashes;
+        const rawFileStats = snapshot.fileStats;
+        if (!Array.isArray(rawFileHashes) || !Array.isArray(rawFileStats)) {
+            invalid('fileHashes and fileStats must be arrays.');
+        }
+
+        const hashes = new Map<string, string>();
+        for (const entry of rawFileHashes ?? []) {
+            if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || typeof entry[1] !== 'string') {
+                invalid('fileHashes contains a malformed entry.');
+            }
+            const normalizedPath = this.normalizeRelPath(entry[0]);
+            if (!normalizedPath || normalizedPath !== entry[0] || hashes.has(normalizedPath)) {
+                invalid(`fileHashes contains an invalid or duplicate path '${entry[0]}'.`);
+            }
+            if (!/^[a-f0-9]{64}$/.test(entry[1])) {
+                invalid(`fileHashes contains an invalid SHA-256 for '${normalizedPath}'.`);
+            }
+            hashes.set(normalizedPath, entry[1]);
+        }
+
+        const statPaths = new Set<string>();
+        for (const entry of rawFileStats ?? []) {
+            if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string') {
+                invalid('fileStats contains a malformed entry.');
+            }
+            const normalizedPath = this.normalizeRelPath(entry[0]);
+            const signature = entry[1] as Partial<FileStatSignature> | undefined;
+            if (!normalizedPath || normalizedPath !== entry[0] || statPaths.has(normalizedPath)) {
+                invalid(`fileStats contains an invalid or duplicate path '${entry[0]}'.`);
+            }
+            if (!signature) {
+                throw new Error(`[Synchronizer] Invalid current-format snapshot: fileStats is missing a signature for '${normalizedPath}'.`);
+            }
+            if (!Number.isSafeInteger(signature.size) || Number(signature.size) < 0) {
+                invalid(`fileStats contains an invalid size for '${normalizedPath}'.`);
+            }
+            if (!Number.isFinite(signature.mtimeMs) || Number(signature.mtimeMs) < 0
+                || !Number.isFinite(signature.ctimeMs) || Number(signature.ctimeMs) < 0) {
+                invalid(`fileStats contains invalid timestamps for '${normalizedPath}'.`);
+            }
+            statPaths.add(normalizedPath);
+        }
+        if (hashes.size !== statPaths.size || [...hashes.keys()].some((filePath) => !statPaths.has(filePath))) {
+            invalid('fileHashes and fileStats must contain identical path sets.');
+        }
+
+        if (typeof snapshot.merkleRoot !== 'string' || !/^[a-f0-9]{64}$/.test(snapshot.merkleRoot)) {
+            invalid('merkleRoot must be a SHA-256 digest.');
+        }
+        if (snapshot.merkleRoot !== computeMerkleRoot(hashes)) {
+            invalid('merkleRoot does not match fileHashes.');
+        }
+        const unscannedDirPrefixes = snapshot.unscannedDirPrefixes;
+        if (typeof snapshot.partialScan !== 'boolean' || !Array.isArray(unscannedDirPrefixes)) {
+            invalid('partial scan metadata is malformed.');
+        }
+        for (const prefix of unscannedDirPrefixes ?? []) {
+            if (typeof prefix !== 'string' || !prefix || this.normalizeRelPath(prefix) !== prefix) {
+                invalid('unscannedDirPrefixes contains an invalid path.');
+            }
+        }
+        if (!Number.isSafeInteger(snapshot.fullHashCounter) || Number(snapshot.fullHashCounter) < 0) {
+            invalid('fullHashCounter must be a nonnegative safe integer.');
+        }
+    }
+
     private async loadSnapshot(): Promise<{ migrated: boolean }> {
         try {
             const data = await fsp.readFile(this.snapshotPath, 'utf-8');
             const obj = JSON.parse(data) as Partial<SnapshotV2>;
+            if (obj.snapshotVersion === SNAPSHOT_VERSION) {
+                this.assertValidCurrentSnapshot(obj);
+            }
 
             const rawFileHashes = Array.isArray(obj.fileHashes) ? obj.fileHashes : [];
             this.fileHashes = new Map<string, string>();
@@ -723,23 +859,40 @@ export class FileSynchronizer {
         nextState: SynchronizerCheckpointState,
         shouldPersist: boolean,
         assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
     ): Promise<void> {
         const commit = this.commitQueue.then(async () => {
             if (this.checkpointVersion !== baseVersion) {
                 throw new Error('[Synchronizer] Cannot commit stale prepared changes. Prepare the filesystem delta again.');
             }
+            const applyCheckpoint = () => {
+                this.applyCheckpointState(nextState);
+                this.checkpointVersion += 1;
+            };
             if (shouldPersist) {
-                await this.saveSnapshot(nextState, assertMutationCurrent);
+                await this.saveSnapshot(
+                    nextState,
+                    assertMutationCurrent,
+                    publishMutation,
+                    applyCheckpoint,
+                );
+                return;
             }
-            assertMutationCurrent?.();
-            this.applyCheckpointState(nextState);
-            this.checkpointVersion += 1;
+            if (publishMutation) {
+                publishMutation(applyCheckpoint);
+            } else {
+                assertMutationCurrent?.();
+                applyCheckpoint();
+            }
         });
         this.commitQueue = commit.catch(() => undefined);
         return commit;
     }
 
-    public async initialize(assertMutationCurrent?: () => void): Promise<void> {
+    public async initialize(
+        assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
+    ): Promise<void> {
         console.log(`Initializing file synchronizer for ${this.rootDir}`);
         const { migrated } = await this.loadSnapshot();
 
@@ -752,7 +905,7 @@ export class FileSynchronizer {
             this.partialScan = effective.partialScan;
             this.unscannedDirPrefixes = effective.unscannedDirPrefixes;
             this.merkleRoot = computeMerkleRoot(this.fileHashes);
-            await this.saveSnapshot(undefined, assertMutationCurrent);
+            await this.saveSnapshot(undefined, assertMutationCurrent, publishMutation);
         } else if (!this.merkleRoot) {
             this.merkleRoot = computeMerkleRoot(this.fileHashes);
         }
@@ -810,8 +963,18 @@ export class FileSynchronizer {
 
         return {
             changes,
-            commit: (assertMutationCurrent?: () => void) => {
-                commit ??= this.commitPreparedState(baseVersion, nextState, shouldPersist, assertMutationCurrent);
+            fileHashes: new Map(nextState.fileHashes),
+            commit: (
+                assertMutationCurrent?: () => void,
+                publishMutation?: (publish: () => void) => void,
+            ) => {
+                commit ??= this.commitPreparedState(
+                    baseVersion,
+                    nextState,
+                    shouldPersist,
+                    assertMutationCurrent,
+                    publishMutation,
+                );
                 return commit;
             },
         };

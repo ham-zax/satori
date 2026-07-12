@@ -45,8 +45,7 @@ import {
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
-    writeRelationshipSidecar,
-    writeSymbolRegistrySidecar,
+    writeNavigationSidecarGeneration,
 } from '../symbols';
 import type {
     SymbolRecord,
@@ -97,6 +96,7 @@ type RepairIndexOptions = {
     snapshotEvidence?: RepairSnapshotEvidence;
     preferredCollectionName?: string;
     assertMutationCurrent?: () => void;
+    publishMutation?: (publish: () => void) => void;
     onProofUpdate?: (proof: RepairProof) => void;
 };
 
@@ -108,11 +108,14 @@ type RepairCompletionMarkerResolution =
 type ReindexByChangeOptions = {
     targetCollectionName?: string;
     maintainCompletionMarker?: boolean;
+    externallyManagedPublication?: boolean;
     assertMutationCurrent?: () => void;
+    publishMutation?: (publish: () => void) => void;
 };
 
 type MutationGuardOptions = {
     assertMutationCurrent?: () => void;
+    publishMutation?: (publish: () => void) => void;
 };
 
 function chunksWithTrustedRelativePath(
@@ -160,6 +163,7 @@ export class Context {
     private runtimeCustomIgnorePatterns: string[];
     private ignoreStateByCollection: Map<string, CodebaseIgnoreState>;
     private synchronizers = new Map<string, FileSynchronizer>();
+    private synchronizerMutationTargets = new Map<string, string>();
     private reindexByChangeQueues = new Map<string, Promise<void>>();
     private writeCollectionOverrides = new Map<string, string>();
     private symbolRegistryStateRoot?: string;
@@ -294,6 +298,7 @@ export class Context {
      */
     registerSynchronizer(collectionName: string, synchronizer: FileSynchronizer): void {
         this.synchronizers.set(collectionName, synchronizer);
+        this.synchronizerMutationTargets.delete(collectionName);
     }
 
     /**
@@ -323,7 +328,11 @@ export class Context {
      * Recreate synchronizer for a codebase using currently active ignore patterns.
      * This is used when ignore rules change and we need deterministic reconciliation.
      */
-    async recreateSynchronizerForCodebase(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
+    async recreateSynchronizerForCodebase(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
+    ): Promise<void> {
         this.loadIndexProfileForCodebase(codebasePath);
         const collectionName = this.resolveCollectionName(codebasePath);
         const synchronizer = new FileSynchronizer(
@@ -331,8 +340,9 @@ export class Context {
             this.getActiveIgnorePatterns(codebasePath),
             this.getIndexedExtensionsForCodebase(codebasePath)
         );
-        await synchronizer.initialize(assertMutationCurrent);
+        await synchronizer.initialize(assertMutationCurrent, publishMutation);
         this.synchronizers.set(collectionName, synchronizer);
+        this.synchronizerMutationTargets.delete(collectionName);
     }
 
     /**
@@ -542,15 +552,35 @@ export class Context {
         collectionName: string,
         marker: IndexCompletionMarkerDocument
     ): Promise<boolean> {
-        if (marker.totalChunks <= 0) {
-            return true;
+        const payloadFilter = 'fileExtension != ".satori_meta"';
+        const count = await this.countIndexedPayloadExactly(collectionName, payloadFilter, marker.totalChunks);
+        return count === marker.totalChunks;
+    }
+
+    private async countIndexedPayloadExactly(
+        collectionName: string,
+        filter: string,
+        expectedMaximum?: number,
+    ): Promise<number | null> {
+        if (typeof this.vectorDatabase.count === 'function') {
+            return this.vectorDatabase.count(collectionName, filter);
         }
 
-        const rows = await this.vectorDatabase.query(collectionName, '', ['id'], 8);
-        return rows.some((row) => {
-            const id = typeof row?.id === 'string' ? row.id : '';
-            return id !== INDEX_COMPLETION_MARKER_DOC_ID;
-        });
+        // Query-only adapters can prove bounded result sets by requesting one row
+        // beyond the expected maximum. A full-size response is ambiguous because
+        // the backend may have truncated it, so fail closed.
+        const maximumExactQueryRows = 16384;
+        const limit = expectedMaximum === undefined
+            ? maximumExactQueryRows
+            : expectedMaximum + 1;
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > maximumExactQueryRows) {
+            return null;
+        }
+        const rows = await this.vectorDatabase.query(collectionName, filter, ['id'], limit);
+        if (expectedMaximum === undefined && rows.length === maximumExactQueryRows) {
+            return null;
+        }
+        return rows.length;
     }
 
     private async collectionHasAnyIndexedPayload(collectionName: string): Promise<boolean> {
@@ -626,6 +656,7 @@ export class Context {
             alternateFamilyName,
         } = this.buildCollectionFamilies(codebasePath);
         const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
+        const runtimeFingerprint = this.buildIndexCompletionFingerprint();
 
         const candidates: Array<{
             collectionName: string;
@@ -636,6 +667,9 @@ export class Context {
         for (const collectionName of familyCollectionNames) {
             const marker = await this.resolveCompletionMarkerForCollection(codebasePath, collectionName);
             if (!marker) {
+                continue;
+            }
+            if (!this.indexCompletionFingerprintsMatch(marker.fingerprint, runtimeFingerprint)) {
                 continue;
             }
             if (!(await this.collectionHasIndexedPayload(collectionName, marker))) {
@@ -772,7 +806,9 @@ export class Context {
         // 2. Check and prepare vector collection
         progressCallback?.({ phase: 'Preparing collection...', current: 0, total: 100, percentage: 0 });
         console.log(`Debug2: Preparing vector collection for codebase${forceReindex ? ' (FORCE REINDEX)' : ''}`);
-        await this.prepareCollection(codebasePath, forceReindex, options.assertMutationCurrent);
+        // indexCodebase is a full rebuild. Reusing an existing collection would retain
+        // remote rows for deleted files or changed chunk boundaries.
+        await this.prepareCollection(codebasePath, true, options.assertMutationCurrent);
         await this.clearIndexCompletionMarker(codebasePath, options.assertMutationCurrent);
 
         // 3. Recursively traverse codebase to get all supported files
@@ -781,13 +817,21 @@ export class Context {
         console.log(`[Context] 📁 Found ${codeFiles.length} code files`);
 
         if (codeFiles.length === 0) {
-            await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+            await this.clearSymbolRegistryForCodebase(
+                codebasePath,
+                options.assertMutationCurrent,
+                options.publishMutation,
+            );
             await this.writeCompletedIndexMarker(codebasePath, 0, 0, undefined, 'completed', options.assertMutationCurrent);
             progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
             return { indexedFiles: 0, totalChunks: 0, status: 'completed' };
         }
 
-        await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+        await this.clearSymbolRegistryForCodebase(
+            codebasePath,
+            options.assertMutationCurrent,
+            options.publishMutation,
+        );
 
         // 3. Process each file with streaming chunk processing
         // Reserve 10% for preparation, 90% for actual indexing
@@ -823,6 +867,7 @@ export class Context {
                 result.symbolManifestFiles,
                 options.assertMutationCurrent,
                 result.analysisByFile,
+                options.publishMutation,
             );
             await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed', options.assertMutationCurrent);
         } else {
@@ -890,6 +935,7 @@ export class Context {
         this.loadIndexProfileForCodebase(codebasePath);
         const synchronizerKey = this.resolveCollectionName(codebasePath);
         const synchronizer = this.synchronizers.get(synchronizerKey);
+        const synchronizerAlreadyExisted = synchronizer !== undefined;
 
         if (!synchronizer) {
             // Load project-specific ignore patterns before creating FileSynchronizer
@@ -901,12 +947,23 @@ export class Context {
                 this.getActiveIgnorePatterns(codebasePath),
                 this.getIndexedExtensionsForCodebase(codebasePath)
             );
-            await newSynchronizer.initialize(options.assertMutationCurrent);
+            await newSynchronizer.initialize(options.assertMutationCurrent, options.publishMutation);
             this.synchronizers.set(synchronizerKey, newSynchronizer);
+            this.synchronizerMutationTargets.delete(synchronizerKey);
         }
 
         const currentSynchronizer = this.synchronizers.get(synchronizerKey)!;
-        const maintainCompletionMarker = options.maintainCompletionMarker === true;
+        const externallyManagedPublication = options.externallyManagedPublication === true;
+        if (externallyManagedPublication && options.maintainCompletionMarker === true) {
+            throw new Error('externallyManagedPublication cannot be combined with maintainCompletionMarker=true.');
+        }
+        if (options.maintainCompletionMarker === false && !externallyManagedPublication) {
+            throw new Error('Disabling completion-marker maintenance requires externallyManagedPublication=true.');
+        }
+        if (externallyManagedPublication && !options.targetCollectionName?.trim()) {
+            throw new Error('externallyManagedPublication requires an explicit targetCollectionName.');
+        }
+        const maintainCompletionMarker = !externallyManagedPublication;
         let collectionName = typeof options.targetCollectionName === 'string' && options.targetCollectionName.trim().length > 0
             ? options.targetCollectionName.trim()
             : null;
@@ -917,17 +974,21 @@ export class Context {
         } else {
             const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
             collectionName = activeCollectionName;
-        }
-        if (!collectionName) {
-            const fallbackCollectionName = this.resolveCollectionName(codebasePath);
-            if (await this.vectorDatabase.hasCollection(fallbackCollectionName)) {
-                collectionName = fallbackCollectionName;
+            if (!collectionName && synchronizerAlreadyExisted) {
+                const retryCollectionName = this.synchronizerMutationTargets.get(synchronizerKey);
+                if (retryCollectionName && await this.vectorDatabase.hasCollection(retryCollectionName)) {
+                    // A failed incremental mutation deliberately withdraws its marker while
+                    // retaining the prepared filesystem delta for retry. Reuse that known
+                    // mutation target only inside the same synchronizer lifetime; it remains
+                    // unavailable to search until exact payload proof republishes the marker.
+                    collectionName = retryCollectionName;
+                }
             }
         }
         const collectionExists = collectionName !== null;
 
         if (!collectionExists) {
-            if (maintainCompletionMarker) {
+            if (maintainCompletionMarker && synchronizerAlreadyExisted) {
                 throw new Error(`Cannot incremental sync '${codebasePath}': no existing collection could be resolved for completion marker maintenance.`);
             }
             console.warn(`[Context] ⚠️  No proven collection exists for '${codebasePath}'. Rebuilding full index before incremental sync resumes.`);
@@ -950,9 +1011,11 @@ export class Context {
             throw new Error(`Expected an indexed collection for '${codebasePath}' after sync preflight.`);
         }
         const targetCollectionName = collectionName;
-        const markerWasMissing = maintainCompletionMarker
-            ? (await this.queryCompletionMarkerRows(targetCollectionName)).length === 0
-            : false;
+        this.synchronizerMutationTargets.set(synchronizerKey, targetCollectionName);
+        const previousMarker = maintainCompletionMarker
+            ? await this.resolveCompletionMarkerForCollection(codebasePath, targetCollectionName)
+            : null;
+        const markerWasMissing = maintainCompletionMarker && previousMarker === null;
 
         progressCallback?.({ phase: 'Checking for file changes...', current: 0, total: 100, percentage: 0 });
         const preparedChanges = await currentSynchronizer.prepareChanges();
@@ -960,14 +1023,15 @@ export class Context {
         const totalChanges = added.length + removed.length + modified.length;
 
         if (totalChanges === 0) {
+            options.assertMutationCurrent?.();
+            await preparedChanges.commit(options.assertMutationCurrent, options.publishMutation);
             if (maintainCompletionMarker && markerWasMissing) {
                 await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
                     requirePayloadProof: true,
                     assertMutationCurrent: options.assertMutationCurrent,
+                    publishMutation: options.publishMutation,
                 });
             }
-            options.assertMutationCurrent?.();
-            await preparedChanges.commit(options.assertMutationCurrent);
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
             console.log('[Context] ✅ No file changes detected.');
             return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: targetCollectionName };
@@ -989,10 +1053,35 @@ export class Context {
 
         let navigationRecovery: 'rebuilt' | 'failed' | undefined;
         let readinessArtifactsComplete = false;
+        let replacedPayloadCount: number | null = null;
+        if (previousMarker?.indexStatus !== 'limit_reached') {
+            replacedPayloadCount = 0;
+            for (const relativePath of new Set([...added, ...removed, ...modified])) {
+                const escapedPath = escapeMilvusStringLiteral(relativePath);
+                const pathCount = await this.countIndexedPayloadExactly(
+                    targetCollectionName,
+                    `relativePath == "${escapedPath}"`,
+                    previousMarker?.totalChunks,
+                );
+                if (pathCount === null) {
+                    replacedPayloadCount = null;
+                    break;
+                }
+                replacedPayloadCount += pathCount;
+            }
+        }
+        let preparedMarkerStats: { indexedFiles: number; totalChunks: number } | null = null;
 
         try {
             if (maintainCompletionMarker) {
                 await this.clearIndexCompletionMarkerFromCollection(targetCollectionName, options.assertMutationCurrent);
+            }
+
+            // An added source path should not normally have payload, but stale rows
+            // can survive an older source generation. Reconcile them before insert
+            // so the exact-count proof can converge instead of failing every retry.
+            for (const file of added) {
+                await this.deleteFileChunks(targetCollectionName, file, options.assertMutationCurrent);
             }
 
             // Handle removed files
@@ -1038,6 +1127,25 @@ export class Context {
                 );
             }
 
+            if (
+                readinessArtifactsComplete === false
+                && previousMarker
+                && previousMarker.indexStatus !== 'limit_reached'
+                && replacedPayloadCount !== null
+                && indexedDelta.status === 'completed'
+            ) {
+                const expectedTotalChunks = previousMarker.totalChunks
+                    - replacedPayloadCount
+                    + indexedDelta.totalChunks;
+                if (!Number.isSafeInteger(expectedTotalChunks) || expectedTotalChunks < 0) {
+                    throw new Error(`Incremental payload accounting produced an invalid chunk count for '${codebasePath}'.`);
+                }
+                preparedMarkerStats = {
+                    indexedFiles: preparedChanges.fileHashes.size,
+                    totalChunks: expectedTotalChunks,
+                };
+            }
+
             const canPublishNavigationDelta = canRebuildNavigationArtifacts && indexedDelta.status === 'completed';
             if (canPublishNavigationDelta) {
                 progressCallback?.({
@@ -1054,6 +1162,7 @@ export class Context {
                     indexedDelta.symbolManifestFiles,
                     options.assertMutationCurrent,
                     indexedDelta.analysisByFile,
+                    options.publishMutation,
                 );
                 readinessArtifactsComplete = true;
             } else if (!canRebuildNavigationArtifacts && indexedDelta.status === 'completed') {
@@ -1064,12 +1173,20 @@ export class Context {
                     percentage: 100,
                 });
                 try {
-                    await this.rebuildNavigationArtifacts(codebasePath, options.assertMutationCurrent);
+                    await this.rebuildNavigationArtifacts(
+                        codebasePath,
+                        options.assertMutationCurrent,
+                        options.publishMutation,
+                    );
                     navigationRecovery = 'rebuilt';
                     readinessArtifactsComplete = true;
                     console.log('[Context] 🧭 Rebuilt navigation sidecars after incremental sync found no compatible pre-sync registry.');
                 } catch (error) {
-                    await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+                    await this.clearSymbolRegistryForCodebase(
+                        codebasePath,
+                        options.assertMutationCurrent,
+                        options.publishMutation,
+                    );
                     await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker, options.assertMutationCurrent);
                     navigationRecovery = 'failed';
                     console.warn(
@@ -1077,7 +1194,11 @@ export class Context {
                     );
                 }
             } else {
-                await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+                await this.clearSymbolRegistryForCodebase(
+                    codebasePath,
+                    options.assertMutationCurrent,
+                    options.publishMutation,
+                );
                 await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker, options.assertMutationCurrent);
                 navigationRecovery = 'failed';
                 if (!canRebuildNavigationArtifacts) {
@@ -1087,20 +1208,59 @@ export class Context {
                 }
             }
         } catch (error) {
-            await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+            await this.clearSymbolRegistryForCodebase(
+                codebasePath,
+                options.assertMutationCurrent,
+                options.publishMutation,
+            );
             await this.clearCompletionMarkerAfterSyncFailure(codebasePath, targetCollectionName, maintainCompletionMarker, options.assertMutationCurrent);
             throw error;
         }
 
-        if (maintainCompletionMarker && readinessArtifactsComplete) {
-            await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
-                requirePayloadProof: markerWasMissing,
-                assertMutationCurrent: options.assertMutationCurrent,
-            });
-        }
         if (readinessArtifactsComplete) {
+            if (preparedMarkerStats) {
+                try {
+                    await this.verifyPreparedSyncPublication(
+                        codebasePath,
+                        targetCollectionName,
+                        preparedChanges.fileHashes,
+                        preparedMarkerStats.totalChunks,
+                    );
+                } catch (error) {
+                    await this.clearSymbolRegistryForCodebase(
+                        codebasePath,
+                        options.assertMutationCurrent,
+                        options.publishMutation,
+                    );
+                    await this.clearCompletionMarkerAfterSyncFailure(
+                        codebasePath,
+                        targetCollectionName,
+                        maintainCompletionMarker,
+                        options.assertMutationCurrent,
+                    );
+                    throw error;
+                }
+            }
             options.assertMutationCurrent?.();
-            await preparedChanges.commit(options.assertMutationCurrent);
+            await preparedChanges.commit(options.assertMutationCurrent, options.publishMutation);
+            if (maintainCompletionMarker) {
+                if (preparedMarkerStats) {
+                    await this.writeCompletedIndexMarker(
+                        codebasePath,
+                        preparedMarkerStats.indexedFiles,
+                        preparedMarkerStats.totalChunks,
+                        targetCollectionName,
+                        'completed',
+                        options.assertMutationCurrent,
+                    );
+                } else {
+                    await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
+                        requirePayloadProof: true,
+                        assertMutationCurrent: options.assertMutationCurrent,
+                        publishMutation: options.publishMutation,
+                    });
+                }
+            }
         }
 
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
@@ -1174,14 +1334,7 @@ export class Context {
             return normalized.length > 0 ? normalized : undefined;
         };
 
-        const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
-        let collectionName = activeCollectionName;
-        if (!collectionName) {
-            const fallbackCollectionName = this.resolveCollectionName(codebasePath);
-            if (await this.vectorDatabase.hasCollection(fallbackCollectionName)) {
-                collectionName = fallbackCollectionName;
-            }
-        }
+        const collectionName = await this.getActiveIndexedCollectionName(codebasePath);
         console.log(`[Context] 🔍 Using collection: ${collectionName}`);
 
         // Check if collection exists and has data
@@ -1382,8 +1535,8 @@ export class Context {
     ): Promise<void> {
         const rows = await this.queryCompletionMarkerRows(collectionName);
         const markerIds = rows
-            .map((row) => (typeof row.id === 'string' ? row.id : ''))
-            .filter((id) => id.length > 0);
+            .map((row) => row.id)
+            .filter((id): id is string => id === INDEX_COMPLETION_MARKER_DOC_ID);
         if (markerIds.length === 0) {
             return;
         }
@@ -1477,13 +1630,18 @@ export class Context {
             });
         }
 
-        await this.clearSymbolRegistryForCodebase(codebasePath, options.assertMutationCurrent);
+        await this.clearSymbolRegistryForCodebase(
+            codebasePath,
+            options.assertMutationCurrent,
+            options.publishMutation,
+        );
 
         // Delete snapshot file
         options.assertMutationCurrent?.();
         await FileSynchronizer.deleteSnapshot(codebasePath);
         const familyCollectionName = this.resolveCollectionName(codebasePath);
         this.synchronizers.delete(familyCollectionName);
+        this.synchronizerMutationTargets.delete(familyCollectionName);
         this.ignoreStateByCollection.delete(familyCollectionName);
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         this.writeCollectionOverrides.delete(canonicalRoot);
@@ -1789,7 +1947,12 @@ export class Context {
         const CHUNK_LIMIT = 450000;
         console.log(`[Context] 🔧 Using EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE}`);
 
-        let chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string; relativePath: string }> = [];
+        let chunkBuffer: Array<{
+            chunk: CodeChunk;
+            codebasePath: string;
+            relativePath: string;
+            fileChunkIndex: number;
+        }> = [];
         let processedFiles = 0;
         let totalChunks = 0;
         let limitReached = false;
@@ -1846,8 +2009,9 @@ export class Context {
                 }
 
                 // Add chunks to buffer
-                for (const chunk of chunks) {
-                    chunkBuffer.push({ chunk, codebasePath, relativePath });
+                for (let fileChunkIndex = 0; fileChunkIndex < chunks.length; fileChunkIndex++) {
+                    const chunk = chunks[fileChunkIndex];
+                    chunkBuffer.push({ chunk, codebasePath, relativePath, fileChunkIndex });
                     totalChunks++;
 
                     // Process batch when buffer reaches EMBEDDING_BATCH_SIZE
@@ -1961,7 +2125,7 @@ export class Context {
 
                 const startLine = chunk.metadata.startLine || 0;
                 const endLine = chunk.metadata.endLine || 0;
-                const id = this.generateId(relativePath, startLine, endLine, chunk.content);
+                const id = this.generateId(relativePath, chunk, index);
 
                 expectedChunks.push({
                     id,
@@ -1993,13 +2157,21 @@ export class Context {
     private async refreshCompletionMarkerFromCurrentSource(
         codebasePath: string,
         collectionName: string,
-        options: { requirePayloadProof?: boolean; assertMutationCurrent?: () => void } = {}
+        options: {
+            requirePayloadProof?: boolean;
+            assertMutationCurrent?: () => void;
+            publishMutation?: (publish: () => void) => void;
+        } = {}
     ): Promise<void> {
         await this.loadIgnorePatterns(codebasePath);
         const codeFiles = await this.getCodeFiles(codebasePath);
         const { expectedChunks } = await this.getExpectedChunksAndSymbols(codeFiles, codebasePath);
         if (options.requirePayloadProof === true) {
-            await this.ensureNavigationArtifactsReadyForMarkerRefresh(codebasePath, options.assertMutationCurrent);
+            await this.ensureNavigationArtifactsReadyForMarkerRefresh(
+                codebasePath,
+                options.assertMutationCurrent,
+                options.publishMutation,
+            );
             const verification = await this.verifyCollectionPayloadMatchesCurrentSource(collectionName, codeFiles, expectedChunks);
             if (!verification.ok) {
                 await this.clearIndexCompletionMarkerFromCollection(collectionName, options.assertMutationCurrent);
@@ -2016,9 +2188,66 @@ export class Context {
         );
     }
 
+    private async verifyPreparedSyncPublication(
+        codebasePath: string,
+        collectionName: string,
+        preparedFileHashes: ReadonlyMap<string, string>,
+        expectedTotalChunks: number,
+    ): Promise<void> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const registryState = await readSymbolRegistrySidecar({
+            stateRoot: this.symbolRegistryStateRoot,
+            normalizedRootPath: canonicalRoot,
+        });
+        if (registryState.status !== 'ok') {
+            throw new Error(`Cannot publish incremental completion proof: navigation registry is ${registryState.status}.`);
+        }
+        const relationshipState = await readRelationshipSidecar({
+            stateRoot: this.symbolRegistryStateRoot,
+            normalizedRootPath: canonicalRoot,
+            expectedSymbolRegistryManifestHash: registryState.manifestHash,
+        });
+        if (relationshipState.status !== 'ok') {
+            throw new Error(`Cannot publish incremental completion proof: relationship evidence is ${relationshipState.status}.`);
+        }
+
+        const manifestHashes = new Map(
+            registryState.registry.manifest.files.map((file) => [file.path, file.hash]),
+        );
+        if (manifestHashes.size !== preparedFileHashes.size) {
+            throw new Error(
+                `Cannot publish incremental completion proof: synchronizer tracks ${preparedFileHashes.size} files but navigation seals ${manifestHashes.size}.`,
+            );
+        }
+        for (const [relativePath, expectedHash] of preparedFileHashes) {
+            if (manifestHashes.get(relativePath) !== expectedHash) {
+                throw new Error(
+                    `Cannot publish incremental completion proof: source hash for '${relativePath}' does not match the prepared synchronizer checkpoint.`,
+                );
+            }
+        }
+
+        const observedTotalChunks = await this.countIndexedPayloadExactly(
+            collectionName,
+            'fileExtension != ".satori_meta"',
+            expectedTotalChunks,
+        );
+        if (observedTotalChunks === null) {
+            throw new Error(
+                `Cannot publish incremental completion proof: backend cannot prove the exact payload count for '${collectionName}'.`,
+            );
+        }
+        if (observedTotalChunks !== expectedTotalChunks) {
+            throw new Error(
+                `Cannot publish incremental completion proof: expected ${expectedTotalChunks} chunks but observed ${observedTotalChunks}.`,
+            );
+        }
+    }
+
     private async ensureNavigationArtifactsReadyForMarkerRefresh(
         codebasePath: string,
         assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
     ): Promise<void> {
         const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
         const registry = await readSymbolRegistrySidecar({
@@ -2035,7 +2264,7 @@ export class Context {
                 return;
             }
         }
-        await this.rebuildNavigationArtifacts(codebasePath, assertMutationCurrent);
+        await this.rebuildNavigationArtifacts(codebasePath, assertMutationCurrent, publishMutation);
     }
 
     private async clearCompletionMarkerAfterSyncFailure(
@@ -2333,7 +2562,11 @@ export class Context {
                 basis: 'empty_source_and_payload',
                 extraCount: 0,
             };
-            await this.clearSymbolRegistryForCodebase(canonicalPath, options.assertMutationCurrent);
+            await this.clearSymbolRegistryForCodebase(
+                canonicalPath,
+                options.assertMutationCurrent,
+                options.publishMutation,
+            );
             await this.writeCompletedIndexMarker(
                 canonicalPath,
                 0,
@@ -2525,6 +2758,7 @@ export class Context {
             symbolManifestFiles,
             options.assertMutationCurrent,
             analysisByFile,
+            options.publishMutation,
         );
 
         // 7. Write new completion marker
@@ -2630,10 +2864,15 @@ export class Context {
     private async rebuildNavigationArtifacts(
         codebasePath: string,
         assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
     ): Promise<void> {
         const codeFiles = await this.getCodeFiles(codebasePath);
         if (codeFiles.length === 0) {
-            await this.clearSymbolRegistryForCodebase(codebasePath, assertMutationCurrent);
+            await this.clearSymbolRegistryForCodebase(
+                codebasePath,
+                assertMutationCurrent,
+                publishMutation,
+            );
             return;
         }
 
@@ -2644,6 +2883,7 @@ export class Context {
             navigationArtifacts.symbolManifestFiles,
             assertMutationCurrent,
             navigationArtifacts.analysisByFile,
+            publishMutation,
         );
     }
 
@@ -2655,6 +2895,7 @@ export class Context {
         rebuiltManifestFiles: SymbolRegistryManifestFile[],
         assertMutationCurrent?: () => void,
         analysisByFile?: Map<string, RelationshipAnalysisEvidence>,
+        publishMutation?: (publish: () => void) => void,
     ): Promise<void> {
         const replacedPaths = new Set<string>([
             ...changedRelativePaths.map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, '')),
@@ -2683,7 +2924,11 @@ export class Context {
         ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
         if (mergedManifestFiles.length === 0) {
-            await this.clearSymbolRegistryForCodebase(codebasePath, assertMutationCurrent);
+            await this.clearSymbolRegistryForCodebase(
+                codebasePath,
+                assertMutationCurrent,
+                publishMutation,
+            );
             return;
         }
 
@@ -2698,6 +2943,7 @@ export class Context {
             mergedManifestFiles,
             assertMutationCurrent,
             retainedAnalysisByFile,
+            publishMutation,
         );
     }
 
@@ -2707,6 +2953,7 @@ export class Context {
         symbolManifestFiles: SymbolRegistryManifestFile[],
         assertMutationCurrent?: () => void,
         suppliedAnalysisByFile?: Map<string, RelationshipAnalysisEvidence>,
+        publishMutation?: (publish: () => void) => void,
     ): Promise<void> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const manifestFiles = [...symbolManifestFiles].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -2725,47 +2972,42 @@ export class Context {
             symbols: symbolRecords,
         });
 
-        assertMutationCurrent?.();
-        const result = await writeSymbolRegistrySidecar({
-            stateRoot: this.symbolRegistryStateRoot,
-            registry,
-            beforePublish: assertMutationCurrent,
-        });
         const analysisByFile = new Map(suppliedAnalysisByFile ?? []);
         for (const file of manifestFiles) {
             if (analysisByFile.has(file.path)) {
                 continue;
             }
-            try {
-                const content = await fs.promises.readFile(path.join(canonicalRoot, file.path), 'utf8');
-                const analysis = await this.languageAnalyzer.analyze({
-                    content,
-                    language: file.language,
-                    relativePath: file.path,
-                });
-                analysisByFile.set(file.path, {
-                    moduleBindings: analysis.moduleBindings,
-                    callSites: analysis.callSites,
-                });
-            } catch (error) {
-                console.warn(`[Context] ⚠️  Skipping relationship extraction for ${file.path}: ${error instanceof Error ? error.message : String(error)}`);
+            const absoluteFile = path.resolve(canonicalRoot, file.path);
+            const relativeFromRoot = path.relative(canonicalRoot, absoluteFile);
+            if (!relativeFromRoot || relativeFromRoot.startsWith('..') || path.isAbsolute(relativeFromRoot)) {
+                throw new Error(`Navigation manifest path '${file.path}' escapes the codebase root.`);
             }
+            const content = await fs.promises.readFile(absoluteFile, 'utf8');
+            const observedHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+            if (observedHash !== file.hash) {
+                throw new Error(`Source changed before navigation publication for '${file.path}'.`);
+            }
+            const analysis = await this.languageAnalyzer.analyze({
+                content,
+                language: file.language,
+                relativePath: file.path,
+            });
+            analysisByFile.set(file.path, {
+                moduleBindings: analysis.moduleBindings,
+                callSites: analysis.callSites,
+            });
         }
         const relationshipRecords = buildRelationshipsForRegistry({ registry, analysisByFile });
         assertMutationCurrent?.();
-        const relationshipResult = await writeRelationshipSidecar({
+        const result = await writeNavigationSidecarGeneration({
             stateRoot: this.symbolRegistryStateRoot,
-            normalizedRootPath: canonicalRoot,
-            symbolRegistryManifestHash: result.manifestHash,
-            relationshipVersion: registry.manifest.relationshipVersion,
-            builtAt: registry.manifest.builtAt,
-            files: manifestFiles,
+            registry,
             records: relationshipRecords,
             analysisByFile,
             beforePublish: assertMutationCurrent,
+            publishMutation,
         });
-        console.log(`[Context] 🧭 Wrote symbol registry sidecar with ${result.symbolCount} symbols across ${result.fileShardCount} file shards`);
-        console.log(`[Context] 🧭 Wrote relationship sidecar with ${relationshipResult.relationshipCount} relationships across ${relationshipResult.fileShardCount} file shards`);
+        console.log(`[Context] 🧭 Published navigation generation '${result.generationId}' with ${result.symbolCount} symbols across ${result.fileShardCount} symbol shards and ${result.relationshipCount} relationships across ${result.relationshipFileShardCount} relationship shards`);
         assertMutationCurrent?.();
         try {
             const sqliteResult = await importNavigationToSqlite({
@@ -2789,11 +3031,14 @@ export class Context {
     private async clearSymbolRegistryForCodebase(
         codebasePath: string,
         assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
     ): Promise<void> {
         assertMutationCurrent?.();
         await clearSymbolRegistrySidecar({
             stateRoot: this.symbolRegistryStateRoot,
             normalizedRootPath: this.canonicalizeCodebasePath(codebasePath),
+            beforeDelete: assertMutationCurrent,
+            publishMutation,
         });
     }
 
@@ -2801,7 +3046,12 @@ export class Context {
  * Process accumulated chunk buffer
  */
     private async processChunkBuffer(
-        chunkBuffer: Array<{ chunk: CodeChunk; codebasePath: string; relativePath: string }>,
+        chunkBuffer: Array<{
+            chunk: CodeChunk;
+            codebasePath: string;
+            relativePath: string;
+            fileChunkIndex: number;
+        }>,
         collectionName: string,
         assertMutationCurrent?: () => void,
     ): Promise<void> {
@@ -2824,7 +3074,7 @@ export class Context {
      * Process a batch of chunks
      */
     private async processChunkBatch(
-        chunkEntries: Array<{ chunk: CodeChunk; relativePath: string }>,
+        chunkEntries: Array<{ chunk: CodeChunk; relativePath: string; fileChunkIndex: number }>,
         codebasePath: string,
         collectionName: string,
         assertMutationCurrent?: () => void,
@@ -2836,6 +3086,12 @@ export class Context {
         // Generate embedding vectors
         const chunkContents = chunks.map(chunk => chunk.content);
         const embeddings = await this.embedding.embedBatch(chunkContents);
+        const documentIds = chunkEntries.map(({ chunk, relativePath, fileChunkIndex }) =>
+            this.generateId(relativePath, chunk, fileChunkIndex)
+        );
+        if (new Set(documentIds).size !== documentIds.length) {
+            throw new Error(`Duplicate chunk identities generated for collection '${collectionName}'.`);
+        }
 
         if (isHybrid === true) {
             // Create hybrid vector documents
@@ -2848,7 +3104,7 @@ export class Context {
                 void omittedEndLine;
 
                 return {
-                    id: this.generateId(relativePath, chunk.metadata.startLine || 0, chunk.metadata.endLine || 0, chunk.content),
+                    id: documentIds[index],
                     content: chunk.content, // Full text content for BM25 and storage
                     vector: embeddings[index].vector, // Dense vector
                     relativePath,
@@ -2859,7 +3115,7 @@ export class Context {
                         ...restMetadata,
                         codebasePath,
                         language: chunk.metadata.language || 'unknown',
-                        chunkIndex: index,
+                        chunkIndex: chunkEntries[index].fileChunkIndex,
                         indexedAt
                     }
                 };
@@ -2879,7 +3135,7 @@ export class Context {
                 void omittedEndLine;
 
                 return {
-                    id: this.generateId(relativePath, chunk.metadata.startLine || 0, chunk.metadata.endLine || 0, chunk.content),
+                    id: documentIds[index],
                     vector: embeddings[index].vector,
                     content: chunk.content,
                     relativePath,
@@ -2890,7 +3146,7 @@ export class Context {
                         ...restMetadata,
                         codebasePath,
                         language: chunk.metadata.language || 'unknown',
-                        chunkIndex: index,
+                        chunkIndex: chunkEntries[index].fileChunkIndex,
                         indexedAt
                     }
                 };
@@ -2917,8 +3173,16 @@ export class Context {
      * @param content Chunk content
      * @returns Hash-based unique ID
      */
-    private generateId(relativePath: string, startLine: number, endLine: number, content: string): string {
-        const combinedString = `${relativePath}:${startLine}:${endLine}:${content}`;
+    private generateId(relativePath: string, chunk: CodeChunk, fileChunkIndex: number): string {
+        const combinedString = JSON.stringify([
+            relativePath,
+            fileChunkIndex,
+            chunk.metadata.startByte ?? null,
+            chunk.metadata.endByte ?? null,
+            chunk.metadata.startLine,
+            chunk.metadata.endLine,
+            chunk.content,
+        ]);
         const hash = crypto.createHash('sha256').update(combinedString, 'utf-8').digest('hex');
         return `chunk_${hash.substring(0, 16)}`;
     }

@@ -204,6 +204,9 @@ export interface VectorDatabase {
      */
     query(collectionName: string, filter: string, outputFields: string[], limit?: number): Promise<VectorRecord[]>;
 
+    /** Return the exact number of rows matching a backend filter. */
+    count?(collectionName: string, filter: string): Promise<number>;
+
     /**
      * Check collection limit
      * Returns true if collection can be created, false if limit exceeded

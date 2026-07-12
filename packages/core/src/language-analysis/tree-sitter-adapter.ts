@@ -173,11 +173,11 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         parents: readonly string[],
         insideRustImpl = false,
         parentNode?: Node,
-        insideCallable = false,
+        semanticContainer: 'module' | 'class' | 'callable' = 'module',
     ): void => {
         let kind: ExtractedSymbolKind | undefined = declarations[node.type];
         if (language === 'go') kind = goSymbolKind(node, kind);
-        if (language === 'python' && node.type === 'function_definition' && parents.length > 0 && !insideCallable) {
+        if (language === 'python' && node.type === 'function_definition' && semanticContainer === 'class') {
             kind = 'method';
         }
         if (language === 'rust' && node.type === 'function_item' && insideRustImpl) {
@@ -204,6 +204,16 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 : language === 'python' && name && node.type === 'function_definition'
                     ? [...parents, name]
                 : parents;
+        const nextSemanticContainer = kind && (
+            kind === 'class'
+            || kind === 'interface'
+            || kind === 'trait'
+            || kind === 'struct'
+        )
+            ? 'class'
+            : kind && (kind === 'function' || kind === 'method' || kind === 'constructor')
+                ? 'callable'
+                : semanticContainer;
         if (kind && name) {
             symbols.push({
                 kind,
@@ -226,11 +236,7 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 nextParents,
                 insideRustImpl || (language === 'rust' && node.type === 'impl_item'),
                 node,
-                insideCallable || Boolean(kind && (
-                    kind === 'function'
-                    || kind === 'method'
-                    || kind === 'constructor'
-                )),
+                nextSemanticContainer,
             );
         }
     };

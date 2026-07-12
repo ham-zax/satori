@@ -94,7 +94,7 @@ function calleeName(node: AstNode): string | undefined {
     return undefined;
 }
 
-function callSiteEvidence(node: AstNode): Pick<CallSite, 'kind' | 'receiverText' | 'qualifiedCallee'> {
+function callSiteEvidence(node: AstNode, source: string): Pick<CallSite, 'kind' | 'receiverText' | 'qualifiedCallee'> {
     if (node.type === 'NewExpression') {
         return { kind: 'constructor' };
     }
@@ -103,12 +103,16 @@ function callSiteEvidence(node: AstNode): Pick<CallSite, 'kind' | 'receiverText'
         return { kind: 'direct' };
     }
     const receiver = callee.object;
-    const receiverText = isAstNode(receiver) && typeof receiver.name === 'string'
-        ? receiver.name
+    const receiverText = isAstNode(receiver) && Number.isInteger(receiver.start) && Number.isInteger(receiver.end)
+        ? source.slice(receiver.start, receiver.end).trim()
+        : undefined;
+    const qualifiedCallee = Number.isInteger(callee.start) && Number.isInteger(callee.end)
+        ? source.slice(callee.start, callee.end).trim()
         : undefined;
     return {
         kind: 'member',
         ...(receiverText ? { receiverText } : {}),
+        ...(qualifiedCallee ? { qualifiedCallee } : {}),
     };
 }
 
@@ -174,7 +178,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
             if (name) {
                 callSites.push({
                     calleeName: name,
-                    ...callSiteEvidence(node),
+                    ...callSiteEvidence(node, input.content),
                     span: sourceMap.spanFromUtf16(node.start, node.end),
                 });
             }

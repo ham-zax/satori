@@ -304,6 +304,17 @@ export class FileSynchronizer {
                     return buffer.subarray(0, bytesRead);
                 },
             );
+            if (!indexable) {
+                return {
+                    hash: '',
+                    signature: {
+                        size: before.size,
+                        mtimeMs: Number(before.mtimeMs),
+                        ctimeMs: Number(before.ctimeMs),
+                    },
+                    indexable: false,
+                };
+            }
             const hasher = crypto.createHash('sha256');
             const stream = handle.createReadStream({ autoClose: false });
             for await (const chunk of stream) {
@@ -318,6 +329,15 @@ export class FileSynchronizer {
                 || after.ctimeMs !== before.ctimeMs
             ) {
                 throw new Error(`File changed while being hashed: ${filePath}`);
+            }
+            const currentPathHandle = await openRegularFileInsideRoot(filePath, this.rootDir);
+            try {
+                const currentPathStat = await currentPathHandle.stat();
+                if (currentPathStat.dev !== after.dev || currentPathStat.ino !== after.ino) {
+                    throw new Error(`File path was replaced while being hashed: ${filePath}`);
+                }
+            } finally {
+                await currentPathHandle.close().catch(() => undefined);
             }
             return {
                 hash: hasher.digest('hex'),
@@ -663,10 +683,18 @@ export class FileSynchronizer {
         try {
             await fsp.writeFile(tempSnapshotPath, JSON.stringify(payload), 'utf-8');
             if (publishMutation) {
+                let publicationCount = 0;
                 publishMutation(() => {
+                    publicationCount += 1;
+                    if (publicationCount > 1) {
+                        throw new Error('[Synchronizer] Snapshot publication callback invoked publish more than once.');
+                    }
                     fsSync.renameSync(tempSnapshotPath, this.snapshotPath);
                     afterPublish?.();
                 });
+                if (publicationCount !== 1) {
+                    throw new Error('[Synchronizer] Snapshot publication callback returned without publishing.');
+                }
             } else {
                 await fsp.rename(tempSnapshotPath, this.snapshotPath);
                 afterPublish?.();
@@ -734,14 +762,22 @@ export class FileSynchronizer {
         if (snapshot.merkleRoot !== computeMerkleRoot(hashes)) {
             invalid('merkleRoot does not match fileHashes.');
         }
-        const unscannedDirPrefixes = snapshot.unscannedDirPrefixes;
-        if (typeof snapshot.partialScan !== 'boolean' || !Array.isArray(unscannedDirPrefixes)) {
+        const rawUnscannedDirPrefixes = snapshot.unscannedDirPrefixes;
+        if (typeof snapshot.partialScan !== 'boolean' || !Array.isArray(rawUnscannedDirPrefixes)) {
             invalid('partial scan metadata is malformed.');
         }
+        const unscannedDirPrefixes = rawUnscannedDirPrefixes as string[];
         for (const prefix of unscannedDirPrefixes ?? []) {
             if (typeof prefix !== 'string' || !prefix || this.normalizeRelPath(prefix) !== prefix) {
                 invalid('unscannedDirPrefixes contains an invalid path.');
             }
+        }
+        const canonicalPrefixes = this.normalizeAndCompressPrefixes(new Set(unscannedDirPrefixes));
+        if (!this.arraysEqual(unscannedDirPrefixes, canonicalPrefixes)) {
+            invalid('unscannedDirPrefixes must be canonical, unique, compressed, and deterministically ordered.');
+        }
+        if (unscannedDirPrefixes.length > 0 && snapshot.partialScan !== true) {
+            invalid('partialScan must be true when unscannedDirPrefixes is nonempty.');
         }
         if (!Number.isSafeInteger(snapshot.fullHashCounter) || Number(snapshot.fullHashCounter) < 0) {
             invalid('fullHashCounter must be a nonnegative safe integer.');
@@ -879,7 +915,17 @@ export class FileSynchronizer {
                 return;
             }
             if (publishMutation) {
-                publishMutation(applyCheckpoint);
+                let publicationCount = 0;
+                publishMutation(() => {
+                    publicationCount += 1;
+                    if (publicationCount > 1) {
+                        throw new Error('[Synchronizer] Checkpoint publication callback invoked publish more than once.');
+                    }
+                    applyCheckpoint();
+                });
+                if (publicationCount !== 1) {
+                    throw new Error('[Synchronizer] Checkpoint publication callback returned without publishing.');
+                }
             } else {
                 assertMutationCurrent?.();
                 applyCheckpoint();

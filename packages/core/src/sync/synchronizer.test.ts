@@ -537,3 +537,40 @@ test('FileSynchronizer publishes the snapshot and in-memory checkpoint inside on
         fs.rmSync(tempHome, { recursive: true, force: true });
     }
 });
+
+test('FileSynchronizer requires publication callbacks to invoke publish exactly once', async () => {
+    const previousHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-publication-home-'));
+    try {
+        process.env.HOME = tempHome;
+        for (const mode of ['zero', 'double'] as const) {
+            const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), `satori-sync-publication-${mode}-`));
+            try {
+                const sourcePath = path.join(tempRepo, 'source.ts');
+                fs.writeFileSync(sourcePath, 'export const value = 1;\n', 'utf8');
+                const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+                await synchronizer.initialize();
+                fs.writeFileSync(sourcePath, 'export const value = 2;\n', 'utf8');
+                const prepared = await synchronizer.prepareChanges();
+                await assert.rejects(
+                    () => prepared.commit(
+                        () => undefined,
+                        (publish) => {
+                            if (mode === 'double') {
+                                publish();
+                                publish();
+                            }
+                        },
+                    ),
+                    mode === 'zero' ? /without publishing/ : /more than once/,
+                );
+            } finally {
+                fs.rmSync(tempRepo, { recursive: true, force: true });
+            }
+        }
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});

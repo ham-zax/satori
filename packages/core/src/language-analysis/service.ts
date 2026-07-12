@@ -84,9 +84,12 @@ function readInputField(
 }
 
 function emergencyChunkBound(value: number | undefined, fallback: number): number {
-    return typeof value === 'number' && Number.isFinite(value) && value > 0
+    const configured = typeof value === 'number' && Number.isFinite(value) && value > 0
         ? Math.floor(value)
         : fallback;
+    // Four bytes is the largest UTF-8 code point. A smaller byte ceiling cannot
+    // preserve both valid UTF-8 and the configured bound.
+    return Math.max(4, configured);
 }
 
 function alignEmergencyByteBoundary(
@@ -106,13 +109,27 @@ function alignEmergencyByteBoundary(
     return aligned;
 }
 
-function emergencyPosition(bytes: Buffer, offset: number): { line: number; column: number } {
-    const prefix = bytes.subarray(0, offset).toString('utf8');
-    const lines = prefix.split('\n');
-    return {
-        line: lines.length,
-        column: lines.at(-1)?.length ?? 0,
-    };
+function buildEmergencyPositions(content: string, byteLength: number): Array<{ line: number; column: number }> {
+    const positions = new Array<{ line: number; column: number }>(byteLength + 1);
+    let byteOffset = 0;
+    let line = 1;
+    let column = 0;
+    positions[0] = { line, column };
+    for (const codePoint of content) {
+        const encodedLength = Buffer.byteLength(codePoint, 'utf8');
+        for (let index = 1; index < encodedLength; index += 1) {
+            positions[byteOffset + index] = { line, column };
+        }
+        byteOffset += encodedLength;
+        if (codePoint === '\n') {
+            line += 1;
+            column = 0;
+        } else {
+            column += codePoint.length;
+        }
+        positions[byteOffset] = { line, column };
+    }
+    return positions;
 }
 
 function emergencyFallbackResult(
@@ -122,6 +139,7 @@ function emergencyFallbackResult(
     const content = readInputField(input, 'content', '');
     const relativePath = readInputField(input, 'relativePath', '<unknown>');
     const bytes = Buffer.from(content, 'utf8');
+    const positions = buildEmergencyPositions(content, bytes.length);
     const chunkSize = emergencyChunkBound(options.chunkSize, 2500);
     const requestedOverlap = typeof options.chunkOverlap === 'number'
         && Number.isFinite(options.chunkOverlap)
@@ -145,8 +163,8 @@ function emergencyFallbackResult(
         }
         if (endByte <= startByte) break;
 
-        const start = emergencyPosition(bytes, startByte);
-        const end = emergencyPosition(bytes, endByte);
+        const start = positions[startByte];
+        const end = positions[endByte];
         chunks.push({
             content: bytes.subarray(startByte, endByte).toString('utf8'),
             metadata: {

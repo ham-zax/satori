@@ -338,6 +338,24 @@ test('Python nested functions inside methods remain local functions and plain im
     );
 });
 
+test('Python methods in a class nested inside a function use the nearest declaration container', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'def outer():',
+            '    class Worker:',
+            '        def run(self):',
+            '            return True',
+        ].join('\n'),
+        language: 'python',
+        relativePath: 'src/worker.py',
+    });
+
+    assert.ok(result.symbols.some((symbol) => (
+        symbol.kind === 'method' && symbol.qualifiedName === 'outer.Worker.run'
+    )));
+});
+
 test('C++ class member functions are methods owned by their class', async () => {
     const analyzer = createLanguageAnalysisService();
     const result = await analyzer.analyze({

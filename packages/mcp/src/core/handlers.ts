@@ -282,7 +282,7 @@ type SnapshotManagerCapabilities = {
     ) => SnapshotAccessGateResult;
     getCodebaseCollectionName?: (codebasePath: string) => string | undefined;
     markCodebaseCleared?: (codebasePath: string, collectionName?: string) => void;
-    saveCodebaseSnapshot?: () => void;
+    saveCodebaseSnapshot?: () => boolean | void;
 };
 
 type GitignoreMatcherCacheState = "ready" | "absent" | "error";
@@ -695,6 +695,7 @@ export class ToolHandlers {
             getSnapshotIndexingProgress: this.getSnapshotIndexingProgress.bind(this),
             clearIndexCompletionMarker: this.clearIndexCompletionMarker.bind(this),
             evaluateReindexPreflight: this.evaluateReindexPreflight.bind(this),
+            assertIndexMutationCapabilities: this.assertIndexMutationCapabilities.bind(this),
             mutationLeaseCoordinator: this.mutationLeaseCoordinator,
         };
         this.manageIndexingHandlers = new ManageIndexingHandlers(manageIndexingHandlersHost);
@@ -950,38 +951,75 @@ export class ToolHandlers {
     }
 
     private saveSnapshotIfSupported(): void {
-        this.snapshotCapabilities().saveCodebaseSnapshot?.();
+        const saveCodebaseSnapshot = this.snapshotCapabilities().saveCodebaseSnapshot;
+        if (typeof saveCodebaseSnapshot !== 'function') {
+            throw new Error('Missing required mutation capability: SnapshotManager.saveCodebaseSnapshot.');
+        }
+        const saved = saveCodebaseSnapshot.call(this.snapshotManager);
+        if (saved === false) {
+            throw new Error('Failed to persist snapshot state.');
+        }
     }
 
     private canonicalizeCodebasePath(codebasePath: string): string {
         return this.searchQuerySupport.canonicalizeCodebasePath(codebasePath);
     }
 
-    private fallbackCollectionName(codebasePath: string): string {
-        const canonicalPath = this.canonicalizeCodebasePath(codebasePath);
-        const hash = crypto.createHash('md5').update(canonicalPath).digest('hex').slice(0, 8);
-        return `hybrid_code_chunks_${hash}`;
+    private assertIndexMutationCapabilities(): void {
+        const context = this.context as unknown as Record<string, unknown>;
+        const snapshot = this.snapshotManager as unknown as Record<string, unknown>;
+        const requiredContextCapabilities = [
+            'resolveCollectionName',
+            'resolveStagedCollectionName',
+            'setWriteCollectionOverride',
+            'getActiveIndexedCollectionName',
+            'clearIndexCompletionMarker',
+            'pruneIndexedCollectionFamily',
+            'pruneUnprovenStagedCollectionFamily',
+        ] as const;
+        const requiredSnapshotCapabilities = [
+            'saveCodebaseSnapshot',
+            'setCodebaseIndexing',
+            'setCodebaseIndexFailed',
+            'setCodebaseIndexed',
+            'setCodebaseIndexManifest',
+            'commitCodebaseLifecycleMutation',
+        ] as const;
+
+        for (const capability of requiredContextCapabilities) {
+            if (typeof context[capability] !== 'function') {
+                throw new Error(`Missing required mutation capability: Context.${capability}.`);
+            }
+        }
+        for (const capability of requiredSnapshotCapabilities) {
+            if (typeof snapshot[capability] !== 'function') {
+                throw new Error(`Missing required mutation capability: SnapshotManager.${capability}.`);
+            }
+        }
     }
 
     private resolveCollectionName(codebasePath: string): string {
-        return this.contextLifecycle().resolveCollectionName?.(codebasePath)
-            || this.fallbackCollectionName(codebasePath);
+        const resolve = this.contextLifecycle().resolveCollectionName;
+        if (typeof resolve !== 'function') {
+            throw new Error('Context lifecycle capability resolveCollectionName is required.');
+        }
+        return resolve.call(this.context, codebasePath);
     }
 
     private resolveStagedCollectionName(codebasePath: string, generationId: string): string {
-        const context = this.contextLifecycle();
-        if (typeof context.resolveStagedCollectionName === 'function') {
-            return context.resolveStagedCollectionName(codebasePath, generationId);
+        const resolve = this.contextLifecycle().resolveStagedCollectionName;
+        if (typeof resolve !== 'function') {
+            throw new Error('Context lifecycle capability resolveStagedCollectionName is required.');
         }
-        const normalizedGenerationId = generationId
-            .trim()
-            .replace(/[^a-zA-Z0-9_]+/g, '_')
-            .replace(/^_+|_+$/g, '');
-        return `${this.resolveCollectionName(codebasePath)}__gen_${normalizedGenerationId || 'run'}`;
+        return resolve.call(this.context, codebasePath, generationId);
     }
 
     private setWriteCollectionOverride(codebasePath: string, collectionName: string | null): void {
-        this.contextLifecycle().setWriteCollectionOverride?.(codebasePath, collectionName);
+        const setOverride = this.contextLifecycle().setWriteCollectionOverride;
+        if (typeof setOverride !== 'function') {
+            throw new Error('Context lifecycle capability setWriteCollectionOverride is required.');
+        }
+        setOverride.call(this.context, codebasePath, collectionName);
     }
 
     private loadIndexProfileForCodebase(codebasePath: string): IndexProfileView {
@@ -1012,16 +1050,28 @@ export class ToolHandlers {
     }
 
     private async clearIndexCompletionMarker(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
-        await this.contextLifecycle().clearIndexCompletionMarker?.(codebasePath, assertMutationCurrent);
+        const clear = this.contextLifecycle().clearIndexCompletionMarker;
+        if (typeof clear !== 'function') {
+            throw new Error('Context lifecycle capability clearIndexCompletionMarker is required.');
+        }
+        await clear.call(this.context, codebasePath, assertMutationCurrent);
     }
 
     private async pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string, assertMutationCurrent?: () => void): Promise<string[]> {
-        const dropped = await this.contextLifecycle().pruneIndexedCollectionFamily?.(codebasePath, keepCollectionName, { assertMutationCurrent });
+        const prune = this.contextLifecycle().pruneIndexedCollectionFamily;
+        if (typeof prune !== 'function') {
+            throw new Error('Context lifecycle capability pruneIndexedCollectionFamily is required.');
+        }
+        const dropped = await prune.call(this.context, codebasePath, keepCollectionName, { assertMutationCurrent });
         return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 
     private async pruneUnprovenStagedCollectionFamily(codebasePath: string, assertMutationCurrent?: () => void): Promise<string[]> {
-        const dropped = await this.contextLifecycle().pruneUnprovenStagedCollectionFamily?.(codebasePath, { assertMutationCurrent });
+        const prune = this.contextLifecycle().pruneUnprovenStagedCollectionFamily;
+        if (typeof prune !== 'function') {
+            throw new Error('Context lifecycle capability pruneUnprovenStagedCollectionFamily is required.');
+        }
+        const dropped = await prune.call(this.context, codebasePath, { assertMutationCurrent });
         return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 
@@ -1120,6 +1170,9 @@ export class ToolHandlers {
         if (!Array.isArray(indexingCodebases) || !indexingCodebases.includes(codebasePath)) {
             return;
         }
+        if (!this.mutationLeaseCoordinator) {
+            return;
+        }
         const skipGrace = Boolean(existingLease) || options?.skipGrace === true;
         if (!skipGrace && !this.isIndexingStateStale(codebasePath)) {
             return;
@@ -1133,19 +1186,18 @@ export class ToolHandlers {
         let releaseRecoveryLease = false;
         let operationTerminal = false;
         const persistRecoverySnapshot = (mutateSnapshot: () => void): void => {
-            if (!recoveryLease || typeof this.snapshotManager.saveCodebaseSnapshot !== "function") {
-                mutateSnapshot();
-                this.saveSnapshotIfSupported();
-                return;
+            if (!recoveryLease) {
+                throw new Error(`Interrupted-index recovery for '${codebasePath}' requires a mutation lease.`);
             }
-            this.mutationLeaseCoordinator?.assertCurrent(recoveryLease);
-            const assertCurrent = () => this.mutationLeaseCoordinator?.assertCurrent(recoveryLease!);
-            const committed = typeof this.snapshotManager.commitCodebaseLifecycleMutation === "function"
-                ? this.snapshotManager.commitCodebaseLifecycleMutation(mutateSnapshot, assertCurrent)
-                : (() => {
-                    mutateSnapshot();
-                    return this.snapshotManager.saveCodebaseSnapshot(false, assertCurrent);
-                })();
+            this.mutationLeaseCoordinator!.assertCurrent(recoveryLease);
+            if (typeof this.snapshotManager.commitCodebaseLifecycleMutation !== 'function') {
+                throw new Error('Missing required mutation capability: SnapshotManager.commitCodebaseLifecycleMutation.');
+            }
+            const assertCurrent = () => this.mutationLeaseCoordinator!.assertCurrent(recoveryLease!);
+            const committed = this.snapshotManager.commitCodebaseLifecycleMutation(
+                mutateSnapshot,
+                assertCurrent,
+            );
             if (!committed) {
                 throw new Error(`Failed to persist interrupted-index recovery for '${codebasePath}'.`);
             }
@@ -1447,7 +1499,7 @@ export class ToolHandlers {
         stats: {
             indexedFiles: number;
             totalChunks: number;
-            status: 'completed';
+            status: 'completed' | 'limit_reached';
         };
         indexFingerprint: IndexFingerprint;
     } | null {
@@ -1456,68 +1508,65 @@ export class ToolHandlers {
         }
 
         const marker = completionProof.marker;
-        const fingerprint = marker?.fingerprint;
-        if (!marker || !fingerprint || typeof fingerprint !== 'object') {
+        if (!marker) {
             return null;
         }
 
-        const record = fingerprint as Record<string, unknown>;
-        if (
-            typeof record.embeddingProvider !== 'string'
-            || typeof record.embeddingModel !== 'string'
-            || typeof record.vectorStoreProvider !== 'string'
-            || typeof record.schemaVersion !== 'string'
-        ) {
-            return null;
-        }
-
-        const embeddingDimension = Number(record.embeddingDimension);
-        const indexedFiles = Number(marker.indexedFiles);
-        const totalChunks = Number(marker.totalChunks);
-        if (
-            !Number.isFinite(embeddingDimension)
-            || !Number.isFinite(indexedFiles)
-            || indexedFiles < 0
-            || !Number.isFinite(totalChunks)
-            || totalChunks < 0
-        ) {
+        const decision = decideInterruptedIndexingRecovery(
+            marker as IndexCompletionMarkerDocument,
+            this.runtimeFingerprint,
+        );
+        if (decision.action !== 'promote_indexed') {
             return null;
         }
 
         return {
-            stats: {
-                indexedFiles,
-                totalChunks,
-                status: 'completed',
-            },
-            indexFingerprint: {
-                embeddingProvider: record.embeddingProvider as IndexFingerprint['embeddingProvider'],
-                embeddingModel: record.embeddingModel,
-                embeddingDimension,
-                vectorStoreProvider: record.vectorStoreProvider as IndexFingerprint['vectorStoreProvider'],
-                schemaVersion: record.schemaVersion as IndexFingerprint['schemaVersion'],
-            },
+            stats: decision.stats,
+            indexFingerprint: decision.indexFingerprint,
         };
     }
 
     private async recoverIndexedSnapshotFromCompletionProof(
         codebasePath: string,
-        completionProof: CompletionProofValidationResult
+        completionProof: CompletionProofValidationResult,
+        lease: import('./mutation-lease.js').RootMutationLease,
     ): Promise<boolean> {
+        const coordinator = this.mutationLeaseCoordinator;
+        if (!coordinator) {
+            return false;
+        }
+        if (!coordinator.isLeaseForRoot(lease, codebasePath)) {
+            throw new Error(`Completion-proof recovery lease does not own '${codebasePath}'.`);
+        }
+        const assertCurrent = () => coordinator.assertCurrent(lease);
+        assertCurrent();
         const recovered = this.extractIndexedRecoveryFromCompletionProof(completionProof);
         if (!recovered) {
             return false;
         }
 
+        assertCurrent();
         const collectionName = await this.getActiveIndexedCollectionNameForSnapshotRecovery(codebasePath);
-        this.snapshotManager.setCodebaseIndexed(
-            codebasePath,
-            recovered.stats,
-            recovered.indexFingerprint,
-            'verified',
-            collectionName
+        assertCurrent();
+        if (!collectionName) {
+            return false;
+        }
+        if (typeof this.snapshotManager.commitCodebaseLifecycleMutation !== 'function') {
+            throw new Error('Missing required mutation capability: SnapshotManager.commitCodebaseLifecycleMutation.');
+        }
+        const committed = this.snapshotManager.commitCodebaseLifecycleMutation(
+            () => this.snapshotManager.setCodebaseIndexed(
+                codebasePath,
+                recovered.stats,
+                recovered.indexFingerprint,
+                'verified',
+                collectionName,
+            ),
+            assertCurrent,
         );
-        this.saveSnapshotIfSupported();
+        if (!committed) {
+            throw new Error(`Failed to persist completion-proof recovery for '${codebasePath}'.`);
+        }
         return true;
     }
 
@@ -1571,10 +1620,12 @@ export class ToolHandlers {
         const context = this.context as unknown as {
             getVectorStore?: () => { hasCollection?: (collectionName: string) => Promise<boolean> | boolean };
             getActiveIndexedCollectionName?: (codebasePath: string) => Promise<string | null>;
-            resolveCollectionName?: (codebasePath: string) => string;
         };
 
-        if (typeof context.getVectorStore !== 'function' || typeof context.resolveCollectionName !== 'function') {
+        if (
+            typeof context.getVectorStore !== 'function'
+            || typeof context.getActiveIndexedCollectionName !== 'function'
+        ) {
             return { state: 'unknown' };
         }
 
@@ -1583,28 +1634,19 @@ export class ToolHandlers {
             return { state: 'unknown' };
         }
 
-        let collectionName: string;
+        let collectionName: string | null;
         try {
-            const snapshotCollectionName = this.getSnapshotCollectionName(codebasePath);
-            if (snapshotCollectionName) {
-                collectionName = snapshotCollectionName;
-            } else if (typeof context.getActiveIndexedCollectionName === 'function') {
-                const activeCollectionName = await context.getActiveIndexedCollectionName(codebasePath);
-                if (typeof activeCollectionName === 'string' && activeCollectionName.trim().length > 0) {
-                    collectionName = activeCollectionName;
-                } else {
-                    collectionName = context.resolveCollectionName(codebasePath);
-                }
-            } else {
-                collectionName = context.resolveCollectionName(codebasePath);
-            }
+            const activeCollectionName = await context.getActiveIndexedCollectionName(codebasePath);
+            collectionName = typeof activeCollectionName === 'string' && activeCollectionName.trim().length > 0
+                ? activeCollectionName.trim()
+                : null;
         } catch (error) {
             console.warn(`[SEARCH-READINESS] Failed to resolve collection name for '${codebasePath}': ${formatUnknownError(error)}`);
             return { state: 'unknown' };
         }
 
-        if (typeof collectionName !== 'string' || collectionName.trim().length === 0) {
-            return { state: 'unknown' };
+        if (!collectionName) {
+            return { state: 'missing' };
         }
 
         try {

@@ -291,6 +291,7 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         });
         await context.recreateSynchronizerForCodebase(repoPath);
         await context.indexCodebase(repoPath);
+        context.getActiveIndexedCollectionName = async () => context.resolveCollectionName(repoPath);
 
         let syncTriggered = false;
         const syncManager = {
@@ -317,7 +318,7 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         const testHandlers = handlers as unknown as {
             validateCompletionProof: () => Promise<{ outcome: 'ok' }>;
         };
-        testHandlers.validateCompletionProof = async () => ({ outcome: 'ok' });
+        testHandlers.validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const initialOutline = parsePayload(await handlers.handleFileOutline({
             path: repoPath,
@@ -453,6 +454,7 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
         });
         await context.recreateSynchronizerForCodebase(repoPath);
         await context.indexCodebase(repoPath);
+        context.getActiveIndexedCollectionName = async () => context.resolveCollectionName(repoPath);
 
         let ensureFreshnessCalls = 0;
         const syncManager = {
@@ -479,7 +481,7 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
         const testHandlers = handlers as unknown as {
             validateCompletionProof: () => Promise<{ outcome: 'ok' }>;
         };
-        testHandlers.validateCompletionProof = async () => ({ outcome: 'ok' });
+        testHandlers.validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const initialOutline = parsePayload(await handlers.handleFileOutline({
             path: repoPath,

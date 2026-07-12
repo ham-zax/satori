@@ -269,8 +269,15 @@ test('coalesced sync callers receive the same durable completed receipt', async 
     const started = new Promise<void>((resolve) => {
         syncStarted = resolve;
     });
+    let atomicPublicationObserved = false;
     const context = {
-        async reindexByChange() {
+        async reindexByChange(_path: string, _progress: unknown, options: {
+            publishMutation?: (publish: () => void) => void;
+        }) {
+            assert.equal(typeof options.publishMutation, 'function');
+            options.publishMutation?.(() => {
+                atomicPublicationObserved = true;
+            });
             syncStarted();
             await syncGate;
             return { added: 1, removed: 0, modified: 0, changedFiles: ['src/new.ts'] };
@@ -293,6 +300,7 @@ test('coalesced sync callers receive the same durable completed receipt', async 
     assert.equal(secondDecision.mode, 'coalesced');
     assert.equal(firstDecision.operation?.phase, 'completed');
     assert.equal(secondDecision.operation?.id, firstDecision.operation?.id);
+    assert.equal(atomicPublicationObserved, true);
     assert.equal(coordinator.getActiveLease(codebasePath), undefined);
 
     fs.rmSync(codebasePath, { recursive: true, force: true });

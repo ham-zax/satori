@@ -56,6 +56,19 @@ test('validateCompletionProof accepts non-negative integer marker counts', async
     assert.equal(result.outcome, 'valid');
 });
 
+test('validateCompletionProof rejects unsafe marker counts', async () => {
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => marker({
+            totalChunks: Number.MAX_SAFE_INTEGER + 1,
+        }),
+    });
+
+    assert.equal(result.outcome, 'stale_local');
+    assert.equal(result.reason, 'invalid_payload');
+});
+
 test('validateCompletionProof requires reindex when a legacy marker lacks parser identity', async () => {
     const currentFingerprint: IndexFingerprint = {
         ...RUNTIME_FINGERPRINT,
@@ -94,4 +107,52 @@ test('validateCompletionProof requires reindex for v3 extractor and relationship
     });
 
     assert.equal(result.outcome, 'fingerprint_mismatch');
+});
+
+test('validateCompletionProof retains partial status and the complete fingerprint', async () => {
+    const fingerprint: IndexFingerprint = {
+        ...RUNTIME_FINGERPRINT,
+        parserVersion: 'parser-v1',
+        extractorVersion: 'extractor-v1',
+        relationshipVersion: 'relationships-v1',
+    };
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: fingerprint,
+        getIndexCompletionMarker: async () => marker({
+            fingerprint,
+            indexStatus: 'limit_reached',
+        }),
+    });
+
+    assert.equal(result.outcome, 'valid');
+    assert.equal(result.marker?.indexStatus, 'limit_reached');
+    assert.deepEqual(result.marker?.fingerprint, fingerprint);
+});
+
+test('validateCompletionProof normalizes a legacy marker status to completed', async () => {
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => marker(),
+    });
+
+    assert.equal(result.outcome, 'valid');
+    assert.equal(result.marker?.indexStatus, 'completed');
+});
+
+test('validateCompletionProof rejects malformed expanded fingerprint fields', async () => {
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => marker({
+            fingerprint: {
+                ...RUNTIME_FINGERPRINT,
+                relationshipVersion: false,
+            },
+        }),
+    });
+
+    assert.equal(result.outcome, 'stale_local');
+    assert.equal(result.reason, 'invalid_payload');
 });

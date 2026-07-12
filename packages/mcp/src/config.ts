@@ -42,6 +42,37 @@ export interface IndexFingerprint {
     relationshipVersion?: string;
 }
 
+export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    const record = value as Record<string, unknown>;
+    if (
+        !['OpenAI', 'VoyageAI', 'Gemini', 'Ollama'].includes(String(record.embeddingProvider))
+        || typeof record.embeddingModel !== 'string'
+        || record.embeddingModel.trim().length === 0
+        || !Number.isSafeInteger(record.embeddingDimension)
+        || Number(record.embeddingDimension) <= 0
+        || record.vectorStoreProvider !== 'Milvus'
+        || (record.schemaVersion !== 'dense_v3' && record.schemaVersion !== 'hybrid_v3')
+        || (record.parserVersion !== undefined && typeof record.parserVersion !== 'string')
+        || (record.extractorVersion !== undefined && typeof record.extractorVersion !== 'string')
+        || (record.relationshipVersion !== undefined && typeof record.relationshipVersion !== 'string')
+    ) {
+        return null;
+    }
+    return {
+        embeddingProvider: record.embeddingProvider as EmbeddingProvider,
+        embeddingModel: record.embeddingModel,
+        embeddingDimension: record.embeddingDimension as number,
+        vectorStoreProvider: record.vectorStoreProvider,
+        schemaVersion: record.schemaVersion,
+        ...(record.parserVersion !== undefined ? { parserVersion: record.parserVersion } : {}),
+        ...(record.extractorVersion !== undefined ? { extractorVersion: record.extractorVersion } : {}),
+        ...(record.relationshipVersion !== undefined ? { relationshipVersion: record.relationshipVersion } : {}),
+    };
+}
+
 export function indexFingerprintsEqual(left: IndexFingerprint, right: IndexFingerprint): boolean {
     return left.embeddingProvider === right.embeddingProvider
         && left.embeddingModel === right.embeddingModel

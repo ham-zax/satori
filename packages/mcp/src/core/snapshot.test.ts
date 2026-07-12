@@ -12,6 +12,7 @@ type SnapshotPrivateAccess = {
     sleepSync(ms: number): boolean;
     acquireSnapshotLock(): { fd: number; path: string } | null;
     refreshDerivedState(): void;
+    isValidCodebaseInfoShape(value: unknown): boolean;
 };
 type SnapshotDirtyView = { isDirty: boolean };
 type IndexedInfoView = { indexedFiles?: number; ignoreRulesVersion?: number };
@@ -32,6 +33,29 @@ const FINGERPRINT_B: IndexFingerprint = {
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3'
 };
+
+test('SnapshotManager rejects invalid lifecycle counts and progress during shape validation', () => {
+    const manager = new SnapshotManager(FINGERPRINT_A) as unknown as SnapshotPrivateAccess;
+    const lastUpdated = '2026-07-12T00:00:00.000Z';
+    const invalid = [
+        { status: 'indexing', indexingPercentage: -1, lastUpdated },
+        { status: 'indexing', indexingPercentage: 101, lastUpdated },
+        { status: 'indexed', indexedFiles: -1, totalChunks: 1, indexStatus: 'completed', lastUpdated },
+        { status: 'indexed', indexedFiles: 1.5, totalChunks: 1, indexStatus: 'completed', lastUpdated },
+        { status: 'indexed', indexedFiles: 1, totalChunks: Number.MAX_SAFE_INTEGER + 1, indexStatus: 'completed', lastUpdated },
+        { status: 'sync_completed', added: 0, removed: -1, modified: 0, totalChanges: 0, lastUpdated },
+        { status: 'sync_completed', added: 0, removed: 0, modified: 0.5, totalChanges: 0, lastUpdated },
+    ];
+
+    for (const value of invalid) {
+        assert.equal(manager.isValidCodebaseInfoShape(value), false);
+    }
+    assert.equal(manager.isValidCodebaseInfoShape({
+        status: 'indexing',
+        indexingPercentage: 42.5,
+        lastUpdated,
+    }), true);
+});
 
 function operationReceipt(
     codebasePath: string,
@@ -1788,5 +1812,168 @@ test('commitCodebaseCallGraphSidecar fences with beforeCommit and rolls back on 
 
         assert.equal(manager.commitCodebaseCallGraphSidecar(codebase, nextSidecar), true);
         assert.equal(manager.getCodebaseInfo(codebase)?.callGraphSidecar?.nodeCount, 3);
+    });
+});
+
+test('v3 object maps reject arrays instead of accepting them as empty records', () => {
+    withTempHome((homeDir) => {
+        const { dir, file } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+            formatVersion: 'v3',
+            codebases: [],
+            clearTombstones: {},
+            latestOperations: [],
+            lastUpdated: new Date().toISOString(),
+        }));
+
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.loadCodebaseSnapshot();
+
+        assert.equal(manager.getAllCodebases().length, 0);
+        assert.equal(typeof manager.getSnapshotCorruptionWarning()?.quarantinedPath, 'string');
+    });
+});
+
+test('metadata-only save cannot resurrect stale indexing after the same operation completed', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-metadata-lifecycle');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const seed = new SnapshotManager(FINGERPRINT_A);
+        seed.setCodebaseIndexing(codebase, 25);
+        seed.setLatestOperation(codebase, operationReceipt(codebase, 1, 'scanning'));
+        assert.equal(seed.saveCodebaseSnapshot(), true);
+
+        const staleMetadataWriter = new SnapshotManager(FINGERPRINT_A);
+        staleMetadataWriter.loadCodebaseSnapshot();
+
+        const lifecycleWriter = new SnapshotManager(FINGERPRINT_A);
+        lifecycleWriter.loadCodebaseSnapshot();
+        lifecycleWriter.setCodebaseIndexed(codebase, {
+            indexedFiles: 4,
+            totalChunks: 12,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        lifecycleWriter.setLatestOperation(codebase, operationReceipt(codebase, 1, 'completed'));
+        assert.equal(lifecycleWriter.saveCodebaseSnapshot(), true);
+
+        staleMetadataWriter.setCodebaseIgnoreControlSignature(codebase, 'metadata-from-stale-reader');
+        assert.equal(staleMetadataWriter.saveCodebaseSnapshot(), true);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        assert.equal(reader.getCodebaseStatus(codebase), 'indexed');
+        assert.equal(reader.getLatestOperation(codebase)?.phase, 'completed');
+        assert.equal(reader.getCodebaseInfo(codebase)?.ignoreControlSignature, 'metadata-from-stale-reader');
+    });
+});
+
+test('metadata-only merge preserves concurrent disk metadata and overlays only the changed field', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-metadata-overlay');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const seed = new SnapshotManager(FINGERPRINT_A);
+        seed.setCodebaseIndexed(codebase, {
+            indexedFiles: 2,
+            totalChunks: 6,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        assert.equal(seed.saveCodebaseSnapshot(), true);
+
+        const manifestWriter = new SnapshotManager(FINGERPRINT_A);
+        manifestWriter.loadCodebaseSnapshot();
+        const ignoreWriter = new SnapshotManager(FINGERPRINT_A);
+        ignoreWriter.loadCodebaseSnapshot();
+
+        manifestWriter.setCodebaseIndexManifest(codebase, ['src/main.ts']);
+        assert.equal(manifestWriter.saveCodebaseSnapshot(), true);
+        ignoreWriter.setCodebaseIgnoreControlSignature(codebase, 'ignore-v2');
+        assert.equal(ignoreWriter.saveCodebaseSnapshot(), true);
+
+        const reader = new SnapshotManager(FINGERPRINT_A);
+        reader.loadCodebaseSnapshot();
+        const info = reader.getCodebaseInfo(codebase);
+        assert.deepEqual(info?.indexManifest?.indexedPaths, ['src/main.ts']);
+        assert.equal(info?.ignoreControlSignature, 'ignore-v2');
+        assert.equal(info?.status, 'indexed');
+    });
+});
+
+test('quarantine does not move a valid replacement written after the failed read', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-quarantine-replacement');
+        fs.mkdirSync(codebase, { recursive: true });
+        const { dir, file } = snapshotPathsFor(homeDir);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, '{ invalid snapshot');
+
+        const replacement = {
+            formatVersion: 'v3',
+            codebases: {
+                [codebase]: {
+                    status: 'indexed',
+                    indexedFiles: 1,
+                    totalChunks: 2,
+                    indexStatus: 'completed',
+                    lastUpdated: new Date().toISOString(),
+                    indexFingerprint: FINGERPRINT_A,
+                    fingerprintSource: 'verified',
+                },
+            },
+            clearTombstones: {},
+            latestOperations: {},
+            lastUpdated: new Date().toISOString(),
+        };
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        const privateManager = manager as unknown as SnapshotPrivateAccess;
+        const acquire = privateManager.acquireSnapshotLock.bind(manager);
+        let replaced = false;
+        privateManager.acquireSnapshotLock = () => {
+            if (!replaced) {
+                replaced = true;
+                fs.writeFileSync(file, JSON.stringify(replacement, null, 2));
+            }
+            return acquire();
+        };
+
+        manager.loadCodebaseSnapshot();
+
+        assert.equal(manager.getCodebaseStatus(codebase), 'indexed');
+        assert.equal(manager.getSnapshotCorruptionWarning(), undefined);
+        assert.equal(
+            fs.readdirSync(dir).some((name) => name.startsWith('mcp-codebase-snapshot.json.corrupt-')),
+            false,
+        );
+    });
+});
+
+test('snapshot getters return clones instead of mutable internal records', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-cloned-getters');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexed(codebase, {
+            indexedFiles: 3,
+            totalChunks: 9,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        manager.setCodebaseIndexManifest(codebase, ['src/original.ts']);
+
+        const direct = manager.getCodebaseInfo(codebase) as unknown as {
+            status: string;
+            indexManifest?: { indexedPaths: string[] };
+        };
+        direct.status = 'indexfailed';
+        direct.indexManifest?.indexedPaths.push('src/injected.ts');
+
+        const listed = manager.getAllCodebases()[0].info as unknown as {
+            indexManifest?: { indexedPaths: string[] };
+        };
+        listed.indexManifest?.indexedPaths.push('src/list-injected.ts');
+
+        assert.equal(manager.getCodebaseStatus(codebase), 'indexed');
+        assert.deepEqual(manager.getCodebaseIndexedPaths(codebase), ['src/original.ts']);
     });
 });

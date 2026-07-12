@@ -9,7 +9,10 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationships-v1',
 };
 
 function buildMarker(overrides: Partial<IndexCompletionMarkerDocument> = {}): IndexCompletionMarkerDocument {
@@ -94,4 +97,37 @@ test('decideInterruptedIndexingRecovery treats legacy markers without indexStatu
     if (decision.action === 'promote_indexed') {
         assert.equal(decision.stats.status, 'completed');
     }
+});
+
+test('decideInterruptedIndexingRecovery preserves the complete marker fingerprint', () => {
+    const decision = decideInterruptedIndexingRecovery(buildMarker(), RUNTIME_FINGERPRINT);
+
+    assert.equal(decision.action, 'promote_indexed');
+    if (decision.action === 'promote_indexed') {
+        assert.deepEqual(decision.indexFingerprint, RUNTIME_FINGERPRINT);
+    }
+});
+
+test('decideInterruptedIndexingRecovery rejects fractional and unsafe marker counts', () => {
+    for (const marker of [
+        buildMarker({ indexedFiles: 1.5 }),
+        buildMarker({ totalChunks: Number.MAX_SAFE_INTEGER + 1 }),
+    ]) {
+        const decision = decideInterruptedIndexingRecovery(marker, RUNTIME_FINGERPRINT);
+        assert.equal(decision.action, 'mark_failed');
+        assert.equal(decision.reason, 'invalid_marker_payload');
+    }
+});
+
+test('decideInterruptedIndexingRecovery rejects malformed expanded fingerprint fields', () => {
+    const marker = buildMarker({
+        fingerprint: {
+            ...RUNTIME_FINGERPRINT,
+            parserVersion: 17,
+        } as unknown as IndexFingerprint,
+    });
+
+    const decision = decideInterruptedIndexingRecovery(marker, RUNTIME_FINGERPRINT);
+    assert.equal(decision.action, 'mark_failed');
+    assert.equal(decision.reason, 'invalid_marker_payload');
 });

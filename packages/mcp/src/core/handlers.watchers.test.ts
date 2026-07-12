@@ -190,6 +190,13 @@ function createMutableSnapshot(repoPath: string, initialStatus: 'not_found' | 'i
             currentStatus = 'indexed';
         },
         setCodebaseIndexManifest: () => undefined,
+        commitCodebaseLifecycleMutation: (mutate: () => void, beforeCommit?: () => void) => {
+            beforeCommit?.();
+            mutate();
+            beforeCommit?.();
+            saveCalls += 1;
+            return true;
+        },
         removeCodebaseCompletely,
         markCodebaseCleared: removeCodebaseCompletely,
         saveCodebaseSnapshot: () => {
@@ -250,7 +257,13 @@ test('handleIndexCodebase touches the watch list when create starts successfully
             getVectorStore: () => ({ checkCollectionLimit: async () => true }),
             addCustomExtensions: () => undefined,
             addCustomIgnorePatterns: () => undefined,
+            resolveCollectionName: () => 'base_collection',
+            resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
+            setWriteCollectionOverride: () => undefined,
+            getActiveIndexedCollectionName: async () => null,
             clearIndexCompletionMarker: async () => undefined,
+            pruneIndexedCollectionFamily: async () => [],
+            pruneUnprovenStagedCollectionFamily: async () => [],
         } as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
@@ -273,7 +286,13 @@ test('handleReindexCodebase touches the watch list when reindex starts successfu
             getVectorStore: () => ({ checkCollectionLimit: async () => true }),
             addCustomExtensions: () => undefined,
             addCustomIgnorePatterns: () => undefined,
+            resolveCollectionName: () => 'base_collection',
+            resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
+            setWriteCollectionOverride: () => undefined,
+            getActiveIndexedCollectionName: async () => null,
             clearIndexCompletionMarker: async () => undefined,
+            pruneIndexedCollectionFamily: async () => [],
+            pruneUnprovenStagedCollectionFamily: async () => [],
         } as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
@@ -301,6 +320,7 @@ test('handleSyncCodebase touches the watch list on success and handleClearIndex 
         const watch = createWatchRecorder();
         const context = {
             clearIndex: async () => undefined,
+            resolveCollectionName: () => 'base_collection',
         } as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
@@ -334,6 +354,7 @@ test('handleClearIndex clears a tracked repo after its directory was deleted', a
             clearIndex: async (pathToClear: string) => {
                 clearedPaths.push(pathToClear);
             },
+            resolveCollectionName: () => 'base_collection',
         } as unknown as HandlerContext;
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);

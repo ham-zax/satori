@@ -4,7 +4,10 @@ import {
     Context,
     Embedding,
     INDEX_COMPLETION_MARKER_DOC_ID,
-    INDEX_COMPLETION_MARKER_FILE_EXTENSION
+    INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+    LANGUAGE_PARSER_VERSION,
+    SYMBOL_EXTRACTOR_VERSION,
+    RELATIONSHIP_BUILDER_VERSION,
 } from '@zokizuan/satori-core';
 import type {
     EmbeddingVector,
@@ -122,6 +125,15 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
             });
             return rows;
         },
+        async count(collectionName, filter) {
+            const documents = Array.from(ensureCollection(collectionName).values());
+            if (filter.includes(`fileExtension != "${INDEX_COMPLETION_MARKER_FILE_EXTENSION}"`)) {
+                return documents.filter((document) => (
+                    document.fileExtension !== INDEX_COMPLETION_MARKER_FILE_EXTENSION
+                )).length;
+            }
+            return documents.length;
+        },
         async checkCollectionLimit() {
             return true;
         }
@@ -155,13 +167,16 @@ function buildMarker(): IndexCompletionMarkerDocument {
         codebasePath: '/repo/app',
         fingerprint: {
             embeddingProvider: 'VoyageAI',
-            embeddingModel: 'voyage-4-large',
-            embeddingDimension: 1024,
+            embeddingModel: 'VoyageAI',
+            embeddingDimension: 4,
             vectorStoreProvider: 'Milvus',
-            schemaVersion: 'hybrid_v3'
+            schemaVersion: 'hybrid_v3',
+            parserVersion: LANGUAGE_PARSER_VERSION,
+            extractorVersion: SYMBOL_EXTRACTOR_VERSION,
+            relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
         },
         indexedFiles: 169,
-        totalChunks: 728,
+        totalChunks: 1,
         completedAt: '2026-02-27T23:57:10.000Z',
         runId: 'run_20260227'
     };
@@ -208,8 +223,8 @@ test('Context marker lifecycle writes, reads, and clears completion marker doc',
 
     await context.writeIndexCompletionMarker(codebasePath, {
         ...buildMarker(),
-        indexedFiles: 0,
-        totalChunks: 0,
+        indexedFiles: 1,
+        totalChunks: 1,
     });
     const marker = await context.getIndexCompletionMarker(codebasePath);
     assert.ok(marker);

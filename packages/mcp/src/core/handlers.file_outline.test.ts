@@ -198,6 +198,18 @@ async function writeTestSymbolRegistry(repoPath: string, symbols: SymbolRecord[]
 
     const registry = buildSymbolRegistry({ manifest, symbols });
     const result = await writeSymbolRegistrySidecar({ registry });
+    await writeRelationshipSidecar({
+        normalizedRootPath: repoPath,
+        symbolRegistryManifestHash: result.manifestHash,
+        relationshipVersion: manifest.relationshipVersion,
+        builtAt: manifest.builtAt,
+        files: manifest.files,
+        records: [],
+        analysisByFile: new Map(manifest.files.map((file) => [file.path, {
+            moduleBindings: [],
+            callSites: [],
+        }])),
+    });
     return { registry, result };
 }
 

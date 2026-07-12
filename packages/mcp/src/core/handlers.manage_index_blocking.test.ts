@@ -66,13 +66,43 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     });
 }
 
+function requiredContextMutationCapabilities() {
+    return {
+        resolveCollectionName: () => 'test_collection',
+        resolveStagedCollectionName: (_codebasePath: string, generationId: string) => `test_collection__gen_${generationId}`,
+        setWriteCollectionOverride: () => undefined,
+        getActiveIndexedCollectionName: async () => null,
+        clearIndexCompletionMarker: async () => undefined,
+        pruneIndexedCollectionFamily: async () => [],
+        pruneUnprovenStagedCollectionFamily: async () => [],
+    };
+}
+
+function requiredSnapshotMutationCapabilities() {
+    return {
+        saveCodebaseSnapshot: () => true,
+        setCodebaseIndexing: () => undefined,
+        setCodebaseIndexFailed: () => undefined,
+        setCodebaseIndexed: () => undefined,
+        setCodebaseIndexManifest: () => undefined,
+        commitCodebaseLifecycleMutation: (mutate: () => void, beforeCommit?: () => void) => {
+            beforeCommit?.();
+            mutate();
+            beforeCommit?.();
+            return true;
+        },
+    };
+}
+
 function createHandlers(repoPath: string): ToolHandlers {
     const context = {
+        ...requiredContextMutationCapabilities(),
         clearIndex: async () => undefined,
         reindexByChange: async () => ({ added: 0, removed: 0, modified: 0 })
     } as unknown as HandlerContext;
 
     const snapshotManager = {
+        ...requiredSnapshotMutationCapabilities(),
         getAllCodebases: () => [{ path: repoPath, info: { status: 'indexing' } }],
         getIndexingCodebases: () => [repoPath],
         getIndexedCodebases: () => [],
@@ -83,7 +113,6 @@ function createHandlers(repoPath: string): ToolHandlers {
             lastUpdated: '2026-02-27T23:57:03.000Z'
         }),
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-        saveCodebaseSnapshot: () => undefined
     } as unknown as HandlerSnapshotManager;
 
     const syncManager = {
@@ -452,6 +481,21 @@ test('handleClearIndex persists one clear receipt before clearing and keeps it a
             },
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
             markCodebaseCleared: () => { currentInfo = undefined; },
+            commitCodebaseLifecycleMutation: (mutate: () => void, beforeCommit?: () => void) => {
+                const previousInfo = currentInfo ? structuredClone(currentInfo) : undefined;
+                try {
+                    beforeCommit?.();
+                    mutate();
+                    const saved = receipts.snapshotMethods.saveCodebaseSnapshot();
+                    if (!saved) {
+                        currentInfo = previousInfo;
+                    }
+                    return saved;
+                } catch (error) {
+                    currentInfo = previousInfo;
+                    throw error;
+                }
+            },
             ...receipts.snapshotMethods,
         } as unknown as HandlerSnapshotManager;
         const syncManager = {
@@ -899,6 +943,7 @@ test('recent indexing state does not trigger stale-index recovery probes', async
         let markerCalls = 0;
 
         const context = {
+            ...requiredContextMutationCapabilities(),
             getIndexCompletionMarker: async () => {
                 markerCalls += 1;
                 return null;
@@ -906,6 +951,7 @@ test('recent indexing state does not trigger stale-index recovery probes', async
         } as unknown as HandlerContext;
 
         const snapshotManager = {
+            ...requiredSnapshotMutationCapabilities(),
             getAllCodebases: () => [{ path: repoPath, info: { status: 'indexing' } }],
             getIndexingCodebases: () => [repoPath],
             getIndexedCodebases: () => [],
@@ -917,7 +963,6 @@ test('recent indexing state does not trigger stale-index recovery probes', async
             }),
             getIndexingProgress: () => 37,
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-            saveCodebaseSnapshot: () => undefined
         } as unknown as HandlerSnapshotManager;
 
         const syncManager = { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager;
@@ -927,6 +972,51 @@ test('recent indexing state does not trigger stale-index recovery probes', async
         const envelope = parseManageEnvelope(response);
         assertBlockedEnvelope(envelope, repoPath, 'create');
         assert.equal(markerCalls, 0);
+    });
+});
+
+test('stale indexing state is not recovered without a cross-process mutation coordinator', async () => {
+    await withTempRepo(async (repoPath) => {
+        const currentInfo: IndexingInfo = {
+            status: 'indexing',
+            indexingPercentage: 63,
+            lastUpdated: '2026-02-27T23:57:03.000Z',
+        };
+        let markerCalls = 0;
+        let failedCalls = 0;
+        let saveCalls = 0;
+        const context = {
+            getIndexCompletionMarker: async () => {
+                markerCalls += 1;
+                return null;
+            },
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
+            getIndexingCodebases: () => [repoPath],
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => 'indexing',
+            getCodebaseInfo: () => currentInfo,
+            getIndexingProgress: () => currentInfo.indexingPercentage,
+            setCodebaseIndexFailed: () => { failedCalls += 1; },
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => { saveCalls += 1; return true; },
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            { getWatchDebounceMs: () => 2000 } as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+
+        const envelope = parseManageEnvelope(await handlers.handleGetIndexingStatus({ path: repoPath }));
+
+        assert.equal(envelope.status, 'not_ready');
+        assert.equal(envelope.reason, 'indexing');
+        assert.equal(markerCalls, 0);
+        assert.equal(failedCalls, 0);
+        assert.equal(saveCalls, 0);
     });
 });
 
@@ -945,6 +1035,7 @@ test('exclusive create lease supersedes recent abandoned indexing without waitin
             ownerId: 'exclusive-create-owner',
         });
         const context = {
+            ...requiredContextMutationCapabilities(),
             getIndexCompletionMarker: async () => {
                 markerCalls += 1;
                 return null;
@@ -952,6 +1043,7 @@ test('exclusive create lease supersedes recent abandoned indexing without waitin
             getCollectionList: async () => [],
         } as unknown as HandlerContext;
         const snapshotManager = {
+            ...requiredSnapshotMutationCapabilities(),
             getAllCodebases: () => [{ path: repoPath, info: currentInfo }],
             getIndexingCodebases: () => currentInfo.status === 'indexing' ? [repoPath] : [],
             getIndexedCodebases: () => [],
@@ -969,7 +1061,6 @@ test('exclusive create lease supersedes recent abandoned indexing without waitin
             },
             setCodebaseIndexing: () => undefined,
             ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-            saveCodebaseSnapshot: () => true,
             startOperation: () => undefined,
             transitionOperation: () => undefined,
             commitOperationPhase: (

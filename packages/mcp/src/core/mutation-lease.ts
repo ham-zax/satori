@@ -173,6 +173,16 @@ export class MutationLeaseCoordinator {
         }
     }
 
+    public publishWhileCurrent(lease: RootMutationLease, publish: () => void): void {
+        this.withRootLock(lease.canonicalRoot, () => {
+            const state = this.readState(lease.canonicalRoot);
+            if (!sameLease(state.lease, lease)) {
+                throw new MutationLeaseLostError(lease);
+            }
+            publish();
+        });
+    }
+
     public isLeaseForRoot(lease: RootMutationLease, root: string): boolean {
         return lease.canonicalRoot === canonicalizeRoot(root);
     }

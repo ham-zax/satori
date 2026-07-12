@@ -499,6 +499,14 @@ export class SyncManager {
                 await this.context.recreateSynchronizerForCodebase(
                     codebasePath,
                     mutationLease ? () => this.assertMutationCurrent(mutationLease) : undefined,
+                    mutationLease
+                        ? (publish: () => void) => {
+                            if (!this.mutationLeaseCoordinator) {
+                                throw new Error(`Cannot publish synchronizer baseline for '${codebasePath}' without a mutation lease coordinator.`);
+                            }
+                            this.mutationLeaseCoordinator.publishWhileCurrent(mutationLease, publish);
+                        }
+                        : undefined,
                 );
                 this.assertMutationCurrent(mutationLease);
             }
@@ -673,6 +681,12 @@ export class SyncManager {
                 maintainCompletionMarker: true,
                 ...(lease ? {
                     assertMutationCurrent: () => this.assertMutationCurrent(lease),
+                    publishMutation: (publish: () => void) => {
+                        if (!this.mutationLeaseCoordinator) {
+                            throw new Error(`Cannot publish sync checkpoint for '${codebasePath}' without a mutation lease coordinator.`);
+                        }
+                        this.mutationLeaseCoordinator.publishWhileCurrent(lease, publish);
+                    },
                 } : {}),
             };
             if (lease) {

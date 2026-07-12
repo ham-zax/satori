@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { indexFingerprintsEqual, type IndexFingerprint } from "../config.js";
+import {
+    indexFingerprintsEqual,
+    parseIndexFingerprint,
+    type IndexFingerprint,
+} from "../config.js";
 
 export type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mismatch" | "probe_failed";
 
@@ -15,15 +19,18 @@ export type CompletionProofReason =
 export type CompletionProofValidationResult = {
     outcome: CompletionProofOutcome;
     reason?: CompletionProofReason;
-    marker?: {
-        kind?: string;
-        codebasePath?: string;
-        fingerprint?: unknown;
-        indexedFiles?: number;
-        totalChunks?: number;
-        completedAt?: string;
-        runId?: string;
-    };
+    marker?: ValidatedCompletionMarker;
+};
+
+export type ValidatedCompletionMarker = {
+    kind: 'satori_index_completion_v1';
+    codebasePath: string;
+    fingerprint: IndexFingerprint;
+    indexedFiles: number;
+    totalChunks: number;
+    completedAt: string;
+    runId: string;
+    indexStatus: 'completed' | 'limit_reached';
 };
 
 export type CompletionMarkerReader = (codebasePath: string) => Promise<unknown>;
@@ -66,60 +73,98 @@ function canonicalizeCodebasePath(codebasePath: string): string {
     }
 }
 
-function markerMatchesRuntimeFingerprint(marker: unknown, runtimeFingerprint?: IndexFingerprint): boolean {
+function markerMatchesRuntimeFingerprint(
+    marker: ValidatedCompletionMarker,
+    runtimeFingerprint?: IndexFingerprint,
+): boolean {
     if (!runtimeFingerprint || typeof runtimeFingerprint !== "object") {
         return true;
     }
-    const fingerprint = (marker as { fingerprint?: unknown } | null)?.fingerprint;
-    if (!fingerprint || typeof fingerprint !== "object") {
-        return false;
-    }
-    const record = fingerprint as Record<string, unknown>;
-    return indexFingerprintsEqual(record as unknown as IndexFingerprint, runtimeFingerprint);
+    return indexFingerprintsEqual(marker.fingerprint, runtimeFingerprint);
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
     return typeof value === "number"
-        && Number.isInteger(value)
+        && Number.isSafeInteger(value)
         && value >= 0;
 }
 
-function validateMarkerShape(
-    expectedCodebasePath: string,
-    marker: unknown
-): { ok: true } | { ok: false; reason: CompletionProofReason } {
+export function parseCompletionMarker(
+    marker: unknown,
+): ValidatedCompletionMarker | null {
     if (!marker || typeof marker !== "object") {
-        return { ok: false, reason: "invalid_payload" };
+        return null;
     }
 
     const record = marker as Record<string, unknown>;
     if (record.kind !== "satori_index_completion_v1") {
-        return { ok: false, reason: "invalid_marker_kind" };
+        return null;
     }
 
     if (typeof record.codebasePath !== "string" || record.codebasePath.trim().length === 0) {
-        return { ok: false, reason: "invalid_payload" };
+        return null;
     }
 
-    if (!record.fingerprint || typeof record.fingerprint !== "object") {
-        return { ok: false, reason: "invalid_payload" };
+    const fingerprint = parseIndexFingerprint(record.fingerprint);
+    if (!fingerprint) {
+        return null;
     }
 
     if (!isNonNegativeInteger(record.indexedFiles) || !isNonNegativeInteger(record.totalChunks)) {
-        return { ok: false, reason: "invalid_payload" };
+        return null;
     }
 
     if (typeof record.completedAt !== "string" || Number.isNaN(Date.parse(record.completedAt))) {
-        return { ok: false, reason: "invalid_payload" };
+        return null;
+    }
+
+    if (typeof record.runId !== "string" || record.runId.trim().length === 0) {
+        return null;
+    }
+
+    if (record.indexStatus !== undefined
+        && record.indexStatus !== 'completed'
+        && record.indexStatus !== 'limit_reached') {
+        return null;
+    }
+
+    return {
+        kind: 'satori_index_completion_v1',
+        codebasePath: record.codebasePath,
+        fingerprint,
+        indexedFiles: record.indexedFiles,
+        totalChunks: record.totalChunks,
+        completedAt: record.completedAt,
+        runId: record.runId,
+        indexStatus: record.indexStatus === 'limit_reached'
+            ? 'limit_reached'
+            : 'completed',
+    };
+}
+
+function validateMarkerShape(
+    expectedCodebasePath: string,
+    marker: unknown,
+): { ok: true; marker: ValidatedCompletionMarker } | { ok: false; reason: CompletionProofReason } {
+    if (marker && typeof marker === 'object') {
+        const kind = (marker as { kind?: unknown }).kind;
+        if (kind !== 'satori_index_completion_v1') {
+            return { ok: false, reason: 'invalid_marker_kind' };
+        }
+    }
+
+    const parsedMarker = parseCompletionMarker(marker);
+    if (!parsedMarker) {
+        return { ok: false, reason: 'invalid_payload' };
     }
 
     const expectedCanonical = canonicalizeCodebasePath(expectedCodebasePath);
-    const markerCanonical = canonicalizeCodebasePath(record.codebasePath);
+    const markerCanonical = canonicalizeCodebasePath(parsedMarker.codebasePath);
     if (expectedCanonical !== markerCanonical) {
         return { ok: false, reason: "path_mismatch" };
     }
 
-    return { ok: true };
+    return { ok: true, marker: parsedMarker };
 }
 
 export async function validateCompletionProof(args: {
@@ -150,20 +195,19 @@ export async function validateCompletionProof(args: {
         return {
             outcome: "stale_local",
             reason: markerShape.reason,
-            marker: marker as CompletionProofValidationResult["marker"]
         };
     }
 
-    if (!markerMatchesRuntimeFingerprint(marker, runtimeFingerprint)) {
+    if (!markerMatchesRuntimeFingerprint(markerShape.marker, runtimeFingerprint)) {
         return {
             outcome: "fingerprint_mismatch",
             reason: "fingerprint_mismatch",
-            marker: marker as CompletionProofValidationResult["marker"]
+            marker: markerShape.marker,
         };
     }
 
     return {
         outcome: "valid",
-        marker: marker as CompletionProofValidationResult["marker"]
+        marker: markerShape.marker,
     };
 }

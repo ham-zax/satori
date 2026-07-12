@@ -74,6 +74,8 @@ type RepairResult = {
 
 type RepairOptionsLike = {
     onProofUpdate?: (proof: Record<string, { status: string; [key: string]: unknown }>) => void;
+    assertMutationCurrent?: () => void;
+    publishMutation?: (publish: () => void) => void;
 };
 
 function createRepairReceiptHarness(
@@ -240,13 +242,27 @@ function createFailedIndexingHarness(
     existingCollections: Set<string>,
     options: {
         mutationLeaseCoordinator?: MutationLeaseCoordinator;
-        indexCodebase?: () => Promise<{ indexedFiles: number; totalChunks: number; status: "completed" }>;
+        indexCodebase?: (
+            codebasePath: string,
+            progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+            forceReindex?: boolean,
+            mutationOptions?: {
+                assertMutationCurrent?: () => void;
+                publishMutation?: (publish: () => void) => void;
+            },
+        ) => Promise<{ indexedFiles: number; totalChunks: number; status: "completed" | "limit_reached" }>;
         beforeHasCollection?: (collectionName: string) => void;
+        touchWatchedCodebase?: () => Promise<void>;
+        rebuildCallGraphForIndex?: () => Promise<void>;
+        pruneIndexedCollectionFamily?: (keepCollectionName: string) => Promise<string[]>;
+        previousIndexedInfo?: Record<string, unknown>;
     } = {},
 ) {
     const droppedCollections: string[] = [];
     const failedSnapshots: Array<{ path: string; errorMessage: string; progress?: number }> = [];
     let writeCollectionOverride: string | null = null;
+    let indexedSnapshots = 0;
+    const publishedSnapshots: Array<{ status: string; collectionName?: string }> = [];
 
     const vectorStore = {
         hasCollection: async (collectionName: string) => {
@@ -284,7 +300,10 @@ function createFailedIndexingHarness(
             setCodebaseIndexFailed: (codebasePath: string, errorMessage: string, progress?: number) => {
                 failedSnapshots.push({ path: codebasePath, errorMessage, progress });
             },
-            setCodebaseIndexed: () => undefined,
+            setCodebaseIndexed: (_path: string, stats: { status: string }, _fingerprint?: unknown, _source?: unknown, collectionName?: string) => {
+                indexedSnapshots += 1;
+                publishedSnapshots.push({ status: stats.status, collectionName });
+            },
             setCodebaseIndexManifest: () => undefined,
         },
         syncManager: {
@@ -299,12 +318,14 @@ function createFailedIndexingHarness(
         getContextActiveIgnorePatterns: () => [],
         getContextIndexedExtensions: () => [".ts"],
         canonicalizeCodebasePath: (codebasePath: string) => path.resolve(codebasePath),
-        pruneIndexedCollectionFamily: async () => [],
+        getSnapshotCodebaseInfo: () => options.previousIndexedInfo,
+        pruneIndexedCollectionFamily: async (_codebasePath: string, keepCollectionName: string) =>
+            options.pruneIndexedCollectionFamily?.(keepCollectionName) ?? [],
         pruneUnprovenStagedCollectionFamily: async () => [],
         getContextTrackedRelativePaths: () => [],
         setIndexingStats: () => undefined,
-        rebuildCallGraphForIndex: async () => undefined,
-        touchWatchedCodebase: async () => undefined,
+        rebuildCallGraphForIndex: options.rebuildCallGraphForIndex ?? (async () => undefined),
+        touchWatchedCodebase: options.touchWatchedCodebase ?? (async () => undefined),
         saveSnapshotIfSupported: () => undefined,
         clearIndexCompletionMarker: async () => undefined,
         getSnapshotIndexingProgress: () => 42,
@@ -315,11 +336,136 @@ function createFailedIndexingHarness(
     return {
         droppedCollections,
         failedSnapshots,
+        get indexedSnapshots() {
+            return indexedSnapshots;
+        },
+        publishedSnapshots,
         handler: new ManageIndexingHandlers(host as unknown as ConstructorParameters<typeof ManageIndexingHandlers>[0]) as unknown as StartBackgroundIndexing,
     };
 }
 
-test("startBackgroundIndexing holds the lease until terminal completion", async () => {
+function createIndexLaunchHarness(
+    repoPath: string,
+    options: {
+        canonicalizeCodebasePath?: (codebasePath: string) => string;
+        startBackgroundIndexing?: (codebasePath: string, lease?: RootMutationLease) => Promise<void> | void;
+        touchWatchedCodebase?: (codebasePath: string) => Promise<void>;
+        assertIndexMutationCapabilities?: (coordinator: MutationLeaseCoordinator) => void;
+    } = {},
+) {
+    const coordinator = new MutationLeaseCoordinator({
+        stateDir: path.join(path.dirname(repoPath), "launch-leases"),
+        ownerId: "launch-owner",
+    });
+    let lifecycle: "not_found" | "indexing" | "indexfailed" = "not_found";
+    let failedCalls = 0;
+    let saveCalls = 0;
+    let canonicalizeCalls = 0;
+    const launchedRoots: string[] = [];
+    const failedRoots: string[] = [];
+    const ownerCheckedRoots: string[] = [];
+    const preflightRoots: string[] = [];
+    const handler = new ManageIndexingHandlers({
+        context: {
+            getVectorStore: () => ({ checkCollectionLimit: async () => true }),
+            addCustomExtensions: () => undefined,
+            addCustomIgnorePatterns: () => undefined,
+        },
+        snapshotManager: {
+            setCodebaseIndexing: () => { lifecycle = "indexing"; },
+            setCodebaseIndexFailed: (codebasePath: string) => {
+                lifecycle = "indexfailed";
+                failedCalls += 1;
+                failedRoots.push(codebasePath);
+            },
+            saveCodebaseSnapshot: () => {
+                saveCalls += 1;
+                return true;
+            },
+        },
+        syncManager: {},
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        startBackgroundIndexing: (codebasePath: string, _force: boolean, _collection?: string, lease?: RootMutationLease) => {
+            launchedRoots.push(codebasePath);
+            return options.startBackgroundIndexing?.(codebasePath, lease);
+        },
+        manageResponse: (action: string, responsePath: string, status: string, message: string, responseOptions?: Record<string, unknown>) => ({
+            content: [{ type: "text", text: JSON.stringify({ action, path: responsePath, status, message, ...responseOptions }) }],
+        }),
+        buildRuntimeOwnerConflictResponseIfBlocked: async (_action: string, codebasePath: string) => {
+            ownerCheckedRoots.push(codebasePath);
+            return null;
+        },
+        recoverStaleIndexingStateIfNeeded: async () => undefined,
+        getSnapshotIndexingCodebases: () => lifecycle === "indexing" ? [repoPath] : [],
+        getSnapshotCodebaseInfo: () => lifecycle === "not_found" ? undefined : { status: lifecycle },
+        getSnapshotIndexedCodebases: () => [],
+        buildManageActionBlockedMessage: () => "blocked",
+        buildCreateHint: () => ({}),
+        buildReindexHint: () => ({}),
+        buildStatusHint: () => ({}),
+        getManageRetryAfterMs: () => 2000,
+        buildIndexingMetadata: () => undefined,
+        buildReindexInstruction: () => "reindex",
+        buildManageRequiresReindexHints: () => ({}),
+        validateCompletionProof: async () => ({ outcome: "stale_local", reason: "missing_marker_doc" }),
+        recoverIndexedSnapshotFromCompletionProof: async () => false,
+        isZillizBackend: () => false,
+        resolveCollectionName,
+        dropZillizCollectionForCreate: async () => ({ status: "unmapped" }),
+        resolveStagedCollectionName: (codebasePath: string, generationId: string) => `${resolveCollectionName(codebasePath)}__gen_${generationId}`,
+        buildCollectionLimitMessage: async () => "collection limit",
+        manageVectorBackendResponse: () => ({ content: [{ type: "text", text: "backend error" }] }),
+        saveSnapshotIfSupported: () => {
+            saveCalls += 1;
+        },
+        touchWatchedCodebase: options.touchWatchedCodebase ?? (async () => undefined),
+        setWriteCollectionOverride: () => undefined,
+        loadIndexProfileForCodebase: () => ({ profile: "default" }),
+        getContextActiveIgnorePatterns: () => [],
+        getContextIndexedExtensions: () => [".ts"],
+        canonicalizeCodebasePath: (codebasePath: string) => {
+            canonicalizeCalls += 1;
+            return options.canonicalizeCodebasePath?.(codebasePath) ?? fs.realpathSync(codebasePath);
+        },
+        pruneIndexedCollectionFamily: async () => [],
+        pruneUnprovenStagedCollectionFamily: async () => [],
+        getContextTrackedRelativePaths: () => [],
+        setIndexingStats: () => undefined,
+        rebuildCallGraphForIndex: async () => undefined,
+        getSnapshotIndexingProgress: () => 0,
+        clearIndexCompletionMarker: async () => undefined,
+        evaluateReindexPreflight: (codebasePath: string) => {
+            preflightRoots.push(codebasePath);
+            return { outcome: "unknown", warnings: [] };
+        },
+        assertIndexMutationCapabilities: () => options.assertIndexMutationCapabilities?.(coordinator),
+        mutationLeaseCoordinator: coordinator,
+    } as unknown as ConstructorParameters<typeof ManageIndexingHandlers>[0]);
+
+    return {
+        coordinator,
+        handler,
+        launchedRoots,
+        get canonicalizeCalls() {
+            return canonicalizeCalls;
+        },
+        get failedCalls() {
+            return failedCalls;
+        },
+        failedRoots,
+        get lifecycle() {
+            return lifecycle;
+        },
+        ownerCheckedRoots,
+        preflightRoots,
+        get saveCalls() {
+            return saveCalls;
+        },
+    };
+}
+
+test("background worker leaves lease release to its launcher", async () => {
     await withTempRepo(async (repoPath) => {
         const stateDir = path.join(path.dirname(repoPath), "lease-state");
         const currentProcess = { pid: 101, processStartTime: "start-101" };
@@ -339,18 +485,287 @@ test("startBackgroundIndexing holds the lease until terminal completion", async 
         const indexing = new Promise<{ indexedFiles: number; totalChunks: number; status: "completed" }>((resolve) => {
             finishIndexing = resolve;
         });
+        let signalIndexStarted!: () => void;
+        const indexStarted = new Promise<void>((resolve) => {
+            signalIndexStarted = resolve;
+        });
+        let indexPublicationRan = false;
         const { handler } = createFailedIndexingHarness(new Set(), {
             mutationLeaseCoordinator: coordinator,
-            indexCodebase: () => indexing,
+            indexCodebase: (_path, _progress, _force, mutationOptions) => {
+                assert.equal(typeof mutationOptions?.assertMutationCurrent, "function");
+                assert.equal(typeof mutationOptions?.publishMutation, "function");
+                mutationOptions?.publishMutation?.(() => {
+                    indexPublicationRan = true;
+                });
+                signalIndexStarted();
+                return indexing;
+            },
         });
 
         const background = handler.startBackgroundIndexing(repoPath, false, undefined, acquired.lease);
-        await new Promise((resolve) => setImmediate(resolve));
+        await indexStarted;
         assert.equal(coordinator.isCurrent(acquired.lease), true);
+        assert.equal(indexPublicationRan, true);
 
         finishIndexing({ indexedFiles: 1, totalChunks: 1, status: "completed" });
         await background;
-        assert.equal(coordinator.isCurrent(acquired.lease), false);
+        assert.equal(coordinator.isCurrent(acquired.lease), true);
+        coordinator.release(acquired.lease);
+    });
+});
+
+test("handleIndexCodebase launcher releases an injected worker lease exactly once", async () => {
+    await withTempRepo(async (repoPath) => {
+        let finishWorker!: () => void;
+        const worker = new Promise<void>((resolve) => { finishWorker = resolve; });
+        const harness = createIndexLaunchHarness(repoPath, {
+            startBackgroundIndexing: () => worker,
+        });
+        const originalRelease = harness.coordinator.release.bind(harness.coordinator);
+        let releaseCalls = 0;
+        harness.coordinator.release = (lease) => {
+            releaseCalls += 1;
+            return originalRelease(lease);
+        };
+
+        const response = await harness.handler.handleIndexCodebase({ path: repoPath });
+        const payload = JSON.parse(response.content[0].text);
+        const activeLease = harness.coordinator.getActiveLease(repoPath);
+        assert.equal(payload.status, "ok");
+        assert.ok(activeLease);
+        assert.equal(releaseCalls, 0);
+
+        finishWorker();
+        await new Promise((resolve) => setImmediate(resolve));
+
+        assert.equal(harness.coordinator.getActiveLease(repoPath), undefined);
+        assert.equal(releaseCalls, 1);
+    });
+});
+
+test("handleIndexCodebase launcher publishes failed lifecycle when an injected worker rejects", async () => {
+    await withTempRepo(async (repoPath) => {
+        let rejectWorker!: (error: Error) => void;
+        const worker = new Promise<void>((_resolve, reject) => { rejectWorker = reject; });
+        const harness = createIndexLaunchHarness(repoPath, {
+            startBackgroundIndexing: () => worker,
+        });
+
+        const response = await harness.handler.handleIndexCodebase({ path: repoPath });
+        assert.equal(JSON.parse(response.content[0].text).status, "ok");
+
+        rejectWorker(new Error("injected worker failed"));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        assert.equal(harness.lifecycle, "indexfailed");
+        assert.equal(harness.failedCalls, 1);
+        assert.equal(harness.saveCalls, 2);
+        assert.equal(harness.coordinator.getActiveLease(repoPath), undefined);
+    });
+});
+
+test("handleIndexCodebase validates mutation capabilities before acquiring a lease", async () => {
+    await withTempRepo(async (repoPath) => {
+        let capabilityChecks = 0;
+        let leaseWasActiveDuringCapabilityCheck = false;
+        const harness = createIndexLaunchHarness(repoPath, {
+            assertIndexMutationCapabilities: (coordinator) => {
+                capabilityChecks += 1;
+                leaseWasActiveDuringCapabilityCheck = coordinator.getActiveLease(repoPath) !== undefined;
+                throw new Error("mutation capabilities unavailable");
+            },
+        });
+
+        const response = await harness.handler.handleIndexCodebase({ path: repoPath });
+        const payload = JSON.parse(response.content[0].text);
+
+        assert.equal(payload.status, "error");
+        assert.match(payload.message, /mutation capabilities unavailable/i);
+        assert.equal(capabilityChecks, 1);
+        assert.equal(leaseWasActiveDuringCapabilityCheck, false);
+        assert.equal(harness.lifecycle, "not_found");
+        assert.equal(harness.saveCalls, 0);
+        assert.deepEqual(harness.launchedRoots, []);
+        assert.equal(harness.coordinator.getActiveLease(repoPath), undefined);
+    });
+});
+
+test("handleIndexCodebase foreground failure after indexing publication becomes indexfailed", async () => {
+    await withTempRepo(async (repoPath) => {
+        const harness = createIndexLaunchHarness(repoPath, {
+            touchWatchedCodebase: async () => {
+                throw new Error("watcher setup failed");
+            },
+        });
+
+        const response = await harness.handler.handleIndexCodebase({ path: repoPath });
+        const payload = JSON.parse(response.content[0].text);
+
+        assert.equal(payload.status, "error");
+        assert.match(payload.message, /watcher setup failed/i);
+        assert.equal(harness.lifecycle, "indexfailed");
+        assert.equal(harness.failedCalls, 1);
+        assert.equal(harness.saveCalls, 2);
+        assert.equal(harness.launchedRoots.length, 0);
+        assert.equal(harness.coordinator.getActiveLease(repoPath), undefined);
+    });
+});
+
+test("handleIndexCodebase keeps the canonical root when foreground publication fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const aliasPath = path.join(path.dirname(repoPath), "repo-failure-alias");
+        fs.symlinkSync(repoPath, aliasPath, "dir");
+        const harness = createIndexLaunchHarness(repoPath, {
+            canonicalizeCodebasePath: (candidate) => fs.realpathSync(candidate),
+            touchWatchedCodebase: async () => {
+                throw new Error("watcher setup failed");
+            },
+        });
+
+        const response = await harness.handler.handleIndexCodebase({ path: aliasPath });
+        const payload = JSON.parse(response.content[0].text);
+
+        assert.equal(payload.status, "error");
+        assert.equal(payload.path, repoPath);
+        assert.deepEqual(harness.failedRoots, [repoPath]);
+        assert.equal(harness.canonicalizeCalls, 1);
+    });
+});
+
+test("handleIndexCodebase canonicalizes the root once before lifecycle and launch", async () => {
+    await withTempRepo(async (repoPath) => {
+        const aliasPath = path.join(path.dirname(repoPath), "repo-alias");
+        fs.symlinkSync(repoPath, aliasPath, "dir");
+        const harness = createIndexLaunchHarness(repoPath, {
+            canonicalizeCodebasePath: (candidate) => fs.realpathSync(candidate),
+        });
+
+        const response = await harness.handler.handleIndexCodebase({ path: aliasPath });
+        const payload = JSON.parse(response.content[0].text);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        assert.equal(payload.status, "ok");
+        assert.equal(payload.path, repoPath);
+        assert.deepEqual(harness.launchedRoots, [repoPath]);
+        assert.equal(harness.canonicalizeCalls, 1);
+    });
+});
+
+test("handleReindexCodebase canonicalizes once before ownership, preflight, and launch", async () => {
+    await withTempRepo(async (repoPath) => {
+        const aliasPath = path.join(path.dirname(repoPath), "repo-reindex-alias");
+        fs.symlinkSync(repoPath, aliasPath, "dir");
+        const harness = createIndexLaunchHarness(repoPath, {
+            canonicalizeCodebasePath: (candidate) => fs.realpathSync(candidate),
+        });
+
+        const response = await harness.handler.handleReindexCodebase({ path: aliasPath });
+        const payload = JSON.parse(response.content[0].text);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        assert.equal(payload.status, "ok");
+        assert.equal(payload.path, repoPath);
+        assert.equal(harness.canonicalizeCalls, 1);
+        assert.deepEqual(harness.preflightRoots, [repoPath]);
+        assert.ok(harness.ownerCheckedRoots.length > 0);
+        assert.ok(harness.ownerCheckedRoots.every((candidate) => candidate === repoPath));
+        assert.deepEqual(harness.launchedRoots, [repoPath]);
+    });
+});
+
+test("background indexing treats watcher touch as best effort after proof", async () => {
+    await withTempRepo(async (repoPath) => {
+        const harness = createFailedIndexingHarness(new Set(), {
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            touchWatchedCodebase: async () => {
+                throw new Error("watcher touch failed");
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(repoPath, false);
+
+        assert.equal(harness.indexedSnapshots, 1);
+        assert.equal(harness.failedSnapshots.length, 0);
+    });
+});
+
+test("background indexing preserves the previous proven collection when navigation publication fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const previousCollection = resolveCollectionName(repoPath);
+        const stagedCollection = `${previousCollection}__gen_candidate`;
+        const existingCollections = new Set([previousCollection]);
+        const harness = createFailedIndexingHarness(existingCollections, {
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            previousIndexedInfo: {
+                status: "indexing",
+                indexedFiles: 3,
+                totalChunks: 9,
+                indexStatus: "completed",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+                collectionName: previousCollection,
+            },
+            rebuildCallGraphForIndex: async () => {
+                throw new Error("navigation publication failed");
+            },
+            pruneIndexedCollectionFamily: async (keepCollectionName) => {
+                const dropped: string[] = [];
+                for (const collectionName of Array.from(existingCollections)) {
+                    if (collectionName !== keepCollectionName) {
+                        existingCollections.delete(collectionName);
+                        harness.droppedCollections.push(collectionName);
+                        dropped.push(collectionName);
+                    }
+                }
+                return dropped;
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(repoPath, true, stagedCollection);
+
+        assert.equal(existingCollections.has(previousCollection), true);
+        assert.equal(existingCollections.has(stagedCollection), false);
+        assert.deepEqual(harness.droppedCollections, [stagedCollection]);
+        assert.deepEqual(harness.publishedSnapshots, [{ status: "completed", collectionName: previousCollection }]);
+        assert.deepEqual(harness.failedSnapshots, []);
+    });
+});
+
+test("background indexing does not replace a previous complete generation with limit_reached", async () => {
+    await withTempRepo(async (repoPath) => {
+        const previousCollection = resolveCollectionName(repoPath);
+        const stagedCollection = `${previousCollection}__gen_partial`;
+        const existingCollections = new Set([previousCollection]);
+        const harness = createFailedIndexingHarness(existingCollections, {
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 2, status: "limit_reached" }),
+            previousIndexedInfo: {
+                status: "indexing",
+                indexedFiles: 3,
+                totalChunks: 9,
+                indexStatus: "completed",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+                collectionName: previousCollection,
+            },
+            pruneIndexedCollectionFamily: async (keepCollectionName) => {
+                const dropped: string[] = [];
+                for (const collectionName of Array.from(existingCollections)) {
+                    if (collectionName !== keepCollectionName) {
+                        existingCollections.delete(collectionName);
+                        harness.droppedCollections.push(collectionName);
+                        dropped.push(collectionName);
+                    }
+                }
+                return dropped;
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(repoPath, true, stagedCollection);
+
+        assert.equal(existingCollections.has(previousCollection), true);
+        assert.equal(existingCollections.has(stagedCollection), false);
+        assert.deepEqual(harness.publishedSnapshots, [{ status: "completed", collectionName: previousCollection }]);
     });
 });
 
@@ -650,7 +1065,26 @@ test("handleRepairIndex does not publish success after lease loss during call-gr
 
 test("handleRepairIndex durably accepts before repair and commits completed receipt with lifecycle", async () => {
     await withTempRepo(async (repoPath) => {
-        const harness = createRepairReceiptHarness(repoPath);
+        let repairPublicationRan = false;
+        const harness = createRepairReceiptHarness(repoPath, {
+            repairIndex: async (repairOptions) => {
+                assert.equal(typeof repairOptions?.assertMutationCurrent, "function");
+                assert.equal(typeof repairOptions?.publishMutation, "function");
+                repairOptions?.publishMutation?.(() => {
+                    repairPublicationRan = true;
+                });
+                return {
+                    status: "ok",
+                    message: "repaired",
+                    indexedFiles: 1,
+                    totalChunks: 2,
+                    warnings: [],
+                    trackedRelativePaths: ["src/repaired.ts"],
+                    collectionName: "repair-collection",
+                    proof: REPAIR_PROOF,
+                };
+            },
+        });
 
         const response = await harness.handler.handleRepairIndex({ path: repoPath });
         const payload = JSON.parse(response.content[0].text) as {
@@ -665,6 +1099,7 @@ test("handleRepairIndex durably accepts before repair and commits completed rece
             ["accepted", "proving", "publishing", "completed"],
         );
         assert.equal(harness.persisted.at(-1)?.indexed, true);
+        assert.equal(repairPublicationRan, true);
         assert.ok(harness.events.indexOf("save:accepted") < harness.events.indexOf("repair"));
         assert.ok(harness.events.indexOf("save:proving") < harness.events.indexOf("repair"));
         assert.ok(harness.events.indexOf("set:indexed") < harness.events.indexOf("save:completed"));
@@ -780,7 +1215,7 @@ test("handleRepairIndex preserves partial proof when the vector backend fails", 
     });
 });
 
-test("handleRepairIndex preserves matched navigation proof when watcher touch fails afterward", async () => {
+test("handleRepairIndex treats watcher touch as best effort after navigation proof", async () => {
     await withTempRepo(async (repoPath) => {
         const harness = createRepairReceiptHarness(repoPath, {
             touchWatchedCodebase: async () => {
@@ -796,9 +1231,8 @@ test("handleRepairIndex preserves matched navigation proof when watcher touch fa
             operation?: IndexOperationReceipt;
         };
 
-        assert.equal(payload.status, "error");
-        assert.match(payload.message, /watcher touch failed/i);
-        assert.equal(payload.operation?.phase, "failed");
+        assert.equal(payload.status, "ok");
+        assert.equal(payload.operation?.phase, "completed");
         assert.equal(payload.repairProof?.navigation.status, "matched");
         assert.equal(payload.repairProof?.navigation.basis, "navigation_and_call_graph_rebuilt");
     });

@@ -74,6 +74,13 @@ function createHandlers(
             const normalized = path.resolve(codebasePath);
             return `hybrid_code_chunks_${Buffer.from(normalized).toString('hex').slice(0, 8)}`;
         },
+        resolveStagedCollectionName: (codebasePath: string, generation: string) =>
+            `${Buffer.from(path.resolve(codebasePath)).toString('hex').slice(0, 8)}__gen_${generation}`,
+        setWriteCollectionOverride: () => undefined,
+        getActiveIndexedCollectionName: async () => null,
+        clearIndexCompletionMarker: async () => undefined,
+        pruneIndexedCollectionFamily: async () => [],
+        pruneUnprovenStagedCollectionFamily: async () => [],
         addCustomExtensions: () => undefined,
         addCustomIgnorePatterns: () => undefined,
         clearIndex: async () => undefined,
@@ -88,7 +95,16 @@ function createHandlers(
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
         removeCodebaseCompletely: () => undefined,
         setCodebaseIndexing: () => undefined,
-        saveCodebaseSnapshot: () => undefined,
+        setCodebaseIndexFailed: () => undefined,
+        setCodebaseIndexed: () => undefined,
+        setCodebaseIndexManifest: () => undefined,
+        saveCodebaseSnapshot: () => true,
+        commitCodebaseLifecycleMutation: (mutate: () => void, beforeCommit?: () => void) => {
+            beforeCommit?.();
+            mutate();
+            beforeCommit?.();
+            return true;
+        },
     } as unknown as HandlerSnapshotManager;
 
     const syncManager = {

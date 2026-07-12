@@ -18,7 +18,13 @@ import {
     classifyVectorBackendError,
     type VectorBackendDiagnostic,
 } from "./backend-diagnostics.js";
-import type { IndexFingerprint, IndexOperationPhase, IndexOperationReceipt } from "../config.js";
+import {
+    indexFingerprintsEqual,
+    parseIndexFingerprint,
+    type IndexFingerprint,
+    type IndexOperationPhase,
+    type IndexOperationReceipt,
+} from "../config.js";
 import { absolutePathOrRaw, requireAbsoluteFilesystemPath, trackCodebasePath } from "../utils.js";
 import type { ReindexPreflightResult } from "./working-tree-state.js";
 import type { RuntimeOwnerMutationAction } from "./runtime-owner.js";
@@ -88,6 +94,7 @@ type ManageIndexingHandlersHost = {
         forceReindex: boolean,
         writeCollectionName?: string,
         mutationLease?: RootMutationLease,
+        previousIndexedInfo?: Record<string, unknown>,
     ) => Promise<void> | void;
     manageResponse(
         action: ManageIndexAction | "reindex",
@@ -122,6 +129,7 @@ type ManageIndexingHandlersHost = {
     recoverIndexedSnapshotFromCompletionProof(
         codebasePath: string,
         proof: CompletionProofValidationResult,
+        lease: RootMutationLease,
     ): Promise<boolean>;
     isZillizBackend(): boolean;
     resolveCollectionName(codebasePath: string): string;
@@ -154,6 +162,7 @@ type ManageIndexingHandlersHost = {
     getSnapshotIndexingProgress(codebasePath: string): number | undefined;
     clearIndexCompletionMarker(codebasePath: string, assertMutationCurrent?: () => void): Promise<void>;
     evaluateReindexPreflight(codebasePath: string): ReindexPreflightResult;
+    assertIndexMutationCapabilities(): void;
     mutationLeaseCoordinator: MutationLeaseCoordinator | null;
 };
 
@@ -282,6 +291,13 @@ export class ManageIndexingHandlers {
     }
 
     public async handleIndexCodebase(args: IndexCodebaseArgs): Promise<ToolTextResponse> {
+        return this.handleIndexCodebaseInternal(args);
+    }
+
+    private async handleIndexCodebaseInternal(
+        args: IndexCodebaseArgs,
+        preparedCanonicalRoot?: string,
+    ): Promise<ToolTextResponse> {
         const { path: codebasePath, force, customExtensions, ignorePatterns, zillizDropCollection } = args;
         const forceReindex = force || false;
         const manageAction: ManageIndexAction = forceReindex ? "reindex" : "create";
@@ -301,13 +317,14 @@ export class ManageIndexingHandlers {
         let leaseTransferred = false;
         let operationTerminal = false;
         let lastDurableOperation: IndexOperationReceipt | undefined;
+        let canonicalRoot = preparedCanonicalRoot;
         const transitionOperation = (phase: IndexOperationPhase, mutateSnapshot?: () => void) => {
-            if (!mutationLease) {
+            if (!mutationLease || typeof this.host.snapshotManager.transitionOperation !== "function") {
                 mutateSnapshot?.();
-                return undefined;
-            }
-            if (typeof this.host.snapshotManager.transitionOperation !== "function") {
-                mutateSnapshot?.();
+                if (mutateSnapshot) {
+                    this.host.saveSnapshotIfSupported();
+                }
+                operationTerminal = phase === "completed" || phase === "failed" || phase === "blocked";
                 return undefined;
             }
             this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
@@ -336,17 +353,20 @@ export class ManageIndexingHandlers {
         };
 
         try {
-            const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
-            if (!absolutePathResult.ok) {
-                return this.host.manageResponse(
-                    manageAction,
-                    codebasePath,
-                    "error",
-                    absolutePathResult.message,
-                    preflightOptions,
-                );
+            if (!canonicalRoot) {
+                const absolutePathResult = requireAbsoluteFilesystemPath(codebasePath, "path");
+                if (!absolutePathResult.ok) {
+                    return this.host.manageResponse(
+                        manageAction,
+                        codebasePath,
+                        "error",
+                        absolutePathResult.message,
+                        preflightOptions,
+                    );
+                }
+                canonicalRoot = this.host.canonicalizeCodebasePath(absolutePathResult.absolutePath);
             }
-            const absolutePath = absolutePathResult.absolutePath;
+            const absolutePath = canonicalRoot;
 
             if (!fs.existsSync(absolutePath)) {
                 return this.host.manageResponse(
@@ -373,6 +393,8 @@ export class ManageIndexingHandlers {
             if (runtimeOwnerConflict) {
                 return runtimeOwnerConflict;
             }
+
+            this.host.assertIndexMutationCapabilities();
 
             const leaseResult = this.host.mutationLeaseCoordinator?.acquire(absolutePath, manageAction);
             if (leaseResult && !leaseResult.acquired) {
@@ -454,7 +476,14 @@ export class ManageIndexingHandlers {
             const isIndexedInSnapshot = this.host.getSnapshotIndexedCodebases().includes(absolutePath);
             if (!forceReindex && !isIndexedInSnapshot) {
                 const proof = await this.host.validateCompletionProof(absolutePath);
-                if (await this.host.recoverIndexedSnapshotFromCompletionProof(absolutePath, proof)) {
+                if (
+                    mutationLease
+                    && await this.host.recoverIndexedSnapshotFromCompletionProof(
+                        absolutePath,
+                        proof,
+                        mutationLease,
+                    )
+                ) {
                     if (proof.outcome === "fingerprint_mismatch") {
                         return this.host.manageResponse(
                             manageAction,
@@ -675,9 +704,6 @@ export class ManageIndexingHandlers {
             const operation = transitionOperation("scanning", () => {
                 this.host.snapshotManager.setCodebaseIndexing(absolutePath, 0);
             });
-            if (!operation) {
-                this.host.saveSnapshotIfSupported();
-            }
 
             trackCodebasePath(absolutePath);
             await this.host.touchWatchedCodebase(absolutePath);
@@ -692,9 +718,35 @@ export class ManageIndexingHandlers {
                 forceReindex,
                 stagedCollectionName,
                 mutationLease,
+                existingInfo,
             );
             leaseTransferred = mutationLease !== undefined;
-            void backgroundIndexing;
+            const launchedLease = mutationLease;
+            void Promise.resolve(backgroundIndexing)
+                .catch((backgroundError: unknown) => {
+                    console.error(`[BACKGROUND-INDEX] Detached worker rejected for '${absolutePath}':`, backgroundError);
+                    if (
+                        launchedLease
+                        && this.host.mutationLeaseCoordinator?.isCurrent(launchedLease)
+                    ) {
+                        try {
+                            transitionOperation("failed", () => {
+                                this.host.snapshotManager.setCodebaseIndexFailed(
+                                    absolutePath,
+                                    formatUnknownError(backgroundError),
+                                    this.host.getSnapshotIndexingProgress(absolutePath),
+                                );
+                            });
+                        } catch (receiptError) {
+                            console.error(`[BACKGROUND-INDEX] Failed to persist detached worker failure for '${absolutePath}':`, receiptError);
+                        }
+                    }
+                })
+                .finally(() => {
+                    if (launchedLease) {
+                        this.host.mutationLeaseCoordinator?.release(launchedLease);
+                    }
+                });
 
             const pathInfo = codebasePath !== absolutePath
                 ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
@@ -715,6 +767,7 @@ export class ManageIndexingHandlers {
             );
         } catch (error: unknown) {
             console.error("Error in handleIndexCodebase:", error);
+            const failurePath = canonicalRoot ?? absolutePathOrRaw(codebasePath);
             const vectorBackendDiagnostic = classifyVectorBackendError(error);
             if (vectorBackendDiagnostic) {
                 const errorMessage = formatUnknownError(error);
@@ -731,12 +784,18 @@ export class ManageIndexingHandlers {
                     console.error("Failed to persist terminal operation receipt:", receiptError);
                     operation = lastDurableOperation;
                 }
-                return this.host.manageVectorBackendResponse(manageAction, absolutePathOrRaw(codebasePath), vectorBackendDiagnostic, humanText, operation);
+                return this.host.manageVectorBackendResponse(manageAction, failurePath, vectorBackendDiagnostic, humanText, operation);
             }
             let operation;
             try {
                 operation = mutationLease && !operationTerminal && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease)
-                    ? transitionOperation("failed")
+                    ? transitionOperation("failed", () => {
+                        this.host.snapshotManager.setCodebaseIndexFailed(
+                            failurePath,
+                            formatUnknownError(error),
+                            this.host.getSnapshotIndexingProgress(failurePath),
+                        );
+                    })
                     : lastDurableOperation;
             } catch (receiptError) {
                 console.error("Failed to persist terminal operation receipt:", receiptError);
@@ -744,7 +803,7 @@ export class ManageIndexingHandlers {
             }
             return this.host.manageResponse(
                 manageAction,
-                absolutePathOrRaw(codebasePath),
+                failurePath,
                 "error",
                 `Error starting indexing: ${formatUnknownError(error)}`,
                 { ...preflightOptions, ...(operation ? { operation } : {}) },
@@ -762,7 +821,17 @@ export class ManageIndexingHandlers {
         if (!absolutePathResult.ok) {
             return this.host.manageResponse("reindex", codebasePath, "error", absolutePathResult.message);
         }
-        const absolutePath = absolutePathResult.absolutePath;
+        let absolutePath: string;
+        try {
+            absolutePath = this.host.canonicalizeCodebasePath(absolutePathResult.absolutePath);
+        } catch (error) {
+            return this.host.manageResponse(
+                "reindex",
+                absolutePathResult.absolutePath,
+                "error",
+                `Error starting reindex: ${formatUnknownError(error)}`,
+            );
+        }
         const runtimeOwnerConflict = await this.host.buildRuntimeOwnerConflictResponseIfBlocked("reindex", absolutePath);
         if (runtimeOwnerConflict) {
             return runtimeOwnerConflict;
@@ -796,14 +865,14 @@ export class ManageIndexingHandlers {
         const forwardedPreflight = preflight.outcome === "unknown" || preflight.outcome === "probe_failed"
             ? preflight
             : undefined;
-        return this.handleIndexCodebase({
+        return this.handleIndexCodebaseInternal({
             path: codebasePath,
             force: true,
             customExtensions,
             ignorePatterns,
             zillizDropCollection,
             __reindexPreflight: forwardedPreflight,
-        });
+        }, absolutePath);
     }
 
     public async handleRepairIndex(args: Record<string, unknown>): Promise<ToolTextResponse> {
@@ -953,6 +1022,12 @@ export class ManageIndexingHandlers {
                 },
                 ...(mutationLease ? {
                     assertMutationCurrent: () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!),
+                    publishMutation: (publish: () => void) => {
+                        if (!this.host.mutationLeaseCoordinator) {
+                            throw new Error(`Cannot publish repair state for '${absolutePath}' without a mutation lease coordinator.`);
+                        }
+                        this.host.mutationLeaseCoordinator.publishWhileCurrent(mutationLease!, publish);
+                    },
                 } : {}),
             });
             if (mutationLease) {
@@ -981,7 +1056,11 @@ export class ManageIndexingHandlers {
                         basis: "navigation_and_call_graph_rebuilt",
                     },
                 };
-                await this.host.touchWatchedCodebase(absolutePath);
+                try {
+                    await this.host.touchWatchedCodebase(absolutePath);
+                } catch (watcherError) {
+                    console.warn(`[REPAIR] Failed to refresh watcher for '${absolutePath}' after navigation proof: ${formatUnknownError(watcherError)}`);
+                }
                 assertMutationCurrent?.();
 
                 const stats = {
@@ -1116,11 +1195,23 @@ export class ManageIndexingHandlers {
         forceReindex: boolean,
         writeCollectionName?: string,
         mutationLease?: RootMutationLease,
+        previousIndexedInfo?: Record<string, unknown>,
     ): Promise<void> {
         const absolutePath = codebasePath;
         let lastSaveTime = 0;
         let targetCollectionName: string | undefined;
         let writingReceiptPublished = false;
+        const assertMutationCurrent = mutationLease
+            ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease)
+            : undefined;
+        const publishMutation = mutationLease
+            ? (publish: () => void) => {
+                if (!this.host.mutationLeaseCoordinator) {
+                    throw new Error(`Cannot publish index state for '${absolutePath}' without a mutation lease coordinator.`);
+                }
+                this.host.mutationLeaseCoordinator.publishWhileCurrent(mutationLease, publish);
+            }
+            : undefined;
         const persistBackgroundPhase = (phase: IndexOperationPhase, mutateSnapshot?: () => void): void => {
             if (!mutationLease) {
                 mutateSnapshot?.();
@@ -1158,6 +1249,34 @@ export class ManageIndexingHandlers {
             }
         };
 
+        const previousInfo = previousIndexedInfo ?? this.host.getSnapshotCodebaseInfo(absolutePath);
+        const previousFingerprint = parseIndexFingerprint(previousInfo?.indexFingerprint);
+        const previousCollectionName = typeof previousInfo?.collectionName === "string"
+            ? previousInfo.collectionName.trim()
+            : "";
+        const previousIndexedFiles = previousInfo?.indexedFiles;
+        const previousTotalChunks = previousInfo?.totalChunks;
+        const previousCompleteGeneration = previousInfo?.indexStatus === "completed"
+            && previousInfo?.fingerprintSource === "verified"
+            && previousFingerprint !== null
+            && indexFingerprintsEqual(previousFingerprint, this.host.runtimeFingerprint)
+            && previousCollectionName.length > 0
+            && Number.isSafeInteger(previousIndexedFiles)
+            && Number(previousIndexedFiles) >= 0
+            && Number.isSafeInteger(previousTotalChunks)
+            && Number(previousTotalChunks) >= 0
+            ? {
+                collectionName: previousCollectionName,
+                fingerprint: previousFingerprint,
+                indexedFiles: Number(previousIndexedFiles),
+                totalChunks: Number(previousTotalChunks),
+                indexedPaths: Array.isArray((previousInfo?.indexManifest as Record<string, unknown> | undefined)?.indexedPaths)
+                    ? ((previousInfo?.indexManifest as Record<string, unknown>).indexedPaths as unknown[])
+                        .filter((entry): entry is string => typeof entry === "string")
+                    : undefined,
+            }
+            : null;
+
         try {
             if (mutationLease) {
                 this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
@@ -1183,11 +1302,7 @@ export class ManageIndexingHandlers {
             const supportedExtensions = this.host.getContextIndexedExtensions(absolutePath);
             console.log(`[BACKGROUND-INDEX] Using ignore patterns: ${ignorePatterns.join(", ")}`);
             const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns, supportedExtensions);
-            await synchronizer.initialize(
-                mutationLease
-                    ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
-                    : undefined,
-            );
+            await synchronizer.initialize(assertMutationCurrent, publishMutation);
 
             await this.host.context.ensureCollectionPrepared(
                 absolutePath,
@@ -1223,9 +1338,8 @@ export class ManageIndexingHandlers {
 
                 console.log(`[BACKGROUND-INDEX] Progress: ${progress.phase} - ${progress.percentage}% (${progress.current}/${progress.total})`);
             }, false, {
-                ...(mutationLease ? {
-                    assertMutationCurrent: () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!),
-                } : {}),
+                assertMutationCurrent,
+                publishMutation,
             });
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
             if (mutationLease) {
@@ -1233,28 +1347,43 @@ export class ManageIndexingHandlers {
             }
             persistBackgroundPhase("proving");
 
-            try {
-                const droppedCollections = await this.host.pruneIndexedCollectionFamily(
-                    absolutePath,
-                    targetCollectionName,
-                    mutationLease
-                        ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
-                        : undefined,
-                );
-                if (droppedCollections.length > 0) {
-                    console.log(`[BACKGROUND-INDEX] 🧹 Retired ${droppedCollections.length} superseded collection(s): ${droppedCollections.join(", ")}`);
+            if (stats.status === "limit_reached" && previousCompleteGeneration) {
+                const assertMutationCurrent = mutationLease
+                    ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
+                    : undefined;
+                await this.host.clearIndexCompletionMarker(absolutePath, assertMutationCurrent);
+                await this.cleanupFailedStagedCollection(absolutePath, targetCollectionName, assertMutationCurrent);
+                assertMutationCurrent?.();
+                persistBackgroundPhase("failed", () => {
+                    this.host.snapshotManager.setCodebaseIndexed(
+                        absolutePath,
+                        {
+                            indexedFiles: previousCompleteGeneration.indexedFiles,
+                            totalChunks: previousCompleteGeneration.totalChunks,
+                            status: "completed",
+                        },
+                        previousCompleteGeneration.fingerprint,
+                        "verified",
+                        previousCompleteGeneration.collectionName,
+                    );
+                    if (previousCompleteGeneration.indexedPaths) {
+                        this.host.snapshotManager.setCodebaseIndexManifest(
+                            absolutePath,
+                            previousCompleteGeneration.indexedPaths,
+                        );
+                    }
+                });
+                if (!mutationLease) {
+                    this.host.saveSnapshotIfSupported();
                 }
-            } catch (pruneError) {
-                console.warn(`[BACKGROUND-INDEX] Failed to retire superseded generations for '${absolutePath}': ${formatUnknownError(pruneError)}`);
+                this.host.setIndexingStats({
+                    indexedFiles: previousCompleteGeneration.indexedFiles,
+                    totalChunks: previousCompleteGeneration.totalChunks,
+                });
+                console.warn(`[BACKGROUND-INDEX] Candidate for '${absolutePath}' reached the chunk limit; preserved previous complete collection '${previousCompleteGeneration.collectionName}'.`);
+                return;
             }
 
-            if (mutationLease) {
-                this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
-            }
-
-            // indexStatus is carried on stats (completed | limit_reached). limit_reached remains
-            // searchable only when core wrote a completion marker for partial vector proof;
-            // navigation still fails closed via indexStatus checks (partial_index_navigation_unavailable).
             await this.host.syncManager.recordCurrentIgnoreControlSignature(absolutePath, mutationLease);
             if (mutationLease) {
                 this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
@@ -1272,7 +1401,11 @@ export class ManageIndexingHandlers {
             if (mutationLease) {
                 this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
             }
-            await this.host.touchWatchedCodebase(absolutePath);
+            try {
+                await this.host.touchWatchedCodebase(absolutePath);
+            } catch (watcherError) {
+                console.warn(`[BACKGROUND-INDEX] Failed to refresh watcher for '${absolutePath}' after index proof: ${formatUnknownError(watcherError)}`);
+            }
             persistBackgroundPhase("completed", () => {
                 this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified", targetCollectionName);
                 this.host.snapshotManager.setCodebaseIndexManifest(absolutePath, this.host.getContextTrackedRelativePaths(absolutePath));
@@ -1281,6 +1414,21 @@ export class ManageIndexingHandlers {
                 this.host.saveSnapshotIfSupported();
             }
             this.host.setIndexingStats({ indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks });
+
+            try {
+                const droppedCollections = await this.host.pruneIndexedCollectionFamily(
+                    absolutePath,
+                    targetCollectionName,
+                    mutationLease
+                        ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
+                        : undefined,
+                );
+                if (droppedCollections.length > 0) {
+                    console.log(`[BACKGROUND-INDEX] 🧹 Retired ${droppedCollections.length} superseded collection(s): ${droppedCollections.join(", ")}`);
+                }
+            } catch (pruneError) {
+                console.warn(`[BACKGROUND-INDEX] Failed to retire superseded generations for '${absolutePath}': ${formatUnknownError(pruneError)}`);
+            }
 
             let message = `Background indexing completed for '${absolutePath}'.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`;
             if (stats.status === "limit_reached") {
@@ -1330,6 +1478,26 @@ export class ManageIndexingHandlers {
 
             try {
                 persistBackgroundPhase("failed", () => {
+                    if (previousCompleteGeneration) {
+                        this.host.snapshotManager.setCodebaseIndexed(
+                            absolutePath,
+                            {
+                                indexedFiles: previousCompleteGeneration.indexedFiles,
+                                totalChunks: previousCompleteGeneration.totalChunks,
+                                status: "completed",
+                            },
+                            previousCompleteGeneration.fingerprint,
+                            "verified",
+                            previousCompleteGeneration.collectionName,
+                        );
+                        if (previousCompleteGeneration.indexedPaths) {
+                            this.host.snapshotManager.setCodebaseIndexManifest(
+                                absolutePath,
+                                previousCompleteGeneration.indexedPaths,
+                            );
+                        }
+                        return;
+                    }
                     this.host.snapshotManager.setCodebaseIndexFailed(
                         absolutePath,
                         errorMessage,
@@ -1345,9 +1513,6 @@ export class ManageIndexingHandlers {
             console.error(`[BACKGROUND-INDEX] Indexing failed for ${absolutePath}: ${errorMessage}`);
         } finally {
             this.host.setWriteCollectionOverride(absolutePath, null);
-            if (mutationLease) {
-                this.host.mutationLeaseCoordinator?.release(mutationLease);
-            }
         }
     }
 }

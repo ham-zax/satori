@@ -7,12 +7,30 @@ import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 import { SnapshotManager } from './snapshot.js';
+import {
+    MutationLeaseCoordinator,
+    type RootMutationLease,
+} from './mutation-lease.js';
 
 type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
 type HandlerSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
 type HandlerSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
 type ToolHandlersTestOverrides = {
     startBackgroundIndexing: (codebasePath: string, forceReindex: boolean, writeCollectionName?: string) => Promise<void> | void;
+    probeLocalSearchCollectionState: (codebasePath: string) => Promise<{
+        state: 'ready' | 'missing' | 'unknown';
+        collectionName?: string;
+    }>;
+    extractIndexedRecoveryFromCompletionProof: (proof: unknown) => {
+        stats: { indexedFiles: number; totalChunks: number; status: 'completed' | 'limit_reached' };
+        indexFingerprint: IndexFingerprint;
+    } | null;
+    saveSnapshotIfSupported: () => void;
+    recoverIndexedSnapshotFromCompletionProof: (
+        codebasePath: string,
+        proof: unknown,
+        lease: RootMutationLease,
+    ) => Promise<boolean>;
 };
 type RuntimeMismatchHint = { indexedFingerprint?: string };
 type IndexedInfo = {
@@ -95,6 +113,253 @@ function baseSearchResult() {
         symbolLabel: 'function run()'
     }];
 }
+
+test('local collection readiness does not trust snapshot or deterministic collection existence', async () => {
+    await withTempRepo(async (repoPath) => {
+        let hasCollectionCalls = 0;
+        const context = {
+            getActiveIndexedCollectionName: async () => null,
+            resolveCollectionName: () => 'raw_base_collection',
+            getVectorStore: () => ({
+                hasCollection: async () => {
+                    hasCollectionCalls += 1;
+                    return true;
+                },
+            }),
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getCodebaseCollectionName: () => 'stale_snapshot_collection',
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            {} as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+
+        const state = await (handlers as unknown as ToolHandlersTestOverrides)
+            .probeLocalSearchCollectionState(repoPath);
+
+        assert.deepEqual(state, { state: 'missing' });
+        assert.equal(hasCollectionCalls, 0);
+    });
+});
+
+test('completion-proof snapshot recovery preserves partial status and full fingerprint', () => {
+    const fingerprint: IndexFingerprint = {
+        ...RUNTIME_FINGERPRINT,
+        parserVersion: 'parser-v1',
+        extractorVersion: 'extractor-v1',
+        relationshipVersion: 'relationships-v1',
+    };
+    const handlers = new ToolHandlers(
+        {} as HandlerContext,
+        {} as HandlerSnapshotManager,
+        {} as HandlerSyncManager,
+        RUNTIME_FINGERPRINT,
+        CAPABILITIES,
+    );
+
+    const recovered = (handlers as unknown as ToolHandlersTestOverrides)
+        .extractIndexedRecoveryFromCompletionProof({
+            outcome: 'fingerprint_mismatch',
+            reason: 'fingerprint_mismatch',
+            marker: {
+                ...buildMarker('/repo/a', fingerprint),
+                indexStatus: 'limit_reached',
+            },
+        });
+
+    assert.deepEqual(recovered, {
+        stats: {
+            indexedFiles: 169,
+            totalChunks: 728,
+            status: 'limit_reached',
+        },
+        indexFingerprint: fingerprint,
+    });
+});
+
+test('snapshot persistence failure is not reported as success', () => {
+    const handlers = new ToolHandlers(
+        {} as HandlerContext,
+        { saveCodebaseSnapshot: () => false } as unknown as HandlerSnapshotManager,
+        {} as HandlerSyncManager,
+        RUNTIME_FINGERPRINT,
+        CAPABILITIES,
+    );
+
+    assert.throws(
+        () => (handlers as unknown as ToolHandlersTestOverrides).saveSnapshotIfSupported(),
+        /Failed to persist snapshot/,
+    );
+});
+
+test('completion-proof recovery is fenced and rolls back when lifecycle persistence fails', async () => {
+    await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'completion-proof-recovery-leases'),
+            ownerId: 'completion-proof-recovery',
+        });
+        const acquired = coordinator.acquire(repoPath, 'create');
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+
+        let currentInfo: IndexedInfo | undefined;
+        let commitCalls = 0;
+        const context = {
+            getActiveIndexedCollectionName: async () => 'proven_collection',
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            setCodebaseIndexed: (
+                _codebasePath: string,
+                stats: { indexedFiles: number; totalChunks: number; status: 'completed' },
+                indexFingerprint: IndexFingerprint,
+            ) => {
+                currentInfo = {
+                    status: 'indexed',
+                    indexedFiles: stats.indexedFiles,
+                    totalChunks: stats.totalChunks,
+                    indexStatus: stats.status,
+                    indexFingerprint,
+                    fingerprintSource: 'verified',
+                    lastUpdated: new Date().toISOString(),
+                };
+            },
+            commitCodebaseLifecycleMutation: (mutate: () => void, beforeCommit?: () => void) => {
+                commitCalls += 1;
+                beforeCommit?.();
+                const previous = currentInfo;
+                mutate();
+                currentInfo = previous;
+                return false;
+            },
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            {} as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
+
+        await assert.rejects(
+            () => (handlers as unknown as ToolHandlersTestOverrides)
+                .recoverIndexedSnapshotFromCompletionProof(
+                    repoPath,
+                    { outcome: 'valid', marker: buildMarker(repoPath) },
+                    acquired.lease,
+                ),
+            /Failed to persist completion-proof recovery/i,
+        );
+        assert.equal(commitCalls, 1);
+        assert.equal(currentInfo, undefined);
+        assert.equal(coordinator.isCurrent(acquired.lease), true);
+        coordinator.release(acquired.lease);
+    });
+});
+
+test('completion-proof recovery refuses publication after lease loss during collection resolution', async () => {
+    await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'completion-proof-lease-loss'),
+            ownerId: 'completion-proof-recovery',
+        });
+        const acquired = coordinator.acquire(repoPath, 'create');
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+
+        let setIndexedCalls = 0;
+        let commitCalls = 0;
+        const context = {
+            getActiveIndexedCollectionName: async () => {
+                coordinator.release(acquired.lease);
+                return 'proven_collection';
+            },
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            setCodebaseIndexed: () => { setIndexedCalls += 1; },
+            commitCodebaseLifecycleMutation: () => {
+                commitCalls += 1;
+                return true;
+            },
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            {} as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
+
+        await assert.rejects(
+            () => (handlers as unknown as ToolHandlersTestOverrides)
+                .recoverIndexedSnapshotFromCompletionProof(
+                    repoPath,
+                    { outcome: 'valid', marker: buildMarker(repoPath) },
+                    acquired.lease,
+                ),
+            /no longer current/i,
+        );
+        assert.equal(commitCalls, 0);
+        assert.equal(setIndexedCalls, 0);
+    });
+});
+
+test('handleIndexCodebase fails before lifecycle mutation when critical context capabilities are absent', async () => {
+    await withTempRepo(async (repoPath) => {
+        let setIndexingCalls = 0;
+        let collectionLimitCalls = 0;
+        const context = {
+            getVectorStore: () => ({
+                checkCollectionLimit: async () => {
+                    collectionLimitCalls += 1;
+                    return true;
+                },
+            }),
+            getIndexCompletionMarker: async () => null,
+            resolveCollectionName: () => 'base_collection',
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [],
+            getCodebaseStatus: () => 'not_found',
+            getCodebaseInfo: () => undefined,
+            setCodebaseIndexing: () => { setIndexingCalls += 1; },
+            saveCodebaseSnapshot: () => true,
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            {} as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+
+        const response = await handlers.handleIndexCodebase({ path: repoPath });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+
+        assert.equal(payload.status, 'error');
+        assert.match(payload.humanText, /missing required mutation capability/i);
+        assert.equal(setIndexingCalls, 0);
+        assert.equal(collectionLimitCalls, 0);
+    });
+});
 
 test('handleSearchCode keeps status ok when completion-proof probe fails', async () => {
     await withTempRepo(async (repoPath) => {
@@ -361,6 +626,7 @@ test('handleSearchCode fails closed when the configured vector backend collectio
             getVectorStore: () => ({
                 hasCollection: async () => false
             }),
+            getActiveIndexedCollectionName: async () => 'satori_repo_missing_collection',
             resolveCollectionName: () => 'satori_repo_missing_collection',
             semanticSearch: async () => {
                 semanticSearchCalls += 1;
@@ -438,6 +704,7 @@ test('handleSearchCode does not enter freshness sync when completion-proof probe
             getVectorStore: () => ({
                 hasCollection: async () => false
             }),
+            getActiveIndexedCollectionName: async () => 'satori_repo_missing_collection',
             resolveCollectionName: () => 'satori_repo_missing_collection',
             semanticSearch: async () => baseSearchResult(),
             getIndexCompletionMarker: async () => {
@@ -631,6 +898,7 @@ test('handleFileOutline returns not_indexed when search collection readiness is 
             getVectorStore: () => ({
                 hasCollection: async () => false
             }),
+            getActiveIndexedCollectionName: async () => 'satori_repo_missing_collection',
             resolveCollectionName: () => 'satori_repo_missing_collection',
             getIndexCompletionMarker: async () => buildMarker(repoPath)
         } as unknown as HandlerContext;
@@ -669,6 +937,7 @@ test('handleCallGraph returns not_indexed when search collection readiness is go
             getVectorStore: () => ({
                 hasCollection: async () => false
             }),
+            getActiveIndexedCollectionName: async () => 'satori_repo_missing_collection',
             resolveCollectionName: () => 'satori_repo_missing_collection',
             getIndexCompletionMarker: async () => buildMarker(repoPath)
         } as unknown as HandlerContext;
@@ -791,6 +1060,7 @@ test('handleGetIndexingStatus returns not_indexed when search collection readine
             getVectorStore: () => ({
                 hasCollection: async () => false
             }),
+            getActiveIndexedCollectionName: async () => 'satori_repo_missing_collection',
             resolveCollectionName: () => 'satori_repo_missing_collection',
             getIndexCompletionMarker: async () => buildMarker(repoPath)
         } as unknown as HandlerContext;
@@ -900,7 +1170,13 @@ test('handleIndexCodebase create proceeds when snapshot is indexed but completio
             getIndexCompletionMarker: async () => null,
             addCustomExtensions: () => undefined,
             addCustomIgnorePatterns: () => undefined,
-            clearIndexCompletionMarker: async () => undefined
+            resolveCollectionName: () => 'base_collection',
+            resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
+            setWriteCollectionOverride: () => undefined,
+            getActiveIndexedCollectionName: async () => null,
+            clearIndexCompletionMarker: async () => undefined,
+            pruneIndexedCollectionFamily: async () => [],
+            pruneUnprovenStagedCollectionFamily: async () => []
         } as unknown as HandlerContext;
         const snapshotManager = {
             getIndexingCodebases: () => [],
@@ -908,7 +1184,16 @@ test('handleIndexCodebase create proceeds when snapshot is indexed but completio
             getIndexedCodebases: () => [repoPath],
             getCodebaseStatus: () => 'indexed',
             setCodebaseIndexing: () => undefined,
-            saveCodebaseSnapshot: () => undefined
+            setCodebaseIndexFailed: () => undefined,
+            setCodebaseIndexed: () => undefined,
+            setCodebaseIndexManifest: () => undefined,
+            saveCodebaseSnapshot: () => true,
+            commitCodebaseLifecycleMutation: (mutate: () => void, beforeCommit?: () => void) => {
+                beforeCommit?.();
+                mutate();
+                beforeCommit?.();
+                return true;
+            }
         } as unknown as HandlerSnapshotManager;
         const syncManager = {
             unregisterCodebaseWatcher: async () => undefined
@@ -938,6 +1223,11 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
         let saveCalls = 0;
 
         const context = {
+            resolveCollectionName: () => 'proven_collection',
+            resolveStagedCollectionName: (_codebasePath: string, generationId: string) => `proven_collection__gen_${generationId}`,
+            setWriteCollectionOverride: () => undefined,
+            pruneIndexedCollectionFamily: async () => [],
+            pruneUnprovenStagedCollectionFamily: async () => [],
             getVectorStore: () => ({
                 checkCollectionLimit: async () => {
                     collectionLimitCalls += 1;
@@ -953,6 +1243,7 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
                 completedAt: '2026-02-28T08:00:00.000Z',
                 runId: 'run_test'
             }),
+            getActiveIndexedCollectionName: async () => 'proven_collection',
             addCustomExtensions: () => undefined,
             addCustomIgnorePatterns: () => undefined,
             clearIndexCompletionMarker: async () => undefined
@@ -975,14 +1266,40 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
                 };
             },
             setCodebaseIndexing: () => undefined,
+            setCodebaseIndexFailed: () => undefined,
+            setCodebaseIndexManifest: () => undefined,
             saveCodebaseSnapshot: () => {
                 saveCalls += 1;
-            }
+            },
+            commitCodebaseLifecycleMutation: (mutate: () => void, beforeCommit?: () => void) => {
+                beforeCommit?.();
+                mutate();
+                saveCalls += 1;
+                beforeCommit?.();
+                return true;
+            },
         } as unknown as HandlerSnapshotManager;
         const syncManager = {
             unregisterCodebaseWatcher: async () => undefined
         } as unknown as HandlerSyncManager;
-        const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'leases'),
+            ownerId: 'recovery-test',
+        });
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
         (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = async () => {
             startedBackgroundIndexing = true;
         };

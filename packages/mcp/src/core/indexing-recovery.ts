@@ -1,5 +1,9 @@
 import { IndexCompletionMarkerDocument } from '@zokizuan/satori-core';
-import { IndexFingerprint, indexFingerprintsEqual } from '../config.js';
+import {
+    IndexFingerprint,
+    indexFingerprintsEqual,
+} from '../config.js';
+import { parseCompletionMarker } from './completion-proof.js';
 
 export type InterruptedIndexingRecoveryDecision =
     | {
@@ -29,35 +33,6 @@ function fingerprintsMatch(a: IndexCompletionMarkerDocument['fingerprint'], b: I
     return indexFingerprintsEqual(a as IndexFingerprint, b);
 }
 
-function hasValidMarkerPayload(marker: IndexCompletionMarkerDocument): boolean {
-    return marker.kind === 'satori_index_completion_v1'
-        && typeof marker.codebasePath === 'string'
-        && marker.codebasePath.length > 0
-        && Number.isFinite(Number(marker.indexedFiles))
-        && Number(marker.indexedFiles) >= 0
-        && Number.isFinite(Number(marker.totalChunks))
-        && Number(marker.totalChunks) >= 0
-        && typeof marker.completedAt === 'string'
-        && !Number.isNaN(Date.parse(marker.completedAt))
-        && typeof marker.runId === 'string'
-        && marker.runId.length > 0;
-}
-
-function normalizeMarkerFingerprint(
-    fingerprint: IndexCompletionMarkerDocument['fingerprint']
-): IndexFingerprint {
-    return {
-        embeddingProvider: fingerprint.embeddingProvider as IndexFingerprint['embeddingProvider'],
-        embeddingModel: fingerprint.embeddingModel,
-        embeddingDimension: Number(fingerprint.embeddingDimension),
-        vectorStoreProvider: fingerprint.vectorStoreProvider as IndexFingerprint['vectorStoreProvider'],
-        schemaVersion: fingerprint.schemaVersion as IndexFingerprint['schemaVersion'],
-        ...(fingerprint.parserVersion ? { parserVersion: fingerprint.parserVersion } : {}),
-        ...(fingerprint.extractorVersion ? { extractorVersion: fingerprint.extractorVersion } : {}),
-        ...(fingerprint.relationshipVersion ? { relationshipVersion: fingerprint.relationshipVersion } : {}),
-    };
-}
-
 export function decideInterruptedIndexingRecovery(
     marker: IndexCompletionMarkerDocument | null,
     runtimeFingerprint: IndexFingerprint
@@ -70,7 +45,8 @@ export function decideInterruptedIndexingRecovery(
         };
     }
 
-    if (!hasValidMarkerPayload(marker)) {
+    const parsedMarker = parseCompletionMarker(marker);
+    if (!parsedMarker) {
         return {
             action: 'mark_failed',
             reason: 'invalid_marker_payload',
@@ -78,16 +54,17 @@ export function decideInterruptedIndexingRecovery(
         };
     }
 
-    const indexStatus = resolveMarkerIndexStatus(marker);
+    const indexStatus = resolveMarkerIndexStatus(parsedMarker);
+    const indexFingerprint = parsedMarker.fingerprint;
 
-    if (!fingerprintsMatch(marker.fingerprint, runtimeFingerprint)) {
+    if (!fingerprintsMatch(parsedMarker.fingerprint, runtimeFingerprint)) {
         return {
             action: 'promote_indexed',
             reason: 'valid_marker_runtime_mismatch',
-            indexFingerprint: normalizeMarkerFingerprint(marker.fingerprint),
+            indexFingerprint,
             stats: {
-                indexedFiles: Number(marker.indexedFiles),
-                totalChunks: Number(marker.totalChunks),
+                indexedFiles: parsedMarker.indexedFiles,
+                totalChunks: parsedMarker.totalChunks,
                 status: indexStatus,
             }
         };
@@ -96,10 +73,10 @@ export function decideInterruptedIndexingRecovery(
     return {
         action: 'promote_indexed',
         reason: 'valid_marker',
-        indexFingerprint: normalizeMarkerFingerprint(marker.fingerprint),
+        indexFingerprint,
         stats: {
-            indexedFiles: Number(marker.indexedFiles),
-            totalChunks: Number(marker.totalChunks),
+            indexedFiles: parsedMarker.indexedFiles,
+            totalChunks: parsedMarker.totalChunks,
             status: indexStatus,
         }
     };

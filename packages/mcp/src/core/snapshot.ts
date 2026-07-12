@@ -30,6 +30,11 @@ export interface SnapshotCorruptionWarning {
     message: string;
 }
 type MergeClass = 'searchable' | 'terminal_bad' | 'active';
+type SnapshotMetadataField =
+    | 'callGraphSidecar'
+    | 'indexManifest'
+    | 'ignoreRulesVersion'
+    | 'ignoreControlSignature';
 
 const OPERATION_PHASE_RANK: Record<IndexOperationPhase, number> = {
     accepted: 0,
@@ -72,7 +77,18 @@ function mergeClassRank(value: MergeClass): number {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonnegativeSafeInteger(value: unknown): value is number {
+    return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function isValidPercentage(value: unknown): value is number {
+    return typeof value === "number"
+        && Number.isFinite(value)
+        && value >= 0
+        && value <= 100;
 }
 
 function errorMessage(error: unknown): string {
@@ -136,6 +152,8 @@ export class SnapshotManager {
     private latestOperations: Map<string, IndexOperationReceipt> = new Map();
     private pendingRemovals: Set<string> = new Set();
     private pendingTombstoneRemovals: Set<string> = new Set();
+    private pendingLifecycleRoots: Set<string> = new Set();
+    private pendingMetadataFields: Map<string, Set<SnapshotMetadataField>> = new Map();
     private isDirty = false;
     private lastLoadedSnapshotStateToken: string | null = null;
     private snapshotCorruptionWarning: SnapshotCorruptionWarning | undefined;
@@ -147,6 +165,8 @@ export class SnapshotManager {
         latestOperations: Map<string, IndexOperationReceipt>;
         pendingRemovals: Set<string>;
         pendingTombstoneRemovals: Set<string>;
+        pendingLifecycleRoots: Set<string>;
+        pendingMetadataFields: Map<string, Set<SnapshotMetadataField>>;
         isDirty: boolean;
     } {
         return {
@@ -155,6 +175,10 @@ export class SnapshotManager {
             latestOperations: structuredClone(this.latestOperations),
             pendingRemovals: new Set(this.pendingRemovals),
             pendingTombstoneRemovals: new Set(this.pendingTombstoneRemovals),
+            pendingLifecycleRoots: new Set(this.pendingLifecycleRoots),
+            pendingMetadataFields: new Map(
+                Array.from(this.pendingMetadataFields.entries(), ([root, fields]) => [root, new Set(fields)]),
+            ),
             isDirty: this.isDirty,
         };
     }
@@ -165,6 +189,8 @@ export class SnapshotManager {
         this.latestOperations = checkpoint.latestOperations;
         this.pendingRemovals = checkpoint.pendingRemovals;
         this.pendingTombstoneRemovals = checkpoint.pendingTombstoneRemovals;
+        this.pendingLifecycleRoots = checkpoint.pendingLifecycleRoots;
+        this.pendingMetadataFields = checkpoint.pendingMetadataFields;
         this.isDirty = checkpoint.isDirty;
         this.refreshDerivedState();
     }
@@ -234,10 +260,18 @@ export class SnapshotManager {
         this.pendingRemovals.delete(codebasePath);
         this.clearTombstones.delete(codebasePath);
         this.pendingTombstoneRemovals.add(codebasePath);
+        this.pendingLifecycleRoots.add(codebasePath);
     }
 
     private markDirty(): void {
         this.isDirty = true;
+    }
+
+    private markMetadataDirty(codebasePath: string, field: SnapshotMetadataField): void {
+        const fields = this.pendingMetadataFields.get(codebasePath) ?? new Set<SnapshotMetadataField>();
+        fields.add(field);
+        this.pendingMetadataFields.set(codebasePath, fields);
+        this.markDirty();
     }
 
     private assertMetadataMutationPreservesDerivedFields(previous: CodebaseInfo, next: CodebaseInfo, operation: string): void {
@@ -296,6 +330,19 @@ export class SnapshotManager {
         const diskGeneration = diskOperation?.generation ?? -1;
         if (localGeneration !== diskGeneration) {
             return localGeneration > diskGeneration ? localInfo : diskInfo;
+        }
+
+        if (localOperation && diskOperation) {
+            if (localOperation.id !== diskOperation.id) {
+                throw new Error(
+                    `Conflicting operation ids at generation ${localGeneration} for '${localOperation.canonicalRoot}'.`,
+                );
+            }
+            const localPhaseRank = OPERATION_PHASE_RANK[localOperation.phase];
+            const diskPhaseRank = OPERATION_PHASE_RANK[diskOperation.phase];
+            if (localPhaseRank !== diskPhaseRank) {
+                return localPhaseRank > diskPhaseRank ? localInfo : diskInfo;
+            }
         }
 
         const localStatus = localInfo.status;
@@ -505,9 +552,13 @@ export class SnapshotManager {
         return (
             typeof value.embeddingProvider === "string"
             && typeof value.embeddingModel === "string"
-            && Number.isFinite(value.embeddingDimension)
+            && Number.isSafeInteger(value.embeddingDimension)
+            && Number(value.embeddingDimension) > 0
             && typeof value.vectorStoreProvider === "string"
             && typeof value.schemaVersion === "string"
+            && (value.parserVersion === undefined || typeof value.parserVersion === "string")
+            && (value.extractorVersion === undefined || typeof value.extractorVersion === "string")
+            && (value.relationshipVersion === undefined || typeof value.relationshipVersion === "string")
         );
     }
 
@@ -560,18 +611,18 @@ export class SnapshotManager {
         }
         switch (status) {
             case "indexing":
-                return Number.isFinite(rawInfo.indexingPercentage);
+                return isValidPercentage(rawInfo.indexingPercentage);
             case "indexed":
-                return Number.isFinite(rawInfo.indexedFiles)
-                    && Number.isFinite(rawInfo.totalChunks)
+                return isNonnegativeSafeInteger(rawInfo.indexedFiles)
+                    && isNonnegativeSafeInteger(rawInfo.totalChunks)
                     && (rawInfo.indexStatus === "completed" || rawInfo.indexStatus === "limit_reached");
             case "indexfailed":
                 return typeof rawInfo.errorMessage === "string";
             case "sync_completed":
-                return Number.isFinite(rawInfo.added)
-                    && Number.isFinite(rawInfo.removed)
-                    && Number.isFinite(rawInfo.modified)
-                    && Number.isFinite(rawInfo.totalChanges);
+                return isNonnegativeSafeInteger(rawInfo.added)
+                    && isNonnegativeSafeInteger(rawInfo.removed)
+                    && isNonnegativeSafeInteger(rawInfo.modified)
+                    && isNonnegativeSafeInteger(rawInfo.totalChanges);
             case "requires_reindex":
                 return typeof rawInfo.message === "string";
             default:
@@ -807,17 +858,55 @@ export class SnapshotManager {
         for (const [codebasePath, localInfo] of this.codebaseInfoMap.entries()) {
             const persistedInfo = merged.get(codebasePath);
             if (!persistedInfo) {
-                merged.set(codebasePath, localInfo);
+                if (this.pendingLifecycleRoots.has(codebasePath)) {
+                    merged.set(codebasePath, localInfo);
+                }
                 continue;
             }
-            merged.set(codebasePath, this.pickPreferredInfo(
-                localInfo,
-                persistedInfo,
-                this.latestOperations.get(codebasePath),
-                persistedOperations.get(codebasePath),
-            ));
+            const lifecycleBase = this.pendingLifecycleRoots.has(codebasePath)
+                ? this.pickPreferredInfo(
+                    localInfo,
+                    persistedInfo,
+                    this.latestOperations.get(codebasePath),
+                    persistedOperations.get(codebasePath),
+                )
+                : persistedInfo;
+            merged.set(
+                codebasePath,
+                this.overlayPendingMetadata(codebasePath, lifecycleBase, localInfo),
+            );
         }
 
+        return merged;
+    }
+
+    private overlayPendingMetadata(
+        codebasePath: string,
+        lifecycleBase: CodebaseInfo,
+        localInfo: CodebaseInfo,
+    ): CodebaseInfo {
+        const fields = this.pendingMetadataFields.get(codebasePath);
+        if (!fields || fields.size === 0) {
+            return lifecycleBase;
+        }
+
+        const merged: CodebaseInfo = { ...lifecycleBase };
+        if (fields.has('callGraphSidecar')) {
+            merged.callGraphSidecar = localInfo.callGraphSidecar
+                ? structuredClone(localInfo.callGraphSidecar)
+                : undefined;
+        }
+        if (fields.has('indexManifest')) {
+            merged.indexManifest = localInfo.indexManifest
+                ? structuredClone(localInfo.indexManifest)
+                : undefined;
+        }
+        if (fields.has('ignoreRulesVersion')) {
+            merged.ignoreRulesVersion = localInfo.ignoreRulesVersion;
+        }
+        if (fields.has('ignoreControlSignature')) {
+            merged.ignoreControlSignature = localInfo.ignoreControlSignature;
+        }
         return merged;
     }
 
@@ -954,12 +1043,18 @@ export class SnapshotManager {
         return latest ? path.join(snapshotDir, latest) : undefined;
     }
 
-    private quarantineCorruptSnapshot(error: unknown): SnapshotCorruptionWarning {
+    private quarantineCorruptSnapshot(
+        error: unknown,
+        failedSnapshotStateToken: string | null,
+    ): { warning: SnapshotCorruptionWarning; replacementChanged: boolean } {
         console.error('[SNAPSHOT] Error loading snapshot:', error);
         const message = errorMessage(error);
         let quarantinedPath = this.findLatestQuarantinedSnapshotPath();
         if (!fs.existsSync(this.snapshotFilePath)) {
-            return { snapshotPath: this.snapshotFilePath, quarantinedPath, message };
+            return {
+                warning: { snapshotPath: this.snapshotFilePath, quarantinedPath, message },
+                replacementChanged: failedSnapshotStateToken !== null,
+            };
         }
 
         let lockHandle: { fd: number; path: string } | null = null;
@@ -967,14 +1062,19 @@ export class SnapshotManager {
         try {
             lockHandle = this.acquireSnapshotLock();
             if (!lockHandle) {
-                try {
-                    fs.copyFileSync(this.snapshotFilePath, quarantinePath);
-                    quarantinedPath = quarantinePath;
-                    console.warn(`[SNAPSHOT] Lock unavailable; copied corrupt snapshot to ${quarantinePath}`);
-                } catch (copyError) {
-                    console.error(`[SNAPSHOT] Failed to preserve corrupt snapshot copy: ${errorMessage(copyError)}`);
-                }
-                return { snapshotPath: this.snapshotFilePath, quarantinedPath, message };
+                return {
+                    warning: { snapshotPath: this.snapshotFilePath, quarantinedPath, message },
+                    replacementChanged: this.readSnapshotStateToken() !== failedSnapshotStateToken,
+                };
+            }
+            if (
+                failedSnapshotStateToken === null
+                || this.readSnapshotStateToken() !== failedSnapshotStateToken
+            ) {
+                return {
+                    warning: { snapshotPath: this.snapshotFilePath, quarantinedPath, message },
+                    replacementChanged: true,
+                };
             }
             fs.renameSync(this.snapshotFilePath, quarantinePath);
             quarantinedPath = quarantinePath;
@@ -986,16 +1086,26 @@ export class SnapshotManager {
                 this.releaseSnapshotLock(lockHandle);
             }
         }
-        return { snapshotPath: this.snapshotFilePath, quarantinedPath, message };
+        return {
+            warning: { snapshotPath: this.snapshotFilePath, quarantinedPath, message },
+            replacementChanged: false,
+        };
     }
 
     public loadCodebaseSnapshot(): void {
+        this.loadCodebaseSnapshotAttempt(true);
+    }
+
+    private loadCodebaseSnapshotAttempt(allowReplacementRetry: boolean): void {
         console.log('[SNAPSHOT] Loading codebase snapshot from:', this.snapshotFilePath);
         const hadRuntimeState = this.codebaseInfoMap.size > 0 || this.clearTombstones.size > 0 || this.latestOperations.size > 0;
+        let failedSnapshotStateToken: string | null = null;
 
         try {
             this.pendingRemovals.clear();
             this.pendingTombstoneRemovals.clear();
+            this.pendingLifecycleRoots.clear();
+            this.pendingMetadataFields.clear();
             this.isDirty = false;
             if (!fs.existsSync(this.snapshotFilePath)) {
                 console.log('[SNAPSHOT] Snapshot file does not exist. Starting with empty codebase list.');
@@ -1015,6 +1125,7 @@ export class SnapshotManager {
                 return;
             }
 
+            failedSnapshotStateToken = this.readSnapshotStateToken();
             const snapshotData = fs.readFileSync(this.snapshotFilePath, 'utf8');
             const snapshot: unknown = JSON.parse(snapshotData);
             let shouldPersist = false;
@@ -1034,7 +1145,15 @@ export class SnapshotManager {
                 this.loadV1Format(snapshot);
                 shouldPersist = true;
             } else {
-                this.snapshotCorruptionWarning = this.quarantineCorruptSnapshot(new Error('Snapshot format is malformed'));
+                const quarantine = this.quarantineCorruptSnapshot(
+                    new Error('Snapshot format is malformed'),
+                    failedSnapshotStateToken,
+                );
+                if (quarantine.replacementChanged && allowReplacementRetry) {
+                    this.loadCodebaseSnapshotAttempt(false);
+                    return;
+                }
+                this.snapshotCorruptionWarning = quarantine.warning;
                 if (!hadRuntimeState) {
                     this.codebaseInfoMap.clear();
                     this.clearTombstones.clear();
@@ -1042,6 +1161,9 @@ export class SnapshotManager {
                 }
                 this.refreshDerivedState();
                 this.isDirty = hadRuntimeState;
+                if (hadRuntimeState && !quarantine.replacementChanged) {
+                    this.pendingLifecycleRoots = new Set(this.codebaseInfoMap.keys());
+                }
                 return;
             }
 
@@ -1052,7 +1174,12 @@ export class SnapshotManager {
                 this.rememberCurrentSnapshotStateToken();
             }
         } catch (error) {
-            this.snapshotCorruptionWarning = this.quarantineCorruptSnapshot(error);
+            const quarantine = this.quarantineCorruptSnapshot(error, failedSnapshotStateToken);
+            if (quarantine.replacementChanged && allowReplacementRetry) {
+                this.loadCodebaseSnapshotAttempt(false);
+                return;
+            }
+            this.snapshotCorruptionWarning = quarantine.warning;
             if (!hadRuntimeState) {
                 this.codebaseInfoMap.clear();
                 this.clearTombstones.clear();
@@ -1060,8 +1187,14 @@ export class SnapshotManager {
             }
             this.pendingRemovals.clear();
             this.pendingTombstoneRemovals.clear();
+            this.pendingMetadataFields.clear();
             this.refreshDerivedState();
             this.isDirty = hadRuntimeState;
+            if (hadRuntimeState && !quarantine.replacementChanged) {
+                this.pendingLifecycleRoots = new Set(this.codebaseInfoMap.keys());
+            } else {
+                this.pendingLifecycleRoots.clear();
+            }
             this.lastLoadedSnapshotStateToken = this.readSnapshotStateToken();
         }
     }
@@ -1118,6 +1251,8 @@ export class SnapshotManager {
             this.latestOperations = mergedOperations;
             this.pendingRemovals.clear();
             this.pendingTombstoneRemovals.clear();
+            this.pendingLifecycleRoots.clear();
+            this.pendingMetadataFields.clear();
             this.isDirty = false;
             this.refreshDerivedState();
             this.rememberCurrentSnapshotStateToken();
@@ -1196,7 +1331,8 @@ export class SnapshotManager {
     }
 
     public getCodebaseInfo(codebasePath: string): CodebaseInfo | undefined {
-        return this.codebaseInfoMap.get(codebasePath);
+        const info = this.codebaseInfoMap.get(codebasePath);
+        return info ? structuredClone(info) : undefined;
     }
 
     public getLatestOperation(codebasePath: string): IndexOperationReceipt | undefined {
@@ -1338,7 +1474,10 @@ export class SnapshotManager {
     }
 
     public getAllCodebases(): Array<{ path: string; info: CodebaseInfo }> {
-        return Array.from(this.codebaseInfoMap.entries()).map(([p, info]) => ({ path: p, info }));
+        return Array.from(this.codebaseInfoMap.entries()).map(([p, info]) => ({
+            path: p,
+            info: structuredClone(info),
+        }));
     }
 
     public getSnapshotCorruptionWarning(): SnapshotCorruptionWarning | undefined {
@@ -1528,6 +1667,7 @@ export class SnapshotManager {
             ignoreControlSignature: info.ignoreControlSignature,
         };
         this.codebaseInfoMap.set(codebasePath, recovered);
+        this.pendingLifecycleRoots.add(codebasePath);
         this.markDirty();
         this.refreshDerivedState();
     }
@@ -1541,11 +1681,10 @@ export class SnapshotManager {
         const nextInfo: CodebaseInfo = {
             ...existing,
             callGraphSidecar: sidecar,
-            lastUpdated: new Date().toISOString(),
         };
         this.assertMetadataMutationPreservesDerivedFields(existing, nextInfo, "setCodebaseCallGraphSidecar");
         this.codebaseInfoMap.set(codebasePath, nextInfo);
-        this.markDirty();
+        this.markMetadataDirty(codebasePath, 'callGraphSidecar');
     }
 
     /**
@@ -1561,22 +1700,17 @@ export class SnapshotManager {
         if (!existing) {
             return false;
         }
-        const previousInfo: CodebaseInfo = { ...existing };
-        const wasDirty = this.isDirty;
-        this.setCodebaseCallGraphSidecar(codebasePath, sidecar);
+        const checkpoint = this.captureMutableState();
         try {
+            this.setCodebaseCallGraphSidecar(codebasePath, sidecar);
             const saved = this.saveCodebaseSnapshot(false, beforeCommit);
             if (!saved) {
-                this.codebaseInfoMap.set(codebasePath, previousInfo);
-                this.isDirty = wasDirty;
-                this.refreshDerivedState();
+                this.restoreMutableState(checkpoint);
                 return false;
             }
             return true;
         } catch (error) {
-            this.codebaseInfoMap.set(codebasePath, previousInfo);
-            this.isDirty = wasDirty;
-            this.refreshDerivedState();
+            this.restoreMutableState(checkpoint);
             throw error;
         }
     }
@@ -1597,11 +1731,10 @@ export class SnapshotManager {
                 indexedPaths: normalized,
                 updatedAt: new Date().toISOString(),
             },
-            lastUpdated: new Date().toISOString(),
         };
         this.assertMetadataMutationPreservesDerivedFields(existing, nextInfo, "setCodebaseIndexManifest");
         this.codebaseInfoMap.set(codebasePath, nextInfo);
-        this.markDirty();
+        this.markMetadataDirty(codebasePath, 'indexManifest');
     }
 
     public getCodebaseIndexedPaths(codebasePath: string): string[] {
@@ -1622,11 +1755,10 @@ export class SnapshotManager {
         const nextInfo: CodebaseInfo = {
             ...existing,
             ignoreRulesVersion: nextVersion,
-            lastUpdated: new Date().toISOString(),
         };
         this.assertMetadataMutationPreservesDerivedFields(existing, nextInfo, "setCodebaseIgnoreRulesVersion");
         this.codebaseInfoMap.set(codebasePath, nextInfo);
-        this.markDirty();
+        this.markMetadataDirty(codebasePath, 'ignoreRulesVersion');
     }
 
     public getCodebaseIgnoreControlSignature(codebasePath: string): string | undefined {
@@ -1642,15 +1774,15 @@ export class SnapshotManager {
         const nextInfo: CodebaseInfo = {
             ...existing,
             ignoreControlSignature: typeof signature === 'string' ? signature : existing.ignoreControlSignature,
-            lastUpdated: new Date().toISOString(),
         };
         this.assertMetadataMutationPreservesDerivedFields(existing, nextInfo, "setCodebaseIgnoreControlSignature");
         this.codebaseInfoMap.set(codebasePath, nextInfo);
-        this.markDirty();
+        this.markMetadataDirty(codebasePath, 'ignoreControlSignature');
     }
 
     public getCodebaseCallGraphSidecar(codebasePath: string): CallGraphSidecarInfo | undefined {
-        return this.codebaseInfoMap.get(codebasePath)?.callGraphSidecar;
+        const sidecar = this.codebaseInfoMap.get(codebasePath)?.callGraphSidecar;
+        return sidecar ? structuredClone(sidecar) : undefined;
     }
 
     public removeCodebaseCompletely(codebasePath: string): void {
@@ -1707,6 +1839,7 @@ export class SnapshotManager {
                 indexedFiles: fileCount,
                 lastUpdated: new Date().toISOString(),
             });
+            this.pendingLifecycleRoots.add(codebasePath);
             this.markDirty();
         }
         this.refreshDerivedState();

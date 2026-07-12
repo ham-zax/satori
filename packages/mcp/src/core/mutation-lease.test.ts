@@ -200,6 +200,32 @@ test("process-start mismatch permits takeover and old owner cannot release it", 
     });
 });
 
+test("publishWhileCurrent executes publication only while the exact lease owns the root lock", async () => {
+    await withTempDir((tempDir) => {
+        const root = path.join(tempDir, "repo");
+        fs.mkdirSync(root);
+        const processes = new Map<number, MutationLeaseProcessSnapshot>([[101, snapshot(101)]]);
+        const owner = coordinator(path.join(tempDir, "state"), snapshot(101), processes, "owner-a");
+        const acquired = owner.acquire(root, "sync");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+
+        let publications = 0;
+        owner.publishWhileCurrent(acquired.lease, () => {
+            publications += 1;
+        });
+        assert.equal(publications, 1);
+        assert.equal(owner.release(acquired.lease), true);
+        assert.throws(
+            () => owner.publishWhileCurrent(acquired.lease, () => {
+                publications += 1;
+            }),
+            /no longer current/,
+        );
+        assert.equal(publications, 1);
+    });
+});
+
 test("live PID without processStartTime remains fail-closed and blocks takeover", async () => {
     await withTempDir((tempDir) => {
         const root = path.join(tempDir, "repo");

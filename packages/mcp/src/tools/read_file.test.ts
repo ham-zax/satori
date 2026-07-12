@@ -1525,9 +1525,13 @@ test('read_file open_symbol returns not_indexed when delegated exact navigation 
                 hasCollection: async () => false
             }),
             resolveCollectionName: () => 'satori_repo_missing_collection',
+            getActiveIndexedCollectionName: async () => null,
             getIndexCompletionMarker: async () => buildMarker(repoPath)
         } as unknown as HandlerContext;
         const toolHandlers = new ToolHandlers(handlerContext, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
+        (toolHandlers as unknown as {
+            validateCompletionProof: () => Promise<{ outcome: 'valid'; marker: ReturnType<typeof buildMarker> }>;
+        }).validateCompletionProof = async () => ({ outcome: 'valid', marker: buildMarker(repoPath) });
 
         const response = await runReadFile({
             path: filePath,

@@ -122,6 +122,10 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         getVectorStore: () => vectorStore,
         resolveCollectionName: options.resolveCollectionNameImpl || resolveCollectionName,
         pruneUnprovenStagedCollectionFamily: options.pruneUnprovenStagedCollectionFamilyImpl || (async () => []),
+        pruneIndexedCollectionFamily: async () => [],
+        setWriteCollectionOverride: () => undefined,
+        getActiveIndexedCollectionName: async () => null,
+        clearIndexCompletionMarker: async () => undefined,
         ...(!options.omitStagedCollectionResolver ? {
             resolveStagedCollectionName: (codebasePath: string, generationId: string) =>
                 `${resolveCollectionName(codebasePath)}__gen_${generationId}`,
@@ -142,6 +146,16 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         },
         setCodebaseIndexing: (codebasePath: string) => {
             snapshotEvents.indexing.push(codebasePath);
+        },
+        setCodebaseIndexFailed: () => undefined,
+        setCodebaseIndexed: () => undefined,
+        setCodebaseIndexManifest: () => undefined,
+        commitCodebaseLifecycleMutation: (mutate: () => void, beforeCommit?: () => void) => {
+            beforeCommit?.();
+            mutate();
+            snapshotEvents.saved += 1;
+            beforeCommit?.();
+            return true;
         },
         saveCodebaseSnapshot: () => {
             snapshotEvents.saved += 1;
@@ -702,7 +716,7 @@ test('handleIndexCodebase force reindex stages into a new generation without eag
     });
 });
 
-test('handleIndexCodebase fallback staged collection names stay backend-safe when no context resolver is provided', async () => {
+test('handleIndexCodebase fails closed when the staged collection resolver is absent', async () => {
     await withTempRepo(async (repoPath) => {
         const { handlers } = createHandlersForValidation({
             backendProvider: 'zilliz',
@@ -724,10 +738,9 @@ test('handleIndexCodebase fallback staged collection names stay backend-safe whe
         });
 
         const envelope = parseManageEnvelope(response);
-        assert.equal(envelope.status, 'ok');
-        assert.ok(startedArgs);
-        assert.match(String(startedArgs?.[2] || ''), /^hybrid_code_chunks_[0-9a-f]{8}__gen_run_[A-Za-z0-9_]+$/);
-        assert.equal(String(startedArgs?.[2] || '').includes('-'), false);
+        assert.equal(envelope.status, 'error');
+        assert.match(envelope.humanText, /missing required mutation capability: Context\.resolveStagedCollectionName/i);
+        assert.equal(startedArgs, null);
     });
 });
 

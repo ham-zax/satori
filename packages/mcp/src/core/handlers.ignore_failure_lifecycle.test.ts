@@ -306,6 +306,7 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
         });
         await context.recreateSynchronizerForCodebase(repoPath);
         await context.indexCodebase(repoPath);
+        context.getActiveIndexedCollectionName = async () => context.resolveCollectionName(repoPath);
 
         const { snapshotManager, info } = createMutableSnapshotManager(repoPath);
         snapshotManager.setCodebaseIndexManifest?.(repoPath, context.getTrackedRelativePaths(repoPath));
@@ -327,7 +328,7 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
         const testHandlers = handlers as unknown as {
             validateCompletionProof: () => Promise<{ outcome: 'ok' }>;
         };
-        testHandlers.validateCompletionProof = async () => ({ outcome: 'ok' });
+        testHandlers.validateCompletionProof = async () => ({ outcome: 'valid' });
 
         const initialOutline = parsePayload(await handlers.handleFileOutline({
             path: repoPath,

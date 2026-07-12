@@ -126,7 +126,7 @@ test('language analysis does not throw when input normalization fails', async ()
     assert.ok(result.chunks.some((chunk) => chunk.content.includes('source remains available')));
 });
 
-test('emergency language analysis keeps chunks bounded when the normal chunk builder fails', async () => {
+test('invalid overlap input still produces bounded searchable chunks', async () => {
     const analyzer = createLanguageAnalysisService({
         chunkSize: 12,
         chunkOverlap: Symbol('invalid overlap') as unknown as number,
@@ -140,14 +140,27 @@ test('emergency language analysis keeps chunks bounded when the normal chunk bui
     });
 
     assert.equal(result.backend, 'bounded_text');
-    assert.equal(result.structuralStatus, 'recovered');
-    assert.equal(result.structuralReason, 'analysis_failure');
+    assert.equal(result.structuralStatus, 'unsupported');
+    assert.equal(result.structuralReason, 'unsupported_language');
     assert.ok(result.chunks.length > 1);
     assert.ok(result.chunks.every((chunk) => Buffer.byteLength(chunk.content, 'utf8') <= 12));
     assert.ok(result.chunks.every((chunk) => chunk.metadata.filePath === 'notes/recovery.txt'));
     assert.equal(result.chunks[0]?.metadata.startByte, 0);
     assert.equal(result.chunks.at(-1)?.metadata.endByte, Buffer.byteLength(source, 'utf8'));
 });
+
+for (const overlap of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    test(`language analysis bounds non-finite chunk overlap ${String(overlap)}`, async () => {
+        const analyzer = createLanguageAnalysisService({ chunkSize: 2500, chunkOverlap: overlap });
+        const source = 'x'.repeat(6000);
+        const result = await analyzer.analyze({ content: source, language: 'text', relativePath: 'large.txt' });
+
+        assert.ok(result.chunks.length >= 3);
+        assert.ok(result.chunks.length < 10);
+        assert.equal(result.chunks[0]?.metadata.startByte, 0);
+        assert.equal(result.chunks.at(-1)?.metadata.endByte, 6000);
+    });
+}
 
 test('Oxc infrastructure exceptions degrade to searchable recovered text', async () => {
     const analyzer = createLanguageAnalysisService();
@@ -638,6 +651,32 @@ for (const fixture of wasmLanguageFixtures) {
         )));
     });
 }
+
+test('Tree-sitter assigns Java enum methods to their enum owner', async () => {
+    const result = await createLanguageAnalysisService().analyze({
+        content: 'enum E { VALUE; void run() {} }\n',
+        language: 'java',
+        relativePath: 'src/E.java',
+    });
+    const method = result.symbols.find((symbol) => symbol.name === 'run');
+    assert.ok(method);
+    assert.equal(method.kind, 'method');
+    assert.deepEqual(method.parentQualifiedNamePath, ['E']);
+    assert.equal(method.qualifiedName, 'E.run');
+});
+
+test('Tree-sitter classifies Scala class definitions as methods', async () => {
+    const result = await createLanguageAnalysisService().analyze({
+        content: 'class Service { def run(): Int = 1 }\n',
+        language: 'scala',
+        relativePath: 'src/Service.scala',
+    });
+    const method = result.symbols.find((symbol) => symbol.name === 'run');
+    assert.ok(method);
+    assert.equal(method.kind, 'method');
+    assert.deepEqual(method.parentQualifiedNamePath, ['Service']);
+    assert.equal(method.qualifiedName, 'Service.run');
+});
 
 test('malformed structural source remains searchable without authoritative symbols', async () => {
     const analyzer = createLanguageAnalysisService();

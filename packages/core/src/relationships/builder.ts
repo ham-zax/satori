@@ -21,6 +21,18 @@ function compareRelationshipRecords(a: RelationshipRecord, b: RelationshipRecord
     const aLine = a.span?.startLine ?? 0;
     const bLine = b.span?.startLine ?? 0;
     if (aLine !== bLine) return aLine - bLine;
+    const aStartByte = a.span?.startByte ?? 0;
+    const bStartByte = b.span?.startByte ?? 0;
+    if (aStartByte !== bStartByte) return aStartByte - bStartByte;
+    const aEndByte = a.span?.endByte ?? 0;
+    const bEndByte = b.span?.endByte ?? 0;
+    if (aEndByte !== bEndByte) return aEndByte - bEndByte;
+    const aStartColumn = a.span?.startColumn ?? 0;
+    const bStartColumn = b.span?.startColumn ?? 0;
+    if (aStartColumn !== bStartColumn) return aStartColumn - bStartColumn;
+    const aEndColumn = a.span?.endColumn ?? 0;
+    const bEndColumn = b.span?.endColumn ?? 0;
+    if (aEndColumn !== bEndColumn) return aEndColumn - bEndColumn;
     if (a.sourceKey !== b.sourceKey) return compareStrings(a.sourceKey, b.sourceKey);
     return compareStrings(a.targetKey || '', b.targetKey || '');
 }
@@ -32,6 +44,11 @@ function relationshipKey(record: RelationshipRecord): string {
         record.type,
         record.file,
         record.span?.startLine ?? 0,
+        record.span?.endLine ?? 0,
+        record.span?.startByte ?? 0,
+        record.span?.endByte ?? 0,
+        record.span?.startColumn ?? 0,
+        record.span?.endColumn ?? 0,
     ].join('\0');
 }
 
@@ -199,8 +216,8 @@ function resolvePythonRelativeModuleCandidates(sourceFile: string, specifier: st
     return [`${moduleBase}.py`, ...(packageCandidate ? [packageCandidate] : [])];
 }
 
-function relationshipSpan(binding: ModuleBinding | CallSite): { startLine: number; endLine: number } {
-    return { startLine: binding.span.startLine, endLine: binding.span.endLine };
+function relationshipSpan(binding: ModuleBinding | CallSite): RelationshipRecord['span'] {
+    return { ...binding.span };
 }
 
 export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsForRegistryInput): RelationshipRecord[] {

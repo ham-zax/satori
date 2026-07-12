@@ -381,7 +381,10 @@ test('RuntimeNavigationStore falls back to JSON when SQLite cache parity mismatc
         assert.equal(relationships.status, 'ok');
         assert.equal(relationships.records.length, 1);
         assert.equal(warnings.length, 1);
-        assert.match(warnings[0] || '', /SQLite parity mismatch: relationship_records/);
+        assert.match(
+            warnings[0] || '',
+            /SQLite relationships are unavailable: navigation sqlite relationship counts do not match relationship manifest/,
+        );
     });
 });
 
@@ -639,7 +642,7 @@ test('RuntimeNavigationStore warns once when dual-read parity detects a SQLite m
         }
         assert.equal(warnings.length, 1);
         assert.match(warnings[0] || '', /SQLite\/JSON parity mismatch/);
-        assert.match(warnings[0] || '', /relationship_records/);
+        assert.match(warnings[0] || '', /relationship_status:ok:incompatible/);
     });
 });
 
@@ -714,7 +717,7 @@ test('createRuntimeNavigationStore honors SATORI_NAVIGATION_DUAL_READ for the sh
                 }
                 assert.equal(warnings.length, 1);
                 assert.match(warnings[0] || '', /SQLite\/JSON parity mismatch/);
-                assert.match(warnings[0] || '', /relationship_records/);
+                assert.match(warnings[0] || '', /relationship_status:ok:incompatible/);
             });
         } finally {
             console.warn = previousWarn;

@@ -28,6 +28,7 @@ import {
 } from '../config/defaults';
 import {
     isIndexableFileByPolicy,
+    isIndexableFileObservationByPolicy,
     normalizeSupportedExtensions,
 } from '../config/index-policy';
 import { loadSatoriRepoConfig, SatoriRepoConfig } from '../config/repo-config';
@@ -71,13 +72,32 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import * as os from 'os';
 import ignore from 'ignore';
 import { FileSynchronizer } from '../sync/synchronizer';
+import {
+    assertDescriptorBoundIndexingSupported,
+    openRegularFileInsideRoot,
+    openRegularFileInsideRootNoFollow,
+    readFileHandleExactly,
+    verifyStableFileObservation,
+} from '../sync/root-bound-fs';
 import type {
     RepairIndexResult,
     RepairProof,
     RepairSnapshotEvidence,
 } from './repair-proof';
+import { compareContractStrings } from '../utils/compare-contract-strings';
+
+const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
+const MAX_EMBEDDING_BATCH_SIZE = 1000;
+
+function resolveEmbeddingBatchSize(rawValue: string | undefined): number {
+    if (!rawValue) return DEFAULT_EMBEDDING_BATCH_SIZE;
+    const parsed = Number(rawValue);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) return DEFAULT_EMBEDDING_BATCH_SIZE;
+    return Math.min(parsed, MAX_EMBEDDING_BATCH_SIZE);
+}
 
 export interface ContextConfig {
     embedding?: Embedding;
@@ -88,9 +108,63 @@ export interface ContextConfig {
     customExtensions?: string[]; // New: custom extensions from MCP
     customIgnorePatterns?: string[]; // New: custom ignore patterns from MCP
     symbolRegistryStateRoot?: string;
+    indexPolicyStateRoot?: string;
 }
 
+export interface CustomIndexPolicyUpdate {
+    customExtensions?: string[];
+    customIgnorePatterns?: string[];
+}
+
+export interface ResolvedIndexPolicy {
+    canonicalRoot: string;
+    profile: IndexProfile;
+    customExtensions: string[];
+    customIgnorePatterns: string[];
+    fileBasedIgnorePatterns: string[];
+    supportedExtensions: string[];
+    effectiveIgnorePatterns: string[];
+    policyHash: string;
+}
+
+export type IndexPolicyPublicationReceipt =
+    | {
+        status: 'committed';
+        operation: 'publish';
+        canonicalRoot: string;
+        documentToken: string;
+        policyHash: string;
+        collectionName: string;
+        navigationGenerationId?: string;
+    }
+    | {
+        status: 'committed';
+        operation: 'clear';
+        canonicalRoot: string;
+        previousDocumentToken: string | null;
+    };
+
+export class IndexPolicyPublicationError extends Error {
+    readonly committed = true;
+
+    constructor(
+        message: string,
+        readonly receipt: IndexPolicyPublicationReceipt,
+        readonly publicationCause: unknown,
+    ) {
+        super(message);
+        this.name = 'IndexPolicyPublicationError';
+    }
+}
+
+export type CompletionMarkerValidationEvidence =
+    | { status: 'valid_v2'; marker: IndexCompletionMarkerDocument }
+    | { status: 'invalid_v2' }
+    | { status: 'legacy_v1'; marker: unknown }
+    | { status: 'missing' };
+
 interface CodebaseIgnoreState {
+    canonicalRoot: string;
     fileBasedPatterns: string[];
     effectivePatterns: string[];
     matcher: ReturnType<typeof ignore> | null;
@@ -121,6 +195,7 @@ type MutationGuardOptions = {
     assertMutationCurrent?: () => void;
     publishMutation?: (publish: () => void) => void;
     deferFullIndexPublication?: boolean;
+    indexPolicy?: ResolvedIndexPolicy;
 };
 
 export type IndexCodebaseResult = {
@@ -147,6 +222,9 @@ type ReindexByChangeResult = {
     changedFiles: string[];
     navigationRecovery?: 'rebuilt' | 'failed';
     collectionName?: string;
+    indexedFiles?: number;
+    totalChunks?: number;
+    indexStatus?: 'completed' | 'limit_reached';
 };
 
 type ExpectedIndexedChunk = {
@@ -169,10 +247,20 @@ export class Context {
     private readonly languageAnalyzer: LanguageAnalysisPort;
     private supportedExtensions: string[];
     private configuredExtensionOverlays: string[];
-    private runtimeCustomExtensions: string[];
+    private runtimeCustomExtensionsByCodebase: Map<string, string[]>;
     private indexProfilesByCodebase: Map<string, IndexProfile>;
     private baseIgnorePatterns: string[];
-    private runtimeCustomIgnorePatterns: string[];
+    private runtimeCustomIgnorePatternsByCodebase: Map<string, string[]>;
+    private loadedCustomPolicyRoots: Set<string>;
+    private policyFileTokensByCodebase: Map<string, string | null>;
+    private policyRuntimeCompatibilityByCodebase: Map<string, boolean>;
+    private publishedPolicyBindingsByCodebase: Map<string, {
+        policyHash: string;
+        collectionName: string;
+        navigationGenerationId?: string;
+    }>;
+    private publishedResolvedPoliciesByCodebase: Map<string, ResolvedIndexPolicy>;
+    private readonly indexPolicyStateRoot: string;
     private ignoreStateByCollection: Map<string, CodebaseIgnoreState>;
     private synchronizers = new Map<string, FileSynchronizer>();
     private synchronizerMutationTargets = new Map<string, string>();
@@ -214,7 +302,7 @@ export class Context {
             ...(config.customExtensions || []),
             ...envCustomExtensions
         ]);
-        this.runtimeCustomExtensions = [];
+        this.runtimeCustomExtensionsByCodebase = new Map();
         this.indexProfilesByCodebase = new Map();
         this.supportedExtensions = this.buildSupportedExtensions('default');
 
@@ -229,12 +317,19 @@ export class Context {
             ...envCustomIgnorePatterns
         ];
         // Runtime custom ignore patterns added via MCP/manage_index
-        this.baseIgnorePatterns = [...new Set(allIgnorePatterns)];
-        this.runtimeCustomIgnorePatterns = [];
+        this.baseIgnorePatterns = allIgnorePatterns;
+        this.runtimeCustomIgnorePatternsByCodebase = new Map();
+        this.loadedCustomPolicyRoots = new Set();
+        this.policyFileTokensByCodebase = new Map();
+        this.policyRuntimeCompatibilityByCodebase = new Map();
+        this.publishedPolicyBindingsByCodebase = new Map();
+        this.publishedResolvedPoliciesByCodebase = new Map();
+        this.indexPolicyStateRoot = config.indexPolicyStateRoot
+            ?? path.join(os.homedir(), '.satori', 'index-policy');
         this.ignoreStateByCollection = new Map();
         this.symbolRegistryStateRoot = config.symbolRegistryStateRoot;
 
-        console.log(`[Context] 🔧 Initialized with ${this.supportedExtensions.length} supported extensions and ${this.baseIgnorePatterns.length + this.runtimeCustomIgnorePatterns.length} base/runtime ignore patterns`);
+        console.log(`[Context] 🔧 Initialized with ${this.supportedExtensions.length} supported extensions and ${this.baseIgnorePatterns.length} base ignore patterns`);
         if (envCustomExtensions.length > 0) {
             console.log(`[Context] 📎 Loaded ${envCustomExtensions.length} custom extensions from environment: ${envCustomExtensions.join(', ')}`);
         }
@@ -272,8 +367,10 @@ export class Context {
     }
 
     getIndexedExtensionsForCodebase(codebasePath: string): string[] {
-        const profile = this.indexProfilesByCodebase.get(this.canonicalizeCodebasePath(codebasePath)) || 'default';
-        return this.buildSupportedExtensions(profile);
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.loadCustomIndexPolicy(canonicalRoot);
+        const profile = this.indexProfilesByCodebase.get(canonicalRoot) || 'default';
+        return this.buildSupportedExtensions(profile, canonicalRoot);
     }
 
     loadIndexProfileForCodebase(codebasePath: string): SatoriRepoConfig {
@@ -293,7 +390,7 @@ export class Context {
      */
     getActiveIgnorePatterns(codebasePath?: string): string[] {
         if (!codebasePath) {
-            return [...new Set([...this.baseIgnorePatterns, ...this.runtimeCustomIgnorePatterns])];
+            return [...this.baseIgnorePatterns];
         }
         return [...this.getOrCreateIgnoreState(codebasePath).effectivePatterns];
     }
@@ -333,6 +430,7 @@ export class Context {
      * Public wrapper for prepareCollection private method
      */
     async ensureCollectionPrepared(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
+        assertDescriptorBoundIndexingSupported();
         return this.prepareCollection(codebasePath, false, assertMutationCurrent);
     }
 
@@ -488,7 +586,7 @@ export class Context {
             return null;
         })();
 
-        if (!parsed || parsed.kind !== 'satori_index_completion_v1') {
+        if (!parsed || parsed.kind !== 'satori_index_completion_v2') {
             return null;
         }
         if (typeof parsed.codebasePath !== 'string' || typeof parsed.runId !== 'string' || parsed.runId.trim().length === 0) {
@@ -514,6 +612,9 @@ export class Context {
             return null;
         }
 
+        if (typeof parsed.indexPolicyHash !== 'string' || parsed.indexPolicyHash.length === 0) {
+            return null;
+        }
         const indexStatus = parsed.indexStatus === 'limit_reached' || parsed.indexStatus === 'completed'
             ? parsed.indexStatus
             : undefined;
@@ -530,13 +631,14 @@ export class Context {
         }
 
         return {
-            kind: 'satori_index_completion_v1',
+            kind: 'satori_index_completion_v2',
             codebasePath: parsedCodebasePath,
             fingerprint: parsed.fingerprint as IndexCompletionFingerprint,
             indexedFiles: Number(indexedFiles),
             totalChunks: Number(totalChunks),
             completedAt: parsed.completedAt,
             runId: parsed.runId,
+            indexPolicyHash: parsed.indexPolicyHash,
             ...(indexStatus ? { indexStatus } : {}),
             ...(typeof parsed.navigationGenerationId === 'string' ? {
                 navigationGenerationId: parsed.navigationGenerationId,
@@ -665,6 +767,7 @@ export class Context {
         indexStatus: 'completed' | 'limit_reached' = 'completed',
         assertMutationCurrent?: () => void,
         navigationCandidate?: StagedNavigationSidecarGeneration,
+        indexPolicyHash: string = this.buildIndexPolicyHash(codebasePath),
     ): Promise<void> {
         const currentNavigation = indexStatus === 'completed' && !navigationCandidate
             ? await resolveCurrentNavigationGeneration(
@@ -673,13 +776,14 @@ export class Context {
             ).catch(() => null)
             : null;
         await this.writeIndexCompletionMarker(codebasePath, {
-            kind: 'satori_index_completion_v1',
+            kind: 'satori_index_completion_v2',
             codebasePath: this.canonicalizeCodebasePath(codebasePath),
             fingerprint: this.buildIndexCompletionFingerprint(),
             indexedFiles,
             totalChunks,
             completedAt: new Date().toISOString(),
             runId: crypto.randomUUID(),
+            indexPolicyHash,
             indexStatus,
             ...(navigationCandidate ? {
                 navigationGenerationId: navigationCandidate.generationId,
@@ -696,12 +800,26 @@ export class Context {
     private async resolveActiveIndexedCollection(
         codebasePath: string
     ): Promise<{ collectionName: string; marker: IndexCompletionMarkerDocument } | null> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.loadCustomIndexPolicy(canonicalRoot);
+        const publishedPolicy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
+        const policyBinding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
+        if (
+            !publishedPolicy
+            || !policyBinding
+            || publishedPolicy.canonicalRoot !== canonicalRoot
+            || policyBinding.policyHash !== publishedPolicy.policyHash
+            || this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot) !== true
+        ) {
+            return null;
+        }
         const {
             activeFamilyName,
             alternateFamilyName,
         } = this.buildCollectionFamilies(codebasePath);
         const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
         const runtimeFingerprint = this.buildIndexCompletionFingerprint();
+        const activePolicyHash = publishedPolicy.policyHash;
 
         const candidates: Array<{
             collectionName: string;
@@ -715,6 +833,16 @@ export class Context {
                 continue;
             }
             if (!this.indexCompletionFingerprintsMatch(marker.fingerprint, runtimeFingerprint)) {
+                continue;
+            }
+            if (marker.indexPolicyHash !== activePolicyHash) {
+                continue;
+            }
+            if (
+                policyBinding.policyHash !== marker.indexPolicyHash
+                || policyBinding.collectionName !== collectionName
+                || (policyBinding.navigationGenerationId ?? undefined) !== (marker.navigationGenerationId ?? undefined)
+            ) {
                 continue;
             }
             if (!(await this.collectionHasIndexedPayload(collectionName, marker))) {
@@ -792,6 +920,113 @@ export class Context {
         return active?.collectionName || null;
     }
 
+    public async resolveProvenGeneration(codebasePath: string): Promise<{
+        collectionName: string;
+        marker: IndexCompletionMarkerDocument;
+        navigation: import('../symbols/sidecar').CurrentNavigationGeneration | null;
+        policy: ResolvedIndexPolicy;
+    } | null> {
+        const active = await this.resolveActiveIndexedCollection(codebasePath);
+        if (!active) return null;
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.loadCustomIndexPolicy(canonicalRoot);
+        const publishedPolicy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
+        const policyBinding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
+        if (
+            !publishedPolicy
+            || !policyBinding
+            || this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot) !== true
+            || publishedPolicy.canonicalRoot !== canonicalRoot
+            || publishedPolicy.policyHash !== active.marker.indexPolicyHash
+            || policyBinding.policyHash !== active.marker.indexPolicyHash
+            || policyBinding.collectionName !== active.collectionName
+            || (policyBinding.navigationGenerationId ?? undefined) !== (active.marker.navigationGenerationId ?? undefined)
+        ) {
+            return null;
+        }
+        const navigation = active.marker.navigationGenerationId
+            ? await resolveCurrentNavigationGeneration(
+                this.symbolRegistryStateRoot,
+                canonicalRoot,
+            ).catch(() => null)
+            : null;
+        if (
+            active.marker.navigationGenerationId
+            && (
+                !navigation
+                || navigation.generationId !== active.marker.navigationGenerationId
+                || navigation.symbolRegistryManifestHash !== active.marker.symbolRegistryManifestHash
+                || navigation.relationshipManifestHash !== active.marker.relationshipManifestHash
+            )
+        ) {
+            return null;
+        }
+        const finalActive = await this.resolveActiveIndexedCollection(codebasePath);
+        const finalPolicy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
+        const finalBinding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
+        if (
+            !finalActive
+            || finalActive.collectionName !== active.collectionName
+            || finalActive.marker.runId !== active.marker.runId
+            || finalActive.marker.indexPolicyHash !== active.marker.indexPolicyHash
+            || finalActive.marker.navigationGenerationId !== active.marker.navigationGenerationId
+            || finalActive.marker.symbolRegistryManifestHash !== active.marker.symbolRegistryManifestHash
+            || finalActive.marker.relationshipManifestHash !== active.marker.relationshipManifestHash
+            || !finalPolicy
+            || !finalBinding
+            || finalPolicy.policyHash !== active.marker.indexPolicyHash
+            || finalBinding.policyHash !== active.marker.indexPolicyHash
+            || finalBinding.collectionName !== active.collectionName
+            || (finalBinding.navigationGenerationId ?? undefined) !== (active.marker.navigationGenerationId ?? undefined)
+        ) {
+            return null;
+        }
+        return {
+            collectionName: active.collectionName,
+            marker: active.marker,
+            navigation,
+            policy: {
+                ...finalPolicy,
+                customExtensions: [...finalPolicy.customExtensions],
+                customIgnorePatterns: [...finalPolicy.customIgnorePatterns],
+                fileBasedIgnorePatterns: [...finalPolicy.fileBasedIgnorePatterns],
+                supportedExtensions: [...finalPolicy.supportedExtensions],
+                effectiveIgnorePatterns: [...finalPolicy.effectiveIgnorePatterns],
+            },
+        };
+    }
+
+    private publishSealedPolicyBindingForMarker(
+        codebasePath: string,
+        collectionName: string,
+        marker: IndexCompletionMarkerDocument,
+        publishMutation?: (publish: () => void) => void,
+    ): void {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.loadCustomIndexPolicy(canonicalRoot);
+        const policy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
+        if (!policy || this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot) !== true) {
+            throw new Error(`Cannot publish generation '${collectionName}': no runtime-compatible sealed index policy is available.`);
+        }
+        if (policy.policyHash !== marker.indexPolicyHash) {
+            throw new Error(`Cannot publish generation '${collectionName}': completion marker and sealed policy hashes differ.`);
+        }
+        const currentBinding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
+        if (
+            currentBinding?.policyHash === marker.indexPolicyHash
+            && currentBinding.collectionName === collectionName
+            && (currentBinding.navigationGenerationId ?? undefined) === (marker.navigationGenerationId ?? undefined)
+        ) {
+            return;
+        }
+        this.publishResolvedIndexPolicy(policy, {
+            collectionName,
+            ...(marker.navigationGenerationId
+                ? { navigationGenerationId: marker.navigationGenerationId }
+                : {}),
+        }, publishMutation);
+    }
+
     private async resolveCompletionProofCollection(
         codebasePath: string,
     ): Promise<{ collectionName: string; marker: IndexCompletionMarkerDocument } | null> {
@@ -863,7 +1098,9 @@ export class Context {
     }
 
     /**
-     * Index a codebase for semantic search
+     * Build and publish a complete codebase generation for semantic search.
+     * When `deferFullIndexPublication` is true, vector, marker, policy, and
+     * navigation publication remain the caller's staged-generation responsibility.
      * @param codebasePath Codebase root path
      * @param progressCallback Optional progress callback function
      * @param forceReindex Whether to recreate the collection even if it exists
@@ -875,14 +1112,17 @@ export class Context {
         forceReindex: boolean = false,
         options: MutationGuardOptions = {},
     ): Promise<IndexCodebaseResult> {
+        assertDescriptorBoundIndexingSupported();
+        if (options.indexPolicy) {
+            this.assertResolvedIndexPolicyRoot(codebasePath, options.indexPolicy);
+        }
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
         console.log(`[Context] 🚀 Starting to index codebase with ${searchType}: ${codebasePath}`);
 
         this.loadIndexProfileForCodebase(codebasePath);
-
-        // 1. Load ignore patterns from various ignore files
-        await this.loadIgnorePatterns(codebasePath);
+        const indexPolicy = options.indexPolicy
+            ?? await this.resolveIndexPolicyForCodebase(codebasePath);
 
         // 2. Check and prepare vector collection
         progressCallback?.({ phase: 'Preparing collection...', current: 0, total: 100, percentage: 0 });
@@ -894,7 +1134,7 @@ export class Context {
 
         // 3. Recursively traverse codebase to get all supported files
         progressCallback?.({ phase: 'Scanning files...', current: 5, total: 100, percentage: 5 });
-        const codeFiles = await this.getCodeFiles(codebasePath);
+        const codeFiles = await this.getCodeFiles(codebasePath, indexPolicy);
         console.log(`[Context] 📁 Found ${codeFiles.length} code files`);
 
         if (codeFiles.length === 0) {
@@ -906,9 +1146,14 @@ export class Context {
                 new Map(),
                 options.publishMutation,
                 options.deferFullIndexPublication === true,
+                indexPolicy,
             );
             if (!options.deferFullIndexPublication) {
-                await this.writeCompletedIndexMarker(codebasePath, 0, 0, undefined, 'completed', options.assertMutationCurrent, navigationCandidate);
+                await this.writeCompletedIndexMarker(codebasePath, 0, 0, undefined, 'completed', options.assertMutationCurrent, navigationCandidate, indexPolicy.policyHash);
+                this.publishResolvedIndexPolicy(indexPolicy, {
+                    collectionName: this.getWriteCollectionName(codebasePath),
+                    ...(navigationCandidate ? { navigationGenerationId: navigationCandidate.generationId } : {}),
+                }, options.publishMutation);
             }
             progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
             return { indexedFiles: 0, totalChunks: 0, status: 'completed', ...(navigationCandidate ? { navigationCandidate } : {}) };
@@ -937,6 +1182,7 @@ export class Context {
             },
             undefined,
             options.assertMutationCurrent,
+            indexPolicy,
         );
 
         console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
@@ -951,9 +1197,14 @@ export class Context {
                 result.analysisByFile,
                 options.publishMutation,
                 options.deferFullIndexPublication === true,
+                indexPolicy,
             );
             if (!options.deferFullIndexPublication) {
-                await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed', options.assertMutationCurrent, navigationCandidate);
+                await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed', options.assertMutationCurrent, navigationCandidate, indexPolicy.policyHash);
+                this.publishResolvedIndexPolicy(indexPolicy, {
+                    collectionName: this.getWriteCollectionName(codebasePath),
+                    ...(navigationCandidate ? { navigationGenerationId: navigationCandidate.generationId } : {}),
+                }, options.publishMutation);
             }
         } else {
             // limit_reached: do not publish complete navigation sidecars, but seal partial vector
@@ -961,13 +1212,16 @@ export class Context {
             // indexStatus must stay on the marker so interrupted-index recovery does not promote as fully completed.
             console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
             if (!options.deferFullIndexPublication) {
-                await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'limit_reached', options.assertMutationCurrent);
+                await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'limit_reached', options.assertMutationCurrent, undefined, indexPolicy.policyHash);
+                this.publishResolvedIndexPolicy(indexPolicy, {
+                    collectionName: this.getWriteCollectionName(codebasePath),
+                }, options.publishMutation);
                 console.warn('[Context] ⚠️  Wrote completion marker for limit_reached partial index (navigation remains unpublished).');
             }
         }
 
         progressCallback?.({
-            phase: 'Indexing complete!',
+            phase: result.status === 'completed' ? 'Indexing complete!' : 'Indexing stopped at chunk limit',
             current: result.processedFiles,
             total: codeFiles.length,
             percentage: 100
@@ -1098,13 +1352,16 @@ export class Context {
                 return { added: 0, removed: 0, modified: 0, changedFiles: [] };
             }
 
-            await this.indexCodebase(codebasePath, progressCallback, false, options);
+            const indexResult = await this.indexCodebase(codebasePath, progressCallback, false, options);
             return {
                 added: changedFiles.length,
                 removed: 0,
                 modified: 0,
                 changedFiles,
                 collectionName: this.getWriteCollectionName(codebasePath),
+                indexedFiles: indexResult.indexedFiles,
+                totalChunks: indexResult.totalChunks,
+                indexStatus: indexResult.status,
             };
         }
         if (!collectionName) {
@@ -1134,8 +1391,28 @@ export class Context {
             }
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
             console.log('[Context] ✅ No file changes detected.');
+            const currentMarker = await this.resolveCompletionMarkerForCollection(codebasePath, targetCollectionName);
+            if (maintainCompletionMarker && currentMarker) {
+                this.publishSealedPolicyBindingForMarker(
+                    codebasePath,
+                    targetCollectionName,
+                    currentMarker,
+                    options.publishMutation,
+                );
+            }
             this.synchronizerMutationTargets.delete(synchronizerKey);
-            return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: targetCollectionName };
+            return {
+                added: 0,
+                removed: 0,
+                modified: 0,
+                changedFiles: [],
+                collectionName: targetCollectionName,
+                ...(currentMarker ? {
+                    indexedFiles: currentMarker.indexedFiles,
+                    totalChunks: currentMarker.totalChunks,
+                    indexStatus: currentMarker.indexStatus,
+                } : {}),
+            };
         }
 
         console.log(`[Context] 🔄 Found changes: ${added.length} added, ${removed.length} removed, ${modified.length} modified.`);
@@ -1194,7 +1471,6 @@ export class Context {
             // Handle modified files
             for (const file of modified) {
                 await this.deleteFileChunks(targetCollectionName, file, options.assertMutationCurrent);
-                updateProgress(`Deleted old chunks for ${file}`);
             }
 
             // Handle added and modified files
@@ -1361,6 +1637,19 @@ export class Context {
                         publishMutation: options.publishMutation,
                     });
                 }
+                const publishedMarker = await this.resolveCompletionMarkerForCollection(
+                    codebasePath,
+                    targetCollectionName,
+                );
+                if (!publishedMarker) {
+                    throw new Error(`Incremental publication did not produce a completion marker for '${targetCollectionName}'.`);
+                }
+                this.publishSealedPolicyBindingForMarker(
+                    codebasePath,
+                    targetCollectionName,
+                    publishedMarker,
+                    options.publishMutation,
+                );
             }
             this.synchronizerMutationTargets.delete(synchronizerKey);
         }
@@ -1368,6 +1657,9 @@ export class Context {
         console.log(`[Context] ✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
         progressCallback?.({ phase: 'Re-indexing complete!', current: totalChanges, total: totalChanges, percentage: 100 });
 
+        const currentMarker = readinessArtifactsComplete && maintainCompletionMarker
+            ? await this.resolveCompletionMarkerForCollection(codebasePath, targetCollectionName)
+            : null;
         return {
             added: added.length,
             removed: removed.length,
@@ -1375,6 +1667,11 @@ export class Context {
             changedFiles: Array.from(new Set([...added, ...removed, ...modified])),
             collectionName: targetCollectionName,
             ...(navigationRecovery ? { navigationRecovery } : {}),
+            ...(currentMarker ? {
+                indexedFiles: currentMarker.indexedFiles,
+                totalChunks: currentMarker.totalChunks,
+                indexStatus: currentMarker.indexStatus,
+            } : {}),
         };
     }
 
@@ -1421,7 +1718,8 @@ export class Context {
         const codebasePath = resolvedRequest.codebasePath;
         const isHybrid = resolvedRequest.retrievalMode !== 'dense' && this.getIsHybrid() === true;
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
-        console.log(`[Context] 🔍 Executing ${searchType}: "${resolvedRequest.query}" in ${codebasePath}`);
+        const requestId = crypto.randomUUID();
+        console.log(`[Context] 🔍 Executing ${searchType}: query_length=${resolvedRequest.query.length}, request_id=${requestId}, root=${codebasePath}`);
         const effectiveFilterExpr = this.buildSemanticSearchFilterExpr(resolvedRequest.filterExpr);
 
         const normalizeBreadcrumbs = (value: unknown): string[] | undefined => {
@@ -1455,10 +1753,9 @@ export class Context {
             }
 
             // 1. Generate query vector
-            console.log(`[Context] 🔍 Generating embeddings for query: "${resolvedRequest.query}"`);
+            console.log(`[Context] 🔍 Generating query embedding: query_length=${resolvedRequest.query.length}, request_id=${requestId}`);
             const queryEmbedding: EmbeddingVector = await this.embedding.embed(resolvedRequest.query);
             console.log(`[Context] ✅ Generated embedding vector with dimension: ${queryEmbedding.vector.length}`);
-            console.log(`[Context] 🔍 First 5 embedding values: [${queryEmbedding.vector.slice(0, 5).join(', ')}]`);
 
             // 2. Prepare hybrid search requests
             const searchRequests: HybridSearchRequest[] = [
@@ -1477,7 +1774,7 @@ export class Context {
             ];
 
             console.log(`[Context] 🔍 Search request 1 (dense): anns_field="${searchRequests[0].anns_field}", vector_dim=${queryEmbedding.vector.length}, limit=${searchRequests[0].limit}`);
-            console.log(`[Context] 🔍 Search request 2 (sparse): anns_field="${searchRequests[1].anns_field}", query_text="${resolvedRequest.query}", limit=${searchRequests[1].limit}`);
+            console.log(`[Context] 🔍 Search request 2 (sparse): anns_field="${searchRequests[1].anns_field}", query_length=${resolvedRequest.query.length}, request_id=${requestId}, limit=${searchRequests[1].limit}`);
 
             // 3. Execute hybrid search
             console.log(`[Context] 🔍 Executing hybrid search with RRF reranking...`);
@@ -1701,6 +1998,67 @@ export class Context {
     }
 
     /**
+     * Read completion-marker evidence for lifecycle validation. Current v2
+     * markers retain the exact payload proof required by normal resolution.
+     * A raw v1 marker is exposed only when no proven v2 marker exists so MCP
+     * can classify the legacy policy-unsealed schema as requiring reindex.
+     */
+    async getIndexCompletionMarkerForValidation(codebasePath: string): Promise<CompletionMarkerValidationEvidence> {
+        const current = await this.getIndexCompletionMarker(codebasePath);
+        if (current) {
+            return { status: 'valid_v2', marker: current };
+        }
+
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        try {
+            this.loadCustomIndexPolicy(canonicalRoot);
+        } catch {
+            // Marker evidence remains readable even when policy proof is malformed.
+        }
+        const relatedCollections = await this.listRelatedCollectionNames(codebasePath);
+        const { activeFamilyName, alternateFamilyName } = this.buildCollectionFamilies(codebasePath);
+        const boundCollection = this.publishedPolicyBindingsByCodebase.get(canonicalRoot)?.collectionName;
+        const collectionPriority = [
+            ...(boundCollection ? [boundCollection] : []),
+            activeFamilyName,
+            alternateFamilyName,
+            ...relatedCollections.filter((name) => name !== boundCollection
+                && name !== activeFamilyName
+                && name !== alternateFamilyName),
+        ].filter((name, index, names) => relatedCollections.includes(name) && names.indexOf(name) === index);
+        for (const collectionName of collectionPriority) {
+            let invalidV2: CompletionMarkerValidationEvidence | null = null;
+            let legacyV1: CompletionMarkerValidationEvidence | null = null;
+            for (const row of await this.queryCompletionMarkerRows(collectionName)) {
+                const rawMetadata = row?.metadata;
+                const parsed = (() => {
+                    if (typeof rawMetadata === 'string') {
+                        try {
+                            return JSON.parse(rawMetadata) as unknown;
+                        } catch {
+                            return null;
+                        }
+                    }
+                    return rawMetadata;
+                })();
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                    continue;
+                }
+                const kind = (parsed as { kind?: unknown }).kind;
+                if (kind === 'satori_index_completion_v2' && !invalidV2) {
+                    invalidV2 = { status: 'invalid_v2' };
+                } else if (kind === 'satori_index_completion_v1' && !legacyV1) {
+                    legacyV1 = { status: 'legacy_v1', marker: parsed };
+                }
+            }
+            if (invalidV2 || legacyV1) {
+                return invalidV2 ?? legacyV1 ?? { status: 'missing' };
+            }
+        }
+        return { status: 'missing' };
+    }
+
+    /**
      * Check if index exists for codebase
      * @param codebasePath Codebase path to check
      * @returns Whether index exists
@@ -1745,6 +2103,14 @@ export class Context {
         this.synchronizerMutationTargets.delete(familyCollectionName);
         this.ignoreStateByCollection.delete(familyCollectionName);
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.runtimeCustomExtensionsByCodebase.delete(canonicalRoot);
+        this.runtimeCustomIgnorePatternsByCodebase.delete(canonicalRoot);
+        this.loadedCustomPolicyRoots.delete(canonicalRoot);
+        this.policyFileTokensByCodebase.delete(canonicalRoot);
+        this.policyRuntimeCompatibilityByCodebase.delete(canonicalRoot);
+        this.publishedPolicyBindingsByCodebase.delete(canonicalRoot);
+        this.publishedResolvedPoliciesByCodebase.delete(canonicalRoot);
+        fs.rmSync(this.resolveCustomIndexPolicyPath(canonicalRoot), { force: true });
         this.writeCollectionOverrides.delete(canonicalRoot);
         this.indexProfilesByCodebase.delete(canonicalRoot);
 
@@ -1757,23 +2123,143 @@ export class Context {
      * @param ignorePatterns Array of base ignore patterns
      */
     updateIgnorePatterns(ignorePatterns: string[]): void {
-        this.baseIgnorePatterns = [...new Set([...DEFAULT_IGNORE_PATTERNS, ...ignorePatterns])];
+        this.baseIgnorePatterns = [...DEFAULT_IGNORE_PATTERNS, ...ignorePatterns];
         this.rebuildAllIgnoreStates();
         console.log(`[Context] 🚫 Updated base ignore patterns. Base total: ${this.baseIgnorePatterns.length}`);
     }
 
-    /**
-     * Add custom ignore patterns (from MCP or other sources) without replacing existing ones
-     * @param customPatterns Array of custom ignore patterns to add
-     */
-    addCustomIgnorePatterns(customPatterns: string[]): void {
-        if (customPatterns.length === 0) return;
-
-        this.runtimeCustomIgnorePatterns = [
-            ...new Set([...this.runtimeCustomIgnorePatterns, ...customPatterns])
+    async resolveIndexPolicyForCodebase(
+        codebasePath: string,
+        update: CustomIndexPolicyUpdate = {},
+    ): Promise<ResolvedIndexPolicy> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.loadCustomIndexPolicy(canonicalRoot);
+        const profile = this.loadIndexProfileForCodebase(canonicalRoot).profile;
+        const customExtensions = update.customExtensions === undefined
+            ? [...(this.runtimeCustomExtensionsByCodebase.get(canonicalRoot) ?? [])]
+            : normalizeSupportedExtensions(update.customExtensions);
+        const customIgnorePatterns = update.customIgnorePatterns === undefined
+            ? [...(this.runtimeCustomIgnorePatternsByCodebase.get(canonicalRoot) ?? [])]
+            : update.customIgnorePatterns.map((pattern) => pattern.trim()).filter(Boolean);
+        const fileBasedPatterns: string[] = [];
+        for (const ignoreFile of await this.findIgnoreFiles(canonicalRoot)) {
+            fileBasedPatterns.push(...await this.loadIgnoreFile(ignoreFile, path.basename(ignoreFile), canonicalRoot));
+        }
+        const supportedExtensions = normalizeSupportedExtensions([
+            ...getSupportedExtensionsForIndexProfile(profile),
+            ...this.configuredExtensionOverlays,
+            ...customExtensions,
+        ]);
+        const effectiveIgnorePatterns = [
+            ...this.baseIgnorePatterns,
+            ...customIgnorePatterns,
+            ...fileBasedPatterns,
         ];
-        this.rebuildAllIgnoreStates();
-        console.log(`[Context] 🚫 Added ${customPatterns.length} custom ignore patterns. Runtime total: ${this.runtimeCustomIgnorePatterns.length}`);
+        const policyHash = crypto.createHash('sha256').update(JSON.stringify({
+            profile,
+            extensions: supportedExtensions,
+            ignorePatterns: effectiveIgnorePatterns,
+        }), 'utf8').digest('hex');
+        return {
+            canonicalRoot,
+            profile,
+            customExtensions,
+            customIgnorePatterns,
+            fileBasedIgnorePatterns: fileBasedPatterns,
+            supportedExtensions,
+            effectiveIgnorePatterns,
+            policyHash,
+        };
+    }
+
+    publishResolvedIndexPolicy(
+        policy: ResolvedIndexPolicy,
+        binding: { collectionName: string; navigationGenerationId?: string },
+        publishMutation?: (publish: () => void) => void,
+    ): IndexPolicyPublicationReceipt {
+        const canonicalRoot = this.canonicalizeCodebasePath(policy.canonicalRoot);
+        if (canonicalRoot !== policy.canonicalRoot) {
+            throw new Error('Resolved index policy root is not canonical.');
+        }
+        return this.persistCustomIndexPolicy(
+            policy,
+            binding,
+            publishMutation,
+            () => this.activateResolvedIndexPolicy(policy, binding),
+        );
+    }
+
+    clearPublishedIndexPolicy(
+        codebasePath: string,
+        publishMutation?: (publish: () => void) => void,
+    ): IndexPolicyPublicationReceipt {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const targetPath = this.resolveCustomIndexPolicyPath(canonicalRoot);
+        const previousDocumentToken = this.resolveCustomIndexPolicyFileToken(canonicalRoot);
+        const receipt: IndexPolicyPublicationReceipt = {
+            status: 'committed',
+            operation: 'clear',
+            canonicalRoot,
+            previousDocumentToken,
+        };
+        let publicationCount = 0;
+        let committed = false;
+        const publish = () => {
+            publicationCount += 1;
+            if (publicationCount > 1) {
+                throw new Error('Index policy removal invoked more than once.');
+            }
+            fs.rmSync(targetPath, { force: true });
+            committed = true;
+            this.clearResolvedIndexPolicyRuntime(canonicalRoot);
+            this.policyFileTokensByCodebase.set(canonicalRoot, null);
+        };
+        try {
+            if (publishMutation) {
+                publishMutation(publish);
+                if (publicationCount !== 1) {
+                    throw new Error('Index policy removal returned without publishing.');
+                }
+            } else {
+                publish();
+            }
+        } catch (error) {
+            if (committed) {
+                throw new IndexPolicyPublicationError(
+                    `Index policy removal committed before its publication receipt failed: ${error instanceof Error ? error.message : String(error)}`,
+                    receipt,
+                    error,
+                );
+            }
+            throw error;
+        }
+        return receipt;
+    }
+
+    private activateResolvedIndexPolicy(
+        policy: ResolvedIndexPolicy,
+        binding: { collectionName: string; navigationGenerationId?: string },
+    ): void {
+        const canonicalRoot = policy.canonicalRoot;
+        this.runtimeCustomExtensionsByCodebase.set(canonicalRoot, [...policy.customExtensions]);
+        this.runtimeCustomIgnorePatternsByCodebase.set(canonicalRoot, [...policy.customIgnorePatterns]);
+        this.indexProfilesByCodebase.set(canonicalRoot, policy.profile);
+        this.loadedCustomPolicyRoots.add(canonicalRoot);
+        this.publishedPolicyBindingsByCodebase.set(canonicalRoot, {
+            policyHash: policy.policyHash,
+            collectionName: binding.collectionName,
+            ...(binding.navigationGenerationId ? { navigationGenerationId: binding.navigationGenerationId } : {}),
+        });
+        this.publishedResolvedPoliciesByCodebase.set(canonicalRoot, {
+            ...policy,
+            customExtensions: [...policy.customExtensions],
+            customIgnorePatterns: [...policy.customIgnorePatterns],
+            fileBasedIgnorePatterns: [...policy.fileBasedIgnorePatterns],
+            supportedExtensions: [...policy.supportedExtensions],
+            effectiveIgnorePatterns: [...policy.effectiveIgnorePatterns],
+        });
+        this.policyRuntimeCompatibilityByCodebase.set(canonicalRoot, true);
+        this.setFileBasedPatternsForCodebase(canonicalRoot, policy.fileBasedIgnorePatterns);
     }
 
     /**
@@ -1781,18 +2267,16 @@ export class Context {
      */
     resetIgnorePatternsToDefaults(): void {
         this.baseIgnorePatterns = [...DEFAULT_IGNORE_PATTERNS];
-        this.runtimeCustomIgnorePatterns = [];
         this.rebuildAllIgnoreStates();
         console.log(`[Context] 🔄 Reset ignore patterns to defaults: ${this.baseIgnorePatterns.length} patterns`);
     }
 
-    private buildEffectiveIgnorePatterns(fileBasedPatterns: string[]): string[] {
+    private buildEffectiveIgnorePatterns(codebasePath: string, fileBasedPatterns: string[]): string[] {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         return [
-            ...new Set([
-                ...this.baseIgnorePatterns,
-                ...this.runtimeCustomIgnorePatterns,
-                ...fileBasedPatterns
-            ])
+            ...this.baseIgnorePatterns,
+            ...(this.runtimeCustomIgnorePatternsByCodebase.get(canonicalRoot) ?? []),
+            ...fileBasedPatterns,
         ];
     }
 
@@ -1800,22 +2284,35 @@ export class Context {
         for (const [collectionName, state] of this.ignoreStateByCollection.entries()) {
             this.ignoreStateByCollection.set(collectionName, {
                 ...state,
-                effectivePatterns: this.buildEffectiveIgnorePatterns(state.fileBasedPatterns),
+                effectivePatterns: this.buildEffectiveIgnorePatterns(state.canonicalRoot, state.fileBasedPatterns),
                 matcher: null,
             });
         }
     }
 
+    private rebuildIgnoreStateForCodebase(codebasePath: string): void {
+        const collectionName = this.resolveCollectionName(codebasePath);
+        const state = this.ignoreStateByCollection.get(collectionName);
+        if (!state) return;
+        this.ignoreStateByCollection.set(collectionName, {
+            ...state,
+            effectivePatterns: this.buildEffectiveIgnorePatterns(codebasePath, state.fileBasedPatterns),
+            matcher: null,
+        });
+    }
+
     private getOrCreateIgnoreState(codebasePath: string): CodebaseIgnoreState {
         const collectionName = this.resolveCollectionName(codebasePath);
+        this.loadCustomIndexPolicy(this.canonicalizeCodebasePath(codebasePath));
         const existing = this.ignoreStateByCollection.get(collectionName);
         if (existing) {
             return existing;
         }
 
         const initial: CodebaseIgnoreState = {
+            canonicalRoot: this.canonicalizeCodebasePath(codebasePath),
             fileBasedPatterns: [],
-            effectivePatterns: this.buildEffectiveIgnorePatterns([]),
+            effectivePatterns: this.buildEffectiveIgnorePatterns(codebasePath, []),
             matcher: null,
         };
         this.ignoreStateByCollection.set(collectionName, initial);
@@ -1824,18 +2321,14 @@ export class Context {
 
     private setFileBasedPatternsForCodebase(codebasePath: string, fileBasedPatterns: string[]): void {
         const collectionName = this.resolveCollectionName(codebasePath);
-        const normalizedFileBased = [
-            ...new Set(
-                fileBasedPatterns
-                    .filter((pattern): pattern is string => typeof pattern === 'string')
-                    .map((pattern) => pattern.trim())
-                    .filter((pattern) => pattern.length > 0)
-            )
-        ];
+        const normalizedFileBased = fileBasedPatterns
+            .filter((pattern): pattern is string => typeof pattern === 'string')
+            .filter((pattern) => pattern.length > 0);
 
         const nextState: CodebaseIgnoreState = {
+            canonicalRoot: this.canonicalizeCodebasePath(codebasePath),
             fileBasedPatterns: normalizedFileBased,
-            effectivePatterns: this.buildEffectiveIgnorePatterns(normalizedFileBased),
+            effectivePatterns: this.buildEffectiveIgnorePatterns(codebasePath, normalizedFileBased),
             matcher: null,
         };
         this.ignoreStateByCollection.set(collectionName, nextState);
@@ -1862,6 +2355,15 @@ export class Context {
             return this.trimTrailingSeparators(path.normalize(realPath));
         } catch {
             return this.trimTrailingSeparators(path.normalize(resolved));
+        }
+    }
+
+    private assertResolvedIndexPolicyRoot(codebasePath: string, policy: ResolvedIndexPolicy): void {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        if (policy.canonicalRoot !== canonicalRoot) {
+            throw new Error(
+                `Resolved index policy belongs to '${policy.canonicalRoot}', not '${canonicalRoot}'.`,
+            );
         }
     }
 
@@ -1983,18 +2485,20 @@ export class Context {
     /**
      * Recursively get all code files in the codebase
      */
-    private async getCodeFiles(codebasePath: string): Promise<string[]> {
+    private async getCodeFiles(codebasePath: string, indexPolicy?: ResolvedIndexPolicy): Promise<string[]> {
         const files: string[] = [];
-        const supportedExtensions = this.getIndexedExtensionsForCodebase(codebasePath);
+        const supportedExtensions = indexPolicy?.supportedExtensions ?? this.getIndexedExtensionsForCodebase(codebasePath);
+        const policyMatcher = indexPolicy ? ignore().add(indexPolicy.effectiveIgnorePatterns) : null;
 
         const traverseDirectory = async (currentPath: string) => {
             const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
+            entries.sort((left, right) => compareContractStrings(left.name, right.name));
 
             for (const entry of entries) {
                 const fullPath = path.join(currentPath, entry.name);
 
                 // Check if path matches ignore patterns
-                if (this.matchesIgnorePattern(fullPath, codebasePath, entry.isDirectory())) {
+                if (this.matchesIgnorePattern(fullPath, codebasePath, entry.isDirectory(), policyMatcher ?? undefined)) {
                     continue;
                 }
 
@@ -2011,14 +2515,68 @@ export class Context {
         };
 
         await traverseDirectory(codebasePath);
-        return files;
+        return files.sort((left, right) => compareContractStrings(
+            path.relative(codebasePath, left).replace(/\\/g, '/'),
+            path.relative(codebasePath, right).replace(/\\/g, '/'),
+        ));
     }
 
-    private buildSupportedExtensions(profile: IndexProfile): string[] {
+    private async readIndexableFileInsideRoot(
+        filePath: string,
+        codebasePath: string,
+        indexPolicy?: ResolvedIndexPolicy,
+    ): Promise<string | null> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const handle = await openRegularFileInsideRoot(filePath, canonicalRoot);
+        try {
+            const before = await handle.stat();
+            const relativePath = this.normalizeRelativePathForCodebase(canonicalRoot, filePath);
+            if (!relativePath || !before.isFile()) {
+                throw new Error(`Indexed source is not a regular file inside the codebase root: ${filePath}`);
+            }
+            const indexable = await isIndexableFileObservationByPolicy(
+                relativePath,
+                before.size,
+                indexPolicy?.supportedExtensions ?? this.getIndexedExtensionsForCodebase(canonicalRoot),
+                async () => {
+                    const buffer = Buffer.alloc(Math.min(before.size, 8192));
+                    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+                    return buffer.subarray(0, bytesRead);
+                },
+            );
+            if (!indexable) return null;
+
+            const content = (await readFileHandleExactly(handle, before.size)).toString('utf8');
+            const after = await handle.stat();
+            if (
+                after.dev !== before.dev
+                || after.ino !== before.ino
+                || after.size !== before.size
+                || after.mtimeMs !== before.mtimeMs
+                || after.ctimeMs !== before.ctimeMs
+            ) {
+                throw new Error(`Indexed source changed while being read: ${filePath}`);
+            }
+            const currentPathHandle = await openRegularFileInsideRoot(filePath, canonicalRoot);
+            try {
+                const currentPathStat = await currentPathHandle.stat();
+                if (currentPathStat.dev !== after.dev || currentPathStat.ino !== after.ino) {
+                    throw new Error(`Indexed source path was replaced while being read: ${filePath}`);
+                }
+            } finally {
+                await currentPathHandle.close().catch(() => undefined);
+            }
+            return content;
+        } finally {
+            await handle.close().catch(() => undefined);
+        }
+    }
+
+    private buildSupportedExtensions(profile: IndexProfile, canonicalRoot?: string): string[] {
         return normalizeSupportedExtensions([
             ...getSupportedExtensionsForIndexProfile(profile),
             ...this.configuredExtensionOverlays,
-            ...this.runtimeCustomExtensions
+            ...(canonicalRoot ? this.runtimeCustomExtensionsByCodebase.get(canonicalRoot) ?? [] : []),
         ]);
     }
 
@@ -2035,6 +2593,7 @@ export class Context {
         onFileProcessed?: (filePath: string, fileIndex: number, totalFiles: number) => void,
         collectionName: string = this.getWriteCollectionName(codebasePath),
         assertMutationCurrent?: () => void,
+        indexPolicy?: ResolvedIndexPolicy,
     ): Promise<{
         processedFiles: number;
         totalChunks: number;
@@ -2044,7 +2603,7 @@ export class Context {
         analysisByFile: Map<string, RelationshipAnalysisEvidence>;
     }> {
         const isHybrid = this.getIsHybrid();
-        const EMBEDDING_BATCH_SIZE = Math.max(1, parseInt(envManager.get('EMBEDDING_BATCH_SIZE') || '100', 10));
+        const EMBEDDING_BATCH_SIZE = resolveEmbeddingBatchSize(envManager.get('EMBEDDING_BATCH_SIZE'));
         const CHUNK_LIMIT = 450000;
         console.log(`[Context] 🔧 Using EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE}`);
 
@@ -2066,7 +2625,8 @@ export class Context {
             const filePath = filePaths[i];
 
             try {
-                const content = await fs.promises.readFile(filePath, 'utf-8');
+                const content = await this.readIndexableFileInsideRoot(filePath, codebasePath, indexPolicy);
+                if (content === null) continue;
                 const language = this.getLanguageFromFilePath(filePath);
                 const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
                 if (!relativePath) {
@@ -2109,6 +2669,7 @@ export class Context {
                     console.log(`📄 Large file ${filePath}: ${Math.round(content.length / 1024)}KB -> ${chunks.length} chunks`);
                 }
 
+                let fileFullyIncluded = true;
                 // Add chunks to buffer
                 for (let fileChunkIndex = 0; fileChunkIndex < chunks.length; fileChunkIndex++) {
                     const chunk = chunks[fileChunkIndex];
@@ -2135,12 +2696,15 @@ export class Context {
                     if (totalChunks >= CHUNK_LIMIT) {
                         console.warn(`[Context] ⚠️  Chunk limit of ${CHUNK_LIMIT} reached. Stopping indexing.`);
                         limitReached = true;
+                        fileFullyIncluded = fileChunkIndex === chunks.length - 1;
                         break; // Exit the inner loop (over chunks)
                     }
                 }
 
-                processedFiles++;
-                onFileProcessed?.(filePath, i + 1, filePaths.length);
+                if (fileFullyIncluded) {
+                    processedFiles++;
+                    onFileProcessed?.(filePath, processedFiles, filePaths.length);
+                }
 
                 if (limitReached) {
                     break; // Exit the outer loop (over files)
@@ -2182,20 +2746,27 @@ export class Context {
      */
     public async getExpectedChunksAndSymbols(
         filePaths: string[],
-        codebasePath: string
+        codebasePath: string,
+        indexPolicy?: ResolvedIndexPolicy,
     ): Promise<{
         expectedChunks: ExpectedIndexedChunk[];
         symbolRecords: SymbolRecord[];
         symbolManifestFiles: SymbolRegistryManifestFile[];
         analysisByFile: Map<string, RelationshipAnalysisEvidence>;
     }> {
+        if (indexPolicy) {
+            this.assertResolvedIndexPolicyRoot(codebasePath, indexPolicy);
+        }
         const expectedChunks: ExpectedIndexedChunk[] = [];
         const symbolRecords: SymbolRecord[] = [];
         const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
         const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
 
         for (const filePath of filePaths) {
-            const content = await fs.promises.readFile(filePath, 'utf-8');
+            const content = await this.readIndexableFileInsideRoot(filePath, codebasePath, indexPolicy);
+            if (content === null) {
+                throw new Error(`Indexed source no longer satisfies the active policy: ${filePath}`);
+            }
             const language = this.getLanguageFromFilePath(filePath);
             const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
             if (!relativePath) {
@@ -2627,9 +3198,19 @@ export class Context {
         }
         publishProof();
 
-        // 3. Load ignore/index policy and indexable files
-        await this.loadIgnorePatterns(canonicalPath);
-        const codeFiles = await this.getCodeFiles(canonicalPath);
+        // 3. Use the exact durable policy sealed to the generation family. Repair
+        // must not reconstruct policy authority from mutable repository controls.
+        this.loadCustomIndexPolicy(canonicalPath);
+        const repairPolicy = this.publishedResolvedPoliciesByCodebase.get(canonicalPath);
+        if (!repairPolicy || this.policyRuntimeCompatibilityByCodebase.get(canonicalPath) !== true) {
+            proof.marker = { status: 'failed', basis: 'sealed_policy_unavailable' };
+            return withProof({
+                status: 'requires_reindex',
+                reason: 'requires_reindex',
+                message: `Repair cannot publish collection '${selectedCollection}' because its sealed index policy is missing or runtime-incompatible.`,
+            });
+        }
+        const codeFiles = await this.getCodeFiles(canonicalPath, repairPolicy);
         const trackedRelativePaths = this.normalizeRelativePathsForCodebase(canonicalPath, codeFiles);
 
         if (codeFiles.length === 0) {
@@ -2675,6 +3256,18 @@ export class Context {
                 selectedCollection,
                 'completed',
                 options.assertMutationCurrent,
+                undefined,
+                repairPolicy.policyHash,
+            );
+            const repairedMarker = await this.resolveCompletionMarkerForCollection(canonicalPath, selectedCollection);
+            if (!repairedMarker) {
+                throw new Error(`Repair did not produce a completion marker for '${selectedCollection}'.`);
+            }
+            this.publishSealedPolicyBindingForMarker(
+                canonicalPath,
+                selectedCollection,
+                repairedMarker,
+                options.publishMutation,
             );
             proof.navigation = { status: 'matched', basis: 'navigation_sidecars_rebuilt' };
             return withProof({
@@ -2694,7 +3287,7 @@ export class Context {
             symbolRecords,
             symbolManifestFiles,
             analysisByFile,
-        } = await this.getExpectedChunksAndSymbols(codeFiles, canonicalPath);
+        } = await this.getExpectedChunksAndSymbols(codeFiles, canonicalPath, repairPolicy);
 
         // 5. Query vector backend for expected chunk IDs.
         const existingIds = new Set<string>();
@@ -2853,13 +3446,15 @@ export class Context {
         publishProof();
 
         // 6. Rebuild symbol registry/relationship sidecars
-        await this.writeSymbolRegistryForCompletedIndex(
+        const navigationCandidate = await this.writeSymbolRegistryForCompletedIndex(
             canonicalPath,
             symbolRecords,
             symbolManifestFiles,
             options.assertMutationCurrent,
             analysisByFile,
             options.publishMutation,
+            false,
+            repairPolicy,
         );
 
         // 7. Write new completion marker
@@ -2870,6 +3465,18 @@ export class Context {
             selectedCollection,
             'completed',
             options.assertMutationCurrent,
+            navigationCandidate,
+            repairPolicy.policyHash,
+        );
+        const repairedMarker = await this.resolveCompletionMarkerForCollection(canonicalPath, selectedCollection);
+        if (!repairedMarker) {
+            throw new Error(`Repair did not produce a completion marker for '${selectedCollection}'.`);
+        }
+        this.publishSealedPolicyBindingForMarker(
+            canonicalPath,
+            selectedCollection,
+            repairedMarker,
+            options.publishMutation,
         );
 
         proof.navigation = { status: 'matched', basis: 'navigation_sidecars_rebuilt' };
@@ -2897,8 +3504,15 @@ export class Context {
     }
 
     private buildIndexPolicyHash(codebasePath: string): string {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.loadCustomIndexPolicy(canonicalRoot);
+        const publishedPolicy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
+        if (publishedPolicy) {
+            return publishedPolicy.policyHash;
+        }
+        const profile = this.indexProfilesByCodebase.get(canonicalRoot) || 'default';
         const payload = JSON.stringify({
-            profile: this.indexProfilesByCodebase.get(this.canonicalizeCodebasePath(codebasePath)) || 'default',
+            profile,
             extensions: this.getIndexedExtensionsForCodebase(codebasePath),
             ignorePatterns: this.getActiveIgnorePatterns(codebasePath),
         });
@@ -2922,7 +3536,10 @@ export class Context {
         const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
 
         for (const filePath of [...filePaths].sort((a, b) => a.localeCompare(b))) {
-            const content = await fs.promises.readFile(filePath, 'utf-8');
+            const content = await this.readIndexableFileInsideRoot(filePath, codebasePath);
+            if (content === null) {
+                throw new Error(`Indexed source no longer satisfies the active policy: ${filePath}`);
+            }
             const language = this.getLanguageFromFilePath(filePath);
             const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
             if (!relativePath) {
@@ -3056,7 +3673,11 @@ export class Context {
         suppliedAnalysisByFile?: Map<string, RelationshipAnalysisEvidence>,
         publishMutation?: (publish: () => void) => void,
         deferPublication: boolean = false,
+        indexPolicy?: ResolvedIndexPolicy,
     ): Promise<StagedNavigationSidecarGeneration | undefined> {
+        if (indexPolicy) {
+            this.assertResolvedIndexPolicyRoot(codebasePath, indexPolicy);
+        }
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const manifestFiles = [...symbolManifestFiles].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
         const registry = buildSymbolRegistry({
@@ -3064,7 +3685,7 @@ export class Context {
                 schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
                 normalizedRootPath: canonicalRoot,
                 rootFingerprint: this.buildRootFingerprint(canonicalRoot),
-                indexPolicyHash: this.buildIndexPolicyHash(codebasePath),
+                indexPolicyHash: indexPolicy?.policyHash ?? this.buildIndexPolicyHash(codebasePath),
                 languageRouterVersion: this.getLanguageRouterVersion(),
                 extractorVersion: this.getSymbolExtractorVersion(),
                 relationshipVersion: this.getRelationshipVersion(),
@@ -3081,7 +3702,10 @@ export class Context {
             if (!relativeFromRoot || relativeFromRoot.startsWith('..') || path.isAbsolute(relativeFromRoot)) {
                 throw new Error(`Navigation manifest path '${file.path}' escapes the codebase root.`);
             }
-            const content = await fs.promises.readFile(absoluteFile, 'utf8');
+            const content = await this.readIndexableFileInsideRoot(absoluteFile, canonicalRoot, indexPolicy);
+            if (content === null) {
+                throw new Error(`Navigation source no longer satisfies the active policy for '${file.path}'.`);
+            }
             const observedHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
             if (observedHash !== file.hash) {
                 throw new Error(`Source changed before navigation publication for '${file.path}'.`);
@@ -3167,6 +3791,34 @@ export class Context {
         }
     }
 
+    public async getCurrentNavigationGeneration(
+        codebasePath: string,
+    ): Promise<import('../symbols/sidecar').CurrentNavigationGeneration | null> {
+        return resolveCurrentNavigationGeneration(
+            this.symbolRegistryStateRoot,
+            this.canonicalizeCodebasePath(codebasePath),
+        );
+    }
+
+    public async restoreNavigationGeneration(
+        codebasePath: string,
+        generation: import('../symbols/sidecar').CurrentNavigationGeneration,
+        assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
+    ): Promise<void> {
+        const rootPath = path.dirname(path.dirname(generation.generationRoot));
+        await publishNavigationSidecarGeneration({
+            rootPath,
+            normalizedRootPath: this.canonicalizeCodebasePath(codebasePath),
+            generationId: generation.generationId,
+            manifestHash: generation.symbolRegistryManifestHash,
+            relationshipManifestHash: generation.relationshipManifestHash,
+        }, {
+            beforePublish: assertMutationCurrent,
+            publishMutation,
+        });
+    }
+
     public async discardNavigationCandidate(
         candidate: StagedNavigationSidecarGeneration,
         assertMutationCurrent?: () => void,
@@ -3182,6 +3834,7 @@ export class Context {
         indexStatus: 'completed' | 'limit_reached',
         assertMutationCurrent?: () => void,
         navigationCandidate?: StagedNavigationSidecarGeneration,
+        indexPolicyHash?: string,
     ): Promise<void> {
         await this.writeCompletedIndexMarker(
             codebasePath,
@@ -3191,6 +3844,7 @@ export class Context {
             indexStatus,
             assertMutationCurrent,
             navigationCandidate,
+            indexPolicyHash,
         );
     }
 
@@ -3252,6 +3906,26 @@ export class Context {
         // Generate embedding vectors
         const chunkContents = chunks.map(chunk => chunk.content);
         const embeddings = await this.embedding.embedBatch(chunkContents);
+        const expectedDimension = this.embedding.getDimension();
+        if (!Array.isArray(embeddings) || embeddings.length !== chunks.length) {
+            throw new Error(`Embedding batch returned ${Array.isArray(embeddings) ? embeddings.length : 'a non-array result'} for ${chunks.length} chunks.`);
+        }
+        for (let index = 0; index < embeddings.length; index += 1) {
+            const embedding = embeddings[index] as unknown;
+            if (!embedding || typeof embedding !== 'object' || Array.isArray(embedding)) {
+                throw new Error(`Embedding batch result ${index} is not a valid embedding object.`);
+            }
+            const record = embedding as { vector?: unknown; dimension?: unknown };
+            if (!Array.isArray(record.vector)) {
+                throw new Error(`Embedding batch result ${index} has no vector array.`);
+            }
+            if (record.vector.length !== expectedDimension || record.dimension !== expectedDimension) {
+                throw new Error(`Embedding batch result ${index} has dimension ${record.vector.length}; expected ${expectedDimension}.`);
+            }
+            if (!record.vector.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+                throw new Error(`Embedding batch result ${index} contains a non-finite vector value.`);
+            }
+        }
         const documentIds = chunkEntries.map(({ chunk, relativePath, fileChunkIndex }) =>
             this.generateId(relativePath, chunk, fileChunkIndex)
         );
@@ -3361,14 +4035,18 @@ export class Context {
     static async getIgnorePatternsFromFile(filePath: string): Promise<string[]> {
         try {
             const content = await fs.promises.readFile(filePath, 'utf-8');
-            return content
-                .split('\n')
-                .map(line => line.endsWith('\r') ? line.slice(0, -1) : line)
-                .filter(line => line.length > 0 && !line.startsWith('#'));
+            return Context.parseIgnorePatterns(content);
         } catch (error) {
             console.warn(`[Context] ⚠️  Could not read ignore file ${filePath}: ${error}`);
             return [];
         }
+    }
+
+    private static parseIgnorePatterns(content: string): string[] {
+        return content
+            .split('\n')
+            .map(line => line.endsWith('\r') ? line.slice(0, -1) : line)
+            .filter(line => line.length > 0 && !line.startsWith('#'));
     }
 
     /**
@@ -3382,7 +4060,7 @@ export class Context {
             // v1 policy: only repo-root .satoriignore and .gitignore are supported.
             const ignoreFiles = await this.findIgnoreFiles(codebasePath);
             for (const ignoreFile of ignoreFiles) {
-                const patterns = await this.loadIgnoreFile(ignoreFile, path.basename(ignoreFile));
+                const patterns = await this.loadIgnoreFile(ignoreFile, path.basename(ignoreFile), codebasePath);
                 fileBasedPatterns.push(...patterns);
             }
 
@@ -3405,31 +4083,31 @@ export class Context {
      * @returns Array of ignore file paths
      */
     private async findIgnoreFiles(codebasePath: string): Promise<string[]> {
-        try {
-            const ignoreFiles: string[] = [];
-            const supportedIgnoreFiles = ['.satoriignore', '.gitignore'];
+        const ignoreFiles: string[] = [];
+        const supportedIgnoreFiles = ['.satoriignore', '.gitignore'];
 
-            for (const fileName of supportedIgnoreFiles) {
-                const absolutePath = path.join(codebasePath, fileName);
-                try {
-                    const stat = await fs.promises.stat(absolutePath);
-                    if (stat.isFile()) {
-                        ignoreFiles.push(absolutePath);
-                    }
-                } catch {
-                    // Missing ignore file is expected.
+        for (const fileName of supportedIgnoreFiles) {
+            const absolutePath = path.join(codebasePath, fileName);
+            try {
+                const stat = await fs.promises.lstat(absolutePath);
+                if (stat.isSymbolicLink()) {
+                    throw new Error(`Ignore file '${fileName}' must not be a symbolic link.`);
                 }
+                if (!stat.isFile()) {
+                    throw new Error(`Ignore file '${fileName}' is not a regular file.`);
+                }
+                ignoreFiles.push(absolutePath);
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+                throw error;
             }
-
-            if (ignoreFiles.length > 0) {
-                console.log(`📄 Found ignore files: ${ignoreFiles.map(f => path.basename(f)).join(', ')}`);
-            }
-
-            return ignoreFiles;
-        } catch (error) {
-            console.warn(`[Context] ⚠️ Failed to scan for ignore files: ${error}`);
-            return [];
         }
+
+        if (ignoreFiles.length > 0) {
+            console.log(`📄 Found ${ignoreFiles.length} supported root ignore file(s).`);
+        }
+
+        return ignoreFiles;
     }
 
     /**
@@ -3438,26 +4116,31 @@ export class Context {
      * @param fileName Display name for logging
      * @returns Array of ignore patterns
      */
-    private async loadIgnoreFile(filePath: string, fileName: string): Promise<string[]> {
+    private async loadIgnoreFile(filePath: string, fileName: string, codebasePath: string): Promise<string[]> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const handle = await openRegularFileInsideRootNoFollow(filePath, canonicalRoot);
+        let content: string;
         try {
-            await fs.promises.access(filePath);
-            console.log(`📄 Found ${fileName} file at: ${filePath}`);
-
-            const ignorePatterns = await Context.getIgnorePatternsFromFile(filePath);
-
-            if (ignorePatterns.length > 0) {
-                console.log(`[Context] 🚫 Loaded ${ignorePatterns.length} ignore patterns from ${fileName}`);
-                return ignorePatterns;
-            } else {
-                console.log(`📄 ${fileName} file found but no valid patterns detected`);
-                return [];
+            const stat = await handle.stat();
+            const maximumIgnoreFileBytes = 1_048_576;
+            if (stat.size > maximumIgnoreFileBytes) {
+                throw new Error(`${fileName} exceeds the ${maximumIgnoreFileBytes}-byte policy limit.`);
             }
-        } catch {
-            if (fileName.includes('global')) {
-                console.log(`📄 No ${fileName} file found`);
-            }
-            return [];
+            content = (await readFileHandleExactly(handle, stat.size)).toString('utf8');
+            await verifyStableFileObservation(handle, filePath, canonicalRoot, stat, {
+                rejectFinalSymlink: true,
+            });
+        } finally {
+            await handle.close().catch(() => undefined);
         }
+        const ignorePatterns = Context.parseIgnorePatterns(content);
+
+        if (ignorePatterns.length > 0) {
+            console.log(`[Context] 🚫 Loaded ${ignorePatterns.length} ignore patterns from ${fileName}`);
+            return ignorePatterns;
+        }
+        console.log(`📄 ${fileName} file found but no valid patterns detected`);
+        return [];
     }
 
     /**
@@ -3467,9 +4150,13 @@ export class Context {
      * @param isDirectory Whether the path is a directory
      * @returns True if path should be ignored
      */
-    private matchesIgnorePattern(filePath: string, codebasePath: string, isDirectory: boolean = false): boolean {
-        const effectivePatterns = this.getActiveIgnorePatterns(codebasePath);
-        if (effectivePatterns.length === 0) {
+    private matchesIgnorePattern(
+        filePath: string,
+        codebasePath: string,
+        isDirectory: boolean = false,
+        matcherOverride?: ReturnType<typeof ignore>,
+    ): boolean {
+        if (!matcherOverride && this.getActiveIgnorePatterns(codebasePath).length === 0) {
             return false;
         }
 
@@ -3478,7 +4165,7 @@ export class Context {
             return false;
         }
 
-        const matcher = this.getIgnoreMatcherForCodebase(codebasePath);
+        const matcher = matcherOverride ?? this.getIgnoreMatcherForCodebase(codebasePath);
 
         if (isDirectory) {
             const withSlash = relativePath.endsWith('/') ? relativePath : `${relativePath}/`;
@@ -3537,19 +4224,314 @@ export class Context {
         }
     }
 
-    /**
-     * Add custom extensions (from MCP or other sources) without replacing existing ones
-     * @param customExtensions Array of custom extensions to add
-     */
-    addCustomExtensions(customExtensions: string[]): void {
-        if (customExtensions.length === 0) return;
+    private resolveCustomIndexPolicyPath(canonicalRoot: string): string {
+        const digest = crypto.createHash('sha256').update(canonicalRoot).digest('hex');
+        return path.join(this.indexPolicyStateRoot, `${digest}.json`);
+    }
 
-        this.runtimeCustomExtensions = normalizeSupportedExtensions([
-            ...this.runtimeCustomExtensions,
-            ...customExtensions
-        ]);
-        this.supportedExtensions = this.buildSupportedExtensions('default');
-        console.log(`[Context] 📎 Added ${customExtensions.length} custom extensions. Runtime total: ${this.runtimeCustomExtensions.length} extensions`);
+    private resolveCustomIndexPolicyFileToken(canonicalRoot: string): string | null {
+        try {
+            const stat = fs.statSync(this.resolveCustomIndexPolicyPath(canonicalRoot), { bigint: true });
+            return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs]
+                .map((value) => value.toString())
+                .join(':');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw error;
+        }
+    }
+
+    private clearResolvedIndexPolicyRuntime(canonicalRoot: string): void {
+        this.runtimeCustomExtensionsByCodebase.delete(canonicalRoot);
+        this.runtimeCustomIgnorePatternsByCodebase.delete(canonicalRoot);
+        this.publishedPolicyBindingsByCodebase.delete(canonicalRoot);
+        this.publishedResolvedPoliciesByCodebase.delete(canonicalRoot);
+        this.policyRuntimeCompatibilityByCodebase.delete(canonicalRoot);
+        this.loadedCustomPolicyRoots.delete(canonicalRoot);
+        this.setFileBasedPatternsForCodebase(canonicalRoot, []);
+    }
+
+    private loadCustomIndexPolicy(canonicalRoot: string): void {
+        const currentToken = this.resolveCustomIndexPolicyFileToken(canonicalRoot);
+        if (
+            this.policyFileTokensByCodebase.has(canonicalRoot)
+            && this.policyFileTokensByCodebase.get(canonicalRoot) === currentToken
+        ) {
+            return;
+        }
+        if (currentToken === null) {
+            this.clearResolvedIndexPolicyRuntime(canonicalRoot);
+            this.policyFileTokensByCodebase.set(canonicalRoot, null);
+            return;
+        }
+        try {
+            const parsed = JSON.parse(fs.readFileSync(this.resolveCustomIndexPolicyPath(canonicalRoot), 'utf8')) as unknown;
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                throw new Error('Custom index policy document is not an object.');
+            }
+            const record = parsed as Record<string, unknown>;
+            if (record.schemaVersion !== 'satori_index_policy_v2' || record.canonicalRoot !== canonicalRoot) {
+                throw new Error('Custom index policy identity is invalid.');
+            }
+            const extensions = Array.isArray(record.customExtensions)
+                ? record.customExtensions.filter((value): value is string => typeof value === 'string')
+                : null;
+            const ignorePatterns = Array.isArray(record.customIgnorePatterns)
+                ? record.customIgnorePatterns.filter((value): value is string => typeof value === 'string')
+                : null;
+            const fileBasedIgnorePatterns = Array.isArray(record.fileBasedIgnorePatterns)
+                ? record.fileBasedIgnorePatterns.filter((value): value is string => typeof value === 'string')
+                : null;
+            const supportedExtensions = Array.isArray(record.supportedExtensions)
+                ? record.supportedExtensions.filter((value): value is string => typeof value === 'string')
+                : null;
+            const effectiveIgnorePatterns = Array.isArray(record.effectiveIgnorePatterns)
+                ? record.effectiveIgnorePatterns.filter((value): value is string => typeof value === 'string')
+                : null;
+            if (!extensions || !ignorePatterns || !fileBasedIgnorePatterns || !supportedExtensions || !effectiveIgnorePatterns
+                || extensions.length !== (record.customExtensions as unknown[]).length
+                || ignorePatterns.length !== (record.customIgnorePatterns as unknown[]).length
+                || fileBasedIgnorePatterns.length !== (record.fileBasedIgnorePatterns as unknown[]).length
+                || supportedExtensions.length !== (record.supportedExtensions as unknown[]).length
+                || effectiveIgnorePatterns.length !== (record.effectiveIgnorePatterns as unknown[]).length) {
+                throw new Error('Custom index policy arrays are malformed.');
+            }
+            const profile: IndexProfile | null = record.profile === 'default' || record.profile === 'minimal' || record.profile === 'all-text'
+                ? record.profile
+                : null;
+            if (!profile) {
+                throw new Error('Custom index policy profile is malformed.');
+            }
+            const payload = {
+                schemaVersion: 'satori_index_policy_v2',
+                canonicalRoot,
+                customExtensions: normalizeSupportedExtensions(extensions),
+                customIgnorePatterns: [...ignorePatterns],
+                fileBasedIgnorePatterns: [...fileBasedIgnorePatterns],
+                profile,
+                supportedExtensions: normalizeSupportedExtensions(supportedExtensions),
+                effectiveIgnorePatterns: [...effectiveIgnorePatterns],
+                policyHash: typeof record.policyHash === 'string' ? record.policyHash : '',
+                collectionName: typeof record.collectionName === 'string' ? record.collectionName : '',
+                navigationGenerationId: typeof record.navigationGenerationId === 'string' ? record.navigationGenerationId : '',
+            };
+            const expectedDigest = crypto.createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex');
+            if (record.documentDigest !== expectedDigest) {
+                throw new Error('Custom index policy document digest is invalid.');
+            }
+            const expectedPolicyHash = crypto.createHash('sha256').update(JSON.stringify({
+                profile: payload.profile,
+                extensions: payload.supportedExtensions,
+                ignorePatterns: payload.effectiveIgnorePatterns,
+            }), 'utf8').digest('hex');
+            if (!/^[a-f0-9]{64}$/.test(payload.policyHash) || payload.policyHash !== expectedPolicyHash
+                || !payload.collectionName.trim()
+                || (payload.navigationGenerationId && !/^[a-zA-Z0-9_-]+$/.test(payload.navigationGenerationId))) {
+                throw new Error('Custom index policy generation binding is invalid.');
+            }
+            const expectedExtensions = normalizeSupportedExtensions([
+                ...getSupportedExtensionsForIndexProfile(payload.profile),
+                ...this.configuredExtensionOverlays,
+                ...payload.customExtensions,
+            ]);
+            const expectedIgnorePatterns = [
+                ...this.baseIgnorePatterns,
+                ...payload.customIgnorePatterns,
+                ...payload.fileBasedIgnorePatterns,
+            ];
+            const runtimeCompatible = JSON.stringify(payload.supportedExtensions) === JSON.stringify(expectedExtensions)
+                && JSON.stringify(payload.effectiveIgnorePatterns) === JSON.stringify(expectedIgnorePatterns);
+            this.activateResolvedIndexPolicy({
+                canonicalRoot,
+                profile: payload.profile,
+                customExtensions: payload.customExtensions,
+                customIgnorePatterns: payload.customIgnorePatterns,
+                fileBasedIgnorePatterns: payload.fileBasedIgnorePatterns,
+                supportedExtensions: payload.supportedExtensions,
+                effectiveIgnorePatterns: payload.effectiveIgnorePatterns,
+                policyHash: payload.policyHash,
+            }, {
+                collectionName: payload.collectionName,
+                ...(payload.navigationGenerationId ? { navigationGenerationId: payload.navigationGenerationId } : {}),
+            });
+            this.policyRuntimeCompatibilityByCodebase.set(canonicalRoot, runtimeCompatible);
+            this.loadedCustomPolicyRoots.add(canonicalRoot);
+            this.policyFileTokensByCodebase.set(canonicalRoot, currentToken);
+        } catch (error) {
+            this.loadedCustomPolicyRoots.delete(canonicalRoot);
+            this.policyFileTokensByCodebase.delete(canonicalRoot);
+            this.policyRuntimeCompatibilityByCodebase.delete(canonicalRoot);
+            throw new Error(`Malformed custom index policy for '${canonicalRoot}': ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    private persistCustomIndexPolicy(
+        policy: ResolvedIndexPolicy,
+        binding: { collectionName: string; navigationGenerationId?: string },
+        publishMutation?: (publish: () => void) => void,
+        activate?: () => void,
+    ): IndexPolicyPublicationReceipt {
+        const canonicalRoot = policy.canonicalRoot;
+        if (!binding.collectionName.trim()) {
+            throw new Error('Index policy collection binding must be nonempty.');
+        }
+        if (binding.navigationGenerationId && !/^[a-zA-Z0-9_-]+$/.test(binding.navigationGenerationId)) {
+            throw new Error('Index policy navigation generation binding is invalid.');
+        }
+        const expectedPolicyHash = crypto.createHash('sha256').update(JSON.stringify({
+            profile: policy.profile,
+            extensions: policy.supportedExtensions,
+            ignorePatterns: policy.effectiveIgnorePatterns,
+        }), 'utf8').digest('hex');
+        if (policy.policyHash !== expectedPolicyHash) {
+            throw new Error('Resolved index policy hash does not match its effective inputs.');
+        }
+        ignore().add(policy.effectiveIgnorePatterns);
+        fs.mkdirSync(this.indexPolicyStateRoot, { recursive: true });
+        const targetPath = this.resolveCustomIndexPolicyPath(canonicalRoot);
+        const temporaryPath = `${targetPath}.tmp-${process.pid}-${crypto.randomUUID()}`;
+        const collectionName = this.resolveCollectionName(canonicalRoot);
+        const previousRuntimeState = {
+            customExtensions: this.runtimeCustomExtensionsByCodebase.has(canonicalRoot)
+                ? [...(this.runtimeCustomExtensionsByCodebase.get(canonicalRoot) ?? [])]
+                : null,
+            customIgnorePatterns: this.runtimeCustomIgnorePatternsByCodebase.has(canonicalRoot)
+                ? [...(this.runtimeCustomIgnorePatternsByCodebase.get(canonicalRoot) ?? [])]
+                : null,
+            profile: this.indexProfilesByCodebase.get(canonicalRoot),
+            binding: this.publishedPolicyBindingsByCodebase.get(canonicalRoot),
+            resolvedPolicy: this.publishedResolvedPoliciesByCodebase.get(canonicalRoot),
+            ignoreState: this.ignoreStateByCollection.get(collectionName),
+            wasLoaded: this.loadedCustomPolicyRoots.has(canonicalRoot),
+            fileToken: this.policyFileTokensByCodebase.get(canonicalRoot),
+            hadFileToken: this.policyFileTokensByCodebase.has(canonicalRoot),
+            runtimeCompatible: this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot),
+        };
+        const restoreRuntimeState = () => {
+            if (previousRuntimeState.customExtensions) {
+                this.runtimeCustomExtensionsByCodebase.set(canonicalRoot, [...previousRuntimeState.customExtensions]);
+            } else {
+                this.runtimeCustomExtensionsByCodebase.delete(canonicalRoot);
+            }
+            if (previousRuntimeState.customIgnorePatterns) {
+                this.runtimeCustomIgnorePatternsByCodebase.set(canonicalRoot, [...previousRuntimeState.customIgnorePatterns]);
+            } else {
+                this.runtimeCustomIgnorePatternsByCodebase.delete(canonicalRoot);
+            }
+            if (previousRuntimeState.profile) {
+                this.indexProfilesByCodebase.set(canonicalRoot, previousRuntimeState.profile);
+            } else {
+                this.indexProfilesByCodebase.delete(canonicalRoot);
+            }
+            if (previousRuntimeState.binding) {
+                this.publishedPolicyBindingsByCodebase.set(canonicalRoot, { ...previousRuntimeState.binding });
+            } else {
+                this.publishedPolicyBindingsByCodebase.delete(canonicalRoot);
+            }
+            if (previousRuntimeState.resolvedPolicy) {
+                this.publishedResolvedPoliciesByCodebase.set(canonicalRoot, {
+                    ...previousRuntimeState.resolvedPolicy,
+                    customExtensions: [...previousRuntimeState.resolvedPolicy.customExtensions],
+                    customIgnorePatterns: [...previousRuntimeState.resolvedPolicy.customIgnorePatterns],
+                    fileBasedIgnorePatterns: [...previousRuntimeState.resolvedPolicy.fileBasedIgnorePatterns],
+                    supportedExtensions: [...previousRuntimeState.resolvedPolicy.supportedExtensions],
+                    effectiveIgnorePatterns: [...previousRuntimeState.resolvedPolicy.effectiveIgnorePatterns],
+                });
+            } else {
+                this.publishedResolvedPoliciesByCodebase.delete(canonicalRoot);
+            }
+            if (previousRuntimeState.ignoreState) {
+                this.ignoreStateByCollection.set(collectionName, {
+                    ...previousRuntimeState.ignoreState,
+                    fileBasedPatterns: [...previousRuntimeState.ignoreState.fileBasedPatterns],
+                    effectivePatterns: [...previousRuntimeState.ignoreState.effectivePatterns],
+                });
+            } else {
+                this.ignoreStateByCollection.delete(collectionName);
+            }
+            if (previousRuntimeState.wasLoaded) {
+                this.loadedCustomPolicyRoots.add(canonicalRoot);
+            } else {
+                this.loadedCustomPolicyRoots.delete(canonicalRoot);
+            }
+            if (previousRuntimeState.hadFileToken) {
+                this.policyFileTokensByCodebase.set(canonicalRoot, previousRuntimeState.fileToken ?? null);
+            } else {
+                this.policyFileTokensByCodebase.delete(canonicalRoot);
+            }
+            if (previousRuntimeState.runtimeCompatible !== undefined) {
+                this.policyRuntimeCompatibilityByCodebase.set(canonicalRoot, previousRuntimeState.runtimeCompatible);
+            } else {
+                this.policyRuntimeCompatibilityByCodebase.delete(canonicalRoot);
+            }
+        };
+        const payload = {
+            schemaVersion: 'satori_index_policy_v2',
+            canonicalRoot,
+            customExtensions: policy.customExtensions,
+            customIgnorePatterns: policy.customIgnorePatterns,
+            fileBasedIgnorePatterns: policy.fileBasedIgnorePatterns,
+            profile: policy.profile,
+            supportedExtensions: policy.supportedExtensions,
+            effectiveIgnorePatterns: policy.effectiveIgnorePatterns,
+            policyHash: policy.policyHash,
+            collectionName: binding.collectionName,
+            navigationGenerationId: binding.navigationGenerationId ?? '',
+        };
+        const documentDigest = crypto.createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex');
+        const receipt: IndexPolicyPublicationReceipt = {
+            status: 'committed',
+            operation: 'publish',
+            canonicalRoot,
+            documentToken: documentDigest,
+            policyHash: policy.policyHash,
+            collectionName: binding.collectionName,
+            ...(binding.navigationGenerationId ? { navigationGenerationId: binding.navigationGenerationId } : {}),
+        };
+        fs.writeFileSync(temporaryPath, JSON.stringify({ ...payload, documentDigest }, null, 2));
+        let publicationCount = 0;
+        let durablePublicationCompleted = false;
+        try {
+            const publish = () => {
+                publicationCount += 1;
+                if (publicationCount > 1) {
+                    throw new Error('Index policy publication invoked more than once.');
+                }
+                try {
+                    activate?.();
+                    fs.renameSync(temporaryPath, targetPath);
+                    durablePublicationCompleted = true;
+                    this.policyFileTokensByCodebase.set(
+                        canonicalRoot,
+                        this.resolveCustomIndexPolicyFileToken(canonicalRoot),
+                    );
+                } catch (error) {
+                    if (!durablePublicationCompleted) restoreRuntimeState();
+                    throw error;
+                }
+            };
+            if (publishMutation) {
+                publishMutation(publish);
+                if (publicationCount !== 1) throw new Error('Index policy publication returned without publishing.');
+            } else {
+                publish();
+            }
+        } catch (error) {
+            if (publicationCount > 0 && !durablePublicationCompleted) {
+                restoreRuntimeState();
+            }
+            if (durablePublicationCompleted) {
+                throw new IndexPolicyPublicationError(
+                    `Index policy publication committed before its receipt failed: ${error instanceof Error ? error.message : String(error)}`,
+                    receipt,
+                    error,
+                );
+            }
+            throw error;
+        } finally {
+            fs.rmSync(temporaryPath, { force: true });
+        }
+        return receipt;
     }
 
     /**

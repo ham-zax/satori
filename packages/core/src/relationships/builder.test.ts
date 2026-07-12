@@ -234,6 +234,40 @@ test('buildCallRelationshipsForRegistry assigns same-line calls by byte containm
     ]);
 });
 
+test('buildCallRelationshipsForRegistry preserves distinct same-line call spans', () => {
+    const file = 'src/two-calls.ts';
+    const fileHash = 'hash-two-calls';
+    const fileOwner = createSynthesizedFileSymbol({
+        relativePath: file,
+        language: 'typescript',
+        content: 'function target() {}\nfunction run() { target(); target(); }\n',
+        fileHash,
+        extractorVersion: 'test-extractor-v1',
+    });
+    const target = createSymbol({ file, kind: 'function', name: 'target', qualifiedName: 'target', label: 'function target', startLine: 1, endLine: 1, startByte: 0, endByte: 20, fileHash });
+    const run = createSymbol({ file, kind: 'function', name: 'run', qualifiedName: 'run', label: 'function run', startLine: 2, endLine: 2, startByte: 21, endByte: 58, fileHash });
+    const registry = buildSymbolRegistry({
+        manifest: { ...manifest(), files: [{ path: file, hash: fileHash, language: 'typescript', symbolCount: 3 }] },
+        symbols: [fileOwner, target, run],
+    });
+
+    const records = buildCallRelationshipsForRegistry({
+        registry,
+        analysisByFile: new Map([[file, {
+            moduleBindings: [],
+            callSites: [
+                { calleeName: 'target', kind: 'direct', span: { startLine: 2, endLine: 2, startByte: 38, endByte: 46, startColumn: 17, endColumn: 25 } },
+                { calleeName: 'target', kind: 'direct', span: { startLine: 2, endLine: 2, startByte: 48, endByte: 56, startColumn: 27, endColumn: 35 } },
+            ],
+        }]]),
+    });
+
+    assert.deepEqual(records.map((record) => record.span), [
+        { startLine: 2, endLine: 2, startByte: 38, endByte: 46, startColumn: 17, endColumn: 25 },
+        { startLine: 2, endLine: 2, startByte: 48, endByte: 56, startColumn: 27, endColumn: 35 },
+    ]);
+});
+
 test('buildCallRelationshipsForRegistry skips definitions, unresolved calls, and non-source owners', async () => {
     const fileOwner = createSynthesizedFileSymbol({
         relativePath: 'src/auth.ts',

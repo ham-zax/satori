@@ -221,6 +221,75 @@ test('importNavigationToSqlite mirrors JSON navigation sidecars into a parity-sa
         });
         assert.equal(parity.ok, true);
         assert.deepEqual(parity.mismatches, []);
+
+        const sqlitePath = resolveNavigationSqlitePath(stateRoot, '/repo');
+        {
+            const database = new DatabaseSync(sqlitePath);
+            database.prepare('UPDATE symbols SET name = ?, label = ? WHERE symbol_instance_id = ?')
+                .run('renamedLogin', 'function renamedLogin()', login.symbolInstanceId);
+            database.close();
+        }
+        assert.equal((await sqliteStore.getManifest({ stateRoot, normalizedRootPath: '/repo' })).status, 'incompatible');
+        {
+            const database = new DatabaseSync(sqlitePath);
+            database.prepare('UPDATE symbols SET name = ?, label = ? WHERE symbol_instance_id = ?')
+                .run(login.name, login.label, login.symbolInstanceId);
+            database.prepare(`
+                UPDATE relationships
+                SET target_key = ?, target_instance_id = ?
+                WHERE type = 'CALLS'
+            `).run(authFile.symbolKey, authFile.symbolInstanceId);
+            database.close();
+        }
+        assert.equal((await sqliteStore.getRelationships({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: registryResult.manifestHash,
+        })).status, 'incompatible');
+        {
+            const database = new DatabaseSync(sqlitePath);
+            database.prepare(`
+                UPDATE relationships
+                SET target_key = ?, target_instance_id = ?
+                WHERE type = 'CALLS'
+            `).run(login.symbolKey, login.symbolInstanceId);
+            database.close();
+        }
+        {
+            const database = new DatabaseSync(sqlitePath);
+            database.prepare('UPDATE relationships SET type = ? WHERE type = ?').run('INVALID', 'CALLS');
+            database.close();
+        }
+        const corruptRelationships = await sqliteStore.getRelationships({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: registryResult.manifestHash,
+        });
+        assert.equal(corruptRelationships.status, 'incompatible');
+
+        {
+            const database = new DatabaseSync(sqlitePath);
+            database.prepare('UPDATE relationships SET type = ? WHERE type = ?').run('CALLS', 'INVALID');
+            database.prepare('UPDATE symbols SET kind = ?, file_path = ?, start_line = ? WHERE symbol_instance_id = ?')
+                .run('invalid', '../escape.ts', -4, login.symbolInstanceId);
+            database.close();
+        }
+        const corruptSymbols = await sqliteStore.getManifest({
+            stateRoot,
+            normalizedRootPath: '/repo',
+        });
+        assert.equal(corruptSymbols.status, 'incompatible');
+
+        {
+            const database = new DatabaseSync(sqlitePath);
+            database.prepare('DELETE FROM symbols').run();
+            database.close();
+        }
+        const truncatedSymbols = await sqliteStore.getManifest({
+            stateRoot,
+            normalizedRootPath: '/repo',
+        });
+        assert.equal(truncatedSymbols.status, 'incompatible');
     });
 });
 
@@ -348,7 +417,7 @@ test('validateNavigationStoreParity reports deterministic mismatches when SQLite
         });
 
         assert.equal(parity.ok, false);
-        assert.ok(parity.mismatches.includes('relationship_records'));
+        assert.ok(parity.mismatches.includes('relationship_status:ok:incompatible'));
     });
 });
 
@@ -405,6 +474,6 @@ test('validateNavigationStoreParity reports a missing SQLite symbol row as a det
         });
 
         assert.equal(parity.ok, false);
-        assert.ok(parity.mismatches.includes(`symbol_by_instance:${login.symbolInstanceId}`));
+        assert.ok(parity.mismatches.includes('registry_status:ok:incompatible'));
     });
 });

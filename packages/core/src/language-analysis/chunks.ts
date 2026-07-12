@@ -103,7 +103,10 @@ export function buildAnalysisChunks(
     const bytes = Buffer.from(content, 'utf8');
     const sourceMap = new Utf8SourceMap(content);
     const chunkSize = clampPositive(options.chunkSize, DEFAULT_CHUNK_SIZE);
-    const requestedOverlap = Math.max(0, Math.floor(options.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP));
+    const overlapOption = options.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP;
+    const requestedOverlap = Number.isFinite(overlapOption)
+        ? Math.max(0, Math.floor(overlapOption))
+        : DEFAULT_CHUNK_OVERLAP;
     const chunkOverlap = Math.min(requestedOverlap, Math.max(0, chunkSize - 1));
     const chunks: CodeChunk[] = [];
 

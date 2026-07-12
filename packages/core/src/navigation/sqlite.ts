@@ -1,9 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {
     buildSymbolRegistry,
     computeSymbolRegistryManifestHash,
     isRelationshipManifest,
+    isRelationshipRecord,
+    isSymbolRecord,
     isSymbolRegistryManifest,
     resolveNavigationSidecarRoot,
     resolveCurrentNavigationGeneration,
@@ -37,7 +40,7 @@ import type {
 } from './store';
 
 const NAVIGATION_SQLITE_FILE_NAME = 'navigation.sqlite';
-const NAVIGATION_SQLITE_SCHEMA_VERSION = 'navigation_sqlite_v2';
+const NAVIGATION_SQLITE_SCHEMA_VERSION = 'navigation_sqlite_v3';
 
 type DatabaseSync = import('node:sqlite').DatabaseSync;
 type DatabaseSyncConstructor = typeof import('node:sqlite').DatabaseSync;
@@ -313,7 +316,7 @@ function symbolFromRow(row: SymbolRow, rootPath: string): SymbolRecord | ReturnT
     if (!Array.isArray(ontologyTagsRaw) || !ontologyTagsRaw.every((entry) => typeof entry === 'string')) {
         return buildFailure(rootPath, 'navigation sqlite symbol row has invalid ontologyTags', 'incompatible');
     }
-    return {
+    const symbol: SymbolRecord = {
         symbolKey: row.symbol_key,
         symbolInstanceId: row.symbol_instance_id,
         language: row.language,
@@ -337,10 +340,13 @@ function symbolFromRow(row: SymbolRow, rootPath: string): SymbolRecord | ReturnT
         extractorVersion: row.extractor_version,
         ...(ontologyTagsRaw.length > 0 ? { ontologyTags: ontologyTagsRaw as SymbolRecord['ontologyTags'] } : {}),
     };
+    return isSymbolRecord(symbol)
+        ? symbol
+        : buildFailure(rootPath, 'navigation sqlite symbol row violates the symbol record contract', 'incompatible');
 }
 
-function relationshipFromRow(row: RelationshipRow): RelationshipRecord {
-    return {
+function relationshipFromRow(row: RelationshipRow, rootPath: string): RelationshipRecord | ReturnType<typeof buildFailure> {
+    const relationship: RelationshipRecord = {
         sourceKey: row.source_key,
         ...(row.source_instance_id ? { sourceInstanceId: row.source_instance_id } : {}),
         ...(row.target_key ? { targetKey: row.target_key } : {}),
@@ -351,6 +357,9 @@ function relationshipFromRow(row: RelationshipRow): RelationshipRecord {
         ...(rowSpan(row) ? { span: rowSpan(row)! } : {}),
         confidence: row.confidence,
     };
+    return isRelationshipRecord(relationship)
+        ? relationship
+        : buildFailure(rootPath, 'navigation sqlite relationship row violates the relationship record contract', 'incompatible');
 }
 
 function readManifestMap(database: DatabaseSync): Map<string, string> {
@@ -360,6 +369,54 @@ function readManifestMap(database: DatabaseSync): Map<string, string> {
 
 function insertManifestValue(database: DatabaseSync, key: string, value: string): void {
     database.prepare('INSERT INTO navigation_manifest(key, value) VALUES (?, ?)').run(key, value);
+}
+
+function contentDigest(value: unknown): string {
+    return crypto.createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
+}
+
+function symbolContentDigest(symbols: SymbolRecord[]): string {
+    return contentDigest([...symbols].sort(compareSymbols).map((symbol) => [
+        symbol.symbolInstanceId,
+        symbol.symbolKey,
+        symbol.file,
+        symbol.language,
+        symbol.kind,
+        symbol.name,
+        symbol.qualifiedName,
+        symbol.label,
+        symbol.span.startLine,
+        symbol.span.endLine,
+        symbol.span.startByte ?? null,
+        symbol.span.endByte ?? null,
+        symbol.span.startColumn ?? null,
+        symbol.span.endColumn ?? null,
+        symbol.parentKey ?? null,
+        symbol.parentQualifiedNamePath,
+        symbol.exported ?? null,
+        symbol.fileHash,
+        symbol.extractorVersion,
+        symbol.ontologyTags ?? [],
+    ]));
+}
+
+function relationshipContentDigest(records: RelationshipRecord[]): string {
+    return contentDigest([...records].sort(compareRelationshipRecords).map((record) => [
+        record.sourceKey,
+        record.sourceInstanceId ?? null,
+        record.targetKey ?? null,
+        record.targetInstanceId ?? null,
+        record.targetPath ?? null,
+        record.type,
+        record.file,
+        record.span?.startLine ?? null,
+        record.span?.endLine ?? null,
+        record.span?.startByte ?? null,
+        record.span?.endByte ?? null,
+        record.span?.startColumn ?? null,
+        record.span?.endColumn ?? null,
+        record.confidence,
+    ]));
 }
 
 function createSchema(database: DatabaseSync): void {
@@ -505,12 +562,31 @@ function readExistingRegistryState(input: NavigationStoreInput, rootPath: string
             ORDER BY file_path ASC, start_line ASC, end_line ASC, kind ASC, qualified_name ASC, symbol_instance_id ASC
         `).all() as SymbolRow[];
         const symbols: SymbolRecord[] = [];
+        const manifestFilesByPath = new Map(parsedManifest.files.map((file) => [file.path, file]));
+        const observedSymbolCounts = new Map<string, number>();
         for (const row of symbolRows) {
             const symbol = symbolFromRow(row, rootPath);
             if ('status' in symbol) {
                 return symbol;
             }
+            const manifestFile = manifestFilesByPath.get(symbol.file);
+            if (
+                !manifestFile
+                || symbol.fileHash !== manifestFile.hash
+                || symbol.language !== manifestFile.language
+            ) {
+                return buildFailure(rootPath, 'navigation sqlite symbol row does not match its manifest file', 'incompatible');
+            }
+            observedSymbolCounts.set(symbol.file, (observedSymbolCounts.get(symbol.file) ?? 0) + 1);
             symbols.push(symbol);
+        }
+        for (const manifestFile of parsedManifest.files) {
+            if ((observedSymbolCounts.get(manifestFile.path) ?? 0) !== manifestFile.symbolCount) {
+                return buildFailure(rootPath, 'navigation sqlite symbol counts do not match registry manifest', 'incompatible');
+            }
+        }
+        if (manifest.get('symbol_content_hash') !== symbolContentDigest(symbols)) {
+            return buildFailure(rootPath, 'navigation sqlite symbol content hash does not match stored rows', 'incompatible');
         }
 
         const registry = buildSymbolRegistry({
@@ -613,9 +689,35 @@ function readRelationshipStateFromSqlite(input: NavigationRelationshipsQueryInpu
             ORDER BY file_path ASC, start_line ASC, end_line ASC, type ASC, source_key ASC, target_key ASC, target_instance_id ASC, target_path ASC
         `).all() as RelationshipRow[];
 
+        const relationshipFiles = new Set(parsedRelationshipManifest.files.map((file) => file.path));
+        const expectedRelationshipCounts = new Map(parsedRelationshipManifest.files.map((file) => [file.path, file.relationshipCount]));
+        const observedRelationshipCounts = new Map<string, number>();
+        const validatedRelationships: RelationshipRecord[] = [];
+        for (const row of relationshipRows) {
+            const relationship = relationshipFromRow(row, rootPath);
+            if ('status' in relationship) {
+                return relationship;
+            }
+            if (!relationshipFiles.has(relationship.file)) {
+                return buildFailure(rootPath, 'navigation sqlite relationship row references a file outside its manifest', 'incompatible');
+            }
+            observedRelationshipCounts.set(
+                relationship.file,
+                (observedRelationshipCounts.get(relationship.file) ?? 0) + 1,
+            );
+            validatedRelationships.push(relationship);
+        }
+        for (const [filePath, expectedCount] of expectedRelationshipCounts) {
+            if ((observedRelationshipCounts.get(filePath) ?? 0) !== expectedCount) {
+                return buildFailure(rootPath, 'navigation sqlite relationship counts do not match relationship manifest', 'incompatible');
+            }
+        }
+        if (manifest.get('relationship_content_hash') !== relationshipContentDigest(validatedRelationships)) {
+            return buildFailure(rootPath, 'navigation sqlite relationship content hash does not match stored rows', 'incompatible');
+        }
+
         const direction = input.direction || 'both';
-        const records = relationshipRows
-            .map((row) => relationshipFromRow(row))
+        const records = validatedRelationships
             .filter((record) => {
                 if (!matchesType(record, input.types)) {
                     return false;
@@ -732,6 +834,7 @@ export async function importNavigationToSqlite(input: ImportNavigationToSqliteIn
         insertManifestValue(database, 'navigation_generation_id', activeGeneration?.generationId ?? 'standalone');
         insertManifestValue(database, 'relationship_manifest_hash', activeGeneration?.relationshipManifestHash ?? 'standalone');
         insertManifestValue(database, 'registry_manifest_json', JSON.stringify(registryState.registry.manifest));
+        insertManifestValue(database, 'symbol_content_hash', symbolContentDigest(registryState.registry.symbols));
         insertManifestValue(database, 'imported_at', new Date().toISOString());
 
         const insertFile = database.prepare(`
@@ -797,6 +900,7 @@ export async function importNavigationToSqlite(input: ImportNavigationToSqliteIn
             insertManifestValue(database, 'relationship_reason', '');
             insertManifestValue(database, 'relationship_manifest_json', JSON.stringify(relationshipState.manifest));
             insertManifestValue(database, 'relationship_warnings_json', JSON.stringify(relationshipState.warnings));
+            insertManifestValue(database, 'relationship_content_hash', relationshipContentDigest(relationshipState.records));
 
             const insertRelationship = database.prepare(`
                 INSERT INTO relationships(
@@ -839,6 +943,7 @@ export async function importNavigationToSqlite(input: ImportNavigationToSqliteIn
             insertManifestValue(database, 'relationship_reason', relationshipState.reason);
             insertManifestValue(database, 'relationship_manifest_json', JSON.stringify(null));
             insertManifestValue(database, 'relationship_warnings_json', JSON.stringify([]));
+            insertManifestValue(database, 'relationship_content_hash', '');
         }
 
         database.exec('COMMIT');

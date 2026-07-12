@@ -542,7 +542,6 @@ test('integration: semantic_search applies threshold in hybrid mode', async () =
 
 test('integration: ignore negation patterns keep explicitly unignored files indexable', async () => {
   const { context } = createContext();
-  context.addCustomIgnorePatterns(['generated/**', '!generated/keep.ts']);
 
   const codebasePath = createTempCodebase({
     'src/main.ts': 'export const main = true;',
@@ -551,7 +550,14 @@ test('integration: ignore negation patterns keep explicitly unignored files inde
   });
 
   try {
-    const stats = await context.indexCodebase(codebasePath);
+    const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
+      customIgnorePatterns: ['generated/**', '!generated/keep.ts'],
+    });
+    const stats = await context.indexCodebase(codebasePath, undefined, false, { indexPolicy: policy });
+    context.publishResolvedIndexPolicy(policy, {
+      collectionName: context.resolveCollectionName(codebasePath),
+      navigationGenerationId: stats.navigationCandidate?.generationId,
+    });
     assert.equal(stats.indexedFiles, 2);
 
     const keptResults = await context.semanticSearch({
@@ -560,7 +566,10 @@ test('integration: ignore negation patterns keep explicitly unignored files inde
       topK: 10,
       scorePolicy: { kind: 'topk_only' },
     });
-    assert.ok(keptResults.some((r) => r.relativePath === 'generated/keep.ts'));
+    assert.ok(
+      keptResults.some((r) => r.relativePath === 'generated/keep.ts'),
+      `expected generated/keep.ts in ${JSON.stringify(keptResults.map((result) => result.relativePath))}`,
+    );
     assert.ok(!keptResults.some((r) => r.relativePath === 'generated/drop.ts'));
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
@@ -569,7 +578,6 @@ test('integration: ignore negation patterns keep explicitly unignored files inde
 
 test('integration: reindex_by_change ignores excluded files but tracks unignored negation files', async () => {
   const { context } = createContext();
-  context.addCustomIgnorePatterns(['generated/**', '!generated/keep.ts']);
 
   const codebasePath = createTempCodebase({
     'src/main.ts': 'export const main = true;',
@@ -578,7 +586,14 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
   });
 
   try {
-    await context.indexCodebase(codebasePath);
+    const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
+      customIgnorePatterns: ['generated/**', '!generated/keep.ts'],
+    });
+    const stats = await context.indexCodebase(codebasePath, undefined, false, { indexPolicy: policy });
+    context.publishResolvedIndexPolicy(policy, {
+      collectionName: context.resolveCollectionName(codebasePath),
+      navigationGenerationId: stats.navigationCandidate?.generationId,
+    });
 
     fs.writeFileSync(path.join(codebasePath, 'generated/drop.ts'), 'export const dropped = false;', 'utf8');
     const ignoredOnlyDelta = await context.reindexByChange(codebasePath);

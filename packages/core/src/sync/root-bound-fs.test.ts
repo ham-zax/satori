@@ -5,11 +5,15 @@ import * as fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+    assertDescriptorBoundIndexingSupported,
     descriptorPathInsideRoot,
     isRealPathInsideRoot,
     openDirectoryInsideRoot,
     openRegularFileInsideRoot,
+    openRegularFileInsideRootNoFollow,
+    readFileHandleExactly,
     resolveInsideRoot,
+    verifyStableFileObservation,
 } from './root-bound-fs';
 
 function createDirectorySymlinkOrSkip(t: TestContext, target: string, linkPath: string): boolean {
@@ -121,6 +125,83 @@ test('openRegularFileInsideRoot rejects final-component file symlink escape', as
     }
 });
 
+test('openRegularFileInsideRootNoFollow rejects a final-component symlink inside the root', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-open-nofollow-root-'));
+    try {
+        const targetPath = path.join(root, 'actual.ignore');
+        const linkPath = path.join(root, '.gitignore');
+        fs.writeFileSync(targetPath, 'generated/**\n', 'utf8');
+        if (!createFileSymlinkOrSkip(t, targetPath, linkPath)) {
+            return;
+        }
+
+        await assert.rejects(
+            () => openRegularFileInsideRootNoFollow(linkPath, root),
+            /symbolic-link|too many levels of symbolic links/i,
+        );
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('openRegularFileInsideRootNoFollow has an explicit platform capability contract for ordinary files', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-open-nofollow-capability-'));
+    const filePath = path.join(root, '.gitignore');
+    try {
+        fs.writeFileSync(filePath, 'generated/**\n', 'utf8');
+        if (process.platform !== 'linux') {
+            await assert.rejects(
+                () => openRegularFileInsideRootNoFollow(filePath, root),
+                /descriptor-bound root validation is unavailable.*unsupported/i,
+            );
+            return;
+        }
+        const handle = await openRegularFileInsideRootNoFollow(filePath, root);
+        try {
+            assert.equal((await handle.stat()).isFile(), true);
+        } finally {
+            await handle.close();
+        }
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('descriptor-bound indexing capability is preflighted explicitly', () => {
+    if (process.platform === 'linux') {
+        assert.doesNotThrow(() => assertDescriptorBoundIndexingSupported());
+        return;
+    }
+    assert.throws(
+        () => assertDescriptorBoundIndexingSupported(),
+        /descriptor-bound root validation is unavailable.*unsupported/i,
+    );
+});
+
+test('verifyStableFileObservation rejects pathname replacement after descriptor read', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-stable-observation-root-'));
+    const filePath = path.join(root, '.gitignore');
+    const replacementPath = path.join(root, 'replacement.ignore');
+    fs.writeFileSync(filePath, 'private/**\n', 'utf8');
+    fs.writeFileSync(replacementPath, 'generated/*\n', 'utf8');
+    const handle = await openRegularFileInsideRootNoFollow(filePath, root);
+    try {
+        const before = await handle.stat();
+        await readFileHandleExactly(handle, before.size);
+        fs.renameSync(replacementPath, filePath);
+
+        await assert.rejects(
+            () => verifyStableFileObservation(handle, filePath, root, before, {
+                rejectFinalSymlink: true,
+            }),
+            /file changed while being read|path was replaced while being read/i,
+        );
+    } finally {
+        await handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('descriptorPathInsideRoot rejects an already-open outside file', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-bound-root-'));
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-bound-out-'));
@@ -137,6 +218,39 @@ test('descriptorPathInsideRoot rejects an already-open outside file', async () =
         await handle.close();
         fs.rmSync(root, { recursive: true, force: true });
         fs.rmSync(outside, { recursive: true, force: true });
+    }
+});
+
+test('readFileHandleExactly rejects growth beyond the observed descriptor size', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-exact-read-'));
+    const filePath = path.join(root, 'source.ts');
+    fs.writeFileSync(filePath, 'abc', 'utf8');
+    const handle = await fsp.open(filePath, fs.constants.O_RDONLY);
+    try {
+        fs.appendFileSync(filePath, 'def', 'utf8');
+        await assert.rejects(
+            () => readFileHandleExactly(handle, 3),
+            /grew beyond the observed size/,
+        );
+    } finally {
+        await handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('readFileHandleExactly rejects a short descriptor read', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-short-read-'));
+    const filePath = path.join(root, 'source.ts');
+    fs.writeFileSync(filePath, 'abc', 'utf8');
+    const handle = await fsp.open(filePath, fs.constants.O_RDONLY);
+    try {
+        await assert.rejects(
+            () => readFileHandleExactly(handle, 4),
+            /does not match the observed size/,
+        );
+    } finally {
+        await handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
     }
 });
 

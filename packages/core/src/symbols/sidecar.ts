@@ -108,6 +108,11 @@ export interface StagedNavigationSidecarGeneration extends WriteNavigationSideca
     relationshipManifestHash: string;
 }
 
+export type NavigationGenerationPointerCandidate = Pick<
+    StagedNavigationSidecarGeneration,
+    'rootPath' | 'normalizedRootPath' | 'generationId' | 'manifestHash' | 'relationshipManifestHash'
+>;
+
 export interface CurrentNavigationGeneration {
     generationId: string;
     generationRoot: string;
@@ -586,7 +591,7 @@ export async function stageNavigationSidecarGeneration(
 }
 
 export async function publishNavigationSidecarGeneration(
-    candidate: StagedNavigationSidecarGeneration,
+    candidate: NavigationGenerationPointerCandidate,
     options: Pick<WriteNavigationSidecarGenerationInput, 'beforePublish' | 'publishMutation'> = {},
 ): Promise<void> {
     await publishCurrentGenerationPointer(
@@ -752,7 +757,7 @@ const VALID_RELATIONSHIP_TYPES = new Set([
     'CONFIGURES',
 ]);
 
-function isSymbolRecord(value: unknown): value is SymbolRecord {
+export function isSymbolRecord(value: unknown): value is SymbolRecord {
     if (!isRecord(value)) {
         return false;
     }
@@ -1019,7 +1024,7 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
     }
 }
 
-function isRelationshipRecord(value: unknown): value is RelationshipRecord {
+export function isRelationshipRecord(value: unknown): value is RelationshipRecord {
     if (!isRecord(value)) {
         return false;
     }

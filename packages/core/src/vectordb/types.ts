@@ -95,13 +95,15 @@ export interface IndexCompletionFingerprint {
 }
 
 export interface IndexCompletionMarkerDocument extends VectorDocumentMetadata {
-    kind: 'satori_index_completion_v1';
+    kind: 'satori_index_completion_v2';
     codebasePath: string;
     fingerprint: IndexCompletionFingerprint;
     indexedFiles: number;
     totalChunks: number;
     completedAt: string;
     runId: string;
+    /** Deterministic identity of the effective file-selection policy used for this generation. */
+    indexPolicyHash: string;
     /**
      * Full-index outcome sealed into the marker.
      * Absent / omitted on legacy markers is treated as `completed`.

@@ -180,6 +180,9 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         if (language === 'python' && node.type === 'function_definition' && semanticContainer === 'class') {
             kind = 'method';
         }
+        if (language === 'scala' && node.type === 'function_definition' && semanticContainer === 'class') {
+            kind = 'method';
+        }
         if (language === 'rust' && node.type === 'function_item' && insideRustImpl) {
             kind = 'method';
         }
@@ -198,6 +201,7 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 || kind === 'interface'
                 || kind === 'trait'
                 || kind === 'struct'
+                || kind === 'enum'
                 || kind === 'module'
             )
                 ? [...parents, name]
@@ -209,6 +213,8 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
             || kind === 'interface'
             || kind === 'trait'
             || kind === 'struct'
+            || kind === 'enum'
+            || (language === 'scala' && kind === 'module')
         )
             ? 'class'
             : kind && (kind === 'function' || kind === 'method' || kind === 'constructor')

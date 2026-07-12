@@ -52,6 +52,18 @@ function requiredOpenFlag(name: 'O_NOFOLLOW' | 'O_DIRECTORY'): number {
     return flag;
 }
 
+/**
+ * Fail before indexing mutates durable state when the runtime cannot provide
+ * the descriptor guarantees required by root-bound source and policy reads.
+ */
+export function assertDescriptorBoundIndexingSupported(): void {
+    requiredOpenFlag('O_NOFOLLOW');
+    requiredOpenFlag('O_DIRECTORY');
+    if (!fsSync.existsSync('/proc/self/fd')) {
+        throw new Error(`Descriptor-bound root validation is unavailable: /proc/self/fd is unsupported on ${process.platform}`);
+    }
+}
+
 function descriptorLink(handle: fsp.FileHandle): string {
     if (process.platform !== 'linux') {
         throw new Error(`Descriptor-bound root validation is unavailable on ${process.platform}`);
@@ -82,6 +94,13 @@ export async function descriptorPathInsideRoot(handle: fsp.FileHandle, rootDir: 
 interface OpenedInsideRoot {
     handle: fsp.FileHandle;
     realPath: string;
+}
+
+function sameFileIdentity(
+    left: Pick<fsSync.Stats, 'dev' | 'ino'>,
+    right: Pick<fsSync.Stats, 'dev' | 'ino'>,
+): boolean {
+    return left.dev === right.dev && left.ino === right.ino;
 }
 
 async function openInsideRoot(
@@ -124,7 +143,7 @@ async function openInsideRoot(
 /**
  * Open a regular file only after binding it to the verified indexed root:
  * 1) realpath must stay under root (rejects intermediate symlink escape),
- * 2) open that verified path (O_NOFOLLOW when available),
+ * 2) open that verified path with required Linux O_NOFOLLOW semantics,
  * 3) require the opened descriptor's dev/ino to match the pre-open lstat,
  * 4) re-check the opened descriptor's real path stays under root.
  */
@@ -133,6 +152,110 @@ export async function openRegularFileInsideRoot(
     rootDir: string,
 ): Promise<fsp.FileHandle> {
     return (await openInsideRoot(filePath, rootDir, 'file')).handle;
+}
+
+/**
+ * Open a regular file while rejecting a symbolic link in the final pathname
+ * component. This is used for policy control files whose contract forbids
+ * symlinks even when the target remains inside the repository.
+ */
+export async function openRegularFileInsideRootNoFollow(
+    filePath: string,
+    rootDir: string,
+): Promise<fsp.FileHandle> {
+    const normalizedRoot = trimTrailingSeparators(path.normalize(rootDir));
+    const normalizedPath = path.normalize(path.resolve(filePath));
+    if (!isRealPathInsideRoot(normalizedPath, normalizedRoot)) {
+        throw new Error(`Path escapes indexed root or is unreadable: ${filePath}`);
+    }
+
+    const preStat = await fsp.lstat(normalizedPath);
+    if (preStat.isSymbolicLink() || !preStat.isFile()) {
+        throw new Error(`Attempted to open symbolic-link or non-file path: ${filePath}`);
+    }
+
+    const handle = await fsp.open(
+        normalizedPath,
+        fsSync.constants.O_RDONLY | requiredOpenFlag('O_NOFOLLOW'),
+    );
+    try {
+        const postStat = await handle.stat();
+        if (!postStat.isFile() || !sameFileIdentity(preStat, postStat)) {
+            throw new Error(`Opened descriptor drifted from verified path: ${filePath}`);
+        }
+        await descriptorPathInsideRoot(handle, normalizedRoot);
+        return handle;
+    } catch (error) {
+        await handle.close().catch(() => undefined);
+        throw error;
+    }
+}
+
+/**
+ * Verify that an observed descriptor stayed unchanged and that the pathname
+ * still names the same file after the read completed.
+ */
+export async function verifyStableFileObservation(
+    handle: fsp.FileHandle,
+    filePath: string,
+    rootDir: string,
+    before: fsSync.Stats,
+    options: { rejectFinalSymlink?: boolean } = {},
+): Promise<void> {
+    const after = await handle.stat();
+    if (
+        !sameFileIdentity(before, after)
+        || after.size !== before.size
+        || after.mtimeMs !== before.mtimeMs
+        || after.ctimeMs !== before.ctimeMs
+    ) {
+        throw new Error(`File changed while being read: ${filePath}`);
+    }
+
+    const currentPathHandle = options.rejectFinalSymlink
+        ? await openRegularFileInsideRootNoFollow(filePath, rootDir)
+        : await openRegularFileInsideRoot(filePath, rootDir);
+    try {
+        const currentPathStat = await currentPathHandle.stat();
+        if (!sameFileIdentity(after, currentPathStat)) {
+            throw new Error(`File path was replaced while being read: ${filePath}`);
+        }
+    } finally {
+        await currentPathHandle.close().catch(() => undefined);
+    }
+}
+
+/**
+ * Read exactly the byte length already observed from an open descriptor.
+ * The stream is capped at one byte beyond that length so concurrent growth is
+ * detected without allowing an unbounded read-to-EOF allocation.
+ */
+export async function readFileHandleExactly(
+    handle: fsp.FileHandle,
+    expectedSize: number,
+): Promise<Buffer> {
+    if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
+        throw new Error(`Observed file size is invalid: ${expectedSize}`);
+    }
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    const stream = handle.createReadStream({
+        autoClose: false,
+        start: 0,
+        end: expectedSize,
+    });
+    for await (const chunk of stream) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buffer.length;
+        if (totalBytes > expectedSize) {
+            throw new Error('File grew beyond the observed size while being read.');
+        }
+        chunks.push(buffer);
+    }
+    if (totalBytes !== expectedSize) {
+        throw new Error(`File byte length ${totalBytes} does not match the observed size ${expectedSize}.`);
+    }
+    return Buffer.concat(chunks, totalBytes);
 }
 
 export interface OpenedDirectoryInsideRoot {

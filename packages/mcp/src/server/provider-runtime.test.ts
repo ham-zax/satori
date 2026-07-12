@@ -4,7 +4,11 @@ import { CapabilityResolver } from "../core/capabilities.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import { buildRuntimeIndexFingerprint, ContextMcpConfig } from "../config.js";
-import { ProviderRuntime, resolveConfiguredEmbeddingDimension } from "./provider-runtime.js";
+import {
+    createLocalOnlyContext,
+    ProviderRuntime,
+    resolveConfiguredEmbeddingDimension,
+} from "./provider-runtime.js";
 import {
     LANGUAGE_PARSER_VERSION,
     RELATIONSHIP_BUILDER_VERSION,
@@ -58,6 +62,21 @@ test("runtime fingerprint seals parser, extractor, and relationship versions", (
     assert.equal(fingerprint.parserVersion, LANGUAGE_PARSER_VERSION);
     assert.equal(fingerprint.extractorVersion, SYMBOL_EXTRACTOR_VERSION);
     assert.equal(fingerprint.relationshipVersion, RELATIONSHIP_BUILDER_VERSION);
+});
+
+test("vector-only context preserves the configured embedding model fingerprint", () => {
+    const config = baseConfig({
+        encoderProvider: "VoyageAI",
+        encoderModel: "voyage-code-3",
+    });
+    const context = createLocalOnlyContext(config);
+    const fingerprint = (
+        context as unknown as {
+            buildIndexCompletionFingerprint(): { embeddingModel: string };
+        }
+    ).buildIndexCompletionFingerprint();
+
+    assert.equal(fingerprint.embeddingModel, "voyage-code-3");
 });
 
 test("MILVUS_TOKEN is not a substitute for MILVUS_ADDRESS", () => {

@@ -25,11 +25,13 @@ class MetadataOnlyEmbedding extends Embedding {
     protected maxTokens = 1;
     private readonly provider: string;
     private readonly dimension: number;
+    readonly config: { model: string };
 
-    constructor(provider: string, dimension: number) {
+    constructor(provider: string, model: string, dimension: number) {
         super();
         this.provider = provider;
         this.dimension = dimension;
+        this.config = { model };
     }
 
     async detectDimension(): Promise<number> {
@@ -92,7 +94,11 @@ export function resolveConfiguredEmbeddingDimension(config: ContextMcpConfig): n
 
 export function createLocalOnlyContext(config: ContextMcpConfig): Context {
     return new Context({
-        embedding: new MetadataOnlyEmbedding(config.encoderProvider, resolveConfiguredEmbeddingDimension(config)),
+        embedding: new MetadataOnlyEmbedding(
+            config.encoderProvider,
+            config.encoderModel,
+            resolveConfiguredEmbeddingDimension(config),
+        ),
         vectorDatabase: new UnconfiguredVectorDatabase(),
     });
 }
@@ -210,7 +216,11 @@ export class ProviderRuntime {
     private async createRuntime(requireEmbedding: boolean): Promise<ToolContext> {
         const embedding = requireEmbedding
             ? createEmbeddingInstance(this.config)
-            : new MetadataOnlyEmbedding(this.config.encoderProvider, resolveConfiguredEmbeddingDimension(this.config));
+            : new MetadataOnlyEmbedding(
+                this.config.encoderProvider,
+                this.config.encoderModel,
+                resolveConfiguredEmbeddingDimension(this.config),
+            );
         if (requireEmbedding) {
             logEmbeddingProviderInfo(this.config, embedding as ReturnType<typeof createEmbeddingInstance>);
         }

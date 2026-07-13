@@ -38,6 +38,7 @@ import type {
     CallGraphHint,
     SearchCapabilityConfidence,
     SearchChunkResult,
+    SearchDebugMode,
     SearchGroupResult,
     SearchNavigationUnavailableReasonV2,
     SearchSpan,
@@ -238,8 +239,7 @@ export function buildExactRegistryGroupResult(input: {
     indexedAt: string | null;
     navigationState: SearchNavigationState;
     graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
-    debug: boolean;
-    debugDetail?: "ranking" | "full";
+    debugMode: SearchDebugMode;
     now: () => number;
     previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
@@ -309,7 +309,7 @@ export function buildExactRegistryGroupResult(input: {
         __symbolKey: registrySymbol.symbolKey,
         __symbolInstanceId: registrySymbol.symbolInstanceId,
         __exactLexicalMatch: true,
-        ...(input.debug ? {
+        ...(input.debugMode === "ranking" || input.debugMode === "full" ? {
             debug: {
                 representativeChunkCount: 1,
                 pathCategory: classifyPathCategory(input.symbol.file),
@@ -321,7 +321,7 @@ export function buildExactRegistryGroupResult(input: {
                 agentFitReason: "exact_registry",
                 matchesMust: true,
                 exactLexicalMatch: true,
-                ...(input.debugDetail !== "ranking" ? {
+                ...(input.debugMode === "full" ? {
                     freshness: {
                         newestChunkIndexedAt: input.indexedAt,
                         ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
@@ -356,8 +356,7 @@ export function buildGroupedSymbolSearchResult(input: {
     registrySymbolRepair?: PythonSourceBackedSpanRepair;
     navigationState: SearchNavigationState;
     graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
-    debug: boolean;
-    debugDetail?: "ranking" | "full";
+    debugMode: SearchDebugMode;
     now: () => number;
     previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
@@ -464,7 +463,7 @@ export function buildGroupedSymbolSearchResult(input: {
         ...(registrySymbol?.symbolKey ? { __symbolKey: registrySymbol.symbolKey } : {}),
         ...(registrySymbol?.symbolInstanceId ? { __symbolInstanceId: registrySymbol.symbolInstanceId } : {}),
         __exactLexicalMatch: input.representative.exactLexicalMatch,
-        ...(input.debug ? {
+        ...(input.debugMode === "ranking" || input.debugMode === "full" ? {
             debug: {
                 representativeChunkCount: input.chunkCount,
                 pathCategory: input.representative.pathCategory,
@@ -481,7 +480,7 @@ export function buildGroupedSymbolSearchResult(input: {
                     evidenceChunkCount: input.chunkCount,
                     supportBoost,
                 },
-                ...(input.debugDetail !== "ranking" ? {
+                ...(input.debugMode === "full" ? {
                     freshness: {
                         newestChunkIndexedAt: input.indexedAt,
                         ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
@@ -505,8 +504,7 @@ export function buildVisibleGroupedSearchResults(input: {
     registryUnavailableReason?: CallGraphUnavailableReason;
     navigationState: SearchNavigationState;
     graphUnavailableReasonOverride?: SearchNavigationUnavailableReasonV2;
-    debug: boolean;
-    debugDetail?: "ranking" | "full";
+    debugMode: SearchDebugMode;
     now: () => number;
     previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
@@ -652,8 +650,7 @@ export function buildVisibleGroupedSearchResults(input: {
             registrySymbolRepair,
             navigationState: input.navigationState,
             graphUnavailableReasonOverride: input.graphUnavailableReasonOverride,
-            debug: input.debug,
-            debugDetail: input.debugDetail,
+            debugMode: input.debugMode,
             now: input.now,
             previewMaxBytes: input.previewMaxBytes,
             navigationHelpers: input.navigationHelpers,
@@ -692,7 +689,7 @@ export function buildVisibleGroupedSearchResults(input: {
 export function buildRawSearchResults(input: {
     scored: RawSearchCandidateLike[];
     limit: number;
-    debug: boolean;
+    debugMode: SearchDebugMode;
     now: () => number;
 }): SearchChunkResult[] {
     return input.scored.slice(0, input.limit).map((candidate) => ({
@@ -712,7 +709,7 @@ export function buildRawSearchResults(input: {
         symbolKey: typeof candidate.result.ownerSymbolKey === "string" ? candidate.result.ownerSymbolKey : undefined,
         symbolInstanceId: typeof candidate.result.ownerSymbolInstanceId === "string" ? candidate.result.ownerSymbolInstanceId : undefined,
         symbolKind: typeof candidate.result.symbolKind === "string" ? candidate.result.symbolKind : undefined,
-        ...(input.debug ? {
+        ...(input.debugMode === "ranking" || input.debugMode === "full" ? {
             debug: {
                 baseScore: candidate.baseScore,
                 fusionScore: candidate.fusionScore,

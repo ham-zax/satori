@@ -482,6 +482,8 @@ export interface SearchRawResponseEnvelope extends SearchBaseResponseEnvelope {
 
 export type SearchResponseEnvelope = SearchGroupedResponseEnvelope | SearchRawResponseEnvelope;
 
+export type SearchDebugMode = "none" | "summary" | "ranking" | "freshness" | "full";
+
 export interface SearchRequestInput {
     path: string;
     query: string;
@@ -490,8 +492,7 @@ export interface SearchRequestInput {
     groupBy: SearchGroupBy;
     rankingMode: SearchRankingMode;
     limit: number;
-    debug?: boolean;
-    debugMode?: "none" | "summary" | "ranking" | "freshness" | "full";
+    debugMode?: SearchDebugMode;
 }
 
 export interface FileOutlineInput {

@@ -288,7 +288,7 @@ export async function finalizeSearchResults(
         const rawResults = buildRawSearchResultsHelper({
             scored,
             limit: input.limit,
-            debug: input.debugMode === "ranking" || input.debugMode === "full",
+            debugMode: input.debugMode,
             now: host.now,
         });
         const noiseMitigationHint = host.searchQuerySupport.buildNoiseMitigationHint(
@@ -398,8 +398,7 @@ export async function finalizeSearchResults(
         )
             ? "partial_index_navigation_unavailable"
             : undefined,
-        debug: input.debugMode === "ranking" || input.debugMode === "full",
-        debugDetail: input.debugMode === "full" ? "full" : "ranking",
+        debugMode: input.debugMode,
         now: host.now,
         previewMaxBytes: SEARCH_GROUP_PREVIEW_MAX_BYTES,
         navigationHelpers: host.getSearchNavigationHelpers(),

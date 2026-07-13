@@ -162,7 +162,7 @@ class ContextMcpServer {
 
         this.snapshotManager = new SnapshotManager(this.runtimeFingerprint);
         this.callGraphManager = new CallGraphSidecarManager(this.runtimeFingerprint);
-        const localContext = createLocalOnlyContext(config);
+        const localContext = createLocalOnlyContext(config, this.mutationLeaseCoordinator);
         this.syncManager = new SyncManager(localContext, this.snapshotManager, {
             watchEnabled: this.watchSyncEnabled,
             watchDebounceMs: this.watchDebounceMs,

@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { formatSymbolQualityMarker, resolveSymbolQualitySummary } from "@zokizuan/satori-core";
+import {
+    computeNavigationGenerationSealHash,
+    computeSymbolQualitySummaryFromAggregate,
+    formatSymbolQualityMarker,
+    readNavigationGenerationSeal,
+    type ProvenGenerationReceipt,
+    unknownSymbolQualitySummary,
+} from "@zokizuan/satori-core";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { classifyVectorBackendError, isMissingProviderConfigIssue } from "./setup-errors.js";
 import { getCompletionMarkerReader, validateCompletionProof } from "../core/completion-proof.js";
@@ -93,7 +100,12 @@ export const listCodebasesTool: McpTool = {
 
         const readyCandidates = all
             .filter((e) => e.info.status === "indexed" || e.info.status === "sync_completed");
-        const ready: Array<{ path: string; probeFailed?: boolean }> = [];
+        const ready: Array<{
+            path: string;
+            probeFailed?: boolean;
+            navigationStatus?: "valid" | "not_bound" | "missing" | "incompatible" | "corrupt" | "unverified";
+            generationReceipt?: ProvenGenerationReceipt;
+        }> = [];
         const requiresReindex: Array<{ path: string; reason: string }> = [];
         // Real index failures always keep their original message. manage_index status
         // reports these as status:"error" and preferProviderIncompleteForStatus preserves them.
@@ -141,7 +153,11 @@ export const listCodebasesTool: McpTool = {
 
             for (const { entry, proof } of completionProofChecks) {
                 if (proof.outcome === "valid") {
-                    ready.push({ path: entry.path });
+                    ready.push({
+                        path: entry.path,
+                        ...(proof.navigationStatus ? { navigationStatus: proof.navigationStatus } : {}),
+                        ...(proof.generationReceipt ? { generationReceipt: proof.generationReceipt } : {}),
+                    });
                     continue;
                 }
                 if (proof.outcome === "probe_failed") {
@@ -154,6 +170,10 @@ export const listCodebasesTool: McpTool = {
                     continue;
                 }
                 const staleReason = proof.reason || "missing_marker_doc";
+                if (staleReason === "requires_reindex" || staleReason === "unsupported_authority") {
+                    requiresReindex.push({ path: entry.path, reason: staleReason });
+                    continue;
+                }
                 failed.push({ path: entry.path, reason: `stale_local:${staleReason}` });
             }
         }
@@ -169,13 +189,28 @@ export const listCodebasesTool: McpTool = {
 
         if (byStatus.indexed.length > 0) {
             lines.push('### Ready');
-            // F9: compact observed quality marker per ready root (same summary as manage status).
-            // Cost: reads symbol registry sidecars when present; missing registry → symbolQuality=unknown.
+            // F9: compact observed quality marker per ready root from the
+            // digest-bound seal aggregate used by manage_index summary.
             const qualityByPath = new Map<string, string>();
             await Promise.all(byStatus.indexed.map(async (item) => {
-                const summary = await resolveSymbolQualitySummary({
-                    normalizedRootPath: item.path,
-                });
+                if (item.navigationStatus !== 'valid' || !item.generationReceipt) {
+                    qualityByPath.set(item.path, 'symbolQuality=unknown');
+                    return;
+                }
+                const sealRead = await readNavigationGenerationSeal(undefined, item.path);
+                const receiptNavigation = item.generationReceipt.navigation;
+                const sealMatchesReceipt = sealRead.status === 'ok'
+                    && sealRead.seal.generationId === receiptNavigation.generationId
+                    && sealRead.seal.symbolRegistryManifestHash === receiptNavigation.symbolRegistryManifestHash
+                    && sealRead.seal.relationshipManifestHash === receiptNavigation.relationshipManifestHash
+                    && computeNavigationGenerationSealHash(sealRead.seal) === receiptNavigation.navigationSealHash;
+                const summary = sealMatchesReceipt
+                    ? computeSymbolQualitySummaryFromAggregate(sealRead.seal.symbolQuality)
+                    : unknownSymbolQualitySummary(
+                        sealRead.status === 'ok'
+                            ? 'Observed symbol quality is not bound by the accepted generation.'
+                            : `Observed symbol quality unavailable (${sealRead.reason}).`,
+                    );
                 qualityByPath.set(item.path, formatSymbolQualityMarker(summary));
             }));
             for (const item of byStatus.indexed) {

@@ -514,11 +514,17 @@ export class RelationshipBackedCallGraph {
         };
     }
 
-    public async rebuildForIndex(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
+    public async rebuildForIndex(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+        effectiveIgnorePatterns?: string[],
+    ): Promise<void> {
         try {
             const sidecar = await this.host.callGraphManager.rebuildForCodebase(
                 codebasePath,
-                this.host.getContextActiveIgnorePatterns(codebasePath),
+                effectiveIgnorePatterns
+                    ? [...effectiveIgnorePatterns]
+                    : this.host.getContextActiveIgnorePatterns(codebasePath),
                 assertMutationCurrent,
             );
             assertMutationCurrent?.();

@@ -478,6 +478,18 @@ export class TrackedRootReadiness {
         }
 
         if (completionProof.outcome === "stale_local") {
+            if (
+                completionProof.reason === "requires_reindex"
+                || completionProof.reason === "unsupported_authority"
+            ) {
+                return {
+                    state: "requires_reindex",
+                    codebasePath: effectiveRoot,
+                    message: completionProof.reason === "unsupported_authority"
+                        ? "The persisted index authority was written by an unsupported newer format. Upgrade this runtime before rebuilding the index."
+                        : "The persisted index authority uses a retired format and must be reindexed.",
+                };
+            }
             return {
                 state: "stale_local",
                 codebasePath: effectiveRoot,

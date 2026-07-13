@@ -632,6 +632,7 @@ export class ManageMaintenanceHandlers {
                 trackedRootState.state === "ready"
                 && trackedRootState.navigationStatus
                 && trackedRootState.navigationStatus !== "valid"
+                && trackedRootState.navigationStatus !== "not_bound"
             ) {
                 warnings.push(WARNING_CODES.NAVIGATION_REPAIR_REQUIRED);
                 envelopeHints = {
@@ -655,17 +656,15 @@ export class ManageMaintenanceHandlers {
                     const registryRead = await readSymbolRegistrySidecar({
                         normalizedRootPath: envelopePath,
                     });
-                    const evidenceAvailability: NonNullable<SymbolQualitySummary['evidenceAvailability']> =
+                    const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
                         trackedRootState.state === 'ready'
                             && trackedRootState.navigationStatus === 'valid'
                             && sealRead.status === 'ok'
                             && registryRead.status === 'ok'
                             ? 'ready'
-                            : sealRead.status !== 'ok'
-                                ? sealRead.status
-                                : registryRead.status === 'ok'
-                                ? 'unverified'
-                                : registryRead.status;
+                            : sealRead.status === 'missing' || registryRead.status === 'missing'
+                                ? 'missing'
+                                : 'unverified';
                     symbolQuality = {
                         ...computeSymbolQualitySummaryFromSidecarRead(registryRead),
                         evidenceAvailability,
@@ -676,14 +675,14 @@ export class ManageMaintenanceHandlers {
                         registryRead,
                     });
                 } else {
-                    const evidenceAvailability: NonNullable<SymbolQualitySummary['evidenceAvailability']> =
+                    const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
                         trackedRootState.state === 'ready'
                             && trackedRootState.navigationStatus === 'valid'
                             && sealRead.status === 'ok'
                             ? 'ready'
-                            : sealRead.status === 'ok'
-                                ? 'unverified'
-                                : sealRead.status;
+                            : sealRead.status === 'missing'
+                                ? 'missing'
+                                : 'unverified';
                     const compactSymbolQuality = sealRead.status === 'ok'
                         ? computeSymbolQualitySummaryFromAggregate(sealRead.seal.symbolQuality)
                         : unknownSymbolQualitySummary(
@@ -767,7 +766,7 @@ export class ManageMaintenanceHandlers {
                                 status: symbolQuality.status,
                                 basis: symbolQuality.basis,
                                 message: symbolQuality.message,
-                                evidenceAvailability: symbolQuality.evidenceAvailability ?? 'unverified',
+                                evidenceAvailability: symbolQuality.evidenceAvailability,
                             },
                     } : {}),
                     ...(languageCapabilities ? { languageCapabilities } : {}),

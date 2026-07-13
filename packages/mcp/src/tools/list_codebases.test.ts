@@ -1,5 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+    computeNavigationGenerationSealHash,
+    resolveNavigationSidecarRoot,
+} from '@zokizuan/satori-core';
 import { listCodebasesTool } from './list_codebases.js';
 import { ToolContext } from './types.js';
 
@@ -16,8 +23,13 @@ const RUNTIME_FINGERPRINT = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationship-v1'
 } as const;
+
+const POLICY_HASH = 'a'.repeat(64);
 
 function buildContext(
     entries: Array<{ path: string; info: Record<string, unknown> }>,
@@ -44,14 +56,16 @@ function buildContext(
 
 function createMarker(path: string, overrides?: Record<string, unknown>) {
     return {
-        kind: 'satori_index_completion_v2',
+        kind: 'satori_index_completion_v3',
         codebasePath: path,
         fingerprint: { ...RUNTIME_FINGERPRINT },
         indexedFiles: 10,
         totalChunks: 25,
         completedAt: '2026-02-28T08:00:00.000Z',
         runId: 'run_123',
-        indexPolicyHash: 'test-policy',
+        indexPolicyHash: POLICY_HASH,
+        indexStatus: 'completed',
+        navigation: { status: 'not_bound' },
         ...overrides
     };
 }
@@ -216,6 +230,27 @@ test('list_codebases maps completion-proof fingerprint mismatch to Requires Rein
     assert.match(text, /completion_proof_fingerprint_mismatch/);
 });
 
+test('list_codebases maps retired and unsupported authority proofs to Requires Reindex', async () => {
+    const response = await runListCodebases(
+        [
+            { path: '/repo/retired', info: { status: 'indexed' } },
+            { path: '/repo/future', info: { status: 'indexed' } },
+        ],
+        {
+            '/repo/retired': { status: 'requires_reindex' },
+            '/repo/future': { status: 'unsupported_authority' },
+        },
+    );
+    const text = response.content[0]?.text || '';
+    const sections = parseSectionLines(text);
+
+    assert.deepEqual(
+        extractPaths(sections.get('Requires Reindex') || []),
+        ['/repo/future', '/repo/retired'],
+    );
+    assert.deepEqual(extractPaths(sections.get('Failed') || []), []);
+});
+
 test('list_codebases keeps ready membership stable when marker probe fails', async () => {
     const entries = [
         { path: '/repo/a', info: { status: 'indexed' } }
@@ -245,6 +280,157 @@ test('list_codebases renders compact symbolQuality marker on ready roots', async
     const aIdx = readySection.indexOf('/repo/ready-a');
     const bIdx = readySection.indexOf('/repo/ready-b');
     assert.ok(aIdx >= 0 && bIdx > aIdx);
+});
+
+test('list_codebases ignores an orphan navigation seal when the completion marker is not bound', async () => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-list-quality-seal-'));
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    const codebasePath = '/repo/sealed-quality';
+    try {
+        process.env.SATORI_STATE_ROOT = stateRoot;
+        const navigationRoot = resolveNavigationSidecarRoot(undefined, codebasePath);
+        const generationId = 'sealed-generation';
+        const generationRoot = path.join(navigationRoot, 'generations', generationId);
+        const seal = {
+            schemaVersion: 'navigation_generation_seal_v1' as const,
+            generationId,
+            symbolRegistryManifestHash: `symmanifest_${'a'.repeat(32)}`,
+            relationshipManifestHash: 'b'.repeat(64),
+            artifactSetHash: 'c'.repeat(64),
+            symbolQuality: {
+                indexedFileCount: 2,
+                languages: [{
+                    language: 'typescript',
+                    indexedFiles: 2,
+                    filesWithNonFileSymbols: 2,
+                    nonFileSymbolCount: 4,
+                }],
+            },
+        };
+        fs.mkdirSync(generationRoot, { recursive: true });
+        fs.writeFileSync(path.join(generationRoot, 'seal.json'), JSON.stringify(seal), 'utf8');
+        fs.writeFileSync(path.join(navigationRoot, 'current.json'), JSON.stringify({
+            schemaVersion: 'navigation_current_v3',
+            generationId,
+            symbolRegistryManifestHash: seal.symbolRegistryManifestHash,
+            relationshipManifestHash: seal.relationshipManifestHash,
+            navigationSealHash: computeNavigationGenerationSealHash(seal),
+        }), 'utf8');
+
+        const response = await runListCodebases(
+            [{ path: codebasePath, info: { status: 'indexed' } }],
+            { [codebasePath]: createMarker(codebasePath) },
+        );
+
+        assert.match(response.content[0]?.text || '', /`\/repo\/sealed-quality` symbolQuality=unknown/);
+        assert.equal(fs.existsSync(path.join(generationRoot, 'manifest.json')), false);
+        assert.equal(fs.existsSync(path.join(generationRoot, 'symbols')), false);
+    } finally {
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+});
+
+test('list_codebases derives symbol quality from the seal bound by a valid generation receipt', async () => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-list-quality-bound-seal-'));
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    const codebasePath = '/repo/sealed-quality';
+    try {
+        process.env.SATORI_STATE_ROOT = stateRoot;
+        const navigationRoot = resolveNavigationSidecarRoot(undefined, codebasePath);
+        const generationId = 'sealed-generation';
+        const generationRoot = path.join(navigationRoot, 'generations', generationId);
+        const seal = {
+            schemaVersion: 'navigation_generation_seal_v1' as const,
+            generationId,
+            symbolRegistryManifestHash: `symmanifest_${'a'.repeat(32)}`,
+            relationshipManifestHash: 'b'.repeat(64),
+            artifactSetHash: 'c'.repeat(64),
+            symbolQuality: {
+                indexedFileCount: 2,
+                languages: [{
+                    language: 'typescript',
+                    indexedFiles: 2,
+                    filesWithNonFileSymbols: 2,
+                    nonFileSymbolCount: 4,
+                }],
+            },
+        };
+        const navigationSealHash = computeNavigationGenerationSealHash(seal);
+        fs.mkdirSync(generationRoot, { recursive: true });
+        fs.writeFileSync(path.join(generationRoot, 'seal.json'), JSON.stringify(seal), 'utf8');
+        fs.writeFileSync(path.join(navigationRoot, 'current.json'), JSON.stringify({
+            schemaVersion: 'navigation_current_v3',
+            generationId,
+            symbolRegistryManifestHash: seal.symbolRegistryManifestHash,
+            relationshipManifestHash: seal.relationshipManifestHash,
+            navigationSealHash,
+        }), 'utf8');
+
+        const marker = createMarker(codebasePath, {
+            navigation: {
+                status: 'sealed',
+                generationId,
+                symbolRegistryManifestHash: seal.symbolRegistryManifestHash,
+                relationshipManifestHash: seal.relationshipManifestHash,
+                sealHash: navigationSealHash,
+            },
+        });
+        const response = await runListCodebases(
+            [{ path: codebasePath, info: { status: 'indexed' } }],
+            {
+                [codebasePath]: {
+                    status: 'valid_v3',
+                    marker,
+                    collectionName: 'collection-a',
+                    navigationProof: { status: 'valid' },
+                    generationReceipt: {
+                        collectionName: 'collection-a',
+                        marker,
+                        policy: {
+                            canonicalRoot: codebasePath,
+                            profile: 'default',
+                            customExtensions: [],
+                            customIgnorePatterns: [],
+                            fileBasedIgnorePatterns: [],
+                            supportedExtensions: ['.ts'],
+                            effectiveIgnorePatterns: [],
+                            policyHash: POLICY_HASH,
+                        },
+                        policyDocumentDigest: 'd'.repeat(64),
+                        exactPayloadCount: 25,
+                        navigation: {
+                            generationId,
+                            generationRoot,
+                            symbolRegistryManifestHash: seal.symbolRegistryManifestHash,
+                            relationshipManifestHash: seal.relationshipManifestHash,
+                            navigationSealHash,
+                        },
+                        observations: {
+                            profileFileToken: null,
+                            policyFileToken: 'policy-token',
+                            navigationToken: 'navigation-token',
+                        },
+                    },
+                },
+            },
+        );
+
+        assert.match(response.content[0]?.text || '', /`\/repo\/sealed-quality` symbolQuality=symbol_rich/);
+        assert.equal(fs.existsSync(path.join(generationRoot, 'manifest.json')), false);
+        assert.equal(fs.existsSync(path.join(generationRoot, 'symbols')), false);
+    } finally {
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
 });
 
 test('list_codebases annotates ready entries when completion proof probe fails', async () => {

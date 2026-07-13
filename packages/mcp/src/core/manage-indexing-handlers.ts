@@ -67,8 +67,13 @@ type IndexProfileView = {
 };
 
 function classifyRepairSnapshotEvidence(info: Record<string, unknown> | undefined): RepairSnapshotEvidence {
-    const fingerprint = info?.indexFingerprint;
-    if (!fingerprint || typeof fingerprint !== "object") {
+    const fingerprint = parseIndexFingerprint(info?.indexFingerprint);
+    if (
+        !fingerprint
+        || !fingerprint.parserVersion
+        || !fingerprint.extractorVersion
+        || !fingerprint.relationshipVersion
+    ) {
         return {
             status: "missing",
             basis: "snapshot_fingerprint_missing",
@@ -78,13 +83,23 @@ function classifyRepairSnapshotEvidence(info: Record<string, unknown> | undefine
         return {
             status: "unproven",
             basis: "snapshot_fingerprint_unverified",
-            fingerprint: fingerprint as IndexFingerprint,
+            fingerprint: {
+                ...fingerprint,
+                parserVersion: fingerprint.parserVersion,
+                extractorVersion: fingerprint.extractorVersion,
+                relationshipVersion: fingerprint.relationshipVersion,
+            },
         };
     }
     return {
         status: "verified",
         basis: "verified_snapshot_fingerprint",
-        fingerprint: fingerprint as IndexFingerprint,
+        fingerprint: {
+            ...fingerprint,
+            parserVersion: fingerprint.parserVersion,
+            extractorVersion: fingerprint.extractorVersion,
+            relationshipVersion: fingerprint.relationshipVersion,
+        },
     };
 }
 
@@ -163,7 +178,11 @@ type ManageIndexingHandlersHost = {
     pruneUnprovenStagedCollectionFamily(codebasePath: string, assertMutationCurrent?: () => void): Promise<string[]>;
     getContextTrackedRelativePaths(codebasePath: string): string[];
     setIndexingStats(stats: { indexedFiles: number; totalChunks: number } | null): void;
-    rebuildCallGraphForIndex(codebasePath: string, assertMutationCurrent?: () => void): Promise<void>;
+    rebuildCallGraphForIndex(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+        effectiveIgnorePatterns?: string[],
+    ): Promise<void>;
     getSnapshotIndexingProgress(codebasePath: string): number | undefined;
     clearIndexCompletionMarker(codebasePath: string, assertMutationCurrent?: () => void): Promise<void>;
     evaluateReindexPreflight(codebasePath: string): ReindexPreflightResult;
@@ -1362,13 +1381,21 @@ export class ManageIndexingHandlers {
             : null;
 
         if (previousCompleteGeneration) {
-            const provenGeneration = await this.host.context.proveVectorGeneration(absolutePath);
-            if (
-                provenGeneration?.collectionName !== previousCompleteGeneration.collectionName
-                || provenGeneration.marker.indexStatus === "limit_reached"
-                || provenGeneration.marker.indexedFiles !== previousCompleteGeneration.indexedFiles
-                || provenGeneration.marker.totalChunks !== previousCompleteGeneration.totalChunks
-            ) {
+            try {
+                const provenGeneration = await this.host.context.proveVectorGeneration(absolutePath);
+                if (
+                    provenGeneration?.collectionName !== previousCompleteGeneration.collectionName
+                    || provenGeneration.marker.indexStatus === "limit_reached"
+                    || provenGeneration.marker.indexedFiles !== previousCompleteGeneration.indexedFiles
+                    || provenGeneration.marker.totalChunks !== previousCompleteGeneration.totalChunks
+                ) {
+                    previousCompleteGeneration = null;
+                }
+            } catch (error) {
+                if (!forceReindex) throw error;
+                console.warn(
+                    `[BACKGROUND-INDEX] Previous generation cannot be preserved during explicit reindex for '${absolutePath}': ${formatUnknownError(error)}`,
+                );
                 previousCompleteGeneration = null;
             }
         }
@@ -1400,7 +1427,9 @@ export class ManageIndexingHandlers {
             const profileConfig = this.host.loadIndexProfileForCodebase(absolutePath);
             console.log(`[BACKGROUND-INDEX] Using index profile '${profileConfig.profile}'${profileConfig.configPath ? ` from ${profileConfig.configPath}` : " (default)"}`);
 
-            candidatePolicy = await this.host.context.resolveIndexPolicyForCodebase(absolutePath, policyUpdate);
+            candidatePolicy = forceReindex
+                ? await this.host.context.resolveIndexPolicyForReindex(absolutePath, policyUpdate)
+                : await this.host.context.resolveIndexPolicyForCodebase(absolutePath, policyUpdate);
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
             const ignorePatterns = candidatePolicy.effectiveIgnorePatterns;
             const supportedExtensions = candidatePolicy.supportedExtensions;
@@ -1501,7 +1530,10 @@ export class ManageIndexingHandlers {
             if (stats.status === "limit_reached") {
                 this.host.context.publishResolvedIndexPolicy(
                     candidatePolicy,
-                    { collectionName: targetCollectionName },
+                    {
+                        collectionName: targetCollectionName,
+                        navigation: { status: 'not_bound' },
+                    },
                     publishMutation,
                 );
                 candidatePolicyPublished = true;
@@ -1530,6 +1562,7 @@ export class ManageIndexingHandlers {
                     mutationLease
                         ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
                         : undefined,
+                    candidatePolicy.effectiveIgnorePatterns,
                 );
                 if (!stats.navigationCandidate) {
                     throw new Error(`Completed index candidate for '${absolutePath}' did not produce a navigation generation.`);
@@ -1561,8 +1594,11 @@ export class ManageIndexingHandlers {
                     candidatePolicy,
                     {
                         collectionName: targetCollectionName,
-                        navigationGenerationId: stats.navigationCandidate.generationId,
-                        navigationSealHash: stats.navigationCandidate.navigationSealHash,
+                        navigation: {
+                            status: 'sealed',
+                            generationId: stats.navigationCandidate.generationId,
+                            sealHash: stats.navigationCandidate.navigationSealHash,
+                        },
                     },
                     publishMutation,
                 );

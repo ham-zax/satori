@@ -556,8 +556,13 @@ test('integration: ignore negation patterns keep explicitly unignored files inde
     const stats = await context.indexCodebase(codebasePath, undefined, false, { indexPolicy: policy });
     context.publishResolvedIndexPolicy(policy, {
       collectionName: context.resolveCollectionName(codebasePath),
-      navigationGenerationId: stats.navigationCandidate?.generationId,
-      navigationSealHash: stats.navigationCandidate?.navigationSealHash,
+      navigation: stats.navigationCandidate
+        ? {
+            status: 'sealed',
+            generationId: stats.navigationCandidate.generationId,
+            sealHash: stats.navigationCandidate.navigationSealHash,
+          }
+        : { status: 'not_bound' },
     });
     assert.equal(stats.indexedFiles, 2);
 
@@ -593,8 +598,13 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
     const stats = await context.indexCodebase(codebasePath, undefined, false, { indexPolicy: policy });
     context.publishResolvedIndexPolicy(policy, {
       collectionName: context.resolveCollectionName(codebasePath),
-      navigationGenerationId: stats.navigationCandidate?.generationId,
-      navigationSealHash: stats.navigationCandidate?.navigationSealHash,
+      navigation: stats.navigationCandidate
+        ? {
+            status: 'sealed',
+            generationId: stats.navigationCandidate.generationId,
+            sealHash: stats.navigationCandidate.navigationSealHash,
+          }
+        : { status: 'not_bound' },
     });
 
     fs.writeFileSync(path.join(codebasePath, 'generated/drop.ts'), 'export const dropped = false;', 'utf8');

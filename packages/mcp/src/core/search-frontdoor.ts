@@ -115,7 +115,7 @@ function buildReadinessWarnings(
 ): string[] {
     return [
         ...buildPartialIndexWarnings(host, state.root),
-        ...(state.navigationStatus !== "valid"
+        ...(state.navigationStatus !== "valid" && state.navigationStatus !== "not_bound"
             ? ["NAVIGATION_REPAIR_REQUIRED"]
             : []),
     ];

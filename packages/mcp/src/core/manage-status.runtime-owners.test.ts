@@ -6,6 +6,7 @@ import path from "node:path";
 import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRegistry,
+    resolveNavigationSidecarRoot,
     writeSymbolRegistrySidecar,
 } from "@zokizuan/satori-core";
 import { ManageMaintenanceHandlers } from "./manage-maintenance-handlers.js";
@@ -249,6 +250,10 @@ test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns nu
         assert.doesNotMatch(String(envelope.humanText || ""), /COMPATIBILITY_DIAGNOSTIC/);
         assert.equal(Buffer.byteLength(response.content[0]?.text ?? "", "utf8") < 4 * 1024, true);
 
+        const navigationRoot = resolveNavigationSidecarRoot(stateRoot, repoPath);
+        fs.mkdirSync(navigationRoot, { recursive: true });
+        fs.writeFileSync(path.join(navigationRoot, "current.json"), "{", "utf8");
+
         const capabilitiesResponse = await handlers.handleGetIndexingStatus({
             path: repoPath,
             detail: "capabilities",
@@ -259,7 +264,7 @@ test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns nu
         assert.ok((capabilitiesEnvelope.symbolQuality as Record<string, unknown>).languages);
         assert.equal(
             (capabilitiesEnvelope.symbolQuality as Record<string, unknown>).evidenceAvailability,
-            "missing",
+            "unverified",
         );
         assert.equal(ownerSummaryCalls, 0);
         assert.equal(compatibilityCalls, 0);

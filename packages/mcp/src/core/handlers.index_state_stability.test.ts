@@ -48,7 +48,10 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationships-v1',
 };
 
 const CAPABILITIES = new CapabilityResolver({
@@ -90,14 +93,16 @@ function withTempHome<T>(fn: (homeDir: string) => Promise<T> | T): Promise<T> | 
 
 function buildMarker(repoPath: string, fingerprint: IndexFingerprint = RUNTIME_FINGERPRINT) {
     return {
-        kind: 'satori_index_completion_v2',
+        kind: 'satori_index_completion_v3',
         codebasePath: repoPath,
         fingerprint,
         indexedFiles: 169,
         totalChunks: 728,
         completedAt: '2026-02-28T08:00:00.000Z',
         runId: 'run_test',
-        indexPolicyHash: 'test-policy',
+        indexPolicyHash: 'a'.repeat(64),
+        indexStatus: 'completed',
+        navigation: { status: 'not_bound' },
     };
 }
 
@@ -1233,16 +1238,7 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
                     return true;
                 }
             }),
-            getIndexCompletionMarker: async () => ({
-                kind: 'satori_index_completion_v2',
-                codebasePath: repoPath,
-                fingerprint: indexedFingerprint,
-                indexedFiles: 169,
-                totalChunks: 728,
-                completedAt: '2026-02-28T08:00:00.000Z',
-                runId: 'run_test',
-                indexPolicyHash: 'test-policy',
-            }),
+            getIndexCompletionMarker: async () => buildMarker(repoPath, indexedFingerprint),
             getActiveIndexedCollectionName: async () => 'proven_collection',
             clearIndexCompletionMarker: async () => undefined
         } as unknown as HandlerContext;
@@ -1308,7 +1304,10 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
         assert.equal(payload.status, 'requires_reindex');
         assert.equal(payload.reason, 'requires_reindex');
         assert.match(payload.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
-        assert.equal((payload.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3/parser=legacy/extractor=legacy/relationship=legacy');
+        assert.match(
+            (payload.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint || '',
+            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}$/,
+        );
         assert.equal(startedBackgroundIndexing, false);
         assert.equal(collectionLimitCalls, 0);
         assert.equal(setIndexedCalls, 1);

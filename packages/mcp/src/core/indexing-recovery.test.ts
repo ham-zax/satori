@@ -17,14 +17,16 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
 
 function buildMarker(overrides: Partial<IndexCompletionMarkerDocument> = {}): IndexCompletionMarkerDocument {
     return {
-        kind: 'satori_index_completion_v2',
+        kind: 'satori_index_completion_v3',
         codebasePath: '/repo/app',
         fingerprint: RUNTIME_FINGERPRINT,
         indexedFiles: 169,
         totalChunks: 728,
         completedAt: '2026-02-27T23:57:10.000Z',
         runId: 'run_20260227',
-        indexPolicyHash: 'policy-hash',
+        indexPolicyHash: 'a'.repeat(64),
+        indexStatus: 'completed',
+        navigation: { status: 'not_bound' },
         ...overrides,
     };
 }
@@ -92,12 +94,15 @@ test('decideInterruptedIndexingRecovery preserves limit_reached from marker inde
     });
 });
 
-test('decideInterruptedIndexingRecovery treats legacy markers without indexStatus as completed', () => {
-    const decision = decideInterruptedIndexingRecovery(buildMarker(), RUNTIME_FINGERPRINT);
-    assert.equal(decision.action, 'promote_indexed');
-    if (decision.action === 'promote_indexed') {
-        assert.equal(decision.stats.status, 'completed');
-    }
+test('decideInterruptedIndexingRecovery rejects current markers without indexStatus', () => {
+    const marker = { ...buildMarker() } as unknown as Record<string, unknown>;
+    delete marker.indexStatus;
+    const decision = decideInterruptedIndexingRecovery(
+        marker as unknown as IndexCompletionMarkerDocument,
+        RUNTIME_FINGERPRINT,
+    );
+    assert.equal(decision.action, 'mark_failed');
+    assert.equal(decision.reason, 'invalid_marker_payload');
 });
 
 test('decideInterruptedIndexingRecovery preserves the complete marker fingerprint', () => {

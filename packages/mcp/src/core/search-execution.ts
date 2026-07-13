@@ -15,6 +15,7 @@ import {
     type SearchScope,
 } from "./search-constants.js";
 import type {
+    SearchDebugMode,
     SearchFreshnessSummary,
     SearchOperatorSummary,
 } from "./search-types.js";
@@ -198,7 +199,7 @@ export type SearchExecutionInput = {
     scope: SearchScope;
     rankingMode: SearchRankingMode;
     limit: number;
-    debug: boolean;
+    debugMode: SearchDebugMode;
     semanticQuery: string;
     parsedOperators: ParsedSearchOperators;
     queryPlan: SearchQueryPlan;
@@ -234,7 +235,9 @@ export async function runSearchExecution(
     const changedFilesState = input.rankingMode === "auto_changed_first"
         ? observedChangedFilesState
         : { available: observedChangedFilesState.available, files: new Set<string>() };
-    const debugChangedFilesState = input.debug ? observedChangedFilesState : undefined;
+    const debugChangedFilesState = input.debugMode === "freshness" || input.debugMode === "full"
+        ? observedChangedFilesState
+        : undefined;
     const changedFilesCount = changedFilesState.files.size;
     const observedChangedFilesCount = observedChangedFilesState.files.size;
     const normalizedObservedChangedFiles = new Set(

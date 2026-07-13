@@ -47,7 +47,10 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationships-v1',
 };
 
 const CAPABILITIES = new CapabilityResolver({
@@ -56,6 +59,26 @@ const CAPABILITIES = new CapabilityResolver({
     encoderProvider: 'VoyageAI',
     encoderModel: 'voyage-4-large',
 });
+
+function buildMarker(
+    repoPath: string,
+    fingerprint: IndexFingerprint = RUNTIME_FINGERPRINT,
+    overrides: Record<string, unknown> = {},
+) {
+    return {
+        kind: 'satori_index_completion_v3',
+        codebasePath: repoPath,
+        fingerprint,
+        indexedFiles: 1,
+        totalChunks: 2,
+        completedAt: '2026-02-27T23:57:10.000Z',
+        runId: 'test-run',
+        indexPolicyHash: 'a'.repeat(64),
+        indexStatus: 'completed',
+        navigation: { status: 'not_bound' },
+        ...overrides,
+    };
+}
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-manage-blocking-'));
@@ -445,15 +468,8 @@ test('handleClearIndex persists one clear receipt before clearing and keeps it a
         let clearCalls = 0;
 
         const context = {
-            getIndexCompletionMarker: async () => ({
-                kind: 'satori_index_completion_v2',
-                codebasePath: repoPath,
-                fingerprint: RUNTIME_FINGERPRINT,
-                indexedFiles: 1,
-                totalChunks: 2,
-                completedAt: '2026-02-27T23:57:10.000Z',
+            getIndexCompletionMarker: async () => buildMarker(repoPath, RUNTIME_FINGERPRINT, {
                 runId: 'clear-recovery-run',
-                indexPolicyHash: 'test-policy',
             }),
             clearIndex: async () => {
                 assert.ok(receipts.persistedPhases.includes('accepted'));
@@ -616,15 +632,12 @@ test('handleGetIndexingStatus reports partial limit_reached instead of fully ind
             fingerprintSource: 'verified' as const,
         };
         const context = {
-            getIndexCompletionMarker: async () => ({
-                kind: 'satori_index_completion_v2',
-                codebasePath: repoPath,
-                fingerprint: RUNTIME_FINGERPRINT,
+            getIndexCompletionMarker: async () => buildMarker(repoPath, RUNTIME_FINGERPRINT, {
                 indexedFiles: 12,
                 totalChunks: 450000,
                 completedAt: '2026-02-28T08:00:00.000Z',
                 runId: 'partial-run',
-                indexPolicyHash: 'test-policy',
+                indexStatus: 'limit_reached',
             }),
             getVectorStore: () => ({
                 hasCollection: async () => true,
@@ -863,16 +876,11 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
         const context = {
             getIndexCompletionMarker: async () => {
                 markerCalls += 1;
-                return {
-                    kind: 'satori_index_completion_v2',
-                    codebasePath: repoPath,
-                    fingerprint: indexedFingerprint,
+                return buildMarker(repoPath, indexedFingerprint, {
                     indexedFiles: 169,
                     totalChunks: 728,
-                    completedAt: '2026-02-27T23:57:10.000Z',
                     runId: 'run_test',
-                    indexPolicyHash: 'test-policy',
-                };
+                });
             }
         } as unknown as HandlerContext;
 
@@ -937,7 +945,10 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
         assert.equal(envelope.operation?.action, 'repair');
         assert.equal(envelope.operation?.phase, 'completed');
         assert.match(envelope.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
-        assert.equal((envelope.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint, 'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3/parser=legacy/extractor=legacy/relationship=legacy');
+        assert.match(
+            (envelope.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint || '',
+            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}$/,
+        );
     });
 });
 

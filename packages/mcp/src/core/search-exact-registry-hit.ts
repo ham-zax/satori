@@ -16,6 +16,7 @@ import {
     buildSearchSpanWarningCodes,
 } from "./search-response-helpers.js";
 import type {
+    SearchDebugMode,
     SearchFreshnessSummary,
     SearchResponseHints,
     SearchResponseEnvelope,
@@ -40,8 +41,7 @@ export type BuildExactRegistryHitEnvelopeInput = {
     indexedAt: string | null;
     navigationState: SearchNavigationState;
     navigationWarning?: string;
-    debug: boolean;
-    debugDetail?: "ranking" | "full";
+    debugMode: SearchDebugMode;
     debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
     debugSearch?: NonNullable<SearchResponseHints["debugSearch"]>;
     now: () => number;
@@ -105,8 +105,7 @@ export function buildExactRegistryHitEnvelope(
         )
             ? "partial_index_navigation_unavailable"
             : undefined,
-        debug: input.debug,
-        debugDetail: input.debugDetail,
+        debugMode: input.debugMode,
         now: input.now,
         previewMaxBytes: input.previewMaxBytes,
         navigationHelpers: input.navigationHelpers,

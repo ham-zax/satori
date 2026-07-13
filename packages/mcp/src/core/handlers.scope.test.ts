@@ -601,6 +601,43 @@ test('handleSearchCode does not use registry navigation when valid completion pr
     });
 });
 
+test('canonical not_bound navigation stays vector-readable without repair guidance', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const handlers = createHandlers(repoPath, [{
+                content: 'return session.isValid();',
+                relativePath: 'src/auth.ts',
+                startLine: 3,
+                endLine: 6,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+            }]);
+            (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({
+                outcome: 'valid',
+                navigationStatus: 'not_bound',
+            });
+
+            const searchResponse = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'validate session',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+            });
+            const searchPayload = JSON.parse(searchResponse.content[0]?.text || '{}');
+            const statusResponse = await handlers.handleGetIndexingStatus({ path: repoPath });
+            const statusPayload = JSON.parse(statusResponse.content[0]?.text || '{}');
+
+            assert.equal(searchPayload.status, 'ok');
+            assert.ok(!warningCodes(searchPayload).includes('NAVIGATION_REPAIR_REQUIRED'));
+            assert.ok(!warningCodes(statusPayload).includes('NAVIGATION_REPAIR_REQUIRED'));
+            assert.doesNotMatch(statusPayload.humanText ?? '', /navigation requires manage_index repair/i);
+        });
+    });
+});
+
 function parseSemanticSearchInvocation(args: unknown[]): ParsedSemanticSearchInvocation {
     if (args.length === 1 && args[0] && typeof args[0] === 'object') {
         const request = args[0] as SemanticSearchRequestView;
@@ -690,6 +727,32 @@ test('handleSearchCode semantic path publishes closed debug projections for ever
             assert.equal(payload.status, 'ok');
             assertClosedDebugProjection(payload, mode);
         }
+    });
+});
+
+test('handleSearchCode ignores the retired internal debug boolean alias', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+        }]);
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is session validation handled',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debug: true,
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assertClosedDebugProjection(payload, 'none');
     });
 });
 
@@ -801,7 +864,7 @@ test('handleSearchCode grouped symbol mode emits a graph-ready concrete target w
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1132,7 +1195,7 @@ test('handleSearchCode grouped symbol mode collapses chunks by owner symbol iden
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1208,7 +1271,7 @@ test('handleSearchCode grouped symbol mode repairs legacy chunks from compatible
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1276,7 +1339,7 @@ test('handleSearchCode ranks exact warning-code emission above tests and generic
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1330,7 +1393,7 @@ test('handleSearchCode ranks natural-language emitted warning site above generic
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1381,7 +1444,7 @@ test('handleSearchCode supplements exact warning-code retrieval from tracked lex
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1432,7 +1495,7 @@ test('handleSearchCode supplements quoted exact literal retrieval from tracked l
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1500,7 +1563,7 @@ test('handleSearchCode exact registry fast path returns a grouped symbol despite
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const rawText = response.content[0]?.text || '{}';
@@ -1782,7 +1845,7 @@ test('handleSearchCode does not shortcut vague one-word semantic queries through
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1815,7 +1878,7 @@ test('handleSearchCode explains exact registry fallback when the symbol registry
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1864,7 +1927,7 @@ test('handleSearchCode exact registry fast path uses normal runtime scope filter
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1932,7 +1995,7 @@ test('handleSearchCode exact registry fast path limits path-scoped lookup to the
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -1982,7 +2045,7 @@ test('handleSearchCode exact registry miss still allows bounded tracked lexical 
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2036,7 +2099,7 @@ test('handleSearchCode tracked lexical recovery reads active ignore patterns onc
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2108,7 +2171,7 @@ test('handleSearchCode tracked lexical recovery short-circuits exact-ish line sc
                     resultMode: 'grouped',
                     groupBy: 'symbol',
                     limit: 5,
-                    debug: true,
+                    debugMode: 'full',
                 });
             } finally {
                 String.prototype.split = originalSplit;
@@ -2158,7 +2221,7 @@ test('handleSearchCode exact symbolInstanceId fast path only uses current regist
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2211,7 +2274,7 @@ test('handleSearchCode uses must-only exact identifier queries for exact registr
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 1,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2289,7 +2352,7 @@ test('handleSearchCode ambiguous exact registry lookup falls back to existing se
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2422,7 +2485,7 @@ test('handleSearchCode debug exposes tracked lexical scan caps when the bounded 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 20,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2491,7 +2554,7 @@ test('handleSearchCode tracked lexical supplement respects ignore rules and dete
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2514,7 +2577,7 @@ test('handleSearchCode ignores tracked lexical paths that resolve outside the re
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2546,7 +2609,7 @@ test('handleSearchCode does not read tracked lexical symlinks whose targets are 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2607,7 +2670,7 @@ test('handleSearchCode does not promote broad file-owned evidence to a nested ou
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 3,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2674,7 +2737,7 @@ test('handleSearchCode does not repair file-owner chunks to arbitrary nested met
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 3,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2735,7 +2798,7 @@ test('handleSearchCode does not repair ambiguous broad file-owner matches to exe
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 3,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2798,7 +2861,7 @@ test('handleSearchCode does not emit method graph hints from weak graph-capable 
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 3,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -2931,7 +2994,7 @@ test('handleSearchCode grouped symbol mode does not require registry when owner 
                 resultMode: 'grouped',
                 groupBy: 'symbol',
                 limit: 5,
-                debug: true,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -3651,7 +3714,7 @@ test('handleSearchCode parses operators from query prefix and applies determinis
             resultMode: 'raw',
             groupBy: 'symbol',
             limit: 10,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -3764,7 +3827,7 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 1,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -3812,7 +3875,7 @@ test('handleSearchCode grouped representative prefers must-matching chunk within
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 1,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -3881,7 +3944,7 @@ test('handleSearchCode grouped diversity keeps multi-file coverage by default', 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -3932,7 +3995,7 @@ test('handleSearchCode grouped diversity keeps distinct symbol instances that sh
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -3987,7 +4050,7 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
         const autoPayload = JSON.parse(autoResponse.content[0]?.text || '{}');
         assert.equal(autoPayload.results[0].target.file, 'src/changed.ts');
@@ -4003,7 +4066,7 @@ test('handleSearchCode applies changed-files boost in auto mode and skips boost 
             groupBy: 'symbol',
             rankingMode: 'default',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
         const defaultPayload = JSON.parse(defaultResponse.content[0]?.text || '{}');
         const defaultChanged = defaultPayload.results.find((result: SearchPayloadResultView) => result.target?.file === 'src/changed.ts');
@@ -4056,7 +4119,7 @@ test('handleSearchCode probes changed files once per grouped search request', as
             scope: 'runtime',
             resultMode: 'grouped',
             groupBy: 'symbol',
-            debug: true,
+            debugMode: 'full',
             limit: 2
         });
 
@@ -4093,7 +4156,7 @@ test('handleSearchCode freshness summary only marks changed-files boost applied 
             scope: 'runtime',
             resultMode: 'grouped',
             groupBy: 'symbol',
-            debug: true,
+            debugMode: 'full',
             limit: 2
         });
 
@@ -4288,7 +4351,7 @@ test('handleSearchCode replaces stale dirty-file candidates with current identif
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -4432,7 +4495,7 @@ test('handleSearchCode supplements exact path-scoped dirty file evidence after s
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -4469,7 +4532,7 @@ test('handleSearchCode does not read dirty live-path symlinks whose targets are 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true,
+            debugMode: 'full',
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -4529,7 +4592,7 @@ test('handleSearchCode supplements exact path-scoped tracked test evidence witho
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -4622,7 +4685,7 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -4724,7 +4787,7 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -4834,7 +4897,7 @@ test('handleSearchCode debug changed-code payload is capped with totals and trun
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -4896,7 +4959,7 @@ test('handleSearchCode auto_changed_first skips boost when changed file set exce
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results[0].target.file, 'src/unchanged.ts');
@@ -4987,7 +5050,7 @@ test('handleSearchCode policy mode skips reranker for docs scope even when capab
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
         const autoPayload = JSON.parse(autoResponse.content[0]?.text || '{}');
         assert.equal(rerankCalls, 0);
@@ -5024,7 +5087,7 @@ test('handleSearchCode debug exposes missing reranker capability without warning
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 1,
-            debug: true
+            debugMode: 'full'
         });
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
@@ -5077,7 +5140,7 @@ test('handleSearchCode degrades gracefully when reranker fails', async () => {
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
@@ -5155,7 +5218,7 @@ test('handleSearchCode marks rerank.enabled=false when reranker instance is miss
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 1,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5214,7 +5277,7 @@ test('handleSearchCode exposes identifier query intent and skips reranker for ex
             resultMode: 'raw',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5271,7 +5334,7 @@ test('handleSearchCode promotes lexical exact matches for hurst-style single-tok
             resultMode: 'raw',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5325,7 +5388,7 @@ test('handleSearchCode prefers usage hits over declarations for reference-seekin
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5379,7 +5442,7 @@ test('handleSearchCode ranks canonical owners above tool wrappers for implementa
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5428,7 +5491,7 @@ test('handleSearchCode demotes tests below implementation owners unless test int
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
         const ownerPayload = JSON.parse(ownerResponse.content[0]?.text || '{}');
         assert.equal(ownerPayload.results[0].target.file, 'packages/cli/src/install.ts');
@@ -5442,7 +5505,7 @@ test('handleSearchCode demotes tests below implementation owners unless test int
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
         const testPayload = JSON.parse(testResponse.content[0]?.text || '{}');
         assert.equal(testPayload.results[0].target.file, 'packages/cli/src/install.test.ts');
@@ -5488,7 +5551,7 @@ test('handleSearchCode strongly demotes test helpers for implementation freshnes
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5538,7 +5601,7 @@ test('handleSearchCode ranks script runtime owners above package installability 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5595,7 +5658,7 @@ test('handleSearchCode boosts exact phase/path anchors for broad semantic querie
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5672,7 +5735,7 @@ test('handleSearchCode demotes sibling structural-anchor near misses below a neu
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5723,7 +5786,7 @@ test('handleSearchCode ranks writer owners above repo config readers for write-i
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5770,7 +5833,7 @@ test('handleSearchCode treats class-qualified mutator methods as writer owners',
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5822,7 +5885,7 @@ test('handleSearchCode does not treat formatter pushes as writer owners', async 
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5869,7 +5932,7 @@ test('handleSearchCode ranks implementation chunks above type-only results for o
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5926,7 +5989,7 @@ test('handleSearchCode does not boost dirty tests for non-test implementation qu
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -5995,7 +6058,7 @@ test('handleSearchCode collapses duplicate declaration groups for reference-seek
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6043,7 +6106,7 @@ test('handleSearchCode identifier query does not treat fragment-only matches as 
             resultMode: 'raw',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6106,7 +6169,7 @@ test('handleSearchCode collapses duplicate declaration groups for identifier que
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 5,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6173,7 +6236,7 @@ test('handleSearchCode reference-seeking queries downweight fragment-only matche
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6233,7 +6296,7 @@ test('handleSearchCode reference-seeking queries rank runtime usage above declar
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6280,7 +6343,7 @@ test('handleSearchCode reference-seeking function declarations do not receive us
             resultMode: 'raw',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6329,7 +6392,7 @@ test('handleSearchCode reference-seeking queries rank executable usage above imp
             resultMode: 'raw',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6390,7 +6453,7 @@ test('handleSearchCode treats arrow function declarations as declarations for re
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6438,7 +6501,7 @@ test('handleSearchCode treats arrow declarations with n-containing parameter nam
             resultMode: 'raw',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6500,7 +6563,7 @@ test('handleSearchCode collapses duplicate function declaration groups for refer
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 3,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -6562,7 +6625,7 @@ test('handleSearchCode reranker can change grouped representative chunk selectio
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 1,
-            debug: true
+            debugMode: 'full'
         });
         const rerankedPayload = JSON.parse(rerankedResponse.content[0]?.text || '{}');
         assert.equal(rerankedPayload.results[0].preview.includes('critical token validation path'), true);
@@ -6615,7 +6678,7 @@ test('handleSearchCode leaves reranker applied false when no returned indexes ar
             resultMode: 'grouped',
             groupBy: 'symbol',
             limit: 2,
-            debug: true
+            debugMode: 'full'
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');

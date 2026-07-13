@@ -28,7 +28,10 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationships-v1',
 };
 
 const CAPABILITIES = new CapabilityResolver({
@@ -40,14 +43,16 @@ const CAPABILITIES = new CapabilityResolver({
 
 function buildMarker(repoPath: string, fingerprint: IndexFingerprint = RUNTIME_FINGERPRINT) {
     return {
-        kind: 'satori_index_completion_v2',
+        kind: 'satori_index_completion_v3',
         codebasePath: repoPath,
         fingerprint,
         indexedFiles: 4,
         totalChunks: 8,
         completedAt: '2026-02-28T08:00:00.000Z',
         runId: 'run_test',
-        indexPolicyHash: 'test-policy',
+        indexPolicyHash: 'a'.repeat(64),
+        indexStatus: 'completed',
+        navigation: { status: 'not_bound' },
     };
 }
 

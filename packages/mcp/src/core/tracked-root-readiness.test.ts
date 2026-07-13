@@ -53,6 +53,30 @@ test("runtime policy incompatibility blocks navigation despite its fingerprint m
     assert.match(result.state === "requires_reindex" ? result.message ?? "" : "", /runtime policy inputs/i);
 });
 
+test("retired persisted authority routes directly to requires_reindex", async () => {
+    const host = createHost();
+    host.validateCompletionProof = async () => ({
+        outcome: "stale_local",
+        reason: "requires_reindex",
+    });
+
+    const result = await new TrackedRootReadiness(host).prepareTrackedRootForRead("/repo", "semantic");
+
+    assert.equal(result.state, "requires_reindex");
+});
+
+test("unsupported future authority routes directly to requires_reindex", async () => {
+    const host = createHost();
+    host.validateCompletionProof = async () => ({
+        outcome: "stale_local",
+        reason: "unsupported_authority",
+    });
+
+    const result = await new TrackedRootReadiness(host).prepareTrackedRootForRead("/repo", "semantic");
+
+    assert.equal(result.state, "requires_reindex");
+});
+
 test("tracked root readiness reports bounded phase timings", async () => {
     const phases: string[] = [];
     const host = createHost();

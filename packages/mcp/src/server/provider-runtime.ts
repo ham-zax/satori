@@ -92,7 +92,25 @@ export function resolveConfiguredEmbeddingDimension(config: ContextMcpConfig): n
     }
 }
 
-export function createLocalOnlyContext(config: ContextMcpConfig): Context {
+function createDurableAuthorityRecoveryPublisher(
+    coordinator: MutationLeaseCoordinator,
+): NonNullable<ConstructorParameters<typeof Context>[0]>['durableAuthorityRecoveryPublisher'] {
+    return (canonicalRoot, _mutationOwner, publish) => {
+        const acquired = coordinator.acquire(canonicalRoot, "repair");
+        if (!acquired.acquired) return false;
+        try {
+            coordinator.publishWhileCurrent(acquired.lease, publish);
+            return true;
+        } finally {
+            coordinator.release(acquired.lease);
+        }
+    };
+}
+
+export function createLocalOnlyContext(
+    config: ContextMcpConfig,
+    mutationLeaseCoordinator?: MutationLeaseCoordinator,
+): Context {
     return new Context({
         embedding: new MetadataOnlyEmbedding(
             config.encoderProvider,
@@ -100,6 +118,9 @@ export function createLocalOnlyContext(config: ContextMcpConfig): Context {
             resolveConfiguredEmbeddingDimension(config),
         ),
         vectorDatabase: new UnconfiguredVectorDatabase(),
+        ...(mutationLeaseCoordinator ? {
+            durableAuthorityRecoveryPublisher: createDurableAuthorityRecoveryPublisher(mutationLeaseCoordinator),
+        } : {}),
     });
 }
 
@@ -232,6 +253,9 @@ export class ProviderRuntime {
         const context = new Context({
             embedding,
             vectorDatabase,
+            durableAuthorityRecoveryPublisher: createDurableAuthorityRecoveryPublisher(
+                this.mutationLeaseCoordinator,
+            ),
         });
         const syncManager = new SyncManager(context, this.snapshotManager, {
             watchEnabled: this.watchSyncEnabled,

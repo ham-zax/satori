@@ -60,7 +60,7 @@ test('search_codebase rejects relative path without CWD resolve', async () => {
     assert.doesNotMatch(response.content[0].text, /handler must not run/);
 });
 
-test('search_codebase normalizes backward-compatible debug selectors', async () => {
+test('search_codebase normalizes public debug selectors to the internal debugMode contract', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const calls: Array<Record<string, unknown>> = [];
     const ctx = {
@@ -103,13 +103,13 @@ test('search_codebase normalizes backward-compatible debug selectors', async () 
     await searchCodebaseTool.execute({ path: '/repo', query: 'auth', debugMode: 'freshness' }, ctx);
     await searchCodebaseTool.execute({ path: '/repo', query: 'auth', debug: true, debugMode: 'ranking' }, ctx);
 
-    assert.equal(calls[0]?.debug, false);
+    assert.equal('debug' in (calls[0] ?? {}), false);
     assert.equal(calls[0]?.debugMode, 'none');
-    assert.equal(calls[1]?.debug, true);
+    assert.equal('debug' in (calls[1] ?? {}), false);
     assert.equal(calls[1]?.debugMode, 'full');
-    assert.equal(calls[2]?.debug, true);
+    assert.equal('debug' in (calls[2] ?? {}), false);
     assert.equal(calls[2]?.debugMode, 'freshness');
-    assert.equal(calls[3]?.debug, true);
+    assert.equal('debug' in (calls[3] ?? {}), false);
     assert.equal(calls[3]?.debugMode, 'ranking');
 });
 

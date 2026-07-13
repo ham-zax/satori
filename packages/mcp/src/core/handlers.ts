@@ -981,7 +981,12 @@ export class ToolHandlers {
             navigationObservationChanged,
         }).catch(() => null);
         const observationAfter = this.getPreparedReadObservation(root);
-        if (!proof || observationAfter !== observationBefore) {
+        if (
+            !proof
+            || proof.navigationProof.status === 'requires_reindex'
+            || proof.navigationProof.status === 'unsupported'
+            || observationAfter !== observationBefore
+        ) {
             this.preparedReadCache.evict(root);
             return null;
         }
@@ -2517,8 +2522,16 @@ export class ToolHandlers {
         return this.relationshipBackedCallGraph.build(input);
     }
 
-    private async rebuildCallGraphForIndex(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
-        await this.relationshipBackedCallGraph.rebuildForIndex(codebasePath, assertMutationCurrent);
+    private async rebuildCallGraphForIndex(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+        effectiveIgnorePatterns?: string[],
+    ): Promise<void> {
+        await this.relationshipBackedCallGraph.rebuildForIndex(
+            codebasePath,
+            assertMutationCurrent,
+            effectiveIgnorePatterns,
+        );
     }
 
     private async rebuildCallGraphForSyncDelta(codebasePath: string, changedFiles: string[]): Promise<boolean> {
@@ -2557,13 +2570,12 @@ export class ToolHandlers {
         const resultMode = (typeof args.resultMode === 'string' ? args.resultMode : 'grouped') as SearchResultMode;
         const groupBy = (typeof args.groupBy === 'string' ? args.groupBy : 'symbol') as SearchGroupBy;
         const rankingMode = (typeof args.rankingMode === 'string' ? args.rankingMode : 'auto_changed_first') as SearchRankingMode;
-        const debug = args?.debug === true;
         const debugMode = args.debugMode === 'summary'
             || args.debugMode === 'ranking'
             || args.debugMode === 'freshness'
             || args.debugMode === 'full'
             ? args.debugMode
-            : debug ? 'full' : 'none';
+            : 'none';
         const rawLimit = typeof args.limit === 'number' ? args.limit : Number(args.limit);
         const input: SearchRequestInput = {
             path: typeof args.path === 'string' ? args.path : '',
@@ -2573,7 +2585,6 @@ export class ToolHandlers {
             groupBy,
             rankingMode,
             limit: Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : 10,
-            debug,
             debugMode,
         };
 
@@ -2905,7 +2916,7 @@ export class ToolHandlers {
                 scope: input.scope,
                 rankingMode: input.rankingMode,
                 limit: input.limit,
-                debug: debugMode === 'ranking' || debugMode === 'full',
+                debugMode,
                 semanticQuery,
                 parsedOperators,
                 queryPlan,

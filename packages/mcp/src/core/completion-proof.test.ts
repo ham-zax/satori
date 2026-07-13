@@ -8,27 +8,49 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationship-v1',
 };
+
+const POLICY_HASH = 'a'.repeat(64);
+const SYMBOL_MANIFEST_HASH = `symmanifest_${'b'.repeat(32)}`;
+const RELATIONSHIP_MANIFEST_HASH = 'c'.repeat(64);
+const NAVIGATION_SEAL_HASH = 'd'.repeat(64);
 
 function marker(overrides: Record<string, unknown> = {}) {
     return {
-        kind: 'satori_index_completion_v2',
+        kind: 'satori_index_completion_v3',
         codebasePath: '/repo/a',
         fingerprint: { ...RUNTIME_FINGERPRINT },
         indexedFiles: 10,
         totalChunks: 25,
         completedAt: '2026-02-28T08:00:00.000Z',
         runId: 'run_123',
-        indexPolicyHash: 'policy-hash',
+        indexPolicyHash: POLICY_HASH,
+        indexStatus: 'completed',
+        navigation: { status: 'not_bound' },
         ...overrides
     };
+}
+
+function sealedMarker() {
+    return marker({
+        navigation: {
+            status: 'sealed',
+            generationId: 'generation-a',
+            symbolRegistryManifestHash: SYMBOL_MANIFEST_HASH,
+            relationshipManifestHash: RELATIONSHIP_MANIFEST_HASH,
+            sealHash: NAVIGATION_SEAL_HASH,
+        },
+    });
 }
 
 function generationReceipt(overrides: Record<string, unknown> = {}) {
     return {
         collectionName: 'generation-b',
-        marker: marker({ indexStatus: 'completed' }),
+        marker: sealedMarker(),
         policy: {
             canonicalRoot: '/repo/a',
             profile: 'default',
@@ -37,15 +59,21 @@ function generationReceipt(overrides: Record<string, unknown> = {}) {
             fileBasedIgnorePatterns: [],
             supportedExtensions: ['.ts'],
             effectiveIgnorePatterns: [],
-            policyHash: 'policy-hash',
+            policyHash: POLICY_HASH,
         },
         policyDocumentDigest: 'a'.repeat(64),
         exactPayloadCount: 25,
-        navigation: null,
+        navigation: {
+            generationId: 'generation-a',
+            generationRoot: '/state/generation-a',
+            symbolRegistryManifestHash: SYMBOL_MANIFEST_HASH,
+            relationshipManifestHash: RELATIONSHIP_MANIFEST_HASH,
+            navigationSealHash: NAVIGATION_SEAL_HASH,
+        },
         observations: {
             profileFileToken: null,
             policyFileToken: 'policy-token',
-            navigationToken: null,
+            navigationToken: 'navigation-token',
         },
         ...overrides,
     };
@@ -99,7 +127,7 @@ test('validateCompletionProof preserves an explicitly unbound navigation generat
         codebasePath: '/repo/a',
         runtimeFingerprint: RUNTIME_FINGERPRINT,
         getIndexCompletionMarker: async () => ({
-            status: 'valid_v2',
+            status: 'valid_v3',
             collectionName: 'generation-b',
             marker: marker(),
             navigationProof: {
@@ -113,11 +141,99 @@ test('validateCompletionProof preserves an explicitly unbound navigation generat
     assert.equal(result.generationReceipt, undefined);
 });
 
+test('validateCompletionProof rejects navigation evidence that contradicts the marker binding', async () => {
+    const contradictoryEvidence = [
+        {
+            marker: sealedMarker(),
+            navigationProof: { status: 'not_bound' },
+        },
+        {
+            marker: marker(),
+            navigationProof: { status: 'valid' },
+            generationReceipt: generationReceipt(),
+        },
+        {
+            marker: marker(),
+            navigationProof: { status: 'not_bound' },
+            generationReceipt: generationReceipt(),
+        },
+    ];
+
+    for (const evidence of contradictoryEvidence) {
+        const result = await validateCompletionProof({
+            codebasePath: '/repo/a',
+            getIndexCompletionMarker: async () => ({
+                status: 'valid_v3',
+                collectionName: 'generation-b',
+                ...evidence,
+            }),
+        });
+
+        assert.equal(result.outcome, 'stale_local');
+        assert.equal(result.reason, 'invalid_payload');
+    }
+});
+
+test('validateCompletionProof requires a marker-bound generation receipt for valid navigation evidence', async () => {
+    const invalidReceipts = [
+        undefined,
+        { malformed: true },
+        generationReceipt({
+            navigation: {
+                ...generationReceipt().navigation,
+                navigationSealHash: 'e'.repeat(64),
+            },
+        }),
+    ];
+
+    for (const suppliedReceipt of invalidReceipts) {
+        const result = await validateCompletionProof({
+            codebasePath: '/repo/a',
+            getIndexCompletionMarker: async () => ({
+                status: 'valid_v3',
+                collectionName: 'generation-b',
+                marker: sealedMarker(),
+                navigationProof: { status: 'valid' },
+                ...(suppliedReceipt === undefined
+                    ? {}
+                    : { generationReceipt: suppliedReceipt }),
+            }),
+        });
+
+        assert.equal(result.outcome, 'stale_local');
+        assert.equal(result.reason, 'invalid_payload');
+    }
+});
+
+test('validateCompletionProof derives fail-closed navigation status when additive evidence is absent', async () => {
+    const unbound = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        getIndexCompletionMarker: async () => ({
+            status: 'valid_v3',
+            collectionName: 'generation-b',
+            marker: marker(),
+        }),
+    });
+    assert.equal(unbound.outcome, 'valid');
+    assert.equal(unbound.navigationStatus, 'not_bound');
+
+    const sealed = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        getIndexCompletionMarker: async () => ({
+            status: 'valid_v3',
+            collectionName: 'generation-b',
+            marker: sealedMarker(),
+        }),
+    });
+    assert.equal(sealed.outcome, 'valid');
+    assert.equal(sealed.navigationStatus, 'unverified');
+});
+
 test('validateCompletionProof preserves the proven bound collection identity', async () => {
     const result = await validateCompletionProof({
         codebasePath: '/repo/a',
         getIndexCompletionMarker: async () => ({
-            status: 'valid_v2',
+            status: 'valid_v3',
             collectionName: 'generation-b',
             marker: marker(),
         }),
@@ -132,14 +248,15 @@ test('validateCompletionProof accepts only a fully bound cloned generation recei
     const result = await validateCompletionProof({
         codebasePath: '/repo/a',
         getIndexCompletionMarker: async () => ({
-            status: 'valid_v2',
+            status: 'valid_v3',
             collectionName: 'generation-b',
-            marker: marker(),
+            marker: sealedMarker(),
             generationReceipt: supplied,
         }),
     });
     assert.equal(result.outcome, 'valid');
     assert.ok(result.generationReceipt);
+    assert.equal(result.navigationStatus, 'valid');
     assert.notEqual(result.generationReceipt, supplied);
     (supplied.policy.customExtensions as string[]).push('.forged');
     assert.deepEqual(result.generationReceipt?.policy.customExtensions, []);
@@ -153,14 +270,15 @@ test('validateCompletionProof accepts only a fully bound cloned generation recei
         const rejected = await validateCompletionProof({
             codebasePath: '/repo/a',
             getIndexCompletionMarker: async () => ({
-                status: 'valid_v2',
+                status: 'valid_v3',
                 collectionName: 'generation-b',
-                marker: marker(),
+                marker: sealedMarker(),
                 generationReceipt: malformed,
             }),
         });
         assert.equal(rejected.outcome, 'valid');
         assert.equal(rejected.generationReceipt, undefined);
+        assert.equal(rejected.navigationStatus, 'unverified');
     }
 });
 
@@ -169,9 +287,9 @@ test('validateCompletionProof falls back to a valid generation receipt when addi
     const result = await validateCompletionProof({
         codebasePath: '/repo/a',
         getIndexCompletionMarker: async () => ({
-            status: 'valid_v2',
+            status: 'valid_v3',
             collectionName: 'generation-b',
-            marker: marker(),
+            marker: sealedMarker(),
             generationReceipt: supplied,
             vectorReceipt: { malformed: true },
         }),
@@ -182,28 +300,35 @@ test('validateCompletionProof falls back to a valid generation receipt when addi
     assert.equal(result.vectorReceipt?.collectionName, 'generation-b');
 });
 
-test('validateCompletionProof rejects impossible navigation seal marker combinations', async () => {
-    for (const invalidMarker of [marker({ navigationSealHash: 'b'.repeat(64) })]) {
+test('validateCompletionProof requires reindex for old flat navigation markers', async () => {
+    for (const invalidMarker of [marker({
+        kind: 'satori_index_completion_v2',
+        navigation: undefined,
+        navigationSealHash: NAVIGATION_SEAL_HASH,
+    })]) {
         const result = await validateCompletionProof({
             codebasePath: '/repo/a',
             getIndexCompletionMarker: async () => invalidMarker,
         });
         assert.equal(result.outcome, 'stale_local');
-        assert.equal(result.reason, 'invalid_payload');
+        assert.equal(result.reason, 'requires_reindex');
     }
 });
 
 test('validateCompletionProof rejects a receipt whose navigation seal is not marker-bound', async () => {
     const sealedMarker = marker({
-        navigationGenerationId: 'generation-a',
-        symbolRegistryManifestHash: 'symbols',
-        relationshipManifestHash: 'relationships',
-        navigationSealHash: 'b'.repeat(64),
+        navigation: {
+            status: 'sealed',
+            generationId: 'generation-a',
+            symbolRegistryManifestHash: SYMBOL_MANIFEST_HASH,
+            relationshipManifestHash: RELATIONSHIP_MANIFEST_HASH,
+            sealHash: NAVIGATION_SEAL_HASH,
+        },
     });
     const result = await validateCompletionProof({
         codebasePath: '/repo/a',
         getIndexCompletionMarker: async () => ({
-            status: 'valid_v2',
+            status: 'valid_v3',
             collectionName: 'generation-b',
             marker: sealedMarker,
             generationReceipt: generationReceipt({
@@ -211,9 +336,9 @@ test('validateCompletionProof rejects a receipt whose navigation seal is not mar
                 navigation: {
                     generationId: 'generation-a',
                     generationRoot: '/state/generation-a',
-                    symbolRegistryManifestHash: 'symbols',
-                    relationshipManifestHash: 'relationships',
-                    navigationSealHash: 'c'.repeat(64),
+                    symbolRegistryManifestHash: SYMBOL_MANIFEST_HASH,
+                    relationshipManifestHash: RELATIONSHIP_MANIFEST_HASH,
+                    navigationSealHash: 'e'.repeat(64),
                 },
                 observations: {
                     profileFileToken: null,
@@ -227,7 +352,7 @@ test('validateCompletionProof rejects a receipt whose navigation seal is not mar
     assert.equal(result.generationReceipt, undefined);
 });
 
-test('validateCompletionProof classifies v1 markers as legacy policy-unsealed proof', async () => {
+test('validateCompletionProof requires reindex for raw v1 markers', async () => {
     const legacy = marker();
     delete (legacy as Record<string, unknown>).indexPolicyHash;
     (legacy as Record<string, unknown>).kind = 'satori_index_completion_v1';
@@ -237,7 +362,56 @@ test('validateCompletionProof classifies v1 markers as legacy policy-unsealed pr
         getIndexCompletionMarker: async () => legacy,
     });
     assert.equal(result.outcome, 'stale_local');
-    assert.equal(result.reason, 'legacy_policy_unsealed');
+    assert.equal(result.reason, 'requires_reindex');
+});
+
+test('validateCompletionProof requires reindex for structured legacy evidence', async () => {
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => ({
+            status: 'requires_reindex',
+        }),
+    });
+    assert.equal(result.outcome, 'stale_local');
+    assert.equal(result.reason, 'requires_reindex');
+});
+
+test('validateCompletionProof fails closed distinctly for unsupported future marker authority', async () => {
+    const futureMarker = marker({ kind: 'satori_index_completion_v4' });
+    const rawResult = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => futureMarker,
+    });
+    assert.deepEqual(rawResult, {
+        outcome: 'stale_local',
+        reason: 'unsupported_authority',
+    });
+
+    const structuredResult = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => ({ status: 'unsupported_authority' }),
+    });
+    assert.deepEqual(structuredResult, {
+        outcome: 'stale_local',
+        reason: 'unsupported_authority',
+    });
+});
+
+test('validateCompletionProof does not misclassify malformed marker kinds as future authority', async () => {
+    for (const kind of ['garbage', 'satori_index_completion_beta']) {
+        const result = await validateCompletionProof({
+            codebasePath: '/repo/a',
+            runtimeFingerprint: RUNTIME_FINGERPRINT,
+            getIndexCompletionMarker: async () => marker({ kind }),
+        });
+        assert.deepEqual(result, {
+            outcome: 'stale_local',
+            reason: 'invalid_marker_kind',
+        });
+    }
 });
 
 test('validateCompletionProof distinguishes runtime policy incompatibility from marker corruption', async () => {
@@ -266,7 +440,7 @@ test('validateCompletionProof rejects unsafe marker counts', async () => {
     assert.equal(result.reason, 'invalid_payload');
 });
 
-test('validateCompletionProof requires reindex when a legacy marker lacks parser identity', async () => {
+test('validateCompletionProof requires reindex for every v2 marker', async () => {
     const currentFingerprint: IndexFingerprint = {
         ...RUNTIME_FINGERPRINT,
         parserVersion: 'oxc-0.139.0+web-tree-sitter-0.26.10+vscode-grammars-0.3.1+scala-0.24.0-sha256-b7ec2bb29c19827abcefd18ed5cb5a43596009f96a5d53c5b9d1f9676d7521c3',
@@ -276,13 +450,17 @@ test('validateCompletionProof requires reindex when a legacy marker lacks parser
     const result = await validateCompletionProof({
         codebasePath: '/repo/a',
         runtimeFingerprint: currentFingerprint,
-        getIndexCompletionMarker: async () => marker(),
+        getIndexCompletionMarker: async () => marker({
+            kind: 'satori_index_completion_v2',
+            navigation: undefined,
+        }),
     });
 
-    assert.equal(result.outcome, 'fingerprint_mismatch');
+    assert.equal(result.outcome, 'stale_local');
+    assert.equal(result.reason, 'requires_reindex');
 });
 
-test('validateCompletionProof requires reindex for v3 extractor and relationship-v2 indexes', async () => {
+test('validateCompletionProof detects fingerprint mismatch for canonical v3 markers', async () => {
     const parserVersion = 'oxc-0.139.0+web-tree-sitter-0.26.10+vscode-grammars-0.3.1+scala-0.24.0-sha256-b7ec2bb29c19827abcefd18ed5cb5a43596009f96a5d53c5b9d1f9676d7521c3';
     const runtimeFingerprint: IndexFingerprint = {
         ...RUNTIME_FINGERPRINT,
@@ -327,15 +505,17 @@ test('validateCompletionProof retains partial status and the complete fingerprin
     assert.deepEqual(result.marker?.fingerprint, fingerprint);
 });
 
-test('validateCompletionProof normalizes a legacy marker status to completed', async () => {
+test('validateCompletionProof requires an explicit canonical marker status', async () => {
+    const withoutStatus = marker();
+    delete withoutStatus.indexStatus;
     const result = await validateCompletionProof({
         codebasePath: '/repo/a',
         runtimeFingerprint: RUNTIME_FINGERPRINT,
-        getIndexCompletionMarker: async () => marker(),
+        getIndexCompletionMarker: async () => withoutStatus,
     });
 
-    assert.equal(result.outcome, 'valid');
-    assert.equal(result.marker?.indexStatus, 'completed');
+    assert.equal(result.outcome, 'stale_local');
+    assert.equal(result.reason, 'invalid_payload');
 });
 
 test('validateCompletionProof rejects malformed expanded fingerprint fields', async () => {

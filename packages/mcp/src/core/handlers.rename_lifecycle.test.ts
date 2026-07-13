@@ -331,7 +331,7 @@ test('cached exact search cannot survive direct collection deletion', async () =
             coordinator,
         );
         const coreEvidence = await context.getIndexCompletionMarkerForValidation(repoPath);
-        assert.equal(coreEvidence.status, 'valid_v2', JSON.stringify(coreEvidence));
+        assert.equal(coreEvidence.status, 'valid_v3', JSON.stringify(coreEvidence));
         const directProof = await (handlers as unknown as {
             validateCompletionProof: (root: string) => Promise<Record<string, unknown>>;
         }).validateCompletionProof(repoPath);

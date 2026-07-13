@@ -22,7 +22,26 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingDimension: 1024,
     vectorStoreProvider: "Milvus",
     schemaVersion: "hybrid_v3",
+    parserVersion: "parser-v1",
+    extractorVersion: "extractor-v1",
+    relationshipVersion: "relationships-v1",
 };
+
+function buildMarker(codebasePath: string, overrides: Record<string, unknown> = {}) {
+    return {
+        kind: 'satori_index_completion_v3' as const,
+        codebasePath,
+        fingerprint: RUNTIME_FINGERPRINT,
+        indexedFiles: 3,
+        totalChunks: 9,
+        completedAt: new Date(0).toISOString(),
+        runId: 'test-run',
+        indexPolicyHash: 'a'.repeat(64),
+        indexStatus: 'completed' as const,
+        navigation: { status: 'not_bound' as const },
+        ...overrides,
+    };
+}
 
 const REPAIR_PROOF = {
     collection: { status: "matched", basis: "selected_snapshot_collection" },
@@ -266,6 +285,7 @@ function createFailedIndexingHarness(
         omitPolicyPublicationDocumentDigest?: boolean;
         policyPublicationDocumentDigest?: string;
         legacyRollback?: boolean;
+        proveVectorGenerationError?: Error;
     } = {},
 ) {
     const droppedCollections: string[] = [];
@@ -275,6 +295,8 @@ function createFailedIndexingHarness(
     const clearedExpectedDocumentDigests: Array<string | undefined> = [];
     let publishedCustomExtensions = [...(options.initialCustomExtensions ?? [])];
     let publishedCustomIgnorePatterns = [...(options.initialCustomIgnorePatterns ?? [])];
+    let standardPolicyResolutionCalls = 0;
+    let reindexPolicyResolutionCalls = 0;
     let writeCollectionOverride: string | null = null;
     let indexedSnapshots = 0;
     const publishedSnapshots: Array<{ status: string; collectionName?: string }> = [];
@@ -293,18 +315,38 @@ function createFailedIndexingHarness(
     const context = {
         getVectorStore: () => vectorStore,
         loadResolvedIgnorePatterns: async () => undefined,
-        resolveIndexPolicyForCodebase: async (_root: string, update: { customExtensions?: string[]; customIgnorePatterns?: string[] } = {}) => ({
-            canonicalRoot: path.resolve(_root),
-            profile: 'default',
-            customExtensions: update.customExtensions ?? publishedCustomExtensions,
-            customIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
-            supportedExtensions: ['.ts', ...(update.customExtensions ?? publishedCustomExtensions)],
-            effectiveIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
-            policyHash: JSON.stringify(update),
-        }),
+        resolveIndexPolicyForCodebase: async (_root: string, update: { customExtensions?: string[]; customIgnorePatterns?: string[] } = {}) => {
+            standardPolicyResolutionCalls += 1;
+            return {
+                canonicalRoot: path.resolve(_root),
+                profile: 'default',
+                customExtensions: update.customExtensions ?? publishedCustomExtensions,
+                customIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
+                supportedExtensions: ['.ts', ...(update.customExtensions ?? publishedCustomExtensions)],
+                effectiveIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
+                policyHash: JSON.stringify(update),
+            };
+        },
+        resolveIndexPolicyForReindex: async (_root: string, update: { customExtensions?: string[]; customIgnorePatterns?: string[] } = {}) => {
+            reindexPolicyResolutionCalls += 1;
+            return {
+                canonicalRoot: path.resolve(_root),
+                profile: 'default',
+                customExtensions: update.customExtensions ?? [],
+                customIgnorePatterns: update.customIgnorePatterns ?? [],
+                supportedExtensions: ['.ts', ...(update.customExtensions ?? [])],
+                effectiveIgnorePatterns: update.customIgnorePatterns ?? [],
+                policyHash: JSON.stringify(update),
+            };
+        },
         publishResolvedIndexPolicy: (
             policy: { canonicalRoot: string; policyHash: string; customExtensions: string[]; customIgnorePatterns: string[] },
-            binding: { collectionName: string; navigationGenerationId?: string },
+            binding: {
+                collectionName: string;
+                navigation:
+                    | { status: 'not_bound' }
+                    | { status: 'sealed'; generationId: string; sealHash: string };
+            },
             publishMutation?: (publish: () => void) => void,
         ) => {
             const receipt = {
@@ -316,7 +358,7 @@ function createFailedIndexingHarness(
                     : { documentDigest: options.policyPublicationDocumentDigest ?? 'a'.repeat(64) }),
                 policyHash: policy.policyHash,
                 collectionName: binding.collectionName,
-                ...(binding.navigationGenerationId ? { navigationGenerationId: binding.navigationGenerationId } : {}),
+                navigation: { ...binding.navigation },
             };
             const publish = () => {
                 publishedCustomExtensions = [...policy.customExtensions];
@@ -422,34 +464,22 @@ function createFailedIndexingHarness(
                 : null
         ),
         getIndexCompletionMarker: async () => options.previousIndexedInfo
-            ? {
-                kind: "satori_index_completion_v2",
-                codebasePath: "repo",
-                fingerprint: RUNTIME_FINGERPRINT,
+            ? buildMarker("repo", {
                 indexedFiles: Number(options.previousIndexedInfo.indexedFiles ?? 0),
                 totalChunks: Number(options.previousIndexedInfo.totalChunks ?? 0),
-                completedAt: new Date(0).toISOString(),
-                runId: "test-run",
-                indexPolicyHash: 'policy-hash',
                 indexStatus: options.previousIndexedInfo.indexStatus === "limit_reached" ? "limit_reached" : "completed",
-            }
+            })
             : null,
         resolveProvenGeneration: async (root: string) => {
             if (options.legacyRollback) return null;
             if (!options.previousIndexedInfo || typeof options.previousIndexedInfo.collectionName !== 'string') return null;
             return {
                 collectionName: options.previousIndexedInfo.collectionName,
-                marker: {
-                    kind: 'satori_index_completion_v2',
-                    codebasePath: 'repo',
-                    fingerprint: RUNTIME_FINGERPRINT,
+                marker: buildMarker('repo', {
                     indexedFiles: Number(options.previousIndexedInfo.indexedFiles ?? 0),
                     totalChunks: Number(options.previousIndexedInfo.totalChunks ?? 0),
-                    completedAt: new Date(0).toISOString(),
-                    runId: 'test-run',
-                    indexPolicyHash: 'policy-hash',
                     indexStatus: options.previousIndexedInfo.indexStatus === 'limit_reached' ? 'limit_reached' as const : 'completed' as const,
-                },
+                }),
                 navigation: null,
                 policy: {
                     canonicalRoot: path.resolve(root),
@@ -464,20 +494,15 @@ function createFailedIndexingHarness(
             };
         },
         proveVectorGeneration: async (root: string) => {
+            if (options.proveVectorGenerationError) throw options.proveVectorGenerationError;
             if (!options.previousIndexedInfo || typeof options.previousIndexedInfo.collectionName !== 'string') return null;
             return {
                 collectionName: options.previousIndexedInfo.collectionName,
-                marker: {
-                    kind: 'satori_index_completion_v2',
-                    codebasePath: 'repo',
-                    fingerprint: RUNTIME_FINGERPRINT,
+                marker: buildMarker('repo', {
                     indexedFiles: Number(options.previousIndexedInfo.indexedFiles ?? 0),
                     totalChunks: Number(options.previousIndexedInfo.totalChunks ?? 0),
-                    completedAt: new Date(0).toISOString(),
-                    runId: 'test-run',
-                    indexPolicyHash: 'policy-hash',
                     indexStatus: 'completed' as const,
-                },
+                }),
                 policy: {
                     canonicalRoot: path.resolve(root),
                     profile: 'default' as const,
@@ -539,6 +564,12 @@ function createFailedIndexingHarness(
         get indexedSnapshots() {
             return indexedSnapshots;
         },
+        get reindexPolicyResolutionCalls() {
+            return reindexPolicyResolutionCalls;
+        },
+        get standardPolicyResolutionCalls() {
+            return standardPolicyResolutionCalls;
+        },
         publishedSnapshots,
         publicationEvents,
         authorityEvents,
@@ -580,30 +611,27 @@ function createIndexLaunchHarness(
             getVectorStore: () => ({ checkCollectionLimit: async () => true }),
             resolveProvenGeneration: async () => options.initialIndexed ? {
                 collectionName: resolveCollectionName(repoPath),
-                marker: {
-                    kind: 'satori_index_completion_v2',
+                marker: buildMarker(repoPath, {
                     indexedFiles: 3,
                     totalChunks: 9,
                     indexStatus: 'completed',
-                },
+                }),
                 navigation: null,
             } : null,
             proveVectorGeneration: async () => options.initialIndexed ? {
                 collectionName: resolveCollectionName(repoPath),
-                marker: {
-                    kind: 'satori_index_completion_v2',
+                marker: buildMarker(repoPath, {
                     indexedFiles: 3,
                     totalChunks: 9,
                     indexStatus: 'completed',
-                },
+                }),
             } : null,
             getActiveIndexedCollectionName: async () => options.initialIndexed ? resolveCollectionName(repoPath) : null,
-            getIndexCompletionMarker: async () => options.initialIndexed ? {
-                kind: 'satori_index_completion_v2',
+            getIndexCompletionMarker: async () => options.initialIndexed ? buildMarker(repoPath, {
                 indexedFiles: 3,
                 totalChunks: 9,
                 indexStatus: 'completed',
-            } : null,
+            }) : null,
         },
         snapshotManager: {
             setCodebaseIndexing: () => { lifecycle = "indexing"; },
@@ -954,6 +982,52 @@ test("background indexing treats watcher touch as best effort after proof", asyn
             "policy:publish",
             "navigation:publish:candidate-generation",
         ]);
+    });
+});
+
+test("background indexing resolves create policy normally and force reindex policy without persisted authority", async () => {
+    await withTempRepo(async (repoPath) => {
+        const createHarness = createFailedIndexingHarness(new Set(), {
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+        });
+
+        await createHarness.handler.startBackgroundIndexing(repoPath, false);
+
+        assert.equal(createHarness.standardPolicyResolutionCalls, 1);
+        assert.equal(createHarness.reindexPolicyResolutionCalls, 0);
+
+        const reindexHarness = createFailedIndexingHarness(new Set(), {
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+        });
+
+        await reindexHarness.handler.startBackgroundIndexing(repoPath, true);
+
+        assert.equal(reindexHarness.standardPolicyResolutionCalls, 0);
+        assert.equal(reindexHarness.reindexPolicyResolutionCalls, 1);
+    });
+});
+
+test("force reindex continues when retired authority prevents optional previous-generation proof", async () => {
+    await withTempRepo(async (repoPath) => {
+        const harness = createFailedIndexingHarness(new Set([resolveCollectionName(repoPath)]), {
+            previousIndexedInfo: {
+                status: "indexed",
+                indexStatus: "completed",
+                fingerprintSource: "verified",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                collectionName: resolveCollectionName(repoPath),
+                indexedFiles: 1,
+                totalChunks: 1,
+            },
+            proveVectorGenerationError: new Error("index policy v2 requires reindex"),
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+        });
+
+        await harness.handler.startBackgroundIndexing(repoPath, true);
+
+        assert.equal(harness.indexedSnapshots, 1);
+        assert.equal(harness.failedSnapshots.length, 0);
+        assert.equal(harness.reindexPolicyResolutionCalls, 1);
     });
 });
 

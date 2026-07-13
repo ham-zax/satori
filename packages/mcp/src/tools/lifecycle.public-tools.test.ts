@@ -8,11 +8,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import {
     Context,
     createLanguageAnalysisService,
     Embedding,
+    INDEX_COMPLETION_MARKER_DOC_ID,
     resetSharedRuntimeNavigationStoreForTests,
+    resolveNavigationSidecarRoot,
 } from "@zokizuan/satori-core";
 import type {
     CollectionDetails,
@@ -28,8 +31,8 @@ import type {
 import { CapabilityResolver } from "../core/capabilities.js";
 import type { IndexFingerprint } from "../config.js";
 import { ToolHandlers } from "../core/handlers.js";
-import type { SnapshotManager } from "../core/snapshot.js";
-import type { SyncManager } from "../core/sync.js";
+import { SnapshotManager } from "../core/snapshot.js";
+import { SyncManager } from "../core/sync.js";
 import type { ToolContext } from "./types.js";
 import { listCodebasesTool } from "./list_codebases.js";
 import { manageIndexTool } from "./manage_index.js";
@@ -432,5 +435,212 @@ test("public tools lifecycle: status/list → search → outline → read_file a
             listAfterText.includes("No codebases") || !listAfterText.includes(repoPath),
             `expected cleared root absent from ready list: ${listAfterText.slice(0, 400)}`,
         );
+    });
+});
+
+test("public reindex replaces a coherent retired v2 tuple with restart-proven v3 authority", async () => {
+    await withTempState(async ({ repoPath, stateRoot }) => {
+        const previousHome = process.env.HOME;
+        process.env.HOME = path.join(path.dirname(stateRoot), "home");
+        try {
+            fs.mkdirSync(path.join(repoPath, "src"), { recursive: true });
+            fs.writeFileSync(
+                path.join(repoPath, "src", "auth.ts"),
+                "export function authenticate(token: string): boolean { return token.length > 0; }\n",
+                "utf8",
+            );
+
+            const vectorDatabase = new InMemoryVectorDatabase();
+            const policyRoot = path.join(stateRoot, "policies");
+            const context = new Context({
+                embedding: new TestEmbedding(),
+                vectorDatabase,
+                languageAnalyzer: createLanguageAnalysisService(),
+                symbolRegistryStateRoot: stateRoot,
+                indexPolicyStateRoot: policyRoot,
+            });
+            await context.recreateSynchronizerForCodebase(repoPath);
+            const initialIndex = await context.indexCodebase(repoPath);
+            assert.equal(initialIndex.status, "completed");
+
+            const canonicalRoot = fs.realpathSync(repoPath);
+            const collectionName = context.resolveCollectionName(canonicalRoot);
+            const markerDocument = vectorDatabase.collections
+                .get(collectionName)
+                ?.get(INDEX_COMPLETION_MARKER_DOC_ID);
+            assert.ok(markerDocument && typeof markerDocument.metadata === "object");
+            const currentMarker = structuredClone(markerDocument.metadata) as Record<string, unknown>;
+            const currentFingerprint = structuredClone(currentMarker.fingerprint) as IndexFingerprint;
+            const currentNavigation = currentMarker.navigation as {
+                status: "sealed";
+                generationId: string;
+                symbolRegistryManifestHash: string;
+                relationshipManifestHash: string;
+            };
+            assert.equal(currentNavigation.status, "sealed");
+
+            const policyPath = path.join(
+                policyRoot,
+                `${crypto.createHash("sha256").update(canonicalRoot).digest("hex")}.json`,
+            );
+            const pointerPath = path.join(
+                resolveNavigationSidecarRoot(stateRoot, canonicalRoot),
+                "current.json",
+            );
+            const currentPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8")) as Record<string, unknown>;
+            const legacyPolicyPayload = {
+                schemaVersion: "satori_index_policy_v2",
+                canonicalRoot,
+                customExtensions: currentPolicy.customExtensions,
+                customIgnorePatterns: currentPolicy.customIgnorePatterns,
+                fileBasedIgnorePatterns: currentPolicy.fileBasedIgnorePatterns,
+                profile: currentPolicy.profile,
+                supportedExtensions: currentPolicy.supportedExtensions,
+                effectiveIgnorePatterns: currentPolicy.effectiveIgnorePatterns,
+                policyHash: currentPolicy.policyHash,
+                collectionName,
+                navigationGenerationId: currentNavigation.generationId,
+            };
+            const legacyPolicyBytes = JSON.stringify({
+                ...legacyPolicyPayload,
+                documentDigest: crypto.createHash("sha256")
+                    .update(JSON.stringify(legacyPolicyPayload), "utf8")
+                    .digest("hex"),
+            });
+            fs.writeFileSync(policyPath, legacyPolicyBytes, "utf8");
+
+            const legacyPointer = JSON.parse(fs.readFileSync(pointerPath, "utf8")) as Record<string, unknown>;
+            legacyPointer.schemaVersion = "navigation_current_v2";
+            delete legacyPointer.navigationSealHash;
+            const legacyPointerBytes = JSON.stringify(legacyPointer);
+            fs.writeFileSync(pointerPath, legacyPointerBytes, "utf8");
+
+            markerDocument.metadata = {
+                ...currentMarker,
+                kind: "satori_index_completion_v2",
+                navigationGenerationId: currentNavigation.generationId,
+                symbolRegistryManifestHash: currentNavigation.symbolRegistryManifestHash,
+                relationshipManifestHash: currentNavigation.relationshipManifestHash,
+            };
+            delete (markerDocument.metadata as Record<string, unknown>).navigation;
+            const legacyMarker = structuredClone(markerDocument.metadata);
+
+            assert.deepEqual(
+                await context.getIndexCompletionMarkerForValidation(canonicalRoot),
+                { status: "requires_reindex" },
+            );
+
+            const snapshotManager = new SnapshotManager(currentFingerprint);
+            snapshotManager.setCodebaseIndexed(
+                canonicalRoot,
+                {
+                    indexedFiles: Number(currentMarker.indexedFiles),
+                    totalChunks: Number(currentMarker.totalChunks),
+                    status: "completed",
+                },
+                currentFingerprint,
+                "verified",
+                collectionName,
+                false,
+            );
+            const syncManager = new SyncManager(context, snapshotManager, { watchEnabled: false });
+            const handlers = new ToolHandlers(
+                context,
+                snapshotManager,
+                syncManager,
+                currentFingerprint,
+                CAPABILITIES,
+            );
+
+            type BackgroundStart = (
+                root: string,
+                force: boolean,
+                stagedCollection?: string,
+                lease?: unknown,
+                previousInfo?: Record<string, unknown>,
+                policyUpdate?: Record<string, unknown>,
+            ) => Promise<void>;
+            const internalIndexing = (handlers as unknown as {
+                manageIndexingHandlers: { startBackgroundIndexing: BackgroundStart };
+            }).manageIndexingHandlers;
+            const actualStart = internalIndexing.startBackgroundIndexing.bind(internalIndexing);
+            let background: Promise<void> | null = null;
+            (handlers as unknown as { startBackgroundIndexing?: BackgroundStart }).startBackgroundIndexing = (
+                ...args
+            ) => {
+                background = actualStart(...args);
+                return background;
+            };
+
+            const toolContext: ToolContext = {
+                context,
+                readFileMaxLines: 1000,
+                snapshotManager,
+                syncManager,
+                capabilities: CAPABILITIES,
+                reranker: null,
+                runtimeFingerprint: currentFingerprint,
+                toolHandlers: handlers,
+            };
+
+            const initialStatus = parsePayload(await manageIndexTool.execute({
+                action: "status",
+                path: canonicalRoot,
+            }, toolContext));
+            assert.equal(initialStatus.status, "requires_reindex");
+            const initialSearch = parsePayload(await searchCodebaseTool.execute({
+                path: canonicalRoot,
+                query: "authenticate token",
+            }, toolContext));
+            assert.equal(initialSearch.status, "requires_reindex");
+
+            const kickoff = await manageIndexTool.execute({
+                action: "reindex",
+                path: canonicalRoot,
+                allowUnnecessaryReindex: true,
+            }, toolContext);
+            assert.notEqual(kickoff.isError, true);
+            assert.ok(background, "public reindex must launch the background worker");
+            await background;
+
+            assert.notEqual(fs.readFileSync(policyPath, "utf8"), legacyPolicyBytes);
+            assert.notEqual(fs.readFileSync(pointerPath, "utf8"), legacyPointerBytes);
+            const publishedPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8")) as Record<string, unknown>;
+            const publishedPointer = JSON.parse(fs.readFileSync(pointerPath, "utf8")) as Record<string, unknown>;
+            assert.equal(publishedPolicy.schemaVersion, "satori_index_policy_v3");
+            assert.equal(publishedPointer.schemaVersion, "navigation_current_v3");
+            assert.equal(vectorDatabase.collections.has(collectionName), false);
+            const publishedCollectionName = publishedPolicy.collectionName;
+            assert.equal(typeof publishedCollectionName, "string");
+            const publishedMarker = vectorDatabase.collections
+                .get(publishedCollectionName as string)
+                ?.get(INDEX_COMPLETION_MARKER_DOC_ID)
+                ?.metadata as Record<string, unknown> | undefined;
+            assert.equal(publishedMarker?.kind, "satori_index_completion_v3");
+            assert.notDeepEqual(publishedMarker, legacyMarker);
+
+            const restarted = new Context({
+                embedding: new TestEmbedding(),
+                vectorDatabase,
+                languageAnalyzer: createLanguageAnalysisService(),
+                symbolRegistryStateRoot: stateRoot,
+                indexPolicyStateRoot: policyRoot,
+            });
+            const receipt = await restarted.proveIndexedGeneration(canonicalRoot);
+            assert.ok(receipt);
+            assert.equal(receipt.marker.kind, "satori_index_completion_v3");
+            assert.ok(receipt.navigation.navigationSealHash);
+            const results = await restarted.semanticSearchInProvenGeneration(receipt, {
+                codebasePath: canonicalRoot,
+                query: "authenticate token",
+                topK: 5,
+                retrievalMode: "dense",
+                scorePolicy: { kind: "topk_only" },
+            });
+            assert.ok(results.length > 0);
+        } finally {
+            if (previousHome === undefined) delete process.env.HOME;
+            else process.env.HOME = previousHome;
+        }
     });
 });

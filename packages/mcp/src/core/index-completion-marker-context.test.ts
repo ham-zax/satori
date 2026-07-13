@@ -168,9 +168,13 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
     };
 }
 
-function buildMarker(indexPolicyHash = 'test-policy'): IndexCompletionMarkerDocument {
+const TEST_POLICY_HASH = 'a'.repeat(64);
+const ORPHAN_POLICY_HASH = 'b'.repeat(64);
+const STAGED_POLICY_HASH = 'c'.repeat(64);
+
+function buildMarker(indexPolicyHash = TEST_POLICY_HASH): IndexCompletionMarkerDocument {
     return {
-        kind: 'satori_index_completion_v2',
+        kind: 'satori_index_completion_v3',
         codebasePath: '/repo/app',
         fingerprint: {
             embeddingProvider: 'VoyageAI',
@@ -187,6 +191,8 @@ function buildMarker(indexPolicyHash = 'test-policy'): IndexCompletionMarkerDocu
         completedAt: '2026-02-27T23:57:10.000Z',
         runId: 'run_20260227',
         indexPolicyHash,
+        indexStatus: 'completed',
+        navigation: { status: 'not_bound' },
     };
 }
 
@@ -238,7 +244,7 @@ test('Context marker lifecycle writes, reads, and clears completion marker doc',
     });
     const marker = await context.getIndexCompletionMarker(codebasePath);
     assert.ok(marker);
-    assert.equal(marker?.kind, 'satori_index_completion_v2');
+    assert.equal(marker?.kind, 'satori_index_completion_v3');
     assert.equal(marker?.runId, 'run_20260227');
 
     await context.clearIndexCompletionMarker(codebasePath);
@@ -246,7 +252,7 @@ test('Context marker lifecycle writes, reads, and clears completion marker doc',
     assert.equal(afterClear, null);
 });
 
-test('Context-backed completion proof classifies a stored v1 marker as legacy policy-unsealed', async () => {
+test('Context-backed completion proof requires reindex for a stored v1 marker', async () => {
     const { db } = createInMemoryVectorDb();
     const context = new Context({
         embedding: new FakeEmbedding(),
@@ -279,11 +285,11 @@ test('Context-backed completion proof classifies a stored v1 marker as legacy po
 
     assert.deepEqual(result, {
         outcome: 'stale_local',
-        reason: 'legacy_policy_unsealed',
+        reason: 'requires_reindex',
     });
 });
 
-test('Context-backed completion proof reports invalid v2 evidence before unrelated v1 evidence', async () => {
+test('Context-backed completion proof reports invalid v3 generation evidence before unrelated v1 evidence', async () => {
     const { db } = createInMemoryVectorDb();
     const context = new Context({
         embedding: new FakeEmbedding(),
@@ -294,19 +300,23 @@ test('Context-backed completion proof reports invalid v2 evidence before unrelat
     const legacyCollectionName = `${familyCollectionName}__gen_legacy`;
     await db.createHybridCollection(familyCollectionName, 4);
     await db.createHybridCollection(legacyCollectionName, 4);
-    await db.insertHybrid(familyCollectionName, [{
-        id: INDEX_COMPLETION_MARKER_DOC_ID,
-        vector: [0, 0, 0, 0],
-        content: 'invalid current marker',
-        relativePath: '.__satori__/index_completion_marker.json',
-        startLine: 0,
-        endLine: 0,
-        fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
-        metadata: {
-            ...buildMarker('policy-hash'),
-            indexedFiles: 'invalid',
+    await db.insertHybrid(familyCollectionName, [
+        buildChunkDoc('invalid_current_chunk', 'src/current.ts'),
+        {
+            id: INDEX_COMPLETION_MARKER_DOC_ID,
+            vector: [0, 0, 0, 0],
+            content: 'invalid current marker',
+            relativePath: '.__satori__/index_completion_marker.json',
+            startLine: 0,
+            endLine: 0,
+            fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+            metadata: {
+                ...buildMarker(),
+                codebasePath,
+                totalChunks: 2,
+            },
         },
-    }]);
+    ]);
     await db.insertHybrid(legacyCollectionName, [{
         id: INDEX_COMPLETION_MARKER_DOC_ID,
         vector: [0, 0, 0, 0],
@@ -332,7 +342,7 @@ test('Context-backed completion proof reports invalid v2 evidence before unrelat
     });
 });
 
-test('Context-backed completion proof does not let an orphan staged v2 mask the base legacy marker', async () => {
+test('Context-backed completion proof does not let an orphan staged v3 mask the base legacy marker', async () => {
     const { db } = createInMemoryVectorDb();
     const context = new Context({
         embedding: new FakeEmbedding(),
@@ -365,7 +375,7 @@ test('Context-backed completion proof does not let an orphan staged v2 mask the 
         endLine: 0,
         fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
         metadata: {
-            ...buildMarker('policy-hash'),
+            ...buildMarker(),
             indexedFiles: 'invalid',
         },
     }]);
@@ -377,11 +387,11 @@ test('Context-backed completion proof does not let an orphan staged v2 mask the 
 
     assert.deepEqual(result, {
         outcome: 'stale_local',
-        reason: 'legacy_policy_unsealed',
+        reason: 'requires_reindex',
     });
 });
 
-test('Context-backed completion proof does not let a valid unbound staged v2 mask the base legacy marker', async () => {
+test('Context-backed completion proof does not let a valid unbound staged v3 mask the base legacy marker', async () => {
     const { db } = createInMemoryVectorDb();
     const context = new Context({
         embedding: new FakeEmbedding(),
@@ -408,7 +418,7 @@ test('Context-backed completion proof does not let a valid unbound staged v2 mas
     await db.insertHybrid(orphanCollectionName, [
         buildChunkDoc('orphan_chunk', 'src/orphan.ts'),
         buildMarkerDoc({
-            ...buildMarker('orphan-policy'),
+            ...buildMarker(ORPHAN_POLICY_HASH),
             completedAt: '2026-07-12T00:00:00.000Z',
             runId: 'run_orphan_valid',
         }),
@@ -421,7 +431,7 @@ test('Context-backed completion proof does not let a valid unbound staged v2 mas
 
     assert.deepEqual(result, {
         outcome: 'stale_local',
-        reason: 'legacy_policy_unsealed',
+        reason: 'requires_reindex',
     });
 });
 
@@ -462,7 +472,7 @@ test('Context getIndexCompletionMarker selects the newest proven staged generati
     assert.equal(marker?.completedAt, '2026-02-28T23:57:10.000Z');
 });
 
-test('Context-backed validation prefers a base v2 generation over a newer unbound staged v2', async () => {
+test('Context-backed validation prefers a base v3 generation over a newer unbound staged v3', async () => {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-completion-bound-base-'));
     const { db } = createInMemoryVectorDb();
     const context = new Context({
@@ -487,18 +497,21 @@ test('Context-backed validation prefers a base v2 generation over a newer unboun
     await db.insertHybrid(stagedCollectionName, [
         buildChunkDoc('staged_chunk', 'src/staged.ts'),
         buildMarkerDoc({
-            ...buildMarker('staged-policy'),
+            ...buildMarker(STAGED_POLICY_HASH),
             completedAt: '2026-07-12T00:00:00.000Z',
             runId: 'run_staged_newer',
         }),
     ]);
-    context.publishResolvedIndexPolicy(policy, { collectionName: familyCollectionName });
+    context.publishResolvedIndexPolicy(policy, {
+        collectionName: familyCollectionName,
+        navigation: { status: 'not_bound' },
+    });
 
     try {
         const evidence = await context.getIndexCompletionMarkerForValidation(codebasePath);
 
-        assert.equal(evidence.status, 'valid_v2');
-        assert.equal(evidence.status === 'valid_v2' ? evidence.marker.runId : null, 'run_base_authoritative');
+        assert.equal(evidence.status, 'valid_v3');
+        assert.equal(evidence.status === 'valid_v3' ? evidence.marker.runId : null, 'run_base_authoritative');
     } finally {
         fs.rmSync(stateRoot, { recursive: true, force: true });
     }
@@ -574,11 +587,14 @@ test('Context getIndexCompletionMarker ignores a newer marker-only staged genera
     assert.equal(marker?.runId, 'run_proven');
 });
 
-test('Context semanticSearch always excludes completion marker docs from query filter', async () => {
+test('Context semanticSearch always excludes completion marker docs from query filter', async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-completion-filter-policy-'));
+    t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
     const { db, getLastHybridFilterExpr } = createInMemoryVectorDb();
     const context = new Context({
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
+        indexPolicyStateRoot: stateRoot,
     });
     const codebasePath = '/repo/app';
     const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
@@ -589,7 +605,10 @@ test('Context semanticSearch always excludes completion marker docs from query f
         buildChunkDoc('filter_chunk', 'src/runtime.ts'),
         buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
-    context.publishResolvedIndexPolicy(policy, { collectionName });
+    context.publishResolvedIndexPolicy(policy, {
+        collectionName,
+        navigation: { status: 'not_bound' },
+    });
 
     await context.semanticSearch({
         codebasePath,
@@ -606,7 +625,9 @@ test('Context semanticSearch always excludes completion marker docs from query f
     assert.match(filterExpr!, /fileExtension != "\.satori_meta"/);
 });
 
-test('Context semanticSearch uses the active staged generation when the base family collection is absent', async () => {
+test('Context semanticSearch uses the active staged generation when the base family collection is absent', async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-completion-active-policy-'));
+    t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
     const hybridResults: HybridSearchResult[] = [{
         document: buildChunkDoc('chunk_runtime', 'src/runtime.ts'),
         score: 0.91
@@ -615,6 +636,7 @@ test('Context semanticSearch uses the active staged generation when the base fam
     const context = new Context({
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
+        indexPolicyStateRoot: stateRoot,
     });
     const codebasePath = '/repo/app';
     const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
@@ -630,7 +652,10 @@ test('Context semanticSearch uses the active staged generation when the base fam
             runId: 'run_ready'
         })
     ]);
-    context.publishResolvedIndexPolicy(policy, { collectionName: stagedCollectionName });
+    context.publishResolvedIndexPolicy(policy, {
+        collectionName: stagedCollectionName,
+        navigation: { status: 'not_bound' },
+    });
 
     const results = await context.semanticSearch({
         codebasePath,
@@ -693,7 +718,10 @@ test('Context semanticSearch does not apply dense thresholds to hybrid RRF resul
         buildChunkDoc('hybrid_chunk', 'src/runtime.ts'),
         buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
-    context.publishResolvedIndexPolicy(policy, { collectionName });
+    context.publishResolvedIndexPolicy(policy, {
+        collectionName,
+        navigation: { status: 'not_bound' },
+    });
 
     const results = await context.semanticSearch({
         codebasePath,
@@ -750,7 +778,10 @@ test('Context semanticSearch request preserves dense thresholds and returns dens
         buildChunkDoc('dense_chunk', 'src/core/high.ts'),
         buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
-    context.publishResolvedIndexPolicy(policy, { collectionName });
+    context.publishResolvedIndexPolicy(policy, {
+        collectionName,
+        navigation: { status: 'not_bound' },
+    });
 
     const request: SemanticSearchRequest = {
         codebasePath,

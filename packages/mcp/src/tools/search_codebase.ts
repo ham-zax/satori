@@ -197,16 +197,16 @@ export const searchCodebaseTool: McpTool = {
             };
         }
 
-        const normalizedDebugMode: PublicSearchDebugMode = parsed.data.debugMode
-            ?? (parsed.data.debug === true ? "full" : "none");
+        const { debug: publicDebug, ...normalizedInput } = parsed.data;
+        const normalizedDebugMode: PublicSearchDebugMode = normalizedInput.debugMode
+            ?? (publicDebug === true ? "full" : "none");
         const input = {
-            ...parsed.data,
+            ...normalizedInput,
             path: absolutePathResult.absolutePath,
-            scope: parsed.data.scope ?? "runtime",
-            resultMode: parsed.data.resultMode ?? "grouped",
-            groupBy: parsed.data.groupBy ?? "symbol",
-            rankingMode: parsed.data.rankingMode ?? "auto_changed_first",
-            debug: normalizedDebugMode !== "none",
+            scope: normalizedInput.scope ?? "runtime",
+            resultMode: normalizedInput.resultMode ?? "grouped",
+            groupBy: normalizedInput.groupBy ?? "symbol",
+            rankingMode: normalizedInput.rankingMode ?? "auto_changed_first",
             debugMode: normalizedDebugMode,
         };
         const startedAt = Date.now();

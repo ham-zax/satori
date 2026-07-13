@@ -47,6 +47,10 @@ These are my preferences so we can stay aligned while we work.
   contract.
 - When public behavior changes, keep the code, focused tests, documentation,
   schemas, and generated contract artifacts in sync.
+- When tightening a required contract, enumerate its first-party consumers
+  before editing: production callers, unit and integration tests, fixtures,
+  scripts, and generated adapters. Use the graph for indexed code and a
+  bounded repository-wide search for consumers the graph does not cover.
 
 ## Safety
 
@@ -67,11 +71,11 @@ These are my preferences so we can stay aligned while we work.
 - The main agent owns synthesis, architecture decisions, and final repository
   edits unless I explicitly delegate a bounded implementation slice.
 - Read targeted files, symbols, and line ranges.
-- Avoid dumping whole directories, large files, logs, generated artifacts, or
-  build output into context.
-- Bound commands whose output may be large.
-- Avoid rereading unchanged files, repeating equivalent searches, or rerunning
-  unchanged commands without new evidence.
+- Keep context bounded: avoid dumping whole directories, large files, logs,
+  generated artifacts, or build output; do not reread unchanged files or repeat
+  equivalent searches without new evidence.
+- Start each long-running command once, bound its output, poll it sparingly, and
+  retain its final summary.
 - Prefer repository code, tests, and authoritative local documentation before
   external research. Use external sources for upstream or version-sensitive
   behavior that the repository cannot establish.
@@ -88,12 +92,19 @@ These are my preferences so we can stay aligned while we work.
 - A defect claim should connect expected behavior, observed behavior, a
   reachable runtime path, a demonstrated mismatch, and meaningful impact.
 - Prefer one focused falsification test over a pile of broad smoke tests.
-- Run the smallest relevant test first, then widen verification in proportion
-  to the affected boundary and risk.
-- Do not run the full validation suite merely because a file changed.
+- During iteration, run the smallest relevant test. Run broad or canonical
+  gates only when required by the affected boundary and risk, and only against
+  the final relevant diff.
 - For stateful behavior, consider the affected happy path and the most relevant
   failure, retry, recovery, rollback, or restoration path.
 - Inspect the complete diff before broad validation.
+- Treat validation as a dependency graph. Avoid overlapping commands unless
+  they prove distinct contracts, and reuse a green result while its relevant
+  inputs remain unchanged.
+- After a failure, rerun the failed gate and only the downstream gates
+  invalidated by its fix. A fixture-only edit invalidates its suite; a
+  production contract edit invalidates affected focused, package, and
+  integration coverage.
 - Before finishing, compare the requested outcome with the actual diff and
   report what was tested, what was not tested, and any remaining risk.
 

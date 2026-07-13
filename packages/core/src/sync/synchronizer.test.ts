@@ -3,8 +3,42 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { compareContractStrings } from '../utils/compare-contract-strings';
-import { FileSynchronizer } from './synchronizer';
+import {
+    FileSynchronizer,
+    SynchronizerCheckpointPublicationError,
+} from './synchronizer';
+
+function checkpointOptions(checkpointIdentity: string) {
+    return {
+        checkpointIdentity,
+        checkpointAuthority: {
+            collectionName: checkpointIdentity,
+            markerRunId: `run_${checkpointIdentity}`,
+            indexPolicyHash: 'a'.repeat(64),
+        },
+    };
+}
+
+test('FileSynchronizer rejects a checkpoint identity owned by another collection', () => {
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-owner-mismatch-'));
+    try {
+        assert.throws(
+            () => new FileSynchronizer(tempRepo, [], ['.ts'], {
+                checkpointIdentity: 'generation-a',
+                checkpointAuthority: {
+                    collectionName: 'generation-b',
+                    markerRunId: 'run_generation_b',
+                    indexPolicyHash: 'a'.repeat(64),
+                },
+            }),
+            /Checkpoint identity must match its collection authority/i,
+        );
+    } finally {
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+    }
+});
 
 function createDirectorySymlinkOrSkip(t: TestContext, target: string, linkPath: string): boolean {
     try {
@@ -538,6 +572,127 @@ test('FileSynchronizer publishes the snapshot and in-memory checkpoint inside on
     }
 });
 
+test('FileSynchronizer reports a durable checkpoint when publication acknowledgement throws after rename', async () => {
+    const previousHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-committed-error-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-committed-error-repo-'));
+
+    try {
+        process.env.HOME = tempHome;
+        const sourcePath = path.join(tempRepo, 'source.ts');
+        fs.writeFileSync(sourcePath, 'export const value = 1;\n', 'utf8');
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize();
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(tempRepo);
+        const baselineSnapshot = fs.readFileSync(snapshotPath, 'utf8');
+
+        fs.writeFileSync(sourcePath, 'export const value = 2;\n', 'utf8');
+        const prepared = await synchronizer.prepareChanges();
+        const error = await prepared.commit(
+            () => undefined,
+            (publish) => {
+                publish();
+                throw new Error('acknowledgement failed');
+            },
+        ).then(
+            () => undefined,
+            (failure: unknown) => failure,
+        );
+
+        assert.ok(error instanceof SynchronizerCheckpointPublicationError);
+        assert.equal(error.committed, true);
+        assert.equal(error.receipt.status, 'committed');
+        assert.equal(error.receipt.merkleRoot.length, 64);
+        assert.match(error.message, /acknowledgement failed/);
+        assert.notEqual(fs.readFileSync(snapshotPath, 'utf8'), baselineSnapshot);
+        assert.equal(synchronizer.getFileHash('source.ts'), prepared.fileHashes.get('source.ts'));
+
+        const restarted = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await restarted.initialize();
+        const pending = await restarted.prepareChanges();
+        assert.deepEqual(pending.changes.modified, []);
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
+test('FileSynchronizer can defer a full-index baseline until the candidate is published', async () => {
+    const previousHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-deferred-baseline-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-deferred-baseline-repo-'));
+
+    try {
+        process.env.HOME = tempHome;
+        fs.writeFileSync(path.join(tempRepo, 'source.ts'), 'export const value = 1;\n', 'utf8');
+
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize(undefined, undefined, { deferSnapshotPublication: true });
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(tempRepo);
+        assert.equal(fs.existsSync(snapshotPath), false);
+
+        const prepared = await synchronizer.prepareChanges();
+        await assert.rejects(
+            () => prepared.commit(() => {
+                throw new Error('mutation lease lost');
+            }),
+            /mutation lease lost/,
+        );
+        assert.equal(fs.existsSync(snapshotPath), false);
+
+        const retry = await synchronizer.prepareChanges();
+        await retry.commit();
+        assert.equal(fs.existsSync(snapshotPath), true);
+        assert.equal(synchronizer.getFileHash('source.ts')?.length, 64);
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
+test('FileSynchronizer defers legacy snapshot replacement until a prepared checkpoint commits', async () => {
+    const previousHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-deferred-legacy-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-deferred-legacy-repo-'));
+
+    try {
+        process.env.HOME = tempHome;
+        fs.writeFileSync(path.join(tempRepo, 'source.ts'), 'export const value = 1;\n', 'utf8');
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(tempRepo);
+        fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+        const legacySnapshot = JSON.stringify({
+            snapshotVersion: 1,
+            fileHashes: [['source.ts', '0'.repeat(64)]],
+            merkleRoot: '0'.repeat(64),
+        });
+        fs.writeFileSync(snapshotPath, legacySnapshot, 'utf8');
+
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize(undefined, undefined, { deferSnapshotPublication: true });
+        assert.equal(fs.readFileSync(snapshotPath, 'utf8'), legacySnapshot);
+
+        const prepared = await synchronizer.prepareChanges();
+        const receipt = await prepared.commit();
+        assert.equal(receipt.status, 'committed');
+        const current = JSON.parse(fs.readFileSync(snapshotPath, 'utf8')) as { snapshotVersion?: number };
+        assert.equal(current.snapshotVersion, 2);
+
+        const restarted = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await restarted.initialize();
+        const pending = await restarted.prepareChanges();
+        assert.deepEqual(pending.changes.modified, []);
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
 test('FileSynchronizer requires publication callbacks to invoke publish exactly once', async () => {
     const previousHome = process.env.HOME;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-publication-home-'));
@@ -571,6 +726,125 @@ test('FileSynchronizer requires publication callbacks to invoke publish exactly 
     } finally {
         if (previousHome === undefined) delete process.env.HOME;
         else process.env.HOME = previousHome;
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
+test('FileSynchronizer isolates authoritative checkpoints by generation and refuses a missing selected checkpoint', async () => {
+    const previousHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-generation-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-generation-repo-'));
+
+    try {
+        process.env.HOME = tempHome;
+        fs.writeFileSync(path.join(tempRepo, 'source.ts'), 'export const value = 1;\n', 'utf8');
+        const firstCollection = 'hybrid_code_chunks_test__gen_first';
+        const secondCollection = 'hybrid_code_chunks_test__gen_second';
+        const first = new FileSynchronizer(tempRepo, [], ['.ts'], checkpointOptions(firstCollection));
+        await first.initialize(undefined, undefined, { deferSnapshotPublication: true });
+        await (await first.prepareChanges({ forceFullHash: true })).commit();
+
+        const firstPath = FileSynchronizer.getSnapshotPathForGeneration(tempRepo, firstCollection);
+        const secondPath = FileSynchronizer.getSnapshotPathForGeneration(tempRepo, secondCollection);
+        assert.equal(fs.existsSync(firstPath), true);
+        assert.equal(fs.existsSync(secondPath), false);
+
+        const reopened = new FileSynchronizer(tempRepo, [], ['.ts'], checkpointOptions(firstCollection));
+        await reopened.initialize(undefined, undefined, { requireExistingCheckpoint: true });
+        const fresh = await reopened.prepareChanges({ forceFullHash: true });
+        assert.deepEqual(fresh.changes.modified, []);
+        const validEvidence = await reopened.inspectOwnedSnapshot();
+        assert.equal(validEvidence.status, 'valid');
+        if (validEvidence.status === 'valid') {
+            const observation = JSON.parse(validEvidence.observationToken) as {
+                documentDigest?: string;
+            };
+            const persisted = JSON.parse(fs.readFileSync(firstPath, 'utf8')) as {
+                documentDigest?: string;
+            };
+            assert.equal(observation.documentDigest, persisted.documentDigest);
+            assert.equal(reopened.getOwnedSnapshotObservationToken(), validEvidence.observationToken);
+        }
+
+        const originalCheckpoint = fs.readFileSync(firstPath, 'utf8');
+        fs.writeFileSync(firstPath, '{"snapshotVersion":3}', 'utf8');
+        const corruptEvidence = await reopened.inspectOwnedSnapshot();
+        assert.equal(corruptEvidence.status, 'corrupt');
+        fs.writeFileSync(firstPath, originalCheckpoint, 'utf8');
+
+        await assert.rejects(
+            () => reopened.deleteOwnedSnapshot(
+                () => undefined,
+                () => {
+                    throw new Error('lease lost before checkpoint cleanup');
+                },
+            ),
+            /lease lost before checkpoint cleanup/,
+        );
+        assert.equal(fs.existsSync(firstPath), true);
+
+        const migratableCheckpoint = JSON.parse(originalCheckpoint) as Record<string, unknown>;
+        migratableCheckpoint.fileStats = [];
+        delete migratableCheckpoint.documentDigest;
+        migratableCheckpoint.documentDigest = crypto.createHash('sha256')
+            .update(JSON.stringify(migratableCheckpoint))
+            .digest('hex');
+        const migratableBytes = JSON.stringify(migratableCheckpoint);
+        fs.writeFileSync(firstPath, migratableBytes, 'utf8');
+        const strictReopen = new FileSynchronizer(tempRepo, [], ['.ts'], checkpointOptions(firstCollection));
+        await assert.rejects(
+            () => strictReopen.initialize(undefined, undefined, { requireExistingCheckpoint: true }),
+            /fileHashes and fileStats must contain identical path sets/,
+        );
+        assert.equal(fs.readFileSync(firstPath, 'utf8'), migratableBytes);
+        fs.writeFileSync(firstPath, originalCheckpoint, 'utf8');
+
+        const missing = new FileSynchronizer(tempRepo, [], ['.ts'], checkpointOptions(secondCollection));
+        await assert.rejects(
+            () => missing.initialize(undefined, undefined, { requireExistingCheckpoint: true }),
+            /Authoritative generation checkpoint is missing/,
+        );
+        assert.equal(fs.existsSync(secondPath), false);
+
+        await FileSynchronizer.deleteSnapshot(tempRepo);
+        assert.equal(fs.existsSync(firstPath), false);
+        const missingEvidence = await reopened.inspectOwnedSnapshot();
+        assert.equal(missingEvidence.status, 'missing');
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
+test('FileSynchronizer forceFullHash hashes every selected source despite unchanged metadata', async () => {
+    const previousHome = process.env.HOME;
+    const previousInterval = process.env.SATORI_SYNC_FULL_HASH_EVERY_N;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-force-hash-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-force-hash-repo-'));
+
+    try {
+        process.env.HOME = tempHome;
+        process.env.SATORI_SYNC_FULL_HASH_EVERY_N = '1000';
+        fs.writeFileSync(path.join(tempRepo, 'one.ts'), 'export const one = 1;\n', 'utf8');
+        fs.writeFileSync(path.join(tempRepo, 'two.ts'), 'export const two = 2;\n', 'utf8');
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize();
+
+        const optimized = await synchronizer.prepareChanges();
+        assert.equal(optimized.changes.fullHashRun, false);
+        assert.equal(optimized.changes.hashedCount, 0);
+
+        const exact = await synchronizer.prepareChanges({ forceFullHash: true });
+        assert.equal(exact.changes.fullHashRun, true);
+        assert.equal(exact.changes.hashedCount, 2);
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        if (previousInterval === undefined) delete process.env.SATORI_SYNC_FULL_HASH_EVERY_N;
+        else process.env.SATORI_SYNC_FULL_HASH_EVERY_N = previousInterval;
+        fs.rmSync(tempRepo, { recursive: true, force: true });
         fs.rmSync(tempHome, { recursive: true, force: true });
     }
 });

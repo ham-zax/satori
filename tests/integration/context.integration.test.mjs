@@ -178,6 +178,30 @@ function createContext() {
   return { context, vectorDatabase };
 }
 
+async function publishCurrentAuthorityCheckpoint(context, codebasePath) {
+  const collectionName = await context.getActiveIndexedCollectionName(codebasePath);
+  const marker = await context.getIndexCompletionMarker(codebasePath);
+  assert.ok(collectionName, 'expected an active collection before publishing its source checkpoint');
+  assert.ok(marker, 'expected a completion marker before publishing its source checkpoint');
+
+  const synchronizer = new FileSynchronizer(
+    codebasePath,
+    context.getActiveIgnorePatterns(codebasePath),
+    context.getIndexedExtensionsForCodebase(codebasePath),
+    {
+      checkpointIdentity: collectionName,
+      checkpointAuthority: {
+        collectionName,
+        markerRunId: marker.runId,
+        indexPolicyHash: marker.indexPolicyHash,
+      },
+    },
+  );
+  await synchronizer.initialize();
+  context.registerSynchronizer(context.resolveCollectionName(codebasePath), synchronizer);
+  return collectionName;
+}
+
 class FailingInsertVectorDatabase extends InMemoryVectorDatabase {
   async insert() {
     throw new Error('Synthetic insert failure');
@@ -289,6 +313,7 @@ test('integration: reindex_by_change tracks add/modify/remove deltas', async () 
 
   try {
     await context.indexCodebase(codebasePath);
+    await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
     const baseline = await context.reindexByChange(codebasePath);
     assert.equal(baseline.added, 0);
@@ -452,16 +477,17 @@ test('integration: clearIndex removes local sync state when remote collection is
 
   try {
     await context.indexCodebase(codebasePath);
+    const collectionName = await publishCurrentAuthorityCheckpoint(context, codebasePath);
     const baseline = await context.reindexByChange(codebasePath);
     assert.equal(baseline.added, 0);
     assert.equal(baseline.removed, 0);
     assert.equal(baseline.modified, 0);
     assert.deepEqual(baseline.changedFiles, []);
 
-    const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(codebasePath);
+    const snapshotPath = FileSynchronizer.getSnapshotPathForGeneration(codebasePath, collectionName);
     assert.equal(fs.existsSync(snapshotPath), true);
 
-    await vectorDatabase.dropCollection(context.resolveCollectionName(codebasePath));
+    await vectorDatabase.dropCollection(collectionName);
     await context.clearIndex(codebasePath);
 
     assert.equal(await context.hasIndexedCollection(codebasePath), false);
@@ -606,6 +632,7 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
           }
         : { status: 'not_bound' },
     });
+    await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
     fs.writeFileSync(path.join(codebasePath, 'generated/drop.ts'), 'export const dropped = false;', 'utf8');
     const ignoredOnlyDelta = await context.reindexByChange(codebasePath);
@@ -634,6 +661,7 @@ test('integration: reindex_by_change tracks safe-broad text and config file chan
 
   try {
     await context.indexCodebase(codebasePath);
+    await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
     const baseline = await context.reindexByChange(codebasePath);
     assert.equal(baseline.added, 0);
@@ -672,6 +700,7 @@ test('integration: hidden supported files stay synchronized when not ignored', a
   try {
     const stats = await context.indexCodebase(codebasePath);
     assert.equal(stats.indexedFiles, 1);
+    await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
     const firstResults = await context.semanticSearch({
       codebasePath,

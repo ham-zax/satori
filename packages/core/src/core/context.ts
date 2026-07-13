@@ -86,7 +86,10 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
 import ignore from 'ignore';
-import { FileSynchronizer } from '../sync/synchronizer';
+import {
+    FileSynchronizer,
+    type SourceFreshnessCheckpointEvidence,
+} from '../sync/synchronizer';
 import {
     assertDescriptorBoundIndexingSupported,
     openRegularFileInsideRoot,
@@ -428,6 +431,8 @@ export type IndexCodebaseResult = {
     indexedFiles: number;
     totalChunks: number;
     status: 'completed' | 'limit_reached';
+    /** Exact SHA-256 identities of source bytes consumed by this full index. */
+    indexedFileHashes: ReadonlyMap<string, string>;
     navigationCandidate?: StagedNavigationSidecarGeneration;
 };
 
@@ -669,15 +674,44 @@ export class Context {
         codebasePath: string,
         assertMutationCurrent?: () => void,
         publishMutation?: (publish: () => void) => void,
+        options: { requireAuthorityCheckpoint?: boolean } = {},
     ): Promise<void> {
         this.loadIndexProfileForCodebase(codebasePath);
         const collectionName = this.resolveCollectionName(codebasePath);
+        const authorityBefore = options.requireAuthorityCheckpoint
+            ? await this.proveIndexedGeneration(codebasePath)
+            : null;
+        if (options.requireAuthorityCheckpoint && !authorityBefore) {
+            throw new Error(`Cannot recreate source freshness state for '${codebasePath}': no authoritative indexed generation is available.`);
+        }
         const synchronizer = new FileSynchronizer(
             codebasePath,
             this.getActiveIgnorePatterns(codebasePath),
-            this.getIndexedExtensionsForCodebase(codebasePath)
+            this.getIndexedExtensionsForCodebase(codebasePath),
+            authorityBefore ? {
+                checkpointIdentity: authorityBefore.collectionName,
+                checkpointAuthority: {
+                    collectionName: authorityBefore.collectionName,
+                    markerRunId: authorityBefore.marker.runId,
+                    indexPolicyHash: authorityBefore.marker.indexPolicyHash,
+                },
+            } : {},
         );
-        await synchronizer.initialize(assertMutationCurrent, publishMutation);
+        await synchronizer.initialize(assertMutationCurrent, publishMutation, {
+            requireExistingCheckpoint: authorityBefore !== null,
+        });
+        if (authorityBefore) {
+            assertMutationCurrent?.();
+            const authorityAfter = await this.proveIndexedGeneration(codebasePath);
+            if (
+                !authorityAfter
+                || authorityAfter.collectionName !== authorityBefore.collectionName
+                || authorityAfter.policyDocumentDigest !== authorityBefore.policyDocumentDigest
+                || !this.indexCompletionMarkersEqual(authorityAfter.marker, authorityBefore.marker)
+            ) {
+                throw new Error(`Cannot register source freshness state for '${codebasePath}': indexed authority changed while its checkpoint was loading.`);
+            }
+        }
         this.synchronizers.set(collectionName, synchronizer);
         this.synchronizerMutationTargets.delete(collectionName);
     }
@@ -697,6 +731,39 @@ export class Context {
 
     hasSynchronizerForCodebase(codebasePath: string): boolean {
         return this.synchronizers.has(this.resolveCollectionName(codebasePath));
+    }
+
+    async inspectSourceFreshnessCheckpoint(
+        codebasePath: string,
+        checkpointIdentity?: string,
+    ): Promise<SourceFreshnessCheckpointEvidence> {
+        const receipt = await this.proveVectorGeneration(codebasePath);
+        const requestedIdentity = checkpointIdentity?.trim();
+        if (!receipt || (requestedIdentity && requestedIdentity !== receipt.collectionName)) {
+            return {
+                status: 'corrupt',
+                message: 'Source freshness checkpoint cannot be inspected because no matching authoritative completed generation is available.',
+            };
+        }
+        const inspector = new FileSynchronizer(
+            codebasePath,
+            [],
+            [],
+            {
+                checkpointIdentity: receipt.collectionName,
+                checkpointAuthority: {
+                    collectionName: receipt.collectionName,
+                    markerRunId: receipt.marker.runId,
+                    indexPolicyHash: receipt.marker.indexPolicyHash,
+                },
+            },
+        );
+        return inspector.inspectOwnedSnapshot();
+    }
+
+    getRegisteredSourceFreshnessCheckpointObservation(codebasePath: string): string | null {
+        const synchronizer = this.synchronizers.get(this.resolveCollectionName(codebasePath));
+        return synchronizer?.getOwnedSnapshotObservationToken() ?? null;
     }
 
     /**
@@ -933,10 +1000,17 @@ export class Context {
             && record.relationshipVersion === right.relationshipVersion;
     }
 
-    private indexCompletionMarkersEqual(
+    public indexCompletionMarkersEqual(
         left: IndexCompletionMarkerDocument,
         right: IndexCompletionMarkerDocument,
     ): boolean {
+        const navigationEqual = left.navigation.status === right.navigation.status
+            && (left.navigation.status === 'not_bound'
+                || (right.navigation.status === 'sealed'
+                    && left.navigation.generationId === right.navigation.generationId
+                    && left.navigation.symbolRegistryManifestHash === right.navigation.symbolRegistryManifestHash
+                    && left.navigation.relationshipManifestHash === right.navigation.relationshipManifestHash
+                    && left.navigation.sealHash === right.navigation.sealHash));
         return left.codebasePath === right.codebasePath
             && left.runId === right.runId
             && left.indexedFiles === right.indexedFiles
@@ -944,7 +1018,7 @@ export class Context {
             && left.completedAt === right.completedAt
             && left.indexPolicyHash === right.indexPolicyHash
             && left.indexStatus === right.indexStatus
-            && JSON.stringify(left.navigation) === JSON.stringify(right.navigation)
+            && navigationEqual
             && this.indexCompletionFingerprintsMatch(left.fingerprint, right.fingerprint)
             && this.indexCompletionFingerprintsMatch(right.fingerprint, left.fingerprint);
     }
@@ -980,6 +1054,7 @@ export class Context {
         assertMutationCurrent?: () => void,
         navigationCandidate?: StagedNavigationSidecarGeneration,
         indexPolicyHash: string = this.buildIndexPolicyHash(codebasePath),
+        runId: string = crypto.randomUUID(),
     ): Promise<void> {
         const currentNavigation = indexStatus === 'completed' && !navigationCandidate
             ? await resolveCurrentNavigationGeneration(
@@ -994,7 +1069,7 @@ export class Context {
             indexedFiles,
             totalChunks,
             completedAt: new Date().toISOString(),
-            runId: crypto.randomUUID(),
+            runId,
             indexPolicyHash,
             indexStatus,
             navigation: navigationCandidate ? {
@@ -1809,7 +1884,13 @@ export class Context {
                 }, marker, options.publishMutation);
             }
             progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
-            return { indexedFiles: 0, totalChunks: 0, status: 'completed', ...(navigationCandidate ? { navigationCandidate } : {}) };
+            return {
+                indexedFiles: 0,
+                totalChunks: 0,
+                status: 'completed',
+                indexedFileHashes: new Map(),
+                ...(navigationCandidate ? { navigationCandidate } : {}),
+            };
         }
 
         // 3. Process each file with streaming chunk processing
@@ -1903,6 +1984,7 @@ export class Context {
             indexedFiles: result.processedFiles,
             totalChunks: result.totalChunks,
             status: result.status,
+            indexedFileHashes: result.indexedFileHashes,
             ...(navigationCandidate ? { navigationCandidate } : {}),
         };
     }
@@ -1956,7 +2038,7 @@ export class Context {
             throw new Error(`Cannot incrementally synchronize '${codebasePath}': no runtime-compatible sealed index policy is available; reindex is required.`);
         }
         const synchronizerKey = this.resolveCollectionName(codebasePath);
-        const synchronizer = this.synchronizers.get(synchronizerKey);
+        let synchronizer = this.synchronizers.get(synchronizerKey);
         const synchronizerAlreadyExisted = synchronizer !== undefined;
         const externallyManagedPublication = options.externallyManagedPublication === true;
         if (externallyManagedPublication && options.maintainCompletionMarker === true) {
@@ -2038,14 +2120,62 @@ export class Context {
             throw new Error(`Cannot incrementally synchronize '${codebasePath}': no runtime-compatible sealed index policy is available; reindex is required.`);
         }
 
+        const previousMarker = maintainCompletionMarker
+            ? await this.resolveCompletionMarkerForCollection(codebasePath, collectionName)
+            : null;
+        const checkpointAuthority = previousMarker ? {
+            collectionName,
+            markerRunId: previousMarker.runId,
+            indexPolicyHash: previousMarker.indexPolicyHash,
+        } : null;
+        const reusingWithdrawnMutationTarget = previousMarker === null
+            && this.synchronizerMutationTargets.get(synchronizerKey) === collectionName
+            && synchronizer?.ownsCheckpointIdentity(collectionName) === true;
+        const restoringMissingMarkerFromOwnedCheckpoint = previousMarker === null
+            && maintainCompletionMarker
+            && options.targetCollectionName?.trim() === collectionName
+            && synchronizer?.ownsCheckpointForCollectionPolicy(
+                collectionName,
+                sealedPolicy.policyHash,
+            ) === true;
+
+        if (
+            synchronizer
+            && !reusingWithdrawnMutationTarget
+            && !restoringMissingMarkerFromOwnedCheckpoint
+            && (!checkpointAuthority || !synchronizer.ownsCheckpointAuthority(checkpointAuthority))
+        ) {
+            if (!checkpointAuthority) {
+                throw new Error(`Cannot incrementally synchronize '${codebasePath}': no completion marker owns its source checkpoint.`);
+            }
+            await this.loadIgnorePatterns(codebasePath);
+            synchronizer = new FileSynchronizer(
+                codebasePath,
+                this.getActiveIgnorePatterns(codebasePath),
+                this.getIndexedExtensionsForCodebase(codebasePath),
+                { checkpointIdentity: collectionName, checkpointAuthority },
+            );
+            await synchronizer.initialize(options.assertMutationCurrent, options.publishMutation, {
+                requireExistingCheckpoint: true,
+            });
+            this.synchronizers.set(synchronizerKey, synchronizer);
+            this.synchronizerMutationTargets.delete(synchronizerKey);
+        }
+
         if (!synchronizer) {
+            if (!checkpointAuthority) {
+                throw new Error(`Cannot incrementally synchronize '${codebasePath}': no completion marker owns its source checkpoint.`);
+            }
             await this.loadIgnorePatterns(codebasePath);
             const newSynchronizer = new FileSynchronizer(
                 codebasePath,
                 this.getActiveIgnorePatterns(codebasePath),
-                this.getIndexedExtensionsForCodebase(codebasePath)
+                this.getIndexedExtensionsForCodebase(codebasePath),
+                { checkpointIdentity: collectionName, checkpointAuthority },
             );
-            await newSynchronizer.initialize(options.assertMutationCurrent, options.publishMutation);
+            await newSynchronizer.initialize(options.assertMutationCurrent, options.publishMutation, {
+                requireExistingCheckpoint: true,
+            });
             this.synchronizers.set(synchronizerKey, newSynchronizer);
             this.synchronizerMutationTargets.delete(synchronizerKey);
         }
@@ -2053,9 +2183,6 @@ export class Context {
         const currentSynchronizer = this.synchronizers.get(synchronizerKey)!;
         const targetCollectionName = collectionName;
         this.synchronizerMutationTargets.set(synchronizerKey, targetCollectionName);
-        const previousMarker = maintainCompletionMarker
-            ? await this.resolveCompletionMarkerForCollection(codebasePath, targetCollectionName)
-            : null;
         const markerWasMissing = maintainCompletionMarker && previousMarker === null;
 
         progressCallback?.({ phase: 'Checking for file changes...', current: 0, total: 100, percentage: 0 });
@@ -2064,13 +2191,26 @@ export class Context {
         const totalChanges = added.length + removed.length + modified.length;
 
         if (totalChanges === 0) {
+            const replacementRunId = maintainCompletionMarker && markerWasMissing
+                ? crypto.randomUUID()
+                : undefined;
             options.assertMutationCurrent?.();
-            await preparedChanges.commit(options.assertMutationCurrent, options.publishMutation);
+            await preparedChanges.commit(
+                options.assertMutationCurrent,
+                options.publishMutation,
+                replacementRunId ? {
+                    collectionName: targetCollectionName,
+                    markerRunId: replacementRunId,
+                    indexPolicyHash: sealedPolicy.policyHash,
+                } : undefined,
+            );
             if (maintainCompletionMarker && markerWasMissing) {
                 await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
                     requirePayloadProof: true,
                     assertMutationCurrent: options.assertMutationCurrent,
                     publishMutation: options.publishMutation,
+                    indexPolicyHash: sealedPolicy.policyHash,
+                    runId: replacementRunId,
                 });
             }
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });
@@ -2302,8 +2442,17 @@ export class Context {
                     throw error;
                 }
             }
+            const nextMarkerRunId = maintainCompletionMarker ? crypto.randomUUID() : undefined;
             options.assertMutationCurrent?.();
-            await preparedChanges.commit(options.assertMutationCurrent, options.publishMutation);
+            await preparedChanges.commit(
+                options.assertMutationCurrent,
+                options.publishMutation,
+                nextMarkerRunId ? {
+                    collectionName: targetCollectionName,
+                    markerRunId: nextMarkerRunId,
+                    indexPolicyHash: sealedPolicy.policyHash,
+                } : undefined,
+            );
             if (maintainCompletionMarker) {
                 if (preparedMarkerStats) {
                     await this.writeCompletedIndexMarker(
@@ -2313,12 +2462,17 @@ export class Context {
                         targetCollectionName,
                         'completed',
                         options.assertMutationCurrent,
+                        undefined,
+                        sealedPolicy.policyHash,
+                        nextMarkerRunId,
                     );
                 } else {
                     await this.refreshCompletionMarkerFromCurrentSource(codebasePath, targetCollectionName, {
                         requirePayloadProof: true,
                         assertMutationCurrent: options.assertMutationCurrent,
                         publishMutation: options.publishMutation,
+                        indexPolicyHash: sealedPolicy.policyHash,
+                        runId: nextMarkerRunId,
                     });
                 }
                 const publishedMarker = await this.resolveCompletionMarkerForCollection(
@@ -3830,11 +3984,11 @@ export class Context {
         ));
     }
 
-    private async readIndexableFileInsideRoot(
+    private async readIndexableFileObservationInsideRoot(
         filePath: string,
         codebasePath: string,
         indexPolicy?: ResolvedIndexPolicy,
-    ): Promise<string | null> {
+    ): Promise<{ content: string; sourceHash: string } | null> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const handle = await openRegularFileInsideRoot(filePath, canonicalRoot);
         try {
@@ -3855,7 +4009,8 @@ export class Context {
             );
             if (!indexable) return null;
 
-            const content = (await readFileHandleExactly(handle, before.size)).toString('utf8');
+            const sourceBytes = await readFileHandleExactly(handle, before.size);
+            const content = sourceBytes.toString('utf8');
             const after = await handle.stat();
             if (
                 after.dev !== before.dev
@@ -3875,10 +4030,26 @@ export class Context {
             } finally {
                 await currentPathHandle.close().catch(() => undefined);
             }
-            return content;
+            return {
+                content,
+                sourceHash: crypto.createHash('sha256').update(sourceBytes).digest('hex'),
+            };
         } finally {
             await handle.close().catch(() => undefined);
         }
+    }
+
+    private async readIndexableFileInsideRoot(
+        filePath: string,
+        codebasePath: string,
+        indexPolicy?: ResolvedIndexPolicy,
+    ): Promise<string | null> {
+        const observation = await this.readIndexableFileObservationInsideRoot(
+            filePath,
+            codebasePath,
+            indexPolicy,
+        );
+        return observation?.content ?? null;
     }
 
     private buildSupportedExtensions(profile: IndexProfile, canonicalRoot?: string): string[] {
@@ -3910,6 +4081,7 @@ export class Context {
         symbolRecords: SymbolRecord[];
         symbolManifestFiles: SymbolRegistryManifestFile[];
         analysisByFile: Map<string, RelationshipAnalysisEvidence>;
+        indexedFileHashes: ReadonlyMap<string, string>;
     }> {
         const isHybrid = this.getIsHybrid();
         const EMBEDDING_BATCH_SIZE = resolveEmbeddingBatchSize(envManager.get('EMBEDDING_BATCH_SIZE'));
@@ -3928,14 +4100,16 @@ export class Context {
         const symbolRecords: SymbolRecord[] = [];
         const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
         const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
+        const indexedFileHashes = new Map<string, string>();
         const describeError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
         for (let i = 0; i < filePaths.length; i++) {
             const filePath = filePaths[i];
 
             try {
-                const content = await this.readIndexableFileInsideRoot(filePath, codebasePath, indexPolicy);
-                if (content === null) continue;
+                const sourceObservation = await this.readIndexableFileObservationInsideRoot(filePath, codebasePath, indexPolicy);
+                if (sourceObservation === null) continue;
+                const { content } = sourceObservation;
                 const language = this.getLanguageFromFilePath(filePath);
                 const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
                 if (!relativePath) {
@@ -3948,6 +4122,7 @@ export class Context {
                     callSites: analysis.callSites,
                 });
                 const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+                indexedFileHashes.set(relativePath, sourceObservation.sourceHash);
                 const fileSymbols = buildSymbolRecordsForFile({
                     relativePath,
                     language,
@@ -4040,6 +4215,12 @@ export class Context {
             }
         }
 
+        if (!limitReached && indexedFileHashes.size !== processedFiles) {
+            throw new Error(
+                `Completed full index source coverage is inconsistent: ${processedFiles} processed files but ${indexedFileHashes.size} source identities.`,
+            );
+        }
+
         return {
             processedFiles,
             totalChunks,
@@ -4047,6 +4228,7 @@ export class Context {
             symbolRecords,
             symbolManifestFiles,
             analysisByFile,
+            indexedFileHashes,
         };
     }
 
@@ -4142,6 +4324,8 @@ export class Context {
             requirePayloadProof?: boolean;
             assertMutationCurrent?: () => void;
             publishMutation?: (publish: () => void) => void;
+            indexPolicyHash?: string;
+            runId?: string;
         } = {}
     ): Promise<void> {
         await this.loadIgnorePatterns(codebasePath);
@@ -4166,6 +4350,9 @@ export class Context {
             collectionName,
             'completed',
             options.assertMutationCurrent,
+            undefined,
+            options.indexPolicyHash,
+            options.runId,
         );
     }
 
@@ -5185,6 +5372,7 @@ export class Context {
         assertMutationCurrent?: () => void,
         navigationCandidate?: StagedNavigationSidecarGeneration,
         indexPolicyHash?: string,
+        runId?: string,
     ): Promise<void> {
         await this.writeCompletedIndexMarker(
             codebasePath,
@@ -5195,6 +5383,7 @@ export class Context {
             assertMutationCurrent,
             navigationCandidate,
             indexPolicyHash,
+            runId,
         );
     }
 

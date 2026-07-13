@@ -34,6 +34,21 @@ interface SnapshotV2 {
     fullHashCounter: number;
 }
 
+interface SnapshotV3 extends SnapshotV2 {
+    snapshotVersion: 3;
+    canonicalRoot: string;
+    checkpointIdentity: string;
+    collectionName: string;
+    markerRunId: string;
+    indexPolicyHash: string;
+    documentDigest: string;
+}
+
+type ParsedSnapshot = Partial<SnapshotV2> & Partial<Pick<
+    SnapshotV3,
+    'canonicalRoot' | 'checkpointIdentity' | 'collectionName' | 'markerRunId' | 'indexPolicyHash' | 'documentDigest'
+>>;
+
 interface ScanCandidate {
     relativePath: string;
     absolutePath: string;
@@ -81,16 +96,80 @@ export interface FileChangeResult {
     fullHashRun: boolean;
 }
 
+export type PreparedFileChangeCommitReceipt = {
+    readonly status: 'committed';
+    readonly checkpointVersion: number;
+    readonly merkleRoot: string;
+};
+
+export class SynchronizerCheckpointPublicationError extends Error {
+    readonly committed = true;
+
+    constructor(
+        message: string,
+        readonly receipt: PreparedFileChangeCommitReceipt,
+        readonly publicationCause: unknown,
+    ) {
+        super(message);
+        this.name = 'SynchronizerCheckpointPublicationError';
+    }
+}
+
 export interface PreparedFileChangeSet {
     readonly changes: FileChangeResult;
     readonly fileHashes: ReadonlyMap<string, string>;
     commit(
         assertMutationCurrent?: () => void,
         publishMutation?: (publish: () => void) => void,
-    ): Promise<void>;
+        checkpointAuthority?: SourceFreshnessCheckpointAuthority,
+    ): Promise<PreparedFileChangeCommitReceipt>;
 }
 
+export interface FileSynchronizerInitializeOptions {
+    /**
+     * Load and scan a missing or legacy checkpoint without publishing it yet.
+     * Full indexing uses this so a failed candidate cannot advance freshness
+     * beyond the authority that remains readable.
+     */
+    deferSnapshotPublication?: boolean;
+    /**
+     * Refuse to manufacture a baseline when reopening an authoritative
+     * generation. A missing generation checkpoint means freshness is unknown.
+     */
+    requireExistingCheckpoint?: boolean;
+}
+
+export interface FileSynchronizerOptions {
+    /** Durable authority identity whose source checkpoint this instance owns. */
+    checkpointIdentity?: string;
+    /** Existing v3 marker evidence that owns the checkpoint. */
+    checkpointAuthority?: SourceFreshnessCheckpointAuthority;
+}
+
+export type SourceFreshnessCheckpointAuthority = {
+    readonly collectionName: string;
+    readonly markerRunId: string;
+    readonly indexPolicyHash: string;
+};
+
+export interface PrepareFileChangesOptions {
+    /** Hash every selected source file instead of trusting cached metadata. */
+    forceFullHash?: boolean;
+}
+
+export type SourceFreshnessCheckpointEvidence =
+    | {
+        readonly status: 'valid';
+        readonly observationToken: string;
+        readonly merkleRoot: string;
+    }
+    | {
+        readonly status: 'missing' | 'corrupt';
+        readonly message: string;
+    };
+
 const SNAPSHOT_VERSION = 2;
+const GENERATION_SNAPSHOT_VERSION = 3;
 const DEFAULT_HASH_CONCURRENCY = 16;
 
 export class FileSynchronizer {
@@ -99,6 +178,9 @@ export class FileSynchronizer {
     private merkleRoot: string;
     private rootDir: string;
     private snapshotPath: string;
+    private checkpointIdentity: string | null;
+    private checkpointAuthority: SourceFreshnessCheckpointAuthority | null;
+    private snapshotDocumentDigest: string | null;
     private ignorePatterns: string[];
     private ignoreMatcher: ReturnType<typeof ignore>;
     private partialScan: boolean;
@@ -107,14 +189,34 @@ export class FileSynchronizer {
     private supportedExtensions: Set<string>;
     private checkpointVersion: number;
     private commitQueue: Promise<void>;
+    private snapshotRequiresPersistence: boolean;
 
     constructor(
         rootDir: string,
         ignorePatterns: string[] = [],
-        supportedExtensions: string[] = DEFAULT_SUPPORTED_EXTENSIONS
+        supportedExtensions: string[] = DEFAULT_SUPPORTED_EXTENSIONS,
+        options: FileSynchronizerOptions = {},
     ) {
         this.rootDir = FileSynchronizer.canonicalizeSnapshotIdentityPath(rootDir);
-        this.snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(this.rootDir);
+        this.checkpointIdentity = options.checkpointIdentity?.trim() || null;
+        this.checkpointAuthority = options.checkpointAuthority
+            ? FileSynchronizer.normalizeCheckpointAuthority(options.checkpointAuthority)
+            : null;
+        if (this.checkpointIdentity && !this.checkpointAuthority) {
+            throw new Error('[Synchronizer] Authority-scoped checkpoint requires exact marker ownership evidence.');
+        }
+        if (!this.checkpointIdentity && this.checkpointAuthority) {
+            throw new Error('[Synchronizer] Marker ownership evidence requires an authority-scoped checkpoint identity.');
+        }
+        if (
+            this.checkpointIdentity
+            && this.checkpointAuthority?.collectionName !== this.checkpointIdentity
+        ) {
+            throw new Error('[Synchronizer] Checkpoint identity must match its collection authority.');
+        }
+        this.snapshotPath = this.checkpointIdentity
+            ? FileSynchronizer.getSnapshotPathForGeneration(this.rootDir, this.checkpointIdentity)
+            : FileSynchronizer.getSnapshotPathForCodebase(this.rootDir);
         this.fileHashes = new Map();
         this.fileStats = new Map();
         this.merkleRoot = '';
@@ -129,6 +231,20 @@ export class FileSynchronizer {
         this.fullHashCounter = 0;
         this.checkpointVersion = 0;
         this.commitQueue = Promise.resolve();
+        this.snapshotRequiresPersistence = false;
+        this.snapshotDocumentDigest = null;
+    }
+
+    private static normalizeCheckpointAuthority(
+        authority: SourceFreshnessCheckpointAuthority,
+    ): SourceFreshnessCheckpointAuthority {
+        const collectionName = authority.collectionName.trim();
+        const markerRunId = authority.markerRunId.trim();
+        const indexPolicyHash = authority.indexPolicyHash.trim();
+        if (!collectionName || !markerRunId || !/^[a-f0-9]{64}$/.test(indexPolicyHash)) {
+            throw new Error('[Synchronizer] Checkpoint marker ownership evidence is malformed.');
+        }
+        return { collectionName, markerRunId, indexPolicyHash };
     }
 
     public static canonicalizeSnapshotIdentityPath(codebasePath: string): string {
@@ -143,16 +259,29 @@ export class FileSynchronizer {
         }
     }
 
-    public static snapshotPathFromCanonicalPath(canonicalPath: string): string {
+    public static snapshotPathFromCanonicalPath(canonicalPath: string, checkpointIdentity?: string): string {
         const homeDir = os.homedir();
         const merkleDir = path.join(homeDir, '.satori', 'merkle');
         const hash = crypto.createHash('md5').update(canonicalPath).digest('hex');
-        return path.join(merkleDir, `${hash}.json`);
+        if (!checkpointIdentity) {
+            return path.join(merkleDir, `${hash}.json`);
+        }
+        const identityHash = crypto.createHash('sha256').update(checkpointIdentity).digest('hex');
+        return path.join(merkleDir, `${hash}.${identityHash}.json`);
     }
 
     public static getSnapshotPathForCodebase(codebasePath: string): string {
         const canonicalPath = FileSynchronizer.canonicalizeSnapshotIdentityPath(codebasePath);
         return FileSynchronizer.snapshotPathFromCanonicalPath(canonicalPath);
+    }
+
+    public static getSnapshotPathForGeneration(codebasePath: string, checkpointIdentity: string): string {
+        const normalizedIdentity = checkpointIdentity.trim();
+        if (!normalizedIdentity) {
+            throw new Error('[Synchronizer] checkpointIdentity must be nonempty.');
+        }
+        const canonicalPath = FileSynchronizer.canonicalizeSnapshotIdentityPath(codebasePath);
+        return FileSynchronizer.snapshotPathFromCanonicalPath(canonicalPath, normalizedIdentity);
     }
 
     private static trimTrailingSeparators(inputPath: string): string {
@@ -650,6 +779,7 @@ export class FileSynchronizer {
         assertMutationCurrent?: () => void,
         publishMutation?: (publish: () => void) => void,
         afterPublish?: () => void,
+        checkpointAuthority: SourceFreshnessCheckpointAuthority | null = this.checkpointAuthority,
     ): Promise<void> {
         const merkleDir = path.dirname(this.snapshotPath);
         assertMutationCurrent?.();
@@ -669,7 +799,7 @@ export class FileSynchronizer {
         const fileHashes = Array.from(checkpoint.fileHashes.entries()).sort(([a], [b]) => compareContractStrings(a, b));
         const fileStats = Array.from(checkpoint.fileStats.entries()).sort(([a], [b]) => compareContractStrings(a, b));
 
-        const payload: SnapshotV2 = {
+        const basePayload: SnapshotV2 = {
             snapshotVersion: SNAPSHOT_VERSION,
             fileHashes,
             fileStats,
@@ -678,10 +808,64 @@ export class FileSynchronizer {
             unscannedDirPrefixes: [...checkpoint.unscannedDirPrefixes],
             fullHashCounter: checkpoint.fullHashCounter
         };
+        const payload: SnapshotV2 | SnapshotV3 = this.checkpointIdentity
+            ? (() => {
+                if (!checkpointAuthority) {
+                    throw new Error('[Synchronizer] Cannot publish an authority-scoped checkpoint without marker ownership evidence.');
+                }
+                const generationPayload = {
+                    ...basePayload,
+                    snapshotVersion: GENERATION_SNAPSHOT_VERSION,
+                    canonicalRoot: this.rootDir,
+                    checkpointIdentity: this.checkpointIdentity,
+                    collectionName: checkpointAuthority.collectionName,
+                    markerRunId: checkpointAuthority.markerRunId,
+                    indexPolicyHash: checkpointAuthority.indexPolicyHash,
+                };
+                return {
+                    ...generationPayload,
+                    documentDigest: crypto.createHash('sha256')
+                        .update(JSON.stringify(generationPayload))
+                        .digest('hex'),
+                };
+            })()
+            : basePayload;
 
+        const serializedPayload = JSON.stringify(payload);
+        const publishedDocumentDigest: string | null = 'documentDigest' in payload
+            && typeof payload.documentDigest === 'string'
+            ? payload.documentDigest
+            : null;
         const tempSnapshotPath = `${this.snapshotPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        let targetReplaced = false;
+        let checkpointApplied = false;
+        const applyPublishedCheckpoint = () => {
+            if (!checkpointApplied) {
+                this.checkpointAuthority = checkpointAuthority;
+                this.snapshotDocumentDigest = publishedDocumentDigest;
+                afterPublish?.();
+                checkpointApplied = true;
+            }
+        };
         try {
-            await fsp.writeFile(tempSnapshotPath, JSON.stringify(payload), 'utf-8');
+            const temporaryFile = await fsp.open(tempSnapshotPath, 'wx', 0o600);
+            try {
+                await temporaryFile.writeFile(serializedPayload, 'utf-8');
+                await temporaryFile.sync();
+            } finally {
+                await temporaryFile.close();
+            }
+            const publishSnapshot = () => {
+                fsSync.renameSync(tempSnapshotPath, this.snapshotPath);
+                targetReplaced = true;
+                const directory = fsSync.openSync(merkleDir, 'r');
+                try {
+                    fsSync.fsyncSync(directory);
+                } finally {
+                    fsSync.closeSync(directory);
+                }
+                applyPublishedCheckpoint();
+            };
             if (publishMutation) {
                 let publicationCount = 0;
                 publishMutation(() => {
@@ -689,16 +873,24 @@ export class FileSynchronizer {
                     if (publicationCount > 1) {
                         throw new Error('[Synchronizer] Snapshot publication callback invoked publish more than once.');
                     }
-                    fsSync.renameSync(tempSnapshotPath, this.snapshotPath);
-                    afterPublish?.();
+                    publishSnapshot();
                 });
                 if (publicationCount !== 1) {
                     throw new Error('[Synchronizer] Snapshot publication callback returned without publishing.');
                 }
             } else {
-                await fsp.rename(tempSnapshotPath, this.snapshotPath);
-                afterPublish?.();
+                publishSnapshot();
             }
+        } catch (error) {
+            if (
+                targetReplaced
+                && !checkpointApplied
+                && fsSync.existsSync(this.snapshotPath)
+                && fsSync.readFileSync(this.snapshotPath, 'utf8') === serializedPayload
+            ) {
+                applyPublishedCheckpoint();
+            }
+            throw error;
         } finally {
             await fsp.unlink(tempSnapshotPath).catch(() => undefined);
         }
@@ -784,12 +976,54 @@ export class FileSynchronizer {
         }
     }
 
-    private async loadSnapshot(): Promise<{ migrated: boolean }> {
+    private assertValidGenerationSnapshot(snapshot: ParsedSnapshot): void {
+        this.assertValidCurrentSnapshot(snapshot);
+        if (!this.checkpointIdentity) {
+            throw new Error('[Synchronizer] Generation checkpoint cannot be loaded without an authority identity.');
+        }
+        if (snapshot.canonicalRoot !== this.rootDir) {
+            throw new Error('[Synchronizer] Generation checkpoint canonical root does not match its owner.');
+        }
+        if (snapshot.checkpointIdentity !== this.checkpointIdentity) {
+            throw new Error('[Synchronizer] Generation checkpoint authority identity does not match its owner.');
+        }
+        if (!this.checkpointAuthority) {
+            throw new Error('[Synchronizer] Generation checkpoint cannot be validated without exact marker ownership evidence.');
+        }
+        if (
+            snapshot.collectionName !== this.checkpointAuthority.collectionName
+            || snapshot.markerRunId !== this.checkpointAuthority.markerRunId
+            || snapshot.indexPolicyHash !== this.checkpointAuthority.indexPolicyHash
+        ) {
+            throw new Error('[Synchronizer] Generation checkpoint does not belong to the active completion marker.');
+        }
+        if (typeof snapshot.documentDigest !== 'string' || !/^[a-f0-9]{64}$/.test(snapshot.documentDigest)) {
+            throw new Error('[Synchronizer] Generation checkpoint document digest is invalid.');
+        }
+        const { documentDigest, ...unsignedSnapshot } = snapshot;
+        const expectedDigest = crypto.createHash('sha256')
+            .update(JSON.stringify(unsignedSnapshot))
+            .digest('hex');
+        if (documentDigest !== expectedDigest) {
+            throw new Error('[Synchronizer] Generation checkpoint document digest does not match its payload.');
+        }
+    }
+
+    private async loadSnapshot(): Promise<{ migrated: boolean; missing: boolean }> {
         try {
             const data = await fsp.readFile(this.snapshotPath, 'utf-8');
-            const obj = JSON.parse(data) as Partial<SnapshotV2>;
-            if (obj.snapshotVersion === SNAPSHOT_VERSION) {
+            const obj = JSON.parse(data) as ParsedSnapshot;
+            if (obj.snapshotVersion === GENERATION_SNAPSHOT_VERSION) {
+                this.assertValidGenerationSnapshot(obj);
+                this.snapshotDocumentDigest = obj.documentDigest ?? null;
+            } else if (obj.snapshotVersion === SNAPSHOT_VERSION) {
+                if (this.checkpointIdentity) {
+                    throw new Error('[Synchronizer] Authority-scoped checkpoint uses the retired root-global snapshot shape.');
+                }
                 this.assertValidCurrentSnapshot(obj);
+                this.snapshotDocumentDigest = null;
+            } else if (this.checkpointIdentity) {
+                throw new Error('[Synchronizer] Authority-scoped checkpoint schema is unsupported.');
             }
 
             const rawFileHashes = Array.isArray(obj.fileHashes) ? obj.fileHashes : [];
@@ -836,8 +1070,9 @@ export class FileSynchronizer {
             this.fullHashCounter = Number.isFinite(Number(obj.fullHashCounter)) ? Number(obj.fullHashCounter) : 0;
 
             const isV2 = obj.snapshotVersion === SNAPSHOT_VERSION;
+            const isV3 = obj.snapshotVersion === GENERATION_SNAPSHOT_VERSION;
             const hasCompatibleStats = this.fileStats.size > 0 || this.fileHashes.size === 0;
-            const migrated = !isV2 || !hasCompatibleStats;
+            const migrated = !(this.checkpointIdentity ? isV3 : isV2) || !hasCompatibleStats;
 
             if (migrated) {
                 console.log(`Loaded legacy snapshot from ${this.snapshotPath}. Migration to v${SNAPSHOT_VERSION} required.`);
@@ -845,7 +1080,7 @@ export class FileSynchronizer {
                 console.log(`Loaded snapshot from ${this.snapshotPath}`);
             }
 
-            return { migrated };
+            return { migrated, missing: false };
         } catch (error: unknown) {
             if (errorCode(error) === 'ENOENT') {
                 console.log(`Snapshot file not found at ${this.snapshotPath}. Creating baseline snapshot.`);
@@ -855,10 +1090,109 @@ export class FileSynchronizer {
                 this.partialScan = false;
                 this.unscannedDirPrefixes = [];
                 this.fullHashCounter = 0;
-                return { migrated: true };
+                this.snapshotDocumentDigest = null;
+                return { migrated: true, missing: true };
             }
             throw error;
         }
+    }
+
+    private snapshotObservationToken(stat: fsSync.Stats): string | null {
+        if (!stat.isFile()) return null;
+        return JSON.stringify({
+            dev: stat.dev,
+            ino: stat.ino,
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            ctimeMs: stat.ctimeMs,
+        });
+    }
+
+    private getSnapshotObservationToken(): string | null {
+        try {
+            return this.snapshotObservationToken(fsSync.statSync(this.snapshotPath));
+        } catch (error: unknown) {
+            if (errorCode(error) === 'ENOENT') return null;
+            throw error;
+        }
+    }
+
+    /** Read-only validation for the durable checkpoint owned by this instance. */
+    public async inspectOwnedSnapshot(): Promise<SourceFreshnessCheckpointEvidence> {
+        if (!this.checkpointIdentity) {
+            return {
+                status: 'corrupt',
+                message: '[Synchronizer] Source freshness inspection requires an authority-scoped checkpoint.',
+            };
+        }
+        try {
+            const observationBefore = this.snapshotObservationToken(await fsp.stat(this.snapshotPath));
+            const data = await fsp.readFile(this.snapshotPath, 'utf8');
+            const observationAfter = this.snapshotObservationToken(await fsp.stat(this.snapshotPath));
+            if (!observationBefore || observationAfter !== observationBefore) {
+                throw new Error('[Synchronizer] Source freshness checkpoint changed while it was being inspected.');
+            }
+            const snapshot = JSON.parse(data) as ParsedSnapshot;
+            if (snapshot.snapshotVersion !== GENERATION_SNAPSHOT_VERSION) {
+                throw new Error('[Synchronizer] Authority-scoped checkpoint schema is unsupported.');
+            }
+            this.assertValidGenerationSnapshot(snapshot);
+            return {
+                status: 'valid',
+                observationToken: JSON.stringify({
+                    stat: observationAfter,
+                    documentDigest: snapshot.documentDigest,
+                }),
+                merkleRoot: snapshot.merkleRoot!,
+            };
+        } catch (error: unknown) {
+            if (errorCode(error) === 'ENOENT') {
+                return {
+                    status: 'missing',
+                    message: `[Synchronizer] Authoritative generation checkpoint is missing at ${this.snapshotPath}.`,
+                };
+            }
+            return {
+                status: 'corrupt',
+                message: errorMessage(error),
+            };
+        }
+    }
+
+    public getOwnedSnapshotObservationToken(): string | null {
+        if (!this.checkpointIdentity || !this.snapshotDocumentDigest) return null;
+        const stat = this.getSnapshotObservationToken();
+        return stat ? JSON.stringify({ stat, documentDigest: this.snapshotDocumentDigest }) : null;
+    }
+
+    public ownsCheckpointIdentity(checkpointIdentity: string): boolean {
+        return this.checkpointIdentity === checkpointIdentity.trim();
+    }
+
+    public ownsCheckpointAuthority(authority: SourceFreshnessCheckpointAuthority): boolean {
+        try {
+            const normalized = FileSynchronizer.normalizeCheckpointAuthority(authority);
+            return this.checkpointAuthority?.collectionName === normalized.collectionName
+                && this.checkpointAuthority.markerRunId === normalized.markerRunId
+                && this.checkpointAuthority.indexPolicyHash === normalized.indexPolicyHash;
+        } catch {
+            return false;
+        }
+    }
+
+    public ownsCheckpointForCollectionPolicy(
+        collectionName: string,
+        indexPolicyHash: string,
+    ): boolean {
+        const normalizedCollectionName = collectionName.trim();
+        return normalizedCollectionName.length > 0
+            && this.checkpointIdentity === normalizedCollectionName
+            && this.checkpointAuthority?.collectionName === normalizedCollectionName
+            && this.checkpointAuthority.indexPolicyHash === indexPolicyHash;
+    }
+
+    public getCheckpointIdentity(): string | null {
+        return this.checkpointIdentity;
     }
 
     private async scanCurrentState(
@@ -888,6 +1222,7 @@ export class FileSynchronizer {
         this.unscannedDirPrefixes = state.unscannedDirPrefixes;
         this.merkleRoot = state.merkleRoot;
         this.fullHashCounter = state.fullHashCounter;
+        this.snapshotRequiresPersistence = false;
     }
 
     private commitPreparedState(
@@ -896,51 +1231,92 @@ export class FileSynchronizer {
         shouldPersist: boolean,
         assertMutationCurrent?: () => void,
         publishMutation?: (publish: () => void) => void,
-    ): Promise<void> {
+        checkpointAuthority?: SourceFreshnessCheckpointAuthority,
+    ): Promise<PreparedFileChangeCommitReceipt> {
         const commit = this.commitQueue.then(async () => {
             if (this.checkpointVersion !== baseVersion) {
                 throw new Error('[Synchronizer] Cannot commit stale prepared changes. Prepare the filesystem delta again.');
             }
+            let checkpointApplied = false;
             const applyCheckpoint = () => {
                 this.applyCheckpointState(nextState);
                 this.checkpointVersion += 1;
+                checkpointApplied = true;
             };
-            if (shouldPersist) {
-                await this.saveSnapshot(
-                    nextState,
-                    assertMutationCurrent,
-                    publishMutation,
-                    applyCheckpoint,
-                );
-                return;
-            }
-            if (publishMutation) {
-                let publicationCount = 0;
-                publishMutation(() => {
-                    publicationCount += 1;
-                    if (publicationCount > 1) {
-                        throw new Error('[Synchronizer] Checkpoint publication callback invoked publish more than once.');
+            try {
+                const normalizedAuthority = checkpointAuthority
+                    ? FileSynchronizer.normalizeCheckpointAuthority(checkpointAuthority)
+                    : this.checkpointAuthority;
+                const authorityChanged = normalizedAuthority?.collectionName !== this.checkpointAuthority?.collectionName
+                    || normalizedAuthority?.markerRunId !== this.checkpointAuthority?.markerRunId
+                    || normalizedAuthority?.indexPolicyHash !== this.checkpointAuthority?.indexPolicyHash;
+                if (shouldPersist || authorityChanged) {
+                    await this.saveSnapshot(
+                        nextState,
+                        assertMutationCurrent,
+                        publishMutation,
+                        applyCheckpoint,
+                        normalizedAuthority,
+                    );
+                } else if (publishMutation) {
+                    let publicationCount = 0;
+                    publishMutation(() => {
+                        publicationCount += 1;
+                        if (publicationCount > 1) {
+                            throw new Error('[Synchronizer] Checkpoint publication callback invoked publish more than once.');
+                        }
+                        applyCheckpoint();
+                    });
+                    if (publicationCount !== 1) {
+                        throw new Error('[Synchronizer] Checkpoint publication callback returned without publishing.');
                     }
+                } else {
+                    assertMutationCurrent?.();
                     applyCheckpoint();
-                });
-                if (publicationCount !== 1) {
-                    throw new Error('[Synchronizer] Checkpoint publication callback returned without publishing.');
                 }
-            } else {
-                assertMutationCurrent?.();
-                applyCheckpoint();
+            } catch (error) {
+                if (checkpointApplied) {
+                    const receipt: PreparedFileChangeCommitReceipt = {
+                        status: 'committed',
+                        checkpointVersion: this.checkpointVersion,
+                        merkleRoot: nextState.merkleRoot,
+                    };
+                    throw new SynchronizerCheckpointPublicationError(
+                        `[Synchronizer] Checkpoint version ${receipt.checkpointVersion} committed before publication acknowledgement failed: ${errorMessage(error)}`,
+                        receipt,
+                        error,
+                    );
+                }
+                throw error;
             }
+            const receipt: PreparedFileChangeCommitReceipt = {
+                status: 'committed',
+                checkpointVersion: this.checkpointVersion,
+                merkleRoot: nextState.merkleRoot,
+            };
+            return receipt;
         });
-        this.commitQueue = commit.catch(() => undefined);
+        this.commitQueue = commit.then(() => undefined, () => undefined);
         return commit;
     }
 
     public async initialize(
         assertMutationCurrent?: () => void,
         publishMutation?: (publish: () => void) => void,
+        options: FileSynchronizerInitializeOptions = {},
     ): Promise<void> {
         console.log(`Initializing file synchronizer for ${this.rootDir}`);
-        const { migrated } = await this.loadSnapshot();
+        const { migrated, missing } = await this.loadSnapshot();
+
+        if (missing && options.requireExistingCheckpoint) {
+            throw new Error(`[Synchronizer] Authoritative generation checkpoint is missing at ${this.snapshotPath}.`);
+        }
+
+        if (migrated && options.requireExistingCheckpoint) {
+            throw new Error(
+                `[Synchronizer] Authoritative generation checkpoint at ${this.snapshotPath} is not fully compatible; reindex is required.`,
+            );
+        }
 
         if (migrated) {
             const previousHashes = new Map(this.fileHashes);
@@ -951,7 +1327,12 @@ export class FileSynchronizer {
             this.partialScan = effective.partialScan;
             this.unscannedDirPrefixes = effective.unscannedDirPrefixes;
             this.merkleRoot = computeMerkleRoot(this.fileHashes);
-            await this.saveSnapshot(undefined, assertMutationCurrent, publishMutation);
+            if (options.deferSnapshotPublication) {
+                this.snapshotRequiresPersistence = true;
+            } else {
+                await this.saveSnapshot(undefined, assertMutationCurrent, publishMutation);
+                this.snapshotRequiresPersistence = false;
+            }
         } else if (!this.merkleRoot) {
             this.merkleRoot = computeMerkleRoot(this.fileHashes);
         }
@@ -961,7 +1342,7 @@ export class FileSynchronizer {
         console.log(`[Synchronizer] File synchronizer initialized. Loaded ${this.fileHashes.size} tracked files.`);
     }
 
-    public async prepareChanges(): Promise<PreparedFileChangeSet> {
+    public async prepareChanges(options: PrepareFileChangesOptions = {}): Promise<PreparedFileChangeSet> {
         console.log('[Synchronizer] Checking for file changes...');
 
         const baseVersion = this.checkpointVersion;
@@ -973,7 +1354,8 @@ export class FileSynchronizer {
 
         const fullHashInterval = this.getFullHashInterval();
         const nextCounter = fullHashInterval > 0 ? this.fullHashCounter + 1 : this.fullHashCounter;
-        const fullHashRun = fullHashInterval > 0 && nextCounter % fullHashInterval === 0;
+        const fullHashRun = options.forceFullHash === true
+            || (fullHashInterval > 0 && nextCounter % fullHashInterval === 0);
 
         const { effective, hashedCount } = await this.scanCurrentState(previousHashes, previousStats, fullHashRun);
         const nextMerkleRoot = computeMerkleRoot(effective.fileHashes);
@@ -1004,8 +1386,12 @@ export class FileSynchronizer {
             merkleRoot: nextMerkleRoot,
             fullHashCounter: nextCounter,
         };
-        const shouldPersist = hasDiffs || hashedCount > 0 || metadataChanged || counterAdvanced;
-        let commit: Promise<void> | undefined;
+        const shouldPersist = this.snapshotRequiresPersistence
+            || hasDiffs
+            || hashedCount > 0
+            || metadataChanged
+            || counterAdvanced;
+        let commit: Promise<PreparedFileChangeCommitReceipt> | undefined;
 
         return {
             changes,
@@ -1013,6 +1399,7 @@ export class FileSynchronizer {
             commit: (
                 assertMutationCurrent?: () => void,
                 publishMutation?: (publish: () => void) => void,
+                checkpointAuthority?: SourceFreshnessCheckpointAuthority,
             ) => {
                 commit ??= this.commitPreparedState(
                     baseVersion,
@@ -1020,6 +1407,7 @@ export class FileSynchronizer {
                     shouldPersist,
                     assertMutationCurrent,
                     publishMutation,
+                    checkpointAuthority,
                 );
                 return commit;
             },
@@ -1048,22 +1436,105 @@ export class FileSynchronizer {
         return Array.from(this.fileHashes.keys()).sort();
     }
 
+    /** Remove only the checkpoint owned by this synchronizer instance. */
+    public async deleteOwnedSnapshot(
+        assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
+    ): Promise<void> {
+        if (assertMutationCurrent && !publishMutation) {
+            throw new Error('[Synchronizer] A mutation-fenced checkpoint deletion requires an atomic publication callback.');
+        }
+        if (publishMutation) {
+            let publicationCount = 0;
+            publishMutation(() => {
+                publicationCount += 1;
+                if (publicationCount > 1) {
+                    throw new Error('[Synchronizer] Checkpoint deletion callback invoked publish more than once.');
+                }
+                FileSynchronizer.deleteSnapshotPathSync(this.snapshotPath);
+            });
+            if (publicationCount !== 1) {
+                throw new Error('[Synchronizer] Checkpoint deletion callback returned without publishing.');
+            }
+            return;
+        }
+        assertMutationCurrent?.();
+        FileSynchronizer.deleteSnapshotPathSync(this.snapshotPath);
+    }
+
     /**
      * Delete snapshot file for a given codebase path.
      */
     static async deleteSnapshot(codebasePath: string): Promise<void> {
         const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(codebasePath);
+        const snapshotDirectory = path.dirname(snapshotPath);
+        const rootSnapshotName = path.basename(snapshotPath, '.json');
 
         try {
-            await fsp.unlink(snapshotPath);
-            console.log(`Deleted snapshot file: ${snapshotPath}`);
+            const entries = await fsp.readdir(snapshotDirectory, { withFileTypes: true });
+            const ownedSnapshotNames = entries
+                .filter((entry) => entry.isFile())
+                .map((entry) => entry.name)
+                .filter((name) => name === `${rootSnapshotName}.json`
+                    || (name.startsWith(`${rootSnapshotName}.`) && name.endsWith('.json')));
+            await Promise.all(ownedSnapshotNames.map((name) => fsp.unlink(path.join(snapshotDirectory, name))));
+            FileSynchronizer.fsyncDirectory(snapshotDirectory);
+            console.log(`Deleted ${ownedSnapshotNames.length} snapshot file(s) for: ${codebasePath}`);
         } catch (error: unknown) {
             if (errorCode(error) === 'ENOENT') {
-                console.log(`Snapshot file not found (already deleted): ${snapshotPath}`);
+                console.log(`Snapshot files not found (already deleted): ${snapshotPath}`);
             } else {
                 console.error(`[Synchronizer] Failed to delete snapshot file ${snapshotPath}:`, errorMessage(error));
                 throw error;
             }
+        }
+    }
+
+    static async deleteSnapshotForGeneration(
+        codebasePath: string,
+        checkpointIdentity: string,
+        assertMutationCurrent?: () => void,
+        publishMutation?: (publish: () => void) => void,
+    ): Promise<void> {
+        const snapshotPath = FileSynchronizer.getSnapshotPathForGeneration(codebasePath, checkpointIdentity);
+        if (assertMutationCurrent && !publishMutation) {
+            throw new Error('[Synchronizer] A mutation-fenced checkpoint deletion requires an atomic publication callback.');
+        }
+        if (publishMutation) {
+            let publicationCount = 0;
+            publishMutation(() => {
+                publicationCount += 1;
+                if (publicationCount > 1) {
+                    throw new Error('[Synchronizer] Checkpoint deletion callback invoked publish more than once.');
+                }
+                FileSynchronizer.deleteSnapshotPathSync(snapshotPath);
+            });
+            if (publicationCount !== 1) {
+                throw new Error('[Synchronizer] Checkpoint deletion callback returned without publishing.');
+            }
+            return;
+        }
+        assertMutationCurrent?.();
+        FileSynchronizer.deleteSnapshotPathSync(snapshotPath);
+    }
+
+    private static deleteSnapshotPathSync(snapshotPath: string): void {
+        try {
+            fsSync.unlinkSync(snapshotPath);
+            FileSynchronizer.fsyncDirectory(path.dirname(snapshotPath));
+        } catch (error: unknown) {
+            if (errorCode(error) !== 'ENOENT') {
+                throw error;
+            }
+        }
+    }
+
+    private static fsyncDirectory(directoryPath: string): void {
+        const directory = fsSync.openSync(directoryPath, 'r');
+        try {
+            fsSync.fsyncSync(directory);
+        } finally {
+            fsSync.closeSync(directory);
         }
     }
 }

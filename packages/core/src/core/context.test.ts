@@ -38,6 +38,7 @@ import {
     INDEX_COMPLETION_MARKER_DOC_ID,
     INDEX_COMPLETION_MARKER_FILE_EXTENSION as COMPLETION_MARKER_EXTENSION,
 } from '../vectordb';
+import { FileSynchronizer } from '../sync/synchronizer';
 
 class TestEmbedding extends Embedding {
     protected maxTokens = 8192;
@@ -173,6 +174,32 @@ function sealedPolicyBinding(
             sealHash: navigation.navigationSealHash,
         },
     };
+}
+
+async function publishCurrentAuthorityCheckpoint(
+    context: Context,
+    codebasePath: string,
+): Promise<void> {
+    const collectionName = await context.getActiveIndexedCollectionName(codebasePath);
+    const marker = await context.getIndexCompletionMarker(codebasePath);
+    assert.ok(collectionName);
+    assert.ok(marker);
+
+    const synchronizer = new FileSynchronizer(
+        codebasePath,
+        context.getActiveIgnorePatterns(codebasePath),
+        context.getIndexedExtensionsForCodebase(codebasePath),
+        {
+            checkpointIdentity: collectionName,
+            checkpointAuthority: {
+                collectionName,
+                markerRunId: marker.runId,
+                indexPolicyHash: marker.indexPolicyHash,
+            },
+        },
+    );
+    await synchronizer.initialize();
+    context.registerSynchronizer(context.resolveCollectionName(codebasePath), synchronizer);
 }
 
 class InMemoryVectorDatabase implements VectorDatabase {
@@ -623,6 +650,7 @@ test('Context.reindexByChange withdraws and republishes completion proof by defa
         });
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         const previousMarker = await context.getIndexCompletionMarker(codebasePath);
         assert.ok(previousMarker);
 
@@ -658,6 +686,7 @@ test('Context.reindexByChange publishes completion proof only after the synchron
         });
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const updatedContent = 'export const runtime = 2;\n';
         const expectedHash = crypto.createHash('sha256').update(updatedContent, 'utf8').digest('hex');
@@ -697,6 +726,7 @@ test('Context.reindexByChange refuses publication when exact post-sync payload p
         });
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const contextWithProcessFileList = context as unknown as ContextWithProcessFileList;
         const originalProcessFileList = contextWithProcessFileList.processFileList.bind(contextWithProcessFileList);
@@ -747,6 +777,7 @@ test('Context.reindexByChange removes stale payload for a newly added source pat
             totalChunks: previousMarker.totalChunks + 1,
             runId: 'marker-with-stale-future-row',
         }, collectionName);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         fs.writeFileSync(addedPath, 'export const future = true;\n', 'utf8');
         const result = await context.reindexByChange(codebasePath);
@@ -1105,6 +1136,10 @@ test('Context.indexCodebase writes a compatible symbol registry sidecar for comp
         const sidecar = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
 
         assert.equal(result.status, 'completed');
+        assert.equal(
+            result.indexedFileHashes.get('src/auth.ts'),
+            crypto.createHash('sha256').update(fs.readFileSync(sourcePath)).digest('hex'),
+        );
         assert.equal(sidecar.status, 'ok');
         assert.equal(sidecar.registry?.manifest.files.length, 1);
         assert.equal(sidecar.registry?.symbolsByFile.get('src/auth.ts')?.some((symbol) => symbol.kind === 'file'), true);
@@ -2011,6 +2046,7 @@ test('Context incremental sync clears its mutation target after a matching commi
         });
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         const originalPublish = context.publishResolvedIndexPolicy.bind(context);
         context.publishResolvedIndexPolicy = ((policy, binding) => originalPublish(
             policy,
@@ -4653,6 +4689,7 @@ test('Context.reindexByChange rebuilds navigation sidecars when tracked files ch
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath })).status, 'ok');
 
         const updatedContent = 'export const auth = false;\n';
@@ -4734,6 +4771,7 @@ test('Context.reindexByChange writes changed chunks to the active staged collect
                 : { status: 'not_bound' },
         });
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), stagedCollection);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         fs.writeFileSync(sourcePath, 'export const auth = false;\n', 'utf8');
         const result = await context.reindexByChange(codebasePath);
@@ -4749,7 +4787,7 @@ test('Context.reindexByChange writes changed chunks to the active staged collect
     }
 });
 
-test('Context.reindexByChange restores missing completion marker in trusted target collection', async () => {
+test('Context.reindexByChange restores a missing marker with its checkpoint-bound custom policy hash', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-marker-restore-'));
     const stateRoot = path.join(tempRoot, 'state');
     const codebasePath = path.join(tempRoot, 'repo');
@@ -4764,14 +4802,24 @@ test('Context.reindexByChange restores missing completion marker in trusted targ
             embedding: new TestEmbedding(),
             vectorDatabase,
             symbolRegistryStateRoot: stateRoot,
+            customExtensions: ['.satori-test'],
         });
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const collectionName = context.resolveCollectionName(codebasePath);
+        const originalMarker = await context.getIndexCompletionMarker(codebasePath);
+        assert.ok(originalMarker);
+        const expectedPolicyHash = originalMarker.indexPolicyHash;
         await context.clearIndexCompletionMarker(codebasePath);
         assert.equal(await context.getIndexCompletionMarker(codebasePath), null);
+
+        const internalContext = context as unknown as {
+            buildIndexPolicyHash(codebasePath: string): string;
+        };
+        internalContext.buildIndexPolicyHash = () => 'f'.repeat(64);
 
         const result = await context.reindexByChange(codebasePath, undefined, {
             targetCollectionName: collectionName,
@@ -4786,6 +4834,12 @@ test('Context.reindexByChange restores missing completion marker in trusted targ
         assert.ok(marker);
         assert.equal(marker.indexedFiles, 1);
         assert.equal(marker.totalChunks > 0, true);
+        assert.equal(marker.indexPolicyHash, expectedPolicyHash);
+        const checkpoint = JSON.parse(fs.readFileSync(
+            FileSynchronizer.getSnapshotPathForGeneration(codebasePath, collectionName),
+            'utf8',
+        )) as { indexPolicyHash?: string };
+        assert.equal(checkpoint.indexPolicyHash, expectedPolicyHash);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -4810,6 +4864,7 @@ test('Context.reindexByChange rebuilds missing navigation sidecars before no-cha
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const collectionName = context.resolveCollectionName(codebasePath);
         await context.clearIndexCompletionMarker(codebasePath);
@@ -4847,6 +4902,7 @@ test('Context.reindexByChange normal no-change sync with existing marker does no
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         assert.ok(await context.getIndexCompletionMarker(codebasePath));
 
         const proofContext = context as unknown as ContextWithExpectedChunks;
@@ -4886,6 +4942,7 @@ test('Context.reindexByChange refuses marker restore when an expected vector row
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const collectionName = context.resolveCollectionName(codebasePath);
         const documents = vectorDatabase.collections.get(collectionName);
@@ -4927,6 +4984,7 @@ test('Context.reindexByChange refuses marker restore when extra remote rows exis
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const collectionName = context.resolveCollectionName(codebasePath);
         await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('stale_extra_chunk')]);
@@ -5000,6 +5058,7 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const initialRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
         assert.equal(initialRegistry.status, 'ok');
@@ -5118,6 +5177,7 @@ test('Context.reindexByChange removes renamed-file navigation and publishes new 
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const initialRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
         assert.equal(initialRegistry.status, 'ok');
@@ -5283,6 +5343,7 @@ test('Context.reindexByChange clears navigation sidecars when changed-file index
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath })).status, 'ok');
 
         const contextWithProcessFileList = context as unknown as ContextWithProcessFileList;
@@ -5326,6 +5387,7 @@ test('Context.reindexByChange marker-maintaining partial sync clears old marker 
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         const collectionName = context.resolveCollectionName(codebasePath);
         assert.equal(vectorDatabase.collections.get(collectionName)?.has(INDEX_COMPLETION_MARKER_DOC_ID), true);
 
@@ -5370,6 +5432,7 @@ test('Context.reindexByChange clears incomplete navigation when a changed file p
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const initialRegistry = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
         assert.equal(initialRegistry.status, 'ok');
@@ -5421,6 +5484,7 @@ test('Context.reindexByChange rebuilds navigation sidecars when no compatible re
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         await clearSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
         assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath })).status, 'missing');
 
@@ -5470,6 +5534,7 @@ test('Context.reindexByChange marker-maintaining sync does not rewrite marker wh
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         const collectionName = context.resolveCollectionName(codebasePath);
         await clearSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath });
 
@@ -5512,6 +5577,7 @@ test('Context.reindexByChange retains the filesystem delta for retry when increm
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: codebasePath })).status, 'ok');
         assert.ok(await context.getIndexCompletionMarker(codebasePath));
 
@@ -5565,6 +5631,7 @@ test('Context.reindexByChange retries the exact staged mutation target after mar
         context.setWriteCollectionOverride(codebasePath, stagedCollection);
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), stagedCollection);
 
         const failingContext = context as unknown as ContextWithDeleteFileChunks;
@@ -5609,6 +5676,7 @@ test('Context.reindexByChange serializes concurrent syncs with an existing synch
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
         vectorDatabase.mutationCalls.length = 0;
 
         fs.writeFileSync(sourcePath, 'export const auth = false;\n', 'utf8');
@@ -5651,6 +5719,24 @@ test('Context.reindexByChange serializes first-use synchronizer creation', async
         });
         await baselineContext.recreateSynchronizerForCodebase(codebasePath);
         await baselineContext.indexCodebase(codebasePath);
+        const baselineCollection = await baselineContext.getActiveIndexedCollectionName(codebasePath);
+        assert.ok(baselineCollection);
+        const baselineMarker = await baselineContext.getIndexCompletionMarker(codebasePath);
+        assert.ok(baselineMarker);
+        const authorityCheckpoint = new FileSynchronizer(
+            codebasePath,
+            baselineContext.getActiveIgnorePatterns(codebasePath),
+            baselineContext.getIndexedExtensionsForCodebase(codebasePath),
+            {
+                checkpointIdentity: baselineCollection,
+                checkpointAuthority: {
+                    collectionName: baselineCollection,
+                    markerRunId: baselineMarker.runId,
+                    indexPolicyHash: baselineMarker.indexPolicyHash,
+                },
+            },
+        );
+        await authorityCheckpoint.initialize();
 
         const context = new Context({
             embedding: new TestEmbedding(),
@@ -5683,6 +5769,148 @@ test('Context.reindexByChange serializes first-use synchronizer creation', async
     }
 });
 
+test('Context.reindexByChange replaces a root-global synchronizer before authoritative mutation', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-authority-switch-'));
+    const previousHome = process.env.HOME;
+    const tempHome = path.join(tempRoot, 'home');
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(tempHome, { recursive: true });
+        process.env.HOME = tempHome;
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const auth = true;\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const baselineContext = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await baselineContext.recreateSynchronizerForCodebase(codebasePath);
+        await baselineContext.indexCodebase(codebasePath);
+        const activeCollection = await baselineContext.getActiveIndexedCollectionName(codebasePath);
+        assert.ok(activeCollection);
+        const activeMarker = await baselineContext.getIndexCompletionMarker(codebasePath);
+        assert.ok(activeMarker);
+
+        const activeCheckpoint = new FileSynchronizer(
+            codebasePath,
+            baselineContext.getActiveIgnorePatterns(codebasePath),
+            baselineContext.getIndexedExtensionsForCodebase(codebasePath),
+            {
+                checkpointIdentity: activeCollection,
+                checkpointAuthority: {
+                    collectionName: activeCollection,
+                    markerRunId: activeMarker.runId,
+                    indexPolicyHash: activeMarker.indexPolicyHash,
+                },
+            },
+        );
+        await activeCheckpoint.initialize();
+        const activeCheckpointPath = FileSynchronizer.getSnapshotPathForGeneration(
+            codebasePath,
+            activeCollection,
+        );
+        const previousCheckpointBytes = fs.readFileSync(activeCheckpointPath, 'utf8');
+
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+        const rootGlobalSynchronizer = new FileSynchronizer(
+            codebasePath,
+            context.getActiveIgnorePatterns(codebasePath),
+            context.getIndexedExtensionsForCodebase(codebasePath),
+        );
+        await rootGlobalSynchronizer.initialize();
+        context.registerSynchronizer(context.resolveCollectionName(codebasePath), rootGlobalSynchronizer);
+
+        fs.writeFileSync(sourcePath, 'export const auth = false;\n', 'utf8');
+        const result = await context.reindexByChange(codebasePath);
+
+        assert.equal(result.modified, 1);
+        const registered = context.getActiveSynchronizers().get(context.resolveCollectionName(codebasePath));
+        assert.ok(registered);
+        assert.equal(registered.ownsCheckpointIdentity(activeCollection), true);
+
+        fs.writeFileSync(activeCheckpointPath, previousCheckpointBytes, 'utf8');
+        const replayedCheckpoint = await context.inspectSourceFreshnessCheckpoint(codebasePath);
+        assert.equal(replayedCheckpoint.status, 'corrupt');
+        if (replayedCheckpoint.status === 'corrupt') {
+            assert.match(replayedCheckpoint.message, /does not belong to the active completion marker/);
+        }
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.recreateSynchronizerForCodebase rejects authority replacement while loading a checkpoint', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sync-recreate-race-'));
+    const previousHome = process.env.HOME;
+    const tempHome = path.join(tempRoot, 'home');
+    const codebasePath = path.join(tempRoot, 'repo');
+
+    try {
+        fs.mkdirSync(tempHome, { recursive: true });
+        process.env.HOME = tempHome;
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'index.ts'), 'export const value = 1;\n', 'utf8');
+
+        const firstCollection = 'hybrid_code_chunks_race__gen_first';
+        const checkpoint = new FileSynchronizer(codebasePath, [], ['.ts'], {
+            checkpointIdentity: firstCollection,
+            checkpointAuthority: {
+                collectionName: firstCollection,
+                markerRunId: 'run_first',
+                indexPolicyHash: 'a'.repeat(64),
+            },
+        });
+        await checkpoint.initialize();
+
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            symbolRegistryStateRoot: path.join(tempRoot, 'state'),
+        });
+        let proofCalls = 0;
+        (context as unknown as {
+            proveIndexedGeneration: () => Promise<unknown>;
+        }).proveIndexedGeneration = async () => {
+            proofCalls += 1;
+            return {
+                collectionName: proofCalls === 1 ? firstCollection : 'hybrid_code_chunks_race__gen_second',
+                policyDocumentDigest: 'a'.repeat(64),
+                marker: {
+                    runId: 'run_first',
+                    indexPolicyHash: 'a'.repeat(64),
+                },
+            };
+        };
+
+        await assert.rejects(
+            () => context.recreateSynchronizerForCodebase(
+                codebasePath,
+                undefined,
+                undefined,
+                { requireAuthorityCheckpoint: true },
+            ),
+            /indexed authority changed while its checkpoint was loading/,
+        );
+        assert.equal(proofCalls, 2);
+        assert.equal(context.hasSynchronizerForCodebase(codebasePath), false);
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context.writeSymbolRegistryForCompletedIndex removes stale sqlite cache when import fails', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sqlite-import-failure-'));
     const stateRoot = path.join(tempRoot, 'state');
@@ -5701,6 +5929,7 @@ test('Context.writeSymbolRegistryForCompletedIndex removes stale sqlite cache wh
 
         await context.recreateSynchronizerForCodebase(codebasePath);
         await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const sqlitePath = resolveNavigationSqlitePath(stateRoot, codebasePath);
         assert.equal(fs.existsSync(sqlitePath), true);

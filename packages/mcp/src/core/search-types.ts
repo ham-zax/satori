@@ -223,6 +223,28 @@ export interface SearchFreshnessSummary {
     changedFilesBoostSkippedForLargeChangeSet: boolean;
 }
 
+export type SearchReadinessInvalidationReason =
+    | "none"
+    | "cache_miss"
+    | "idle_expired"
+    | "proof_expired"
+    | "observation_unavailable"
+    | "observation_changed"
+    | "revalidation_failed"
+    | "freshness_changed";
+
+export interface SearchReadinessDebugHint {
+    proofMode: "cold" | "warm";
+    invalidationReason: SearchReadinessInvalidationReason;
+    operations: {
+        preparedCacheLookups: number;
+        preparedCacheHits: number;
+        coldReadinessChecks: number;
+        warmReceiptRevalidations: number;
+        exactPayloadRecounts: number;
+    };
+}
+
 export interface SearchOperatorSummary {
     prefixBlockChars: number;
     lang: string[];
@@ -291,6 +313,7 @@ export interface SearchDebugHint {
         grouping: number;
         navigationValidation: number;
     };
+    readiness: SearchReadinessDebugHint;
     passesUsed: string[];
     candidateLimit: number;
     mustRetry: {
@@ -395,7 +418,7 @@ export type SearchRankingDebugHint = Pick<SearchDebugHint,
     | "rerank"
 >;
 
-export type SearchFreshnessDebugHint = Pick<SearchDebugHint, "phaseTimingsMs" | "changedCode">;
+export type SearchFreshnessDebugHint = Pick<SearchDebugHint, "phaseTimingsMs" | "readiness" | "changedCode">;
 
 export interface SearchResponseHints extends Record<string, unknown> {
     version?: 1;

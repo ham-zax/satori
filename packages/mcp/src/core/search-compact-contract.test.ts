@@ -147,6 +147,17 @@ test("debug modes are projected from explicit source-level whitelists", () => {
         retrieval: { mode: "hybrid", scorePolicyKind: "hybrid", backendScoreKinds: ["rrf"] },
         rankingProvenance: { semanticPassesUsed: ["primary"], lexicalPassesUsed: [], livePathSupplementUsed: false, lexicalFileScanUsed: false, rerankApplied: false, exactMatchPinningApplied: false, registryRepairGroupCount: 0 },
         phaseTimingsMs: { prepareRead: 4 },
+        readiness: {
+            proofMode: "warm",
+            invalidationReason: "none",
+            operations: {
+                preparedCacheLookups: 1,
+                preparedCacheHits: 1,
+                coldReadinessChecks: 0,
+                warmReceiptRevalidations: 1,
+                exactPayloadRecounts: 0,
+            },
+        },
         passesUsed: ["primary"],
         candidateLimit: 32,
         mustRetry: { attempts: 1, maxAttempts: 1, applied: false, satisfied: true, finalCount: 1 },
@@ -182,13 +193,14 @@ test("debug modes are projected from explicit source-level whitelists", () => {
         } } : {}),
         ...(debugMode === "freshness" ? { debugSearch: {
             phaseTimingsMs: fullDebug.phaseTimingsMs,
+            readiness: fullDebug.readiness,
             changedCode: fullDebug.changedCode,
         } } : {}),
         results: [],
     });
 
     assert.equal(build("summary").hints?.debugSearch, undefined);
-    assert.deepEqual(Object.keys(build("freshness").hints?.debugSearch ?? {}).sort(), ["changedCode", "phaseTimingsMs"]);
+    assert.deepEqual(Object.keys(build("freshness").hints?.debugSearch ?? {}).sort(), ["changedCode", "phaseTimingsMs", "readiness"]);
     const rankingKeys = Object.keys(build("ranking").hints?.debugSearch ?? {});
     assert.equal(rankingKeys.includes("phaseTimingsMs"), false);
     assert.equal(rankingKeys.includes("changedCode"), false);

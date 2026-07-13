@@ -77,6 +77,7 @@ export type TrackedRootReadinessState =
         generationReceipt?: ProvenGenerationReceipt;
         navigationStatus?: CompletionProofValidationResult['navigationStatus'];
         preparedObservation?: string;
+        exactPayloadRecounts?: number;
     }
     | { state: "requires_reindex"; codebasePath: string; message?: string }
     | { state: "indexing"; codebasePath: string }
@@ -530,6 +531,9 @@ export class TrackedRootReadiness {
             ...(completionProof.vectorReceipt ? { vectorReceipt: completionProof.vectorReceipt } : {}),
             ...(completionProof.generationReceipt ? { generationReceipt: completionProof.generationReceipt } : {}),
             navigationStatus: completionProof.navigationStatus ?? 'unverified',
+            exactPayloadRecounts: completionProof.outcome === "valid" || collectionState.state === "ready"
+                ? 1
+                : 0,
             ...(preparedObservationBefore
                 && preparedObservationAfter === preparedObservationBefore
                 ? { preparedObservation: preparedObservationAfter }

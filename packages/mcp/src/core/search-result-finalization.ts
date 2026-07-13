@@ -26,6 +26,7 @@ import type {
     CallGraphHint,
     SearchDebugHint,
     SearchFreshnessSummary,
+    SearchReadinessDebugHint,
     SearchResponseHints,
     SearchResponseEnvelope,
 } from "./search-types.js";
@@ -78,6 +79,7 @@ type FinalizeSearchResultsInput = {
     proofDebugHint?: CompletionProbeDebugHint;
     partialIndexSearchWarnings: string[];
     phaseTimings: NonNullable<SearchDebugHint["phaseTimingsMs"]>;
+    readiness: SearchReadinessDebugHint;
     parsedOperators: ParsedSearchOperators;
     queryPlan: SearchQueryPlan;
     maxAttempts: number;
@@ -272,11 +274,11 @@ export async function finalizeSearchResults(
             ...(changedCode ? { changedCode } : {}),
         }, freshnessSummary);
         const debugSearch = input.debugMode === "full"
-            ? { ...rankingDebug!, phaseTimingsMs: input.phaseTimings, ...(changedCode ? { changedCode } : {}) }
+            ? { ...rankingDebug!, phaseTimingsMs: input.phaseTimings, readiness: input.readiness, ...(changedCode ? { changedCode } : {}) }
             : input.debugMode === "ranking"
                 ? rankingDebug
                 : input.debugMode === "freshness"
-                    ? { phaseTimingsMs: input.phaseTimings, ...(changedCode ? { changedCode } : {}) }
+                    ? { phaseTimingsMs: input.phaseTimings, readiness: input.readiness, ...(changedCode ? { changedCode } : {}) }
                     : undefined;
         return {
             ...(debugSummary ? { debugSummary } : {}),

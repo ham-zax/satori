@@ -64,3 +64,93 @@ test("prepared read cache exposes a cloned vector candidate without evicting on 
     )?.state, { receipt: { collectionName: "generation-a" } });
     assert.equal(cache.size, 1);
 });
+
+test("prepared read cache expires a frequently used proof at its absolute age", () => {
+    const cache = new PreparedReadCache<{ receipt: string }>(32, 10, 20);
+    cache.seed("/repo", { receipt: "proof-1" }, "authority-1", 0);
+
+    assert.equal(cache.lookupCandidate("/repo/src", 9, (path, root) => path.startsWith(root)).status, "hit");
+    cache.seed("/repo", { receipt: "proof-2" }, "authority-1", 9, true);
+    assert.equal(cache.lookupCandidate("/repo/src", 18, (path, root) => path.startsWith(root)).status, "hit");
+    assert.deepEqual(
+        cache.lookupCandidate("/repo/src", 20, (path, root) => path.startsWith(root)),
+        { status: "miss", reason: "proof_expired" },
+    );
+    assert.equal(cache.size, 0);
+});
+
+test("prepared read cache preserves proof age across a warm navigation observation change", () => {
+    const cache = new PreparedReadCache<{ receipt: string }>(32, 100, 20);
+    cache.seed("/repo", { receipt: "proof-1" }, "navigation-1", 0);
+    cache.seed("/repo", { receipt: "proof-1" }, "navigation-2", 19, true);
+
+    assert.deepEqual(
+        cache.lookupCandidate("/repo/src", 20, (path, root) => path.startsWith(root)),
+        { status: "miss", reason: "proof_expired" },
+    );
+});
+
+test("prepared read cache resets proof age after a cold proof", () => {
+    const cache = new PreparedReadCache<{ receipt: string }>(32, 100, 20);
+    cache.seed("/repo", { receipt: "proof-1" }, "navigation-1", 0);
+    cache.seed("/repo", { receipt: "proof-2" }, "navigation-1", 19);
+
+    assert.equal(
+        cache.lookupCandidate("/repo/src", 20, (path, root) => path.startsWith(root)).status,
+        "hit",
+    );
+});
+
+test("prepared read cache does not fall back to a parent when the deepest proof expires", () => {
+    const cache = new PreparedReadCache<{ root: string }>(32, 100, 20);
+    cache.seed("/repo", { root: "/repo" }, "parent", 10);
+    cache.seed("/repo/packages/child", { root: "/repo/packages/child" }, "child", 0);
+
+    assert.deepEqual(
+        cache.lookupCandidate(
+            "/repo/packages/child/src/index.ts",
+            20,
+            (targetPath, root) => targetPath === root || targetPath.startsWith(`${root}/`),
+        ),
+        { status: "miss", reason: "proof_expired" },
+    );
+    assert.equal(cache.size, 1);
+});
+
+test("prepared read cache retains one bounded clone per root under repeated access", () => {
+    const cache = new PreparedReadCache<{ sequence: number }>();
+    cache.seed("/repo", { sequence: 0 }, "authority", 0);
+
+    for (let sequence = 1; sequence <= 100; sequence += 1) {
+        const candidate = cache.getCandidate(
+            "/repo/src/index.ts",
+            sequence,
+            (targetPath, root) => targetPath.startsWith(root),
+        );
+        assert.ok(candidate);
+        candidate.state.sequence = sequence;
+    }
+
+    assert.equal(cache.size, 1);
+    assert.deepEqual(
+        cache.getCandidate("/repo", 101, (targetPath, root) => targetPath.startsWith(root))?.state,
+        { sequence: 0 },
+    );
+});
+
+test("prepared read cache remains root-bounded across repeated multi-root access", () => {
+    const cache = new PreparedReadCache<{ root: number }>();
+    for (let root = 0; root < 20; root += 1) {
+        const rootPath = `/repo-${root}`;
+        cache.seed(rootPath, { root }, `authority-${root}`, 0);
+        for (let access = 1; access <= 5; access += 1) {
+            assert.ok(cache.getCandidate(
+                `${rootPath}/src/index.ts`,
+                access,
+                (targetPath, candidateRoot) => targetPath.startsWith(candidateRoot),
+            ));
+        }
+    }
+
+    assert.equal(cache.size, 20);
+});

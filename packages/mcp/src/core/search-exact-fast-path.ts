@@ -23,6 +23,7 @@ import {
 import type {
     SearchDebugHint,
     SearchFreshnessSummary,
+    SearchReadinessDebugHint,
     SearchResponseHints,
     SearchResponseEnvelope,
 } from "./search-types.js";
@@ -79,6 +80,7 @@ type SearchExactFastPathInput = {
     proofDebugHint?: CompletionProbeDebugHint;
     partialIndexSearchWarnings: string[];
     phaseTimings: NonNullable<SearchDebugHint["phaseTimingsMs"]>;
+    readiness: SearchReadinessDebugHint;
     candidateLimit: number;
     maxAttempts: number;
     operatorSummary: SearchDebugHint["operatorSummary"];
@@ -368,11 +370,11 @@ export async function runExactRegistryFastPath(
         }, input.freshnessSummary)
         : undefined;
     const debugSearch: NonNullable<SearchResponseHints["debugSearch"]> | undefined = input.debugMode === "full"
-        ? { ...rankingDebug!, phaseTimingsMs: input.phaseTimings, ...(changedCode ? { changedCode } : {}) }
+        ? { ...rankingDebug!, phaseTimingsMs: input.phaseTimings, readiness: input.readiness, ...(changedCode ? { changedCode } : {}) }
         : input.debugMode === "ranking"
             ? rankingDebug
             : input.debugMode === "freshness"
-                ? { phaseTimingsMs: input.phaseTimings, ...(changedCode ? { changedCode } : {}) }
+                ? { phaseTimingsMs: input.phaseTimings, readiness: input.readiness, ...(changedCode ? { changedCode } : {}) }
                 : undefined;
 
     const envelope = buildExactRegistryHitEnvelope({

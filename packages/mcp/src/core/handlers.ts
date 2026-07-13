@@ -54,6 +54,8 @@ import {
     SearchDebugHint,
     SearchGroupResult,
     SearchFreshnessSummary,
+    SearchReadinessDebugHint,
+    SearchReadinessInvalidationReason,
     SearchRecommendedNextAction,
     SearchRequestInput,
     SearchResponseEnvelope,
@@ -299,6 +301,16 @@ type PreparedReadObservationSnapshot = {
     freshnessEpoch: number;
     mutationGeneration: number;
 };
+
+type CachedPreparedReadResult =
+    | {
+        status: "hit";
+        state: Extract<TrackedRootReadinessState, { state: "ready" }>;
+    }
+    | {
+        status: "miss";
+        reason: SearchReadinessInvalidationReason;
+    };
 
 function parsePreparedReadObservation(value: string): PreparedReadObservationSnapshot | null {
     try {
@@ -947,22 +959,32 @@ export class ToolHandlers {
         }
     }
 
-    private async getCachedPreparedRead(absolutePath: string): Promise<Extract<TrackedRootReadinessState, { state: 'ready' }> | null> {
-        const candidate = this.preparedReadCache.getCandidate(
+    private async getCachedPreparedRead(
+        absolutePath: string,
+        operations: SearchReadinessDebugHint["operations"],
+    ): Promise<CachedPreparedReadResult> {
+        operations.preparedCacheLookups += 1;
+        const lookup = this.preparedReadCache.lookupCandidate(
             absolutePath,
             this.now(),
             (targetPath, root) => this.isPathWithinCodebase(targetPath, root),
         );
-        const cached = candidate?.state;
-        if (!cached?.vectorReceipt) return null;
+        if (lookup.status === "miss") {
+            return { status: "miss", reason: lookup.reason };
+        }
+        const cached = lookup.state;
+        if (!cached.vectorReceipt) {
+            this.preparedReadCache.evict(lookup.root);
+            return { status: "miss", reason: "cache_miss" };
+        }
         const root = cached.root.path;
         const observationBefore = this.getPreparedReadObservation(root);
         const revalidate = this.contextLifecycle().revalidatePreparedGeneration;
         if (!observationBefore || typeof revalidate !== 'function') {
             this.preparedReadCache.evict(root);
-            return null;
+            return { status: "miss", reason: "observation_unavailable" };
         }
-        const cachedObservation = candidate ? parsePreparedReadObservation(candidate.observation) : null;
+        const cachedObservation = parsePreparedReadObservation(lookup.observation);
         const currentObservation = observationBefore ? parsePreparedReadObservation(observationBefore) : null;
         if (
             !cachedObservation
@@ -972,10 +994,11 @@ export class ToolHandlers {
             || cachedObservation.mutationGeneration !== currentObservation.mutationGeneration
         ) {
             this.preparedReadCache.evict(root);
-            return null;
+            return { status: "miss", reason: "observation_changed" };
         }
         const navigationObservationChanged =
             cachedObservation.navigationAuthority !== currentObservation.navigationAuthority;
+        operations.warmReceiptRevalidations += 1;
         const proof = await revalidate.call(this.context, root, cached.vectorReceipt, {
             ...(cached.generationReceipt ? { priorGenerationReceipt: cached.generationReceipt } : {}),
             navigationObservationChanged,
@@ -988,18 +1011,30 @@ export class ToolHandlers {
             || observationAfter !== observationBefore
         ) {
             this.preparedReadCache.evict(root);
-            return null;
+            return {
+                status: "miss",
+                reason: observationAfter !== observationBefore
+                    ? "observation_changed"
+                    : "revalidation_failed",
+            };
         }
+        operations.preparedCacheHits += 1;
         return {
-            ...cached,
-            vectorReceipt: proof.vectorReceipt,
-            generationReceipt: proof.generationReceipt,
-            navigationStatus: proof.navigationProof.status,
-            preparedObservation: observationBefore,
+            status: "hit",
+            state: {
+                ...cached,
+                vectorReceipt: proof.vectorReceipt,
+                generationReceipt: proof.generationReceipt,
+                navigationStatus: proof.navigationProof.status,
+                preparedObservation: observationBefore,
+            },
         };
     }
 
-    private seedPreparedRead(state: Extract<TrackedRootReadinessState, { state: 'ready' }>): void {
+    private seedPreparedRead(
+        state: Extract<TrackedRootReadinessState, { state: 'ready' }>,
+        preserveProofAge: boolean,
+    ): void {
         const root = state.root.path;
         if (!state.vectorReceipt || !state.preparedObservation) {
             this.preparedReadCache.evict(root);
@@ -1010,7 +1045,13 @@ export class ToolHandlers {
             this.preparedReadCache.evict(root);
             return;
         }
-        this.preparedReadCache.seed(root, state, state.preparedObservation, this.now());
+        this.preparedReadCache.seed(
+            root,
+            state,
+            state.preparedObservation,
+            this.now(),
+            preserveProofAge,
+        );
     }
 
     private async prepareTrackedRootReadWithObservation(
@@ -2624,6 +2665,18 @@ export class ToolHandlers {
             rerankerUsed: false,
         };
         const phaseTimings = this.createSearchPhaseTimings();
+        const readinessDebug: SearchReadinessDebugHint = {
+            proofMode: "cold",
+            invalidationReason: "cache_miss",
+            operations: {
+                preparedCacheLookups: 0,
+                preparedCacheHits: 0,
+                coldReadinessChecks: 0,
+                warmReceiptRevalidations: 0,
+                exactPayloadRecounts: 0,
+            },
+        };
+        let preservePreparedProofAge = false;
 
         const readinessPhaseToSearchPhase = {
             snapshot_reload: 'snapshotReload',
@@ -2644,8 +2697,17 @@ export class ToolHandlers {
             }, {
                 trackedRootReadiness: this.trackedRootReadiness,
                 prepareInitialTrackedRootRead: async (absolutePath) => {
-                    const cached = await this.getCachedPreparedRead(absolutePath);
-                    if (cached) return cached;
+                    const cached = await this.getCachedPreparedRead(absolutePath, readinessDebug.operations);
+                    if (cached.status === "hit") {
+                        preservePreparedProofAge = true;
+                        readinessDebug.proofMode = "warm";
+                        readinessDebug.invalidationReason = "none";
+                        return cached.state;
+                    }
+                    preservePreparedProofAge = false;
+                    readinessDebug.proofMode = "cold";
+                    readinessDebug.invalidationReason = cached.reason;
+                    readinessDebug.operations.coldReadinessChecks += 1;
                     const prepareReadStartedAtMs = this.searchPhaseNowMs();
                     const trackedRootState = await this.prepareTrackedRootReadWithObservation(
                         absolutePath,
@@ -2653,19 +2715,34 @@ export class ToolHandlers {
                             phaseTimings[readinessPhaseToSearchPhase[phase]] += durationMs;
                         },
                     );
+                    if (trackedRootState.state === "ready") {
+                        readinessDebug.operations.exactPayloadRecounts += trackedRootState.exactPayloadRecounts ?? 0;
+                    }
                     this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
                     return trackedRootState;
                 },
-                preparePostFreshnessTrackedRootRead: (absolutePath) => this.measureSearchPhase(
-                    phaseTimings,
-                    'prepareRead',
-                    () => this.prepareTrackedRootReadWithObservation(
-                        absolutePath,
-                        (phase, durationMs) => {
-                            phaseTimings[readinessPhaseToSearchPhase[phase]] += durationMs;
+                preparePostFreshnessTrackedRootRead: (absolutePath, invalidationReason) => {
+                    preservePreparedProofAge = false;
+                    readinessDebug.proofMode = "cold";
+                    readinessDebug.invalidationReason = invalidationReason;
+                    readinessDebug.operations.coldReadinessChecks += 1;
+                    return this.measureSearchPhase(
+                        phaseTimings,
+                        'prepareRead',
+                        async () => {
+                            const trackedRootState = await this.prepareTrackedRootReadWithObservation(
+                                absolutePath,
+                                (phase, durationMs) => {
+                                    phaseTimings[readinessPhaseToSearchPhase[phase]] += durationMs;
+                                },
+                            );
+                            if (trackedRootState.state === "ready") {
+                                readinessDebug.operations.exactPayloadRecounts += trackedRootState.exactPayloadRecounts ?? 0;
+                            }
+                            return trackedRootState;
                         },
-                    )
-                ),
+                    );
+                },
                 getPreparedReadObservation: (canonicalRoot) => this.getPreparedReadObservation(canonicalRoot),
                 ensureSearchFreshness: (effectiveRoot) => this.measureSearchPhase(
                     phaseTimings,
@@ -2838,6 +2915,7 @@ export class ToolHandlers {
                 proofDebugHint,
                 partialIndexSearchWarnings,
                 phaseTimings,
+                readiness: readinessDebug,
                 candidateLimit,
                 maxAttempts,
                 operatorSummary: initialOperatorSummary,
@@ -2876,7 +2954,7 @@ export class ToolHandlers {
                     generationReceipt,
                     navigationStatus,
                     preparedObservation,
-                });
+                }, preservePreparedProofAge);
                 return {
                     content: [{ type: "text", text: this.stringifyToolJson(exactFastPath.envelope) }],
                     meta: {
@@ -2993,6 +3071,7 @@ export class ToolHandlers {
                 proofDebugHint,
                 partialIndexSearchWarnings,
                 phaseTimings,
+                readiness: readinessDebug,
                 parsedOperators,
                 queryPlan,
                 maxAttempts,
@@ -3025,7 +3104,7 @@ export class ToolHandlers {
                 generationReceipt,
                 navigationStatus,
                 preparedObservation,
-            });
+            }, preservePreparedProofAge);
             return {
                 content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                 meta: { searchDiagnostics }

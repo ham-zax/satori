@@ -4,6 +4,7 @@ import { requireAbsoluteFilesystemPath, trackCodebasePath } from "../utils.js";
 import type { CompletionProofReason } from "./completion-proof.js";
 import type {
     SearchRecommendedNextAction,
+    SearchReadinessInvalidationReason,
     SearchRequestInput,
     SearchResponseEnvelope,
 } from "./search-types.js";
@@ -52,7 +53,13 @@ export type SearchFrontDoorHost = {
         "buildIndexFailedSearchPayload" | "buildMissingLocalCollectionSearchPayload"
     >;
     prepareInitialTrackedRootRead: (absolutePath: string) => Promise<TrackedRootReadinessState>;
-    preparePostFreshnessTrackedRootRead: (absolutePath: string) => Promise<TrackedRootReadinessState>;
+    preparePostFreshnessTrackedRootRead: (
+        absolutePath: string,
+        reason: Extract<
+            SearchReadinessInvalidationReason,
+            "freshness_changed" | "observation_unavailable" | "observation_changed"
+        >,
+    ) => Promise<TrackedRootReadinessState>;
     getPreparedReadObservation?: (canonicalRoot: string) => string | null;
     ensureSearchFreshness: (effectiveRoot: string) => Promise<FreshnessDecision>;
     noteFreshnessMode: (mode: FreshnessDecision["mode"]) => void;
@@ -303,7 +310,14 @@ export async function runSearchFrontDoor(
             && observationBeforeFreshness === observationAfterFreshness;
         const postFreshnessRootState = canReuseInitialReadiness
             ? trackedRootState
-            : await host.preparePostFreshnessTrackedRootRead(absolutePath);
+            : await host.preparePostFreshnessTrackedRootRead(
+                absolutePath,
+                freshnessDecision.mode !== "skipped_recent"
+                    ? "freshness_changed"
+                    : observationBeforeFreshness === null
+                        ? "observation_unavailable"
+                        : "observation_changed",
+            );
         const readinessBlockedPayload = buildBlockedReadinessPayload(postFreshnessRootState, searchContext, host);
         if (readinessBlockedPayload) {
             return { kind: "blocked", payload: readinessBlockedPayload };

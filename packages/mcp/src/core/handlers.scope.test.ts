@@ -681,6 +681,7 @@ function assertClosedDebugProjection(
     assert.ok(hints?.debugSearch);
     if (mode === 'ranking') {
         assert.equal(hints.debugSearch.phaseTimingsMs, undefined);
+        assert.equal(hints.debugSearch.readiness, undefined);
         assert.equal(hints.debugSearch.changedCode, undefined);
         assert.ok(resultDebug);
         assert.equal(resultDebug.freshness, undefined);
@@ -689,12 +690,14 @@ function assertClosedDebugProjection(
     }
     if (mode === 'freshness') {
         assert.ok(hints.debugSearch.phaseTimingsMs);
+        assert.ok(hints.debugSearch.readiness);
         assert.equal(hints.debugSearch.queryIntent, undefined);
         assert.equal(hints.debugSearch.rankingProvenance, undefined);
         assert.equal(resultDebug, undefined);
         return;
     }
     assert.ok(hints.debugSearch.phaseTimingsMs);
+    assert.ok(hints.debugSearch.readiness);
     assert.ok(hints.debugSearch.queryIntent);
     assert.ok(resultDebug);
 }
@@ -727,6 +730,199 @@ test('handleSearchCode semantic path publishes closed debug projections for ever
             assert.equal(payload.status, 'ok');
             assertClosedDebugProjection(payload, mode);
         }
+    });
+});
+
+test('handleSearchCode reports warm proof reuse and forces a cold recount after absolute proof expiry', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+        }]);
+        const vectorReceipt = { collectionName: 'committed-v3' } as never;
+        let nowMs = 0;
+        let navigationAuthority = 'navigation-1';
+        const observation = JSON.stringify({
+            vectorAuthority: 'vector-1',
+            navigationAuthority: 'navigation-1',
+            freshnessEpoch: 1,
+            mutationGeneration: 1,
+        });
+        const internals = handlers as unknown as {
+            now: () => number;
+            context: HandlerContext & {
+                getIndexAuthorityObservations: () => { vector: string; navigation: string };
+                revalidatePreparedGeneration: () => Promise<{
+                    vectorReceipt: never;
+                    navigationProof: { status: 'not_bound' };
+                }>;
+            };
+            syncManager: HandlerSyncManager & {
+                getPreparedReadObservation: () => { freshnessEpoch: number };
+            };
+            mutationLeaseCoordinator: {
+                observe: () => { mutationActive: boolean; generation: number };
+                getActiveLease: () => null;
+            };
+            preparedReadCache: {
+                seed: (root: string, state: unknown, authority: string, now: number) => void;
+            };
+            validateCompletionProof: () => Promise<{
+                outcome: 'valid';
+                navigationStatus: 'not_bound';
+                vectorReceipt: never;
+            }>;
+        };
+        internals.now = () => nowMs;
+        internals.context.getIndexAuthorityObservations = () => ({
+            vector: 'vector-1',
+            navigation: navigationAuthority,
+        });
+        internals.context.revalidatePreparedGeneration = async () => ({
+            vectorReceipt,
+            navigationProof: { status: 'not_bound' },
+        });
+        internals.syncManager.getPreparedReadObservation = () => ({ freshnessEpoch: 1 });
+        internals.mutationLeaseCoordinator = {
+            observe: () => ({ mutationActive: false, generation: 1 }),
+            getActiveLease: () => null,
+        };
+        internals.validateCompletionProof = async () => ({
+            outcome: 'valid',
+            navigationStatus: 'not_bound',
+            vectorReceipt,
+        });
+        internals.preparedReadCache.seed(repoPath, {
+            state: 'ready',
+            root: { path: repoPath, info: { status: 'indexed' } },
+            vectorReceipt,
+            navigationStatus: 'not_bound',
+            preparedObservation: observation,
+        }, observation, nowMs);
+
+        const search = async () => {
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'where is session validation handled',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debugMode: 'freshness',
+            });
+            return JSON.parse(response.content[0]?.text || '{}').hints.debugSearch.readiness;
+        };
+
+        nowMs = 1;
+        assert.deepEqual(await search(), {
+            proofMode: 'warm',
+            invalidationReason: 'none',
+            operations: {
+                preparedCacheLookups: 1,
+                preparedCacheHits: 1,
+                coldReadinessChecks: 0,
+                warmReceiptRevalidations: 1,
+                exactPayloadRecounts: 0,
+            },
+        });
+
+        navigationAuthority = 'navigation-2';
+        nowMs = 14 * 60_000;
+        assert.deepEqual(await search(), {
+            proofMode: 'warm',
+            invalidationReason: 'none',
+            operations: {
+                preparedCacheLookups: 1,
+                preparedCacheHits: 1,
+                coldReadinessChecks: 0,
+                warmReceiptRevalidations: 1,
+                exactPayloadRecounts: 0,
+            },
+        });
+
+        navigationAuthority = 'navigation-3';
+        nowMs = 28 * 60_000;
+        assert.deepEqual(await search(), {
+            proofMode: 'warm',
+            invalidationReason: 'none',
+            operations: {
+                preparedCacheLookups: 1,
+                preparedCacheHits: 1,
+                coldReadinessChecks: 0,
+                warmReceiptRevalidations: 1,
+                exactPayloadRecounts: 0,
+            },
+        });
+
+        nowMs = 30 * 60_000;
+        assert.deepEqual(await search(), {
+            proofMode: 'cold',
+            invalidationReason: 'proof_expired',
+            operations: {
+                preparedCacheLookups: 1,
+                preparedCacheHits: 0,
+                coldReadinessChecks: 1,
+                warmReceiptRevalidations: 0,
+                exactPayloadRecounts: 1,
+            },
+        });
+    });
+});
+
+test('handleSearchCode reports the exact recount used by fallback collection proof', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+        }]);
+        let fallbackProofs = 0;
+        const internals = handlers as unknown as {
+            context: HandlerContext & {
+                getActiveIndexedCollectionName: () => Promise<string>;
+                getVectorStore: () => { hasCollection: () => Promise<boolean> };
+            };
+            validateCompletionProof: () => Promise<{ outcome: 'probe_failed' }>;
+        };
+        internals.validateCompletionProof = async () => ({ outcome: 'probe_failed' });
+        internals.context.getActiveIndexedCollectionName = async () => {
+            fallbackProofs += 1;
+            return 'committed-v3';
+        };
+        internals.context.getVectorStore = () => ({ hasCollection: async () => true });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is session validation handled',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debugMode: 'freshness',
+        });
+        const readiness = JSON.parse(response.content[0]?.text || '{}').hints.debugSearch.readiness;
+
+        assert.equal(fallbackProofs, 2);
+        assert.deepEqual(readiness, {
+            proofMode: 'cold',
+            invalidationReason: 'observation_unavailable',
+            operations: {
+                preparedCacheLookups: 1,
+                preparedCacheHits: 0,
+                coldReadinessChecks: 2,
+                warmReceiptRevalidations: 0,
+                exactPayloadRecounts: 2,
+            },
+        });
     });
 });
 

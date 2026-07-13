@@ -16,6 +16,24 @@ const PHASES = new Set(["cold", "warm"]);
 const PHASE_ORDER = ["cold", "warm"];
 const STATUSES = new Set(["ok", "zero_result", "fallback", "error"]);
 const BASELINE_KEYS = ["maxLatencyMs", "maxPayloadBytes", "maxContextBytes"];
+const READINESS_PROOF_MODES = new Set(["cold", "warm"]);
+const READINESS_INVALIDATION_REASONS = new Set([
+    "none",
+    "cache_miss",
+    "idle_expired",
+    "proof_expired",
+    "observation_unavailable",
+    "observation_changed",
+    "revalidation_failed",
+    "freshness_changed",
+]);
+const READINESS_OPERATION_KEYS = [
+    "preparedCacheLookups",
+    "preparedCacheHits",
+    "coldReadinessChecks",
+    "warmReceiptRevalidations",
+    "exactPayloadRecounts",
+];
 const MCP_TOOLS = new Set([
     "list_codebases",
     "manage_index",
@@ -55,6 +73,65 @@ function requirePositiveFinite(value, label) {
         throw new Error(`${label} must be a positive finite number.`);
     }
     return value;
+}
+
+function normalizeReadiness(value, label, phase) {
+    if (!Array.isArray(value)) {
+        throw new Error(`${label} must be an array.`);
+    }
+    return value.map((rawEntry, index) => {
+        const entryLabel = `${label}[${index}]`;
+        const entry = requireRecord(rawEntry, entryLabel);
+        if (!READINESS_PROOF_MODES.has(entry.proofMode)) {
+            throw new Error(`${entryLabel}.proofMode must be cold or warm.`);
+        }
+        if (entry.proofMode !== phase) {
+            throw new Error(`${entryLabel}.proofMode must match observation phase '${phase}'.`);
+        }
+        if (!READINESS_INVALIDATION_REASONS.has(entry.invalidationReason)) {
+            throw new Error(`${entryLabel}.invalidationReason is unsupported.`);
+        }
+        if (
+            (entry.proofMode === "warm" && entry.invalidationReason !== "none")
+            || (entry.proofMode === "cold" && entry.invalidationReason === "none")
+        ) {
+            throw new Error(`${entryLabel} contains contradictory proof mode and invalidation reason.`);
+        }
+        const rawOperations = requireRecord(entry.operations, `${entryLabel}.operations`);
+        const operations = Object.fromEntries(READINESS_OPERATION_KEYS.map((key) => {
+            const operation = rawOperations[key];
+            if (!Number.isSafeInteger(operation) || operation < 0) {
+                throw new Error(`${entryLabel}.operations.${key} must be a non-negative safe integer.`);
+            }
+            return [key, operation];
+        }));
+        if (
+            operations.preparedCacheLookups < 1
+            || operations.preparedCacheHits > operations.preparedCacheLookups
+            || operations.preparedCacheHits > operations.warmReceiptRevalidations
+        ) {
+            throw new Error(`${entryLabel}.operations contains contradictory cache counters.`);
+        }
+        if (entry.proofMode === "warm" && (
+            operations.preparedCacheHits < 1
+            || operations.coldReadinessChecks !== 0
+            || operations.warmReceiptRevalidations < 1
+            || operations.exactPayloadRecounts !== 0
+        )) {
+            throw new Error(`${entryLabel}.operations does not prove warm receipt reuse.`);
+        }
+        if (entry.proofMode === "cold" && (
+            operations.coldReadinessChecks < 1
+            || operations.exactPayloadRecounts < 1
+        )) {
+            throw new Error(`${entryLabel}.operations does not prove a cold authority check.`);
+        }
+        return {
+            proofMode: entry.proofMode,
+            invalidationReason: entry.invalidationReason,
+            operations,
+        };
+    });
 }
 
 function requireSpan(value, label) {
@@ -278,7 +355,20 @@ export function validateObservationSet(value, taskIds) {
         }
         const latencyMs = requireNonNegativeFinite(observation.latencyMs, `observations[${index}].latencyMs`);
         const contextBytes = requireNonNegativeFinite(observation.contextBytes, `observations[${index}].contextBytes`);
+        let responseBytes;
+        if (observation.responseBytes !== undefined) {
+            if (!Number.isSafeInteger(observation.responseBytes) || observation.responseBytes < 0) {
+                throw new Error(`observations[${index}].responseBytes must be a non-negative safe integer.`);
+            }
+            responseBytes = observation.responseBytes;
+        }
         assertJsonValue(observation.response, `observations[${index}].response`);
+        if (responseBytes !== undefined && responseBytes < serializedPayloadBytes(observation.response)) {
+            throw new Error(`observations[${index}].responseBytes cannot be smaller than the final response payload.`);
+        }
+        const readiness = observation.readiness === undefined
+            ? undefined
+            : normalizeReadiness(observation.readiness, `observations[${index}].readiness`, observation.phase);
         if (!Array.isArray(observation.results)) {
             throw new Error(`observations[${index}].results must be an array.`);
         }
@@ -296,8 +386,10 @@ export function validateObservationSet(value, taskIds) {
             status: observation.status,
             latencyMs,
             contextBytes,
+            ...(responseBytes !== undefined ? { responseBytes } : {}),
             response: jsonClone(observation.response),
             results,
+            ...(readiness !== undefined ? { readiness } : {}),
             ...(version === 2 ? { sample } : {}),
         };
         for (const key of ["toolCalls", "callsToSource"]) {
@@ -446,7 +538,7 @@ export function gradeObservation(task, observation) {
             && task.expected.callerSymbols.every((caller) => recovered.has(`${caller.file}#${caller.symbol}`));
     }
 
-    const payloadBytes = serializedPayloadBytes(observation.response);
+    const payloadBytes = observation.responseBytes ?? serializedPayloadBytes(observation.response);
     const baselineFailures = [];
     if (task.baselineLimits?.maxLatencyMs !== undefined
         && observation.latencyMs > task.baselineLimits.maxLatencyMs) {
@@ -481,6 +573,7 @@ export function gradeObservation(task, observation) {
         fallbackUsed: observation.status === "fallback",
         latencyMs: observation.latencyMs,
         payloadBytes,
+        ...(observation.readiness !== undefined ? { readiness: observation.readiness } : {}),
         contextBytes: observation.contextBytes,
         toolCalls: observation.toolCalls ?? null,
         callsToSource: observation.callsToSource ?? null,

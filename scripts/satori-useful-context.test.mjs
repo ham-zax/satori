@@ -336,6 +336,40 @@ test("validateObservationSet rejects bad spans, non-finite numbers, and non-JSON
     );
     assert.throws(
         () => validateObservationSet(minimalObservations([baseObservation({
+            responseBytes: 1.5,
+        })]), taskIds),
+        /responseBytes.*safe integer/i
+    );
+    assert.throws(
+        () => validateObservationSet(minimalObservations([baseObservation({
+            responseBytes: 1,
+        })]), taskIds),
+        /responseBytes.*smaller/i
+    );
+    assert.throws(
+        () => validateObservationSet(minimalObservations([baseObservation({
+            readiness: [null],
+        })]), taskIds),
+        /readiness\[0\].*object/i
+    );
+    assert.throws(
+        () => validateObservationSet(minimalObservations([baseObservation({
+            readiness: [{
+                proofMode: "cold",
+                invalidationReason: "cache_miss",
+                operations: {
+                    preparedCacheLookups: 1,
+                    preparedCacheHits: 0,
+                    coldReadinessChecks: 1,
+                    warmReceiptRevalidations: 0,
+                    exactPayloadRecounts: 0,
+                },
+            }],
+        })]), taskIds),
+        /cold authority check/i
+    );
+    assert.throws(
+        () => validateObservationSet(minimalObservations([baseObservation({
             response: { fn: () => 1 },
         })]), taskIds),
         /JSON|serializ/i
@@ -541,8 +575,43 @@ test("gradeObservation handles stale/dirty fields, zero/fallback status, and bas
         "maxPayloadBytes",
         "maxContextBytes",
     ]);
-    // Must not trust a claimed payload size if somehow present.
+    // Legacy observations without recorder bytes retain the deterministic JSON fallback.
     assert.equal(graded.payloadBytes, serializedPayloadBytes(response));
+});
+
+test("gradeObservation uses recorder response bytes and retains readiness evidence", () => {
+    const response = { status: "ok", results: [] };
+    const responseBytes = serializedPayloadBytes(response) + 17;
+    const coldReadiness = [{
+        proofMode: "cold",
+        invalidationReason: "cache_miss",
+        operations: {
+            preparedCacheLookups: 1,
+            preparedCacheHits: 0,
+            coldReadinessChecks: 1,
+            warmReceiptRevalidations: 0,
+            exactPayloadRecounts: 1,
+        },
+    }];
+    const warmReadiness = [{
+        proofMode: "warm",
+        invalidationReason: "none",
+        operations: {
+            preparedCacheLookups: 1,
+            preparedCacheHits: 1,
+            coldReadinessChecks: 0,
+            warmReceiptRevalidations: 1,
+            exactPayloadRecounts: 0,
+        },
+    }];
+    const normalized = validateObservationSet(minimalObservations([
+        baseObservation({ response, responseBytes, readiness: coldReadiness }),
+        baseObservation({ phase: "warm", response, responseBytes, readiness: warmReadiness }),
+    ]), ["t-owner"]);
+    const graded = gradeObservation(baseTask(), normalized.observations[1]);
+
+    assert.equal(graded.payloadBytes, responseBytes);
+    assert.deepEqual(graded.readiness, warmReadiness);
 });
 
 // ---------------------------------------------------------------------------

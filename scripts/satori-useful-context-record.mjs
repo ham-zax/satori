@@ -7,7 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { validateTaskSuite } from "./satori-useful-context.mjs";
+import { validateObservationSet, validateTaskSuite } from "./satori-useful-context.mjs";
 
 const EXPECTED_TOOLS = [
     "manage_index",
@@ -501,6 +501,57 @@ export async function callAndDecode(session, invocation) {
     return { result, payload: decodeToolResponse(result) };
 }
 
+function responseUtf8Bytes(result) {
+    if (!Array.isArray(result?.content)) return 0;
+    return result.content.reduce((total, item) => total + (
+        typeof item?.text === "string" ? Buffer.byteLength(item.text, "utf8") : 0
+    ), 0);
+}
+
+function extractReadinessDiagnostics(payload) {
+    const readiness = payload?.hints?.debugSearch?.readiness;
+    const operations = readiness?.operations;
+    if (!isRecord(readiness)
+        || !["cold", "warm"].includes(readiness.proofMode)
+        || typeof readiness.invalidationReason !== "string"
+        || !isRecord(operations)
+        || ![
+            operations.preparedCacheLookups,
+            operations.preparedCacheHits,
+            operations.coldReadinessChecks,
+            operations.warmReceiptRevalidations,
+            operations.exactPayloadRecounts,
+        ].every((value) => Number.isSafeInteger(value) && value >= 0)) {
+        return null;
+    }
+    return structuredClone(readiness);
+}
+
+function assertMeasuredReadiness(task, phase, invocation, readiness) {
+    if (invocation.tool !== "search_codebase"
+        || !["freshness", "full"].includes(invocation.args.debugMode)) {
+        return;
+    }
+    if (!readiness) {
+        throw new Error(`Task '${task.id}' ${phase} search returned no structured readiness diagnostics.`);
+    }
+    if (phase === "cold" && (
+        readiness.proofMode !== "cold"
+        || readiness.operations.coldReadinessChecks < 1
+        || readiness.operations.exactPayloadRecounts < 1
+    )) {
+        throw new Error(`Task '${task.id}' cold search did not prove a cold authority check with an exact payload recount.`);
+    }
+    if (phase === "warm" && (
+        readiness.proofMode !== "warm"
+        || readiness.operations.preparedCacheHits < 1
+        || readiness.operations.warmReceiptRevalidations < 1
+        || readiness.operations.exactPayloadRecounts !== 0
+    )) {
+        throw new Error(`Task '${task.id}' warm search did not prove receipt revalidation without a payload recount.`);
+    }
+}
+
 function validateSetupProtocol(task) {
     for (const invocation of task.workload.setup) {
         if (invocation.tool !== "manage_index" || invocation.args.action !== "status") {
@@ -546,6 +597,8 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
     let finalResult;
     let finalPayload;
     let bytes = 0;
+    let responseBytes = 0;
+    const readiness = [];
     const identities = [];
     const seen = new Set();
     let ownerReached = false;
@@ -564,6 +617,10 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
             throw new Error(`Task '${task.id}' must use read_file mode='annotated' so the exact-open span can be verified.`);
         }
         const called = await callAndDecode(session, invocation);
+        responseBytes += responseUtf8Bytes(called.result);
+        const readinessDiagnostics = extractReadinessDiagnostics(called.payload);
+        assertMeasuredReadiness(task, phase, invocation, readinessDiagnostics);
+        if (readinessDiagnostics) readiness.push(readinessDiagnostics);
         const freshnessMode = called.payload?.freshnessDecision?.mode;
         if (["synced", "reconciled_ignore_change", "coalesced"].includes(freshnessMode)) {
             throw new Error(`Task '${task.id}' measured call caused or joined sync freshness mode '${freshnessMode}'.`);
@@ -603,12 +660,14 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
         status: observationStatus(finalPayload, finalResult, identities, task),
         latencyMs,
         contextBytes: bytes,
+        responseBytes,
         response: finalPayload,
         results: identities,
         toolCalls,
         sourceReached: callsToSource !== null,
         callsToSource,
         sourceMode,
+        ...(readiness.length > 0 ? { readiness } : {}),
         ...(sample !== undefined ? { sample } : {}),
     };
     const openedSymbol = extractOpenedSymbol(finalPayload, task, repoRoot);
@@ -693,7 +752,7 @@ export async function recordSuite(taskSuite, options) {
     if (finalRevision !== revision) {
         throw new Error(`Repository revision changed during recording (${revision} -> ${finalRevision}); discard this run.`);
     }
-    return {
+    const recorded = {
         version: outputVersion,
         ...(outputVersion === 2 ? { warmSampleCount } : {}),
         metadata: {
@@ -707,6 +766,8 @@ export async function recordSuite(taskSuite, options) {
         },
         observations,
     };
+    validateObservationSet(recorded, expanded.tasks.map((task) => task.id));
+    return recorded;
 }
 
 export async function main(argv = process.argv.slice(2)) {

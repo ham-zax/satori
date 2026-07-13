@@ -26,7 +26,8 @@
               "scope": "runtime",
               "resultMode": "grouped",
               "groupBy": "symbol",
-              "rankingMode": "auto_changed_first"
+              "rankingMode": "auto_changed_first",
+              "debugMode": "freshness"
             }
           }
         ],
@@ -60,7 +61,8 @@
               "scope": "runtime",
               "resultMode": "grouped",
               "groupBy": "symbol",
-              "rankingMode": "auto_changed_first"
+              "rankingMode": "auto_changed_first",
+              "debugMode": "freshness"
             }
           }
         ],
@@ -71,13 +73,13 @@
       }
     },
     {
-      "id": "open-repair-owner",
+      "id": "open-prepared-cache-owner",
       "queryClass": "exact_open",
       "language": "typescript",
       "expected": {
-        "ownerFile": "packages/core/src/core/context.ts",
-        "ownerSymbol": "repairIndex",
-        "span": { "startLine": 2103, "endLine": 2506 }
+        "ownerFile": "packages/mcp/src/core/prepared-read-cache.ts",
+        "ownerSymbol": "lookupCandidate",
+        "span": { "startLine": 68, "endLine": 110 }
       },
       "workload": {
         "setup": [
@@ -90,9 +92,9 @@
           {
             "tool": "read_file",
             "args": {
-              "path": "$REPO_ROOT/packages/core/src/core/context.ts",
+              "path": "$REPO_ROOT/packages/mcp/src/core/prepared-read-cache.ts",
               "mode": "annotated",
-              "open_symbol": { "symbolLabel": "repairIndex" }
+              "open_symbol": { "symbolLabel": "lookupCandidate" }
             }
           }
         ],

@@ -34,7 +34,7 @@ function taskSuite(repoRoot) {
                     setup: [{ tool: "manage_index", args: { action: "status", path: "$REPO_ROOT" } }],
                     invocations: [{
                         tool: "search_codebase",
-                        args: { path: "$REPO_ROOT", query: "find owner" },
+                        args: { path: "$REPO_ROOT", query: "find owner", debugMode: "freshness" },
                     }],
                     phaseProtocol: { cold: "fresh runtime", warm: "same runtime" },
                 },
@@ -112,17 +112,33 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       : { status: ${JSON.stringify(status)}, action: "status", path: message.params.arguments.path, operation: operation() };
   } else if (name === "search_codebase") {
     if (dirtyFile) fs.appendFileSync(dirtyFile, "changed during recording\\n");
-    measuredSearchRan = true;
+    const proofMode = measuredSearchRan ? "warm" : "cold";
     payload = {
       status: "ok",
       runtimeId: process.pid,
       freshnessDecision: { mode: searchFreshnessMode },
+      hints: {
+        debugSearch: {
+          readiness: {
+            proofMode,
+            invalidationReason: proofMode === "warm" ? "none" : "cache_miss",
+            operations: {
+              preparedCacheLookups: 1,
+              preparedCacheHits: proofMode === "warm" ? 1 : 0,
+              coldReadinessChecks: proofMode === "cold" ? 1 : 0,
+              warmReceiptRevalidations: proofMode === "warm" ? 1 : 0,
+              exactPayloadRecounts: proofMode === "cold" ? 1 : 0
+            }
+          }
+        }
+      },
       results: [
         { file: "src/first.ts", symbolLabel: "function firstCandidate()", preview: "first preview" },
         { file: "src/owner.ts", symbolLabel: "function handleOwner()", content: "return owner;" },
         { file: "src/after.ts", symbolLabel: "function afterCandidate()", content: "must not count" }
       ]
     };
+    measuredSearchRan = true;
   } else if (name === "read_file") {
     payload = {
       runtimeId: process.pid,
@@ -202,6 +218,10 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
         assert.equal(openCold.status, "ok");
         assert.ok(Number.isInteger(openCold.latencyMs) && openCold.latencyMs >= 0);
         assert.equal(openCold.contextBytes, Buffer.byteLength(openCold.response.content, "utf8"));
+        assert.ok(ownerCold.responseBytes > ownerCold.contextBytes);
+        assert.deepEqual(ownerCold.readiness.map((entry) => entry.proofMode), ["cold"]);
+        assert.deepEqual(ownerWarm.readiness.map((entry) => entry.proofMode), ["warm"]);
+        assert.equal(ownerWarm.readiness[0].operations.exactPayloadRecounts, 0);
 
         const grade = spawnSync(process.execPath, [
             path.join(SCRIPT_DIR, "satori-useful-context.mjs"),
@@ -435,6 +455,7 @@ process.on("SIGINT", () => {});
 setInterval(() => {}, 1_000);
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+let measuredSearchRan = false;
 rl.on("close", () => {});
 rl.on("line", (line) => {
   if (!line.trim()) return;
@@ -477,12 +498,25 @@ rl.on("line", (line) => {
       ...(action === "sync" ? { syncStats: { added: 0, removed: 0, modified: 0 } } : {})
     };
   } else if (name === "search_codebase") {
+    const proofMode = measuredSearchRan ? "warm" : "cold";
     payload = {
       status: "ok",
       runtimeId: process.pid,
       freshnessDecision: { mode: "skipped_recent" },
+      hints: { debugSearch: { readiness: {
+        proofMode,
+        invalidationReason: proofMode === "warm" ? "none" : "cache_miss",
+        operations: {
+          preparedCacheLookups: 1,
+          preparedCacheHits: proofMode === "warm" ? 1 : 0,
+          coldReadinessChecks: proofMode === "cold" ? 1 : 0,
+          warmReceiptRevalidations: proofMode === "warm" ? 1 : 0,
+          exactPayloadRecounts: proofMode === "cold" ? 1 : 0
+        }
+      } } },
       results: [{ file: "src/owner.ts", symbolLabel: "function handleOwner()", content: "return owner;" }],
     };
+    measuredSearchRan = true;
   } else {
     payload = { status: "ok", runtimeId: process.pid };
   }

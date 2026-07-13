@@ -16,8 +16,8 @@ import {
     parseNavigationGenerationSeal,
     readRelationshipSidecar,
     readNavigationGenerationSeal,
-    readSymbolRegistryManifest,
     readSymbolRegistrySidecar,
+    resolveCurrentNavigationGeneration,
     resolveNavigationSidecarRoot,
     stageNavigationSidecarGeneration,
     publishNavigationSidecarGeneration,
@@ -153,23 +153,6 @@ async function writeSingleRelationshipFixture(stateRoot: string): Promise<{
         shardPath: path.join(registryResult.rootPath, shardFile),
     };
 }
-
-test('readSymbolRegistryManifest does not deserialize or require symbol shards', async () => {
-    await withTempDir(async (stateRoot) => {
-        const fixture = await writeSingleSymbolRegistryFixture(stateRoot);
-        await fs.promises.rm(fixture.shardPath);
-
-        const result = await readSymbolRegistryManifest({
-            stateRoot,
-            normalizedRootPath: '/repo',
-        });
-        assert.equal(result.status, 'ok');
-        if (result.status === 'ok') {
-            assert.equal(result.manifest.files.length, 1);
-            assert.equal(result.manifest.files[0]?.symbolCount, 1);
-        }
-    });
-});
 
 test('resolveNavigationSidecarRoot is deterministic and rooted under navigation state', () => {
     const first = resolveNavigationSidecarRoot('/tmp/state', '/repo');
@@ -1303,6 +1286,12 @@ test('writeNavigationSidecarGeneration publishes symbols and relationships throu
             records: [],
             analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
         });
+        const pointer = await readJsonFile<{
+            schemaVersion: string;
+            navigationSealHash: string;
+        }>(path.join(first.rootPath, 'current.json'));
+        assert.equal(pointer.schemaVersion, 'navigation_current_v3');
+        assert.equal(pointer.navigationSealHash, first.navigationSealHash);
         const seal = await readNavigationGenerationSeal(stateRoot, '/repo');
         assert.equal(seal.status, 'ok');
         if (seal.status === 'ok') {
@@ -1367,7 +1356,7 @@ test('writeNavigationSidecarGeneration publishes symbols and relationships throu
     });
 });
 
-test('readNavigationGenerationSeal rejects a seal that is not bound by the current pointer', async () => {
+test('normal navigation readers reject a legacy v2 pointer without a seal binding', async () => {
     await withTempDir(async (stateRoot) => {
         const symbol = createSynthesizedFileSymbol({
             relativePath: 'src/auth.ts',
@@ -1388,12 +1377,167 @@ test('readNavigationGenerationSeal rejects a seal that is not bound by the curre
         });
         const pointerPath = path.join(generation.rootPath, 'current.json');
         const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')) as Record<string, unknown>;
+        pointer.schemaVersion = 'navigation_current_v2';
         delete pointer.navigationSealHash;
         fs.writeFileSync(pointerPath, JSON.stringify(pointer), 'utf8');
 
+        await assert.rejects(
+            () => resolveCurrentNavigationGeneration(stateRoot, '/repo'),
+            /retired navigation_current_v2 pointer requires reindex/i,
+        );
         const seal = await readNavigationGenerationSeal(stateRoot, '/repo');
         assert.equal(seal.status, 'incompatible');
-        assert.match(seal.reason, /predates seal binding/i);
+        assert.match(seal.reason, /retired navigation_current_v2 pointer requires reindex/i);
+    });
+});
+
+test('normal navigation readers reject a sealed legacy v2 pointer', async () => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 }]),
+            symbols: [symbol],
+        });
+        const generation = await writeNavigationSidecarGeneration({
+            stateRoot,
+            registry,
+            records: [],
+            analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
+        });
+        const pointerPath = path.join(generation.rootPath, 'current.json');
+        const pointer = await readJsonFile<Record<string, unknown>>(pointerPath);
+        pointer.schemaVersion = 'navigation_current_v2';
+        await writeJsonFile(pointerPath, pointer);
+
+        await assert.rejects(
+            () => resolveCurrentNavigationGeneration(stateRoot, '/repo'),
+            /retired navigation_current_v2 pointer requires reindex/i,
+        );
+        const seal = await readNavigationGenerationSeal(stateRoot, '/repo');
+        assert.equal(seal.status, 'incompatible');
+        assert.match(seal.reason, /retired navigation_current_v2 pointer requires reindex/i);
+    });
+});
+
+test('normal navigation readers reject retired v1 pointers', async () => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 }]),
+            symbols: [symbol],
+        });
+        const generation = await writeNavigationSidecarGeneration({
+            stateRoot,
+            registry,
+            records: [],
+            analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
+        });
+        const pointerPath = path.join(generation.rootPath, 'current.json');
+        const pointer = await readJsonFile<Record<string, unknown>>(pointerPath);
+        pointer.schemaVersion = 'navigation_current_v1';
+        delete pointer.navigationSealHash;
+        await writeJsonFile(pointerPath, pointer);
+
+        await assert.rejects(
+            () => resolveCurrentNavigationGeneration(stateRoot, '/repo'),
+            /retired navigation_current_v1 pointer requires reindex/i,
+        );
+        const seal = await readNavigationGenerationSeal(stateRoot, '/repo');
+        assert.equal(seal.status, 'incompatible');
+        assert.match(seal.reason, /retired navigation_current_v1 pointer requires reindex/i);
+    });
+});
+
+test('normal navigation readers distinguish unsupported future pointers from repairable corruption', async () => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 }]),
+            symbols: [symbol],
+        });
+        const generation = await writeNavigationSidecarGeneration({
+            stateRoot,
+            registry,
+            records: [],
+            analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
+        });
+        const pointerPath = path.join(generation.rootPath, 'current.json');
+        const pointer = await readJsonFile<Record<string, unknown>>(pointerPath);
+        pointer.schemaVersion = 'navigation_current_v4';
+        await writeJsonFile(pointerPath, pointer);
+
+        await assert.rejects(
+            () => resolveCurrentNavigationGeneration(stateRoot, '/repo'),
+            (error: unknown) => error instanceof Error
+                && error.name === 'UnsupportedNavigationPointerError'
+                && /unsupported navigation_current_v4 pointer/i.test(error.message),
+        );
+        const seal = await readNavigationGenerationSeal(stateRoot, '/repo');
+        assert.equal(seal.status, 'incompatible');
+        assert.match(seal.reason, /unsupported navigation_current_v4 pointer/i);
+        assert.deepEqual(await readJsonFile(pointerPath), pointer);
+
+        pointer.schemaVersion = 'navigation_current_beta';
+        await writeJsonFile(pointerPath, pointer);
+        await assert.rejects(
+            () => resolveCurrentNavigationGeneration(stateRoot, '/repo'),
+            (error: unknown) => error instanceof Error
+                && error.name !== 'UnsupportedNavigationPointerError'
+                && /pointer is invalid or incompatible/i.test(error.message),
+        );
+        const malformedSeal = await readNavigationGenerationSeal(stateRoot, '/repo');
+        assert.equal(malformedSeal.status, 'corrupt');
+    });
+});
+
+test('normal navigation readers reject noncanonical extra pointer fields', async () => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 }]),
+            symbols: [symbol],
+        });
+        const generation = await writeNavigationSidecarGeneration({
+            stateRoot,
+            registry,
+            records: [],
+            analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
+        });
+        const pointerPath = path.join(generation.rootPath, 'current.json');
+        const pointer = await readJsonFile<Record<string, unknown>>(pointerPath);
+        pointer.retiredField = 'not-canonical';
+        await writeJsonFile(pointerPath, pointer);
+
+        await assert.rejects(
+            () => resolveCurrentNavigationGeneration(stateRoot, '/repo'),
+            /pointer is invalid or incompatible/i,
+        );
+        const seal = await readNavigationGenerationSeal(stateRoot, '/repo');
+        assert.equal(seal.status, 'corrupt');
     });
 });
 

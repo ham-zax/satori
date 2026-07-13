@@ -154,6 +154,27 @@ type ContextWithProcessChunkBatch = {
     ): Promise<void>;
 };
 
+function unboundPolicyBinding(collectionName: string) {
+    return {
+        collectionName,
+        navigation: { status: 'not_bound' as const },
+    };
+}
+
+function sealedPolicyBinding(
+    collectionName: string,
+    navigation: { generationId: string; navigationSealHash: string },
+) {
+    return {
+        collectionName,
+        navigation: {
+            status: 'sealed' as const,
+            generationId: navigation.generationId,
+            sealHash: navigation.navigationSealHash,
+        },
+    };
+}
+
 class InMemoryVectorDatabase implements VectorDatabase {
     readonly collections = new Map<string, Map<string, VectorDocument>>();
     readonly queryCalls: Array<{ collectionName: string; filter: string; outputFields: string[] }> = [];
@@ -982,14 +1003,16 @@ test('Context.indexCodebase clears stale completion marker before rebuilding nav
         await vectorDatabase.createHybridCollection(collectionName);
         await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('old_ready_chunk')]);
         await context.writeIndexCompletionMarker(repoPath, {
-            kind: 'satori_index_completion_v2',
+            kind: 'satori_index_completion_v3',
             codebasePath: path.resolve(repoPath),
             fingerprint: testIndexFingerprint(),
             indexedFiles: 1,
             totalChunks: 1,
             completedAt: '2026-02-27T23:57:10.000Z',
             runId: 'old_ready_marker',
-            indexPolicyHash: 'test-policy',
+            indexPolicyHash: 'a'.repeat(64),
+            indexStatus: 'completed',
+            navigation: { status: 'not_bound' },
         });
         assert.ok(await context.getIndexCompletionMarker(repoPath));
 
@@ -1634,26 +1657,38 @@ test('Context custom index policy preserves omitted fields, supports explicit re
             customExtensions: ['.foo'],
             customIgnorePatterns: ['private/**'],
         });
-        context.publishResolvedIndexPolicy(initialPolicy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(initialPolicy, {
+            collectionName: 'generation-a',
+            navigation: { status: 'not_bound' },
+        });
 
         const ignoreOnly = await context.resolveIndexPolicyForCodebase(rootA, {
             customIgnorePatterns: ['generated/**'],
         });
         assert.deepEqual(ignoreOnly.customExtensions, ['.foo']);
-        context.publishResolvedIndexPolicy(ignoreOnly, { collectionName: 'generation-b' });
+        context.publishResolvedIndexPolicy(ignoreOnly, {
+            collectionName: 'generation-b',
+            navigation: { status: 'not_bound' },
+        });
 
         const extensionOnly = await context.resolveIndexPolicyForCodebase(rootA, {
             customExtensions: ['.foo', '.bar'],
         });
         assert.deepEqual(extensionOnly.customIgnorePatterns, ['generated/**']);
-        context.publishResolvedIndexPolicy(extensionOnly, { collectionName: 'generation-c' });
+        context.publishResolvedIndexPolicy(extensionOnly, {
+            collectionName: 'generation-c',
+            navigation: { status: 'not_bound' },
+        });
 
         const resetIgnores = await context.resolveIndexPolicyForCodebase(rootA, {
             customIgnorePatterns: [],
         });
         assert.deepEqual(resetIgnores.customExtensions, ['.foo', '.bar']);
         assert.deepEqual(resetIgnores.customIgnorePatterns, []);
-        context.publishResolvedIndexPolicy(resetIgnores, { collectionName: 'generation-d' });
+        context.publishResolvedIndexPolicy(resetIgnores, {
+            collectionName: 'generation-d',
+            navigation: { status: 'not_bound' },
+        });
 
         assert.equal(context.getIndexedExtensionsForCodebase(rootA).includes('.foo'), true);
         assert.equal(context.getIndexedExtensionsForCodebase(rootB).includes('.foo'), false);
@@ -1690,7 +1725,10 @@ test('Context publishes and reloads the exact root ignore-file policy', async ()
         });
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
         assert.deepEqual(policy.fileBasedIgnorePatterns, ['generated/**', '!important.ts']);
-        context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(policy, {
+            collectionName: 'generation-a',
+            navigation: { status: 'not_bound' },
+        });
         assert.equal(context.getActiveIgnorePatterns(codebasePath).includes('generated/**'), true);
 
         const restarted = new Context({
@@ -1728,7 +1766,10 @@ test('Context preserves ordered duplicate ignore rules around negation', async (
             '!generated/keep.ts',
             'generated/**',
         ]);
-        context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(policy, {
+            collectionName: 'generation-a',
+            navigation: { status: 'not_bound' },
+        });
 
         const restarted = new Context({
             embedding: new TestEmbedding(),
@@ -1764,13 +1805,19 @@ test('Context reloads policy published by another Context instance', async () =>
         const initial = await first.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['private/**'],
         });
-        first.publishResolvedIndexPolicy(initial, { collectionName: 'generation-a' });
+        first.publishResolvedIndexPolicy(initial, {
+            collectionName: 'generation-a',
+            navigation: { status: 'not_bound' },
+        });
         assert.equal(second.getActiveIgnorePatterns(codebasePath).includes('private/**'), true);
 
         const replacement = await first.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['generated/**'],
         });
-        first.publishResolvedIndexPolicy(replacement, { collectionName: 'generation-b' });
+        first.publishResolvedIndexPolicy(replacement, {
+            collectionName: 'generation-b',
+            navigation: { status: 'not_bound' },
+        });
 
         assert.equal(second.getActiveIgnorePatterns(codebasePath).includes('private/**'), false);
         assert.equal(second.getActiveIgnorePatterns(codebasePath).includes('generated/**'), true);
@@ -1807,11 +1854,10 @@ test('Context resolves a newly published profile policy on the first active-gene
         await publisher.indexCodebase(codebasePath, undefined, false, { indexPolicy: policy });
         const navigation = await publisher.getCurrentNavigationGeneration(codebasePath);
         assert.ok(navigation);
-        publisher.publishResolvedIndexPolicy(policy, {
-            collectionName: publisher.resolveCollectionName(codebasePath),
-            navigationGenerationId: navigation?.generationId,
-            navigationSealHash: navigation?.navigationSealHash,
-        });
+        publisher.publishResolvedIndexPolicy(
+            policy,
+            sealedPolicyBinding(publisher.resolveCollectionName(codebasePath), navigation),
+        );
 
         assert.equal(
             await longLived.getActiveIndexedCollectionName(codebasePath),
@@ -1836,7 +1882,10 @@ test('Context keeps durable and runtime policy consistent when the publication w
         const previous = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['private/**'],
         });
-        context.publishResolvedIndexPolicy(previous, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(previous, {
+            collectionName: 'generation-a',
+            navigation: { status: 'not_bound' },
+        });
         const candidate = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['generated/**'],
         });
@@ -1844,7 +1893,7 @@ test('Context keeps durable and runtime policy consistent when the publication w
         assert.throws(
             () => context.publishResolvedIndexPolicy(
                 candidate,
-                { collectionName: 'generation-b' },
+                { collectionName: 'generation-b', navigation: { status: 'not_bound' } },
                 (publish) => {
                     publish();
                     throw new Error('lease wrapper rejected publication receipt');
@@ -1856,6 +1905,7 @@ test('Context keeps durable and runtime policy consistent when the publication w
                 assert.equal(error.receipt.status, 'committed');
                 assert.equal(error.receipt.operation, 'publish');
                 assert.equal(error.receipt.collectionName, 'generation-b');
+                assert.deepEqual(error.receipt.navigation, { status: 'not_bound' });
                 return true;
             },
         );
@@ -1998,7 +2048,7 @@ test('Context policy removal reports a committed receipt when its wrapper throws
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['generated/**'],
         });
-        const publishReceipt = context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        const publishReceipt = context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a'));
         assert.equal(publishReceipt.operation, 'publish');
 
         assert.throws(
@@ -2033,7 +2083,7 @@ test('Context policy removal reports a committed receipt when runtime reconcilia
             indexPolicyStateRoot: policyRoot,
         });
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
-        const publishReceipt = context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        const publishReceipt = context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a'));
         const policyPath = path.join(
             policyRoot,
             `${crypto.createHash('sha256').update(policy.canonicalRoot).digest('hex')}.json`,
@@ -2084,14 +2134,14 @@ test('Context policy removal rejects a concurrently replaced document', async ()
         const initialPolicy = await first.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['initial/**'],
         });
-        const initialReceipt = first.publishResolvedIndexPolicy(initialPolicy, { collectionName: 'generation-a' });
+        const initialReceipt = first.publishResolvedIndexPolicy(initialPolicy, unboundPolicyBinding('generation-a'));
         const replacementPolicy = await second.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['replacement/**'],
         });
         assert.throws(() => first.clearPublishedIndexPolicy(codebasePath, (publish) => {
             const replacementReceipt = second.publishResolvedIndexPolicy(
                 replacementPolicy,
-                { collectionName: 'generation-b' },
+                unboundPolicyBinding('generation-b'),
             );
             assert.equal(replacementReceipt.operation, 'publish');
             publish();
@@ -2125,7 +2175,7 @@ test('Context policy removal compares the expected digest with the document actu
         const initialPolicy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['initial/**'],
         });
-        const initialReceipt = context.publishResolvedIndexPolicy(initialPolicy, { collectionName: 'generation-a' });
+        const initialReceipt = context.publishResolvedIndexPolicy(initialPolicy, unboundPolicyBinding('generation-a'));
         assert.equal(initialReceipt.operation, 'publish');
 
         const replacementWriter = new Context({
@@ -2136,7 +2186,7 @@ test('Context policy removal compares the expected digest with the document actu
         const replacementPolicy = await replacementWriter.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['replacement/**'],
         });
-        replacementWriter.publishResolvedIndexPolicy(replacementPolicy, { collectionName: 'generation-b' });
+        replacementWriter.publishResolvedIndexPolicy(replacementPolicy, unboundPolicyBinding('generation-b'));
         const policyKey = `${crypto.createHash('sha256').update(initialPolicy.canonicalRoot).digest('hex')}.json`;
         const policyPath = path.join(policyRoot, policyKey);
         const replacementDocument = fs.readFileSync(path.join(replacementPolicyRoot, policyKey));
@@ -2198,7 +2248,7 @@ test('Context serializes direct publish and compare-clear through the same Core 
         const initialPolicy = await first.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['initial/**'],
         });
-        const initialReceipt = first.publishResolvedIndexPolicy(initialPolicy, { collectionName: 'generation-a' });
+        const initialReceipt = first.publishResolvedIndexPolicy(initialPolicy, unboundPolicyBinding('generation-a'));
         assert.equal(initialReceipt.operation, 'publish');
         const replacementPolicy = await second.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['replacement/**'],
@@ -2209,7 +2259,7 @@ test('Context serializes direct publish and compare-clear through the same Core 
 
         privateFirst.withIndexPolicyMutationLock(initialPolicy.canonicalRoot, () => {
             assert.throws(
-                () => second.publishResolvedIndexPolicy(replacementPolicy, { collectionName: 'generation-b' }),
+                () => second.publishResolvedIndexPolicy(replacementPolicy, unboundPolicyBinding('generation-b')),
                 /policy mutation lock is already held/i,
             );
             assert.throws(
@@ -2271,7 +2321,7 @@ test('Context recovers a policy mutation lock abandoned by a crashed child proce
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['generated/**'],
         });
-        const receipt = context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        const receipt = context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a'));
 
         assert.equal(receipt.operation, 'publish');
         assert.equal(fs.existsSync(lockPath), false);
@@ -2294,7 +2344,7 @@ test('Context preserves a compare-clear tombstone when mismatch restoration fail
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['generated/**'],
         });
-        context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a'));
         const canonicalRoot = fs.realpathSync.native(codebasePath);
         const policyPath = path.join(
             policyRoot,
@@ -2341,10 +2391,10 @@ test('Context preserves both policy documents when mismatch restoration finds an
         fs.mkdirSync(codebasePath, { recursive: true });
         const context = new Context({ embedding: new TestEmbedding(), vectorDatabase: new InMemoryVectorDatabase(), indexPolicyStateRoot: policyRoot });
         const initialPolicy = await context.resolveIndexPolicyForCodebase(codebasePath, { customIgnorePatterns: ['initial/**'] });
-        context.publishResolvedIndexPolicy(initialPolicy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(initialPolicy, unboundPolicyBinding('generation-a'));
         const replacement = new Context({ embedding: new TestEmbedding(), vectorDatabase: new InMemoryVectorDatabase(), indexPolicyStateRoot: replacementRoot });
         const replacementPolicy = await replacement.resolveIndexPolicyForCodebase(codebasePath, { customIgnorePatterns: ['replacement/**'] });
-        replacement.publishResolvedIndexPolicy(replacementPolicy, { collectionName: 'generation-b' });
+        replacement.publishResolvedIndexPolicy(replacementPolicy, unboundPolicyBinding('generation-b'));
         const policyKey = `${crypto.createHash('sha256').update(initialPolicy.canonicalRoot).digest('hex')}.json`;
         const policyPath = path.join(policyRoot, policyKey);
         const replacementBytes = fs.readFileSync(path.join(replacementRoot, policyKey));
@@ -2386,13 +2436,13 @@ test('Context restores one valid pending policy tombstone before the next public
         fs.mkdirSync(codebasePath, { recursive: true });
         const context = new Context({ embedding: new TestEmbedding(), vectorDatabase: new InMemoryVectorDatabase(), indexPolicyStateRoot: policyRoot });
         const initialPolicy = await context.resolveIndexPolicyForCodebase(codebasePath, { customIgnorePatterns: ['initial/**'] });
-        context.publishResolvedIndexPolicy(initialPolicy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(initialPolicy, unboundPolicyBinding('generation-a'));
         const policyPath = path.join(policyRoot, `${crypto.createHash('sha256').update(initialPolicy.canonicalRoot).digest('hex')}.json`);
         const pendingPath = `${policyPath}.removed-crashed-writer`;
         fs.renameSync(policyPath, pendingPath);
 
         const replacementPolicy = await context.resolveIndexPolicyForCodebase(codebasePath, { customIgnorePatterns: ['replacement/**'] });
-        context.publishResolvedIndexPolicy(replacementPolicy, { collectionName: 'generation-b' });
+        context.publishResolvedIndexPolicy(replacementPolicy, unboundPolicyBinding('generation-b'));
 
         assert.equal(fs.existsSync(policyPath), true);
         assert.equal(fs.existsSync(pendingPath), false);
@@ -2421,7 +2471,7 @@ test('Context recovers a policy lock whose PID was reused by another process ide
         }));
         const context = new Context({ embedding: new TestEmbedding(), vectorDatabase: new InMemoryVectorDatabase(), indexPolicyStateRoot: policyRoot });
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
-        assert.equal(context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' }).operation, 'publish');
+        assert.equal(context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a')).operation, 'publish');
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -2441,7 +2491,7 @@ test('Context clearIndex leaves runtime policy authority intact when the policy 
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['generated/**'],
         });
-        context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a'));
         const canonicalRoot = fs.realpathSync.native(codebasePath);
         const policyPath = path.join(
             policyRoot,
@@ -2483,7 +2533,7 @@ test('Context policy removal reconciles runtime state after removing a malformed
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['generated/**'],
         });
-        context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a'));
         const policyPath = path.join(
             policyRoot,
             `${crypto.createHash('sha256').update(policy.canonicalRoot).digest('hex')}.json`,
@@ -2524,7 +2574,7 @@ test('Context fenced policy publication removes orphaned removal tombstones', as
         const initialPolicy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['initial/**'],
         });
-        context.publishResolvedIndexPolicy(initialPolicy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(initialPolicy, unboundPolicyBinding('generation-a'));
         const policyPath = path.join(
             policyRoot,
             `${crypto.createHash('sha256').update(initialPolicy.canonicalRoot).digest('hex')}.json`,
@@ -2537,7 +2587,7 @@ test('Context fenced policy publication removes orphaned removal tombstones', as
         });
         context.publishResolvedIndexPolicy(
             replacementPolicy,
-            { collectionName: 'generation-b' },
+            unboundPolicyBinding('generation-b'),
             (publish) => publish(),
         );
 
@@ -2563,15 +2613,17 @@ test('Context completion validation rejects a missing policy-bound collection in
         await context.indexCodebase(codebasePath);
         const proven = await context.resolveProvenGeneration(codebasePath);
         assert.ok(proven);
-        context.publishResolvedIndexPolicy(proven.policy, {
-            collectionName: context.resolveStagedCollectionName(codebasePath, 'missing'),
-            navigationGenerationId: proven.navigation?.generationId,
-            navigationSealHash: proven.navigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            proven.policy,
+            sealedPolicyBinding(
+                context.resolveStagedCollectionName(codebasePath, 'missing'),
+                proven.navigation,
+            ),
+        );
 
         assert.deepEqual(
             await context.getIndexCompletionMarkerForValidation(codebasePath),
-            { status: 'invalid_v2' },
+            { status: 'invalid_v3' },
         );
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
     } finally {
@@ -2597,15 +2649,14 @@ test('Context completion validation rejects a markerless policy-bound collection
         assert.ok(proven);
         const markerlessCollection = context.resolveStagedCollectionName(codebasePath, 'markerless');
         await vectorDatabase.createHybridCollection(markerlessCollection, 4);
-        context.publishResolvedIndexPolicy(proven.policy, {
-            collectionName: markerlessCollection,
-            navigationGenerationId: proven.navigation?.generationId,
-            navigationSealHash: proven.navigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            proven.policy,
+            sealedPolicyBinding(markerlessCollection, proven.navigation),
+        );
 
         assert.deepEqual(
             await context.getIndexCompletionMarkerForValidation(codebasePath),
-            { status: 'invalid_v2' },
+            { status: 'invalid_v3' },
         );
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
     } finally {
@@ -2659,8 +2710,8 @@ test('Context completion validation preserves vector authority when navigation i
         fs.rmSync(path.join(resolveNavigationSidecarRoot(navigationStateRoot, codebasePath), 'current.json'));
 
         const evidence = await context.getIndexCompletionMarkerForValidation(codebasePath);
-        assert.equal(evidence.status, 'valid_v2');
-        if (evidence.status === 'valid_v2') {
+        assert.equal(evidence.status, 'valid_v3');
+        if (evidence.status === 'valid_v3') {
             assert.equal(evidence.navigationProof.status, 'missing');
             assert.equal(evidence.generationReceipt, undefined);
         }
@@ -2732,8 +2783,8 @@ test('Context completion validation preserves vector authority when navigation m
         fs.writeFileSync(path.join(generationRoot, 'relationships', 'manifest.json'), '{', 'utf8');
 
         const evidence = await context.getIndexCompletionMarkerForValidation(codebasePath);
-        assert.equal(evidence.status, 'valid_v2');
-        if (evidence.status === 'valid_v2') {
+        assert.equal(evidence.status, 'valid_v3');
+        if (evidence.status === 'valid_v3') {
             assert.equal(evidence.navigationProof.status, 'corrupt');
             assert.equal(evidence.generationReceipt, undefined);
         }
@@ -2742,32 +2793,52 @@ test('Context completion validation preserves vector authority when navigation m
     }
 });
 
-test('Context completion validation treats v1 evidence under a durable v2 binding as contradictory', async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-validation-bound-v1-'));
+test('Context refuses a retired v2 marker under durable v3 authority without mutating canonical policy or pointer', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-validation-bound-v2-'));
     const codebasePath = path.join(tempRoot, 'repo');
     try {
         fs.mkdirSync(codebasePath, { recursive: true });
         fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
         const vectorDatabase = new InMemoryVectorDatabase();
+        const policyRoot = path.join(tempRoot, 'policies');
+        const navigationRoot = path.join(tempRoot, 'navigation');
         const context = new Context({
             embedding: new TestEmbedding(),
             vectorDatabase,
-            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
-            symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
+            indexPolicyStateRoot: policyRoot,
+            symbolRegistryStateRoot: navigationRoot,
         });
         await context.indexCodebase(codebasePath);
         const collectionName = context.resolveCollectionName(codebasePath);
         const marker = vectorDatabase.collections.get(collectionName)?.get(INDEX_COMPLETION_MARKER_DOC_ID);
-        assert.ok(marker);
+        assert.ok(marker && typeof marker.metadata === 'object');
+        const trustedFingerprint = structuredClone(
+            (marker.metadata as { fingerprint: IndexCompletionFingerprint }).fingerprint,
+        );
         marker.metadata = {
-            kind: 'satori_index_completion_v1',
-            codebasePath,
+            ...(marker.metadata as Record<string, unknown>),
+            kind: 'satori_index_completion_v2',
         };
+        const policyPath = path.join(
+            policyRoot,
+            `${crypto.createHash('sha256').update(fs.realpathSync(codebasePath)).digest('hex')}.json`,
+        );
+        const pointerPath = path.join(resolveNavigationSidecarRoot(navigationRoot, codebasePath), 'current.json');
+        const markerBefore = structuredClone(marker.metadata);
+        const policyBefore = fs.readFileSync(policyPath, 'utf8');
+        const pointerBefore = fs.readFileSync(pointerPath, 'utf8');
 
         assert.deepEqual(
             await context.getIndexCompletionMarkerForValidation(codebasePath),
-            { status: 'invalid_v2' },
+            { status: 'requires_reindex' },
         );
+        const repair = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+        });
+        assert.equal(repair.status, 'requires_reindex');
+        assert.deepEqual(marker.metadata, markerBefore);
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), policyBefore);
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), pointerBefore);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -2792,7 +2863,7 @@ test('Context does not overwrite a newer policy publication when an older public
         const previous = await first.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['previous/**'],
         });
-        first.publishResolvedIndexPolicy(previous, { collectionName: 'generation-a' });
+        first.publishResolvedIndexPolicy(previous, unboundPolicyBinding('generation-a'));
         const staleCandidate = await first.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['stale/**'],
         });
@@ -2803,10 +2874,10 @@ test('Context does not overwrite a newer policy publication when an older public
         assert.throws(
             () => first.publishResolvedIndexPolicy(
                 staleCandidate,
-                { collectionName: 'generation-b' },
+                unboundPolicyBinding('generation-b'),
                 (publish) => {
                     publish();
-                    second.publishResolvedIndexPolicy(newer, { collectionName: 'generation-c' });
+                    second.publishResolvedIndexPolicy(newer, unboundPolicyBinding('generation-c'));
                     throw new Error('stale publication receipt rejected');
                 },
             ),
@@ -2839,7 +2910,7 @@ test('Context reuses the compiled ignore matcher while the durable policy is unc
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['generated/**'],
         });
-        context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a'));
 
         const privateContext = context as unknown as {
             getIgnoreMatcherForCodebase(root: string): ReturnType<typeof import('ignore').default>;
@@ -2867,7 +2938,7 @@ test('Context treats changed runtime policy inputs as reindexable compatibility 
         const accepted = await publisher.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['custom/**'],
         });
-        publisher.publishResolvedIndexPolicy(accepted, { collectionName: 'generation-a' });
+        publisher.publishResolvedIndexPolicy(accepted, unboundPolicyBinding('generation-a'));
 
         const restarted = new Context({
             embedding: new TestEmbedding(),
@@ -2911,11 +2982,10 @@ test('Context invalidates and cannot republish an accepted generation after same
         context.updateIgnorePatterns(['new-runtime/**']);
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
 
-        context.publishResolvedIndexPolicy(accepted, {
-            collectionName,
-            navigationGenerationId: navigation?.generationId,
-            navigationSealHash: navigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            accepted,
+            sealedPolicyBinding(collectionName, navigation),
+        );
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
 
         const restarted = new Context({
@@ -3122,7 +3192,7 @@ test('Context rejects a corrupted current-format custom index policy', async () 
         const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customExtensions: ['.foo'],
         });
-        context.publishResolvedIndexPolicy(policy, { collectionName: 'generation-a' });
+        context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-a'));
 
         const canonicalRoot = fs.realpathSync(codebasePath);
         const policyPath = path.join(
@@ -3165,7 +3235,7 @@ test('Context active collection resolution rejects a different published index p
         const changedPolicy = await context.resolveIndexPolicyForCodebase(codebasePath, {
             customIgnorePatterns: ['runtime.ts'],
         });
-        context.publishResolvedIndexPolicy(changedPolicy, { collectionName: 'different-generation' });
+        context.publishResolvedIndexPolicy(changedPolicy, unboundPolicyBinding('different-generation'));
 
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
     } finally {
@@ -3192,11 +3262,10 @@ test('Context active collection resolution requires the durable policy document 
         const acceptedPolicy = await context.resolveIndexPolicyForCodebase(codebasePath);
         const navigation = await context.getCurrentNavigationGeneration(codebasePath);
         assert.ok(navigation);
-        context.publishResolvedIndexPolicy(acceptedPolicy, {
-            collectionName: context.resolveCollectionName(codebasePath),
-            navigationGenerationId: navigation?.generationId,
-            navigationSealHash: navigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            acceptedPolicy,
+            sealedPolicyBinding(context.resolveCollectionName(codebasePath), navigation),
+        );
         assert.ok(await context.getActiveIndexedCollectionName(codebasePath));
 
         const policyPath = path.join(
@@ -3235,11 +3304,10 @@ test('Context proven generation returns the sealed policy after ignore-file chan
         const acceptedPolicy = await context.resolveIndexPolicyForCodebase(codebasePath);
         const acceptedNavigation = await context.getCurrentNavigationGeneration(codebasePath);
         assert.ok(acceptedNavigation);
-        context.publishResolvedIndexPolicy(acceptedPolicy, {
-            collectionName: context.resolveCollectionName(codebasePath),
-            navigationGenerationId: acceptedNavigation?.generationId,
-            navigationSealHash: acceptedNavigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            acceptedPolicy,
+            sealedPolicyBinding(context.resolveCollectionName(codebasePath), acceptedNavigation),
+        );
 
         const initial = await context.resolveProvenGeneration(codebasePath);
         assert.ok(initial);
@@ -3340,8 +3408,8 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         assert.deepEqual(normalized.policy.customExtensions, second.policy.customExtensions);
         assert.notEqual(normalized.observations, second.observations);
         const validationEvidence = await context.getIndexCompletionMarkerForValidation(codebasePath);
-        assert.equal(validationEvidence.status, 'valid_v2');
-        if (validationEvidence.status === 'valid_v2') {
+        assert.equal(validationEvidence.status, 'valid_v3');
+        if (validationEvidence.status === 'valid_v3') {
             assert.equal(validationEvidence.collectionName, first.collectionName);
             assert.equal(validationEvidence.navigationProof.status, 'valid');
         }
@@ -3409,12 +3477,166 @@ test('Context completion validation preserves vector proof but rejects a tampere
 
         assert.equal(await context.proveIndexedGeneration(codebasePath), null);
         const evidence = await context.getIndexCompletionMarkerForValidation(codebasePath);
-        assert.equal(evidence.status, 'valid_v2');
-        if (evidence.status === 'valid_v2') {
+        assert.equal(evidence.status, 'valid_v3');
+        if (evidence.status === 'valid_v3') {
             assert.equal(evidence.navigationProof.status, 'incompatible');
         }
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context completion validation requires reindex for a legacy navigation pointer under v3 authority', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-legacy-pointer-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const navigationStateRoot = path.join(tempRoot, 'navigation');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+            symbolRegistryStateRoot: navigationStateRoot,
+        });
+        await context.indexCodebase(codebasePath);
+
+        const pointerPath = path.join(
+            resolveNavigationSidecarRoot(navigationStateRoot, codebasePath),
+            'current.json',
+        );
+        const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')) as Record<string, unknown>;
+        pointer.schemaVersion = 'navigation_current_v2';
+        const pointerBefore = JSON.stringify(pointer);
+        fs.writeFileSync(pointerPath, pointerBefore, 'utf8');
+        const marker = vectorDatabase.collections
+            .get(context.resolveCollectionName(codebasePath))
+            ?.get(INDEX_COMPLETION_MARKER_DOC_ID);
+        assert.ok(marker && typeof marker.metadata === 'object');
+        const trustedFingerprint = structuredClone(
+            (marker.metadata as { fingerprint: IndexCompletionFingerprint }).fingerprint,
+        );
+
+        assert.deepEqual(
+            await context.getIndexCompletionMarkerForValidation(codebasePath),
+            { status: 'requires_reindex' },
+        );
+        const repair = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+        });
+        assert.equal(repair.status, 'requires_reindex');
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), pointerBefore);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context refuses unsupported future navigation authority without overwriting it during repair', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-future-pointer-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const navigationStateRoot = path.join(tempRoot, 'navigation');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+            symbolRegistryStateRoot: navigationStateRoot,
+        });
+        await context.indexCodebase(codebasePath);
+
+        const pointerPath = path.join(
+            resolveNavigationSidecarRoot(navigationStateRoot, codebasePath),
+            'current.json',
+        );
+        const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')) as Record<string, unknown>;
+        pointer.schemaVersion = 'navigation_current_v4';
+        const futurePointerBytes = JSON.stringify(pointer);
+        fs.writeFileSync(pointerPath, futurePointerBytes, 'utf8');
+        const markerDocument = vectorDatabase.collections
+            .get(context.resolveCollectionName(codebasePath))
+            ?.get(INDEX_COMPLETION_MARKER_DOC_ID);
+        assert.ok(markerDocument && typeof markerDocument.metadata === 'object');
+        const trustedFingerprint = structuredClone(
+            (markerDocument.metadata as { fingerprint: IndexCompletionFingerprint }).fingerprint,
+        );
+
+        assert.deepEqual(
+            await context.getIndexCompletionMarkerForValidation(codebasePath),
+            { status: 'unsupported_authority' },
+        );
+        const repair = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+        });
+        assert.equal(repair.status, 'requires_reindex');
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), futurePointerBytes);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context distinguishes unsupported future marker and policy schemas without mutating them', async (t) => {
+    for (const component of ['marker', 'policy'] as const) {
+        await t.test(component, async () => {
+            const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `satori-context-future-${component}-`));
+            const codebasePath = path.join(tempRoot, 'repo');
+            const policyRoot = path.join(tempRoot, 'policies');
+            try {
+                fs.mkdirSync(codebasePath, { recursive: true });
+                fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+                const vectorDatabase = new InMemoryVectorDatabase();
+                const context = new Context({
+                    embedding: new TestEmbedding(),
+                    vectorDatabase,
+                    indexPolicyStateRoot: policyRoot,
+                    symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
+                });
+                await context.indexCodebase(codebasePath);
+                const collectionName = context.resolveCollectionName(codebasePath);
+                const markerDocument = vectorDatabase.collections
+                    .get(collectionName)
+                    ?.get(INDEX_COMPLETION_MARKER_DOC_ID);
+                assert.ok(markerDocument && typeof markerDocument.metadata === 'object');
+                const trustedFingerprint = structuredClone(
+                    (markerDocument.metadata as { fingerprint: IndexCompletionFingerprint }).fingerprint,
+                );
+                const policyPath = path.join(
+                    policyRoot,
+                    `${crypto.createHash('sha256').update(fs.realpathSync(codebasePath)).digest('hex')}.json`,
+                );
+
+                if (component === 'marker') {
+                    markerDocument.metadata = {
+                        ...(markerDocument.metadata as Record<string, unknown>),
+                        kind: 'satori_index_completion_v4',
+                    };
+                } else {
+                    const policy = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
+                    fs.writeFileSync(policyPath, JSON.stringify({
+                        ...policy,
+                        schemaVersion: 'satori_index_policy_v4',
+                    }), 'utf8');
+                }
+                const markerBefore = structuredClone(markerDocument.metadata);
+                const policyBefore = fs.readFileSync(policyPath, 'utf8');
+
+                assert.deepEqual(
+                    await context.getIndexCompletionMarkerForValidation(codebasePath),
+                    { status: 'unsupported_authority' },
+                );
+                const repair = await context.repairIndex(codebasePath, {
+                    snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
+                });
+                assert.equal(repair.status, 'requires_reindex');
+                assert.deepEqual(markerDocument.metadata, markerBefore);
+                assert.equal(fs.readFileSync(policyPath, 'utf8'), policyBefore);
+            } finally {
+                fs.rmSync(tempRoot, { recursive: true, force: true });
+            }
+        });
     }
 });
 
@@ -3481,78 +3703,6 @@ test('Context completion validation classifies malformed repository profile auth
     }
 });
 
-test('Context loads legacy policy documents whose digest predates navigation seal binding', async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-legacy-policy-digest-'));
-    const codebasePath = path.join(tempRoot, 'repo');
-    const policyRoot = path.join(tempRoot, 'policies');
-    try {
-        fs.mkdirSync(codebasePath, { recursive: true });
-        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
-        const vectorDatabase = new InMemoryVectorDatabase();
-        const context = new Context({
-            embedding: new TestEmbedding(),
-            vectorDatabase,
-            indexPolicyStateRoot: policyRoot,
-            symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
-        });
-        await context.indexCodebase(codebasePath);
-        const canonicalRoot = fs.realpathSync(codebasePath);
-        const policyPath = path.join(
-            policyRoot,
-            `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`,
-        );
-        const document = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
-        delete document.navigationSealHash;
-        delete document.documentDigest;
-        const documentDigest = crypto.createHash('sha256').update(JSON.stringify(document), 'utf8').digest('hex');
-        fs.writeFileSync(policyPath, JSON.stringify({ ...document, documentDigest }), 'utf8');
-
-        const restarted = new Context({
-            embedding: new TestEmbedding(),
-            vectorDatabase,
-            indexPolicyStateRoot: policyRoot,
-            symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
-        });
-        const policy = await restarted.resolveIndexPolicyForCodebase(codebasePath);
-        assert.equal(policy.policyHash, document.policyHash);
-        assert.notEqual(
-            (await restarted.getIndexCompletionMarkerForValidation(codebasePath)).status,
-            'policy_authority_invalid',
-        );
-
-        for (const binding of [
-            { navigationGenerationId: 'generation-a', navigationSealHash: '' },
-            { navigationGenerationId: '', navigationSealHash: 'a'.repeat(64) },
-        ]) {
-            const mismatchedPayload = {
-                ...document,
-                ...binding,
-            };
-            delete mismatchedPayload.documentDigest;
-            const mismatchedDigest = crypto.createHash('sha256')
-                .update(JSON.stringify(mismatchedPayload), 'utf8')
-                .digest('hex');
-            fs.writeFileSync(
-                policyPath,
-                JSON.stringify({ ...mismatchedPayload, documentDigest: mismatchedDigest }),
-                'utf8',
-            );
-            const mismatched = new Context({
-                embedding: new TestEmbedding(),
-                vectorDatabase,
-                indexPolicyStateRoot: policyRoot,
-                symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
-            });
-            assert.equal(
-                (await mismatched.getIndexCompletionMarkerForValidation(codebasePath)).status,
-                'policy_authority_invalid',
-            );
-        }
-    } finally {
-        fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-});
-
 test('Context keeps vector retrieval usable but rejects strict proof when no navigation generation is bound', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-vector-only-generation-'));
     const stateRoot = path.join(tempRoot, 'state');
@@ -3572,15 +3722,8 @@ test('Context keeps vector retrieval usable but rejects strict proof when no nav
         const collectionName = context.resolveCollectionName(codebasePath);
         const markerDocument = vectorDatabase.collections.get(collectionName)?.get(INDEX_COMPLETION_MARKER_DOC_ID);
         assert.ok(markerDocument && typeof markerDocument.metadata === 'object');
-        for (const field of [
-            'navigationGenerationId',
-            'symbolRegistryManifestHash',
-            'relationshipManifestHash',
-            'navigationSealHash',
-        ]) {
-            delete (markerDocument.metadata as Record<string, unknown>)[field];
-        }
-        context.publishResolvedIndexPolicy(policy, { collectionName });
+        (markerDocument.metadata as Record<string, unknown>).navigation = { status: 'not_bound' };
+        context.publishResolvedIndexPolicy(policy, unboundPolicyBinding(collectionName));
 
         const vectorReceipt = await context.proveVectorGeneration(codebasePath);
         assert.ok(vectorReceipt);
@@ -3656,6 +3799,10 @@ test('Context completes an interrupted two-file durable authority restoration on
             vectorDatabase: new InMemoryVectorDatabase(),
             indexPolicyStateRoot: policyRoot,
             symbolRegistryStateRoot: navigationStateRoot,
+            durableAuthorityRecoveryPublisher: (_root, _owner, publish) => {
+                publish();
+                return true;
+            },
         });
 
         assert.equal(fs.readFileSync(policyPath, 'utf8'), desired[0]);
@@ -3665,6 +3812,206 @@ test('Context completes an interrupted two-file durable authority restoration on
             assert.equal(fs.existsSync(entry.temporaryPath), false);
             assert.equal(fs.existsSync(entry.displacedPath), false);
         }
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context fails closed and leaves authority untouched when recovery cannot acquire a fence', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-authority-restore-live-owner-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const navigationStateRoot = path.join(tempRoot, 'navigation-state');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        const policyPath = path.join(
+            policyRoot,
+            `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`,
+        );
+        const pointerPath = path.join(
+            resolveNavigationSidecarRoot(navigationStateRoot, canonicalRoot),
+            'current.json',
+        );
+        fs.mkdirSync(path.dirname(policyPath), { recursive: true });
+        fs.mkdirSync(path.dirname(pointerPath), { recursive: true });
+        const candidate = ['{"candidatePolicy":true}\n', '{"candidatePointer":true}\n'];
+        const desired = ['{"previousPolicy":true}\n', '{"previousPointer":true}\n'];
+        fs.writeFileSync(policyPath, candidate[0]!, 'utf8');
+        fs.writeFileSync(pointerPath, candidate[1]!, 'utf8');
+
+        const id = crypto.randomUUID();
+        const entries = [policyPath, pointerPath].map((targetPath, index) => ({
+            targetPath,
+            temporaryPath: `${targetPath}.restore-${id}`,
+            displacedPath: `${targetPath}.rollback-${id}`,
+            content: desired[index]!,
+            digest: crypto.createHash('sha256').update(desired[index]!, 'utf8').digest('hex'),
+            expectedDigest: crypto.createHash('sha256').update(candidate[index]!, 'utf8').digest('hex'),
+        }));
+        for (const entry of entries) fs.writeFileSync(entry.temporaryPath, entry.content, 'utf8');
+        const journalRoot = path.join(policyRoot, 'restore-transactions');
+        fs.mkdirSync(journalRoot, { recursive: true });
+        const journalPath = path.join(journalRoot, `${id}.json`);
+        fs.writeFileSync(journalPath, JSON.stringify({
+            schemaVersion: 1,
+            id,
+            canonicalRoot,
+            phase: 'prepared',
+            nextEntry: 0,
+            mutationOwner: { ownerId: 'live-owner', generation: 4, operationId: crypto.randomUUID() },
+            entries,
+        }), 'utf8');
+
+        let recoveryAttempts = 0;
+        assert.throws(
+            () => new Context({
+                embedding: new TestEmbedding(),
+                vectorDatabase: new InMemoryVectorDatabase(),
+                indexPolicyStateRoot: policyRoot,
+                symbolRegistryStateRoot: navigationStateRoot,
+                durableAuthorityRecoveryPublisher: () => {
+                    recoveryAttempts += 1;
+                    return false;
+                },
+            }),
+            /could not acquire the mutation fence/i,
+        );
+
+        assert.equal(recoveryAttempts, 1);
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), candidate[0]);
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), candidate[1]);
+        assert.equal(fs.existsSync(journalPath), true);
+        for (const entry of entries) assert.equal(fs.existsSync(entry.temporaryPath), true);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context fails closed without a recovery publisher when an authority restoration is pending', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-authority-restore-no-publisher-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const navigationStateRoot = path.join(tempRoot, 'navigation-state');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        const policyPath = path.join(
+            policyRoot,
+            `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`,
+        );
+        const pointerPath = path.join(
+            resolveNavigationSidecarRoot(navigationStateRoot, canonicalRoot),
+            'current.json',
+        );
+        fs.mkdirSync(path.dirname(policyPath), { recursive: true });
+        fs.mkdirSync(path.dirname(pointerPath), { recursive: true });
+        const current = ['{"policy":true}\n', '{"pointer":true}\n'];
+        fs.writeFileSync(policyPath, current[0]!, 'utf8');
+        fs.writeFileSync(pointerPath, current[1]!, 'utf8');
+
+        const id = crypto.randomUUID();
+        const entries = [policyPath, pointerPath].map((targetPath, index) => ({
+            targetPath,
+            temporaryPath: `${targetPath}.restore-${id}`,
+            displacedPath: `${targetPath}.rollback-${id}`,
+            content: current[index]!,
+            digest: crypto.createHash('sha256').update(current[index]!, 'utf8').digest('hex'),
+            expectedDigest: crypto.createHash('sha256').update(current[index]!, 'utf8').digest('hex'),
+        }));
+        for (const entry of entries) fs.writeFileSync(entry.temporaryPath, entry.content, 'utf8');
+        const journalRoot = path.join(policyRoot, 'restore-transactions');
+        fs.mkdirSync(journalRoot, { recursive: true });
+        const journalPath = path.join(journalRoot, `${id}.json`);
+        fs.writeFileSync(journalPath, JSON.stringify({
+            schemaVersion: 1,
+            id,
+            canonicalRoot,
+            phase: 'prepared',
+            nextEntry: 0,
+            entries,
+        }), 'utf8');
+
+        assert.throws(
+            () => new Context({
+                embedding: new TestEmbedding(),
+                vectorDatabase: new InMemoryVectorDatabase(),
+                indexPolicyStateRoot: policyRoot,
+                symbolRegistryStateRoot: navigationStateRoot,
+            }),
+            /no fenced recovery publisher is configured/i,
+        );
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), current[0]);
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), current[1]);
+        assert.equal(fs.existsSync(journalPath), true);
+        for (const entry of entries) assert.equal(fs.existsSync(entry.temporaryPath), true);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context rejects restore journals whose auxiliary paths escape owned authority paths', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-authority-restore-path-safety-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const navigationStateRoot = path.join(tempRoot, 'navigation-state');
+    const externalSentinel = path.join(tempRoot, 'external-sentinel.txt');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        const policyPath = path.join(
+            policyRoot,
+            `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`,
+        );
+        const pointerPath = path.join(
+            resolveNavigationSidecarRoot(navigationStateRoot, canonicalRoot),
+            'current.json',
+        );
+        fs.mkdirSync(path.dirname(policyPath), { recursive: true });
+        fs.mkdirSync(path.dirname(pointerPath), { recursive: true });
+        fs.writeFileSync(policyPath, '{"policy":true}\n', 'utf8');
+        fs.writeFileSync(pointerPath, '{"pointer":true}\n', 'utf8');
+        fs.writeFileSync(externalSentinel, 'preserve me', 'utf8');
+
+        const id = crypto.randomUUID();
+        const entries = [policyPath, pointerPath].map((targetPath, index) => {
+            const content = index === 0 ? '{"policy":true}\n' : '{"pointer":true}\n';
+            return {
+                targetPath,
+                temporaryPath: index === 0 ? externalSentinel : `${targetPath}.restore-${id}`,
+                displacedPath: `${targetPath}.rollback-${id}`,
+                content,
+                digest: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+                expectedDigest: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+            };
+        });
+        const journalRoot = path.join(policyRoot, 'restore-transactions');
+        fs.mkdirSync(journalRoot, { recursive: true });
+        fs.writeFileSync(path.join(journalRoot, `${id}.json`), JSON.stringify({
+            schemaVersion: 1,
+            id,
+            canonicalRoot,
+            phase: 'committed',
+            nextEntry: 2,
+            entries,
+        }), 'utf8');
+
+        assert.throws(
+            () => new Context({
+                embedding: new TestEmbedding(),
+                vectorDatabase: new InMemoryVectorDatabase(),
+                indexPolicyStateRoot: policyRoot,
+                symbolRegistryStateRoot: navigationStateRoot,
+                durableAuthorityRecoveryPublisher: (_root, _owner, publish) => {
+                    publish();
+                    return true;
+                },
+            }),
+            /invalid entry/i,
+        );
+        assert.equal(fs.readFileSync(externalSentinel, 'utf8'), 'preserve me');
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), '{"policy":true}\n');
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), '{"pointer":true}\n');
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -3710,7 +4057,7 @@ test('Context refuses stale durable rollback after current authority changes', a
     }
 });
 
-test('Context restores exact legacy durable authority bytes after a failed forward publication', async () => {
+test('Context restores retired durable authority bytes without promoting them', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-legacy-authority-rollback-'));
     const codebasePath = path.join(tempRoot, 'repo');
     const policyRoot = path.join(tempRoot, 'policies');
@@ -3736,13 +4083,32 @@ test('Context restores exact legacy durable authority bytes after a failed forwa
             resolveNavigationSidecarRoot(navigationStateRoot, canonicalRoot),
             'current.json',
         );
-        const legacyPolicy = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
-        delete legacyPolicy.navigationSealHash;
-        delete legacyPolicy.documentDigest;
-        legacyPolicy.documentDigest = crypto.createHash('sha256')
-            .update(JSON.stringify(legacyPolicy), 'utf8')
-            .digest('hex');
+        const currentPolicy = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
+        const currentPolicyNavigation = currentPolicy.navigation as {
+            status: 'sealed';
+            generationId: string;
+        };
+        const legacyPolicyPayload = {
+            schemaVersion: 'satori_index_policy_v2',
+            canonicalRoot,
+            customExtensions: currentPolicy.customExtensions,
+            customIgnorePatterns: currentPolicy.customIgnorePatterns,
+            fileBasedIgnorePatterns: currentPolicy.fileBasedIgnorePatterns,
+            profile: currentPolicy.profile,
+            supportedExtensions: currentPolicy.supportedExtensions,
+            effectiveIgnorePatterns: currentPolicy.effectiveIgnorePatterns,
+            policyHash: currentPolicy.policyHash,
+            collectionName: context.resolveCollectionName(codebasePath),
+            navigationGenerationId: currentPolicyNavigation.generationId,
+        };
+        const legacyPolicy = {
+            ...legacyPolicyPayload,
+            documentDigest: crypto.createHash('sha256')
+                .update(JSON.stringify(legacyPolicyPayload), 'utf8')
+                .digest('hex'),
+        };
         const legacyPointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')) as Record<string, unknown>;
+        legacyPointer.schemaVersion = 'navigation_current_v2';
         delete legacyPointer.navigationSealHash;
         const collectionName = context.resolveCollectionName(codebasePath);
         const markerDocument = vectorDatabase.collections.get(collectionName)?.get(INDEX_COMPLETION_MARKER_DOC_ID);
@@ -3750,7 +4116,19 @@ test('Context restores exact legacy durable authority bytes after a failed forwa
         const trustedFingerprint = structuredClone(
             (markerDocument.metadata as { fingerprint: IndexCompletionFingerprint }).fingerprint,
         );
-        delete (markerDocument.metadata as Record<string, unknown>).navigationSealHash;
+        const legacyMarker = markerDocument.metadata as Record<string, unknown>;
+        const markerNavigation = legacyMarker.navigation as {
+            status: 'sealed';
+            generationId: string;
+            symbolRegistryManifestHash: string;
+            relationshipManifestHash: string;
+            sealHash: string;
+        };
+        legacyMarker.kind = 'satori_index_completion_v2';
+        legacyMarker.navigationGenerationId = markerNavigation.generationId;
+        legacyMarker.symbolRegistryManifestHash = markerNavigation.symbolRegistryManifestHash;
+        legacyMarker.relationshipManifestHash = markerNavigation.relationshipManifestHash;
+        delete legacyMarker.navigation;
         const legacyPolicyBytes = JSON.stringify(legacyPolicy);
         const legacyPointerBytes = `${JSON.stringify(legacyPointer, null, 2)}\n`;
         fs.writeFileSync(policyPath, legacyPolicyBytes, 'utf8');
@@ -3761,37 +4139,256 @@ test('Context restores exact legacy durable authority bytes after a failed forwa
         fs.writeFileSync(pointerPath, '{"candidate":true}\n', 'utf8');
         const candidateAuthority = context.captureDurableIndexAuthority(codebasePath);
 
-        await context.restoreDurableIndexAuthority(
+        const restore = await context.restoreDurableIndexAuthority(
             snapshot,
             (publish) => publish(),
             candidateAuthority,
         );
 
+        assert.deepEqual(restore, { status: 'restored_requires_reindex' });
         assert.equal(fs.readFileSync(policyPath, 'utf8'), legacyPolicyBytes);
         assert.equal(fs.readFileSync(pointerPath, 'utf8'), legacyPointerBytes);
+        await assert.rejects(
+            context.resolveIndexPolicyForCodebase(codebasePath),
+            /index policy v2 requires reindex/i,
+        );
+        assert.deepEqual(
+            await context.getIndexCompletionMarkerForValidation(codebasePath),
+            { status: 'requires_reindex' },
+        );
+        assert.equal(fs.existsSync(resolveNavigationSqlitePath(navigationStateRoot, canonicalRoot)), false);
         const restarted = new Context({
             embedding: new TestEmbedding(),
             vectorDatabase,
             indexPolicyStateRoot: policyRoot,
             symbolRegistryStateRoot: navigationStateRoot,
         });
-        assert.equal((await restarted.resolveIndexPolicyForCodebase(codebasePath)).policyHash, legacyPolicy.policyHash);
-        assert.ok(await restarted.proveVectorGeneration(codebasePath));
-        assert.equal(await restarted.proveIndexedGeneration(codebasePath), null);
+        await assert.rejects(
+            restarted.resolveIndexPolicyForCodebase(codebasePath),
+            /index policy v2 requires reindex/i,
+        );
+        await assert.rejects(
+            restarted.proveVectorGeneration(codebasePath),
+            /index policy v2 requires reindex/i,
+        );
+        await assert.rejects(
+            restarted.proveIndexedGeneration(codebasePath),
+            /index policy v2 requires reindex/i,
+        );
+        assert.deepEqual(
+            await restarted.getIndexCompletionMarkerForValidation(codebasePath),
+            { status: 'requires_reindex' },
+        );
 
         const repair = await restarted.repairIndex(codebasePath, {
             snapshotEvidence: verifiedSnapshotEvidence(trustedFingerprint),
         });
-        assert.equal(repair.status, 'ok');
-        assert.ok(await restarted.proveIndexedGeneration(codebasePath));
+        assert.equal(repair.status, 'requires_reindex');
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), legacyPolicyBytes);
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), legacyPointerBytes);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
 
-        const afterRestart = new Context({
+test('Context acknowledges committed restoration of unsupported policy authority', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-future-authority-rollback-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const navigationStateRoot = path.join(tempRoot, 'navigation');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        const context = new Context({
             embedding: new TestEmbedding(),
-            vectorDatabase,
+            vectorDatabase: new InMemoryVectorDatabase(),
             indexPolicyStateRoot: policyRoot,
             symbolRegistryStateRoot: navigationStateRoot,
         });
-        assert.ok(await afterRestart.proveIndexedGeneration(codebasePath));
+        await context.indexCodebase(codebasePath);
+
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        const policyPath = path.join(
+            policyRoot,
+            `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`,
+        );
+        const pointerPath = path.join(
+            resolveNavigationSidecarRoot(navigationStateRoot, canonicalRoot),
+            'current.json',
+        );
+        const futurePolicy = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
+        futurePolicy.schemaVersion = 'satori_index_policy_v4';
+        const futurePolicyBytes = `${JSON.stringify(futurePolicy, null, 2)}\n`;
+        const currentPointerBytes = fs.readFileSync(pointerPath, 'utf8');
+        fs.writeFileSync(policyPath, futurePolicyBytes, 'utf8');
+        const snapshot = context.captureDurableIndexAuthority(codebasePath);
+
+        fs.writeFileSync(policyPath, '{"candidate":true}\n', 'utf8');
+        fs.writeFileSync(pointerPath, '{"candidate":true}\n', 'utf8');
+        const candidateAuthority = context.captureDurableIndexAuthority(codebasePath);
+
+        const restore = await context.restoreDurableIndexAuthority(
+            snapshot,
+            (publish) => publish(),
+            candidateAuthority,
+        );
+
+        assert.deepEqual(restore, { status: 'restored_unsupported_authority' });
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), futurePolicyBytes);
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), currentPointerBytes);
+        assert.deepEqual(
+            await context.getIndexCompletionMarkerForValidation(codebasePath),
+            { status: 'unsupported_authority' },
+        );
+        assert.equal(fs.existsSync(resolveNavigationSqlitePath(navigationStateRoot, canonicalRoot)), false);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context requires reindex for a coherent pre-seal tuple without mutating it', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-legacy-authority-inspection-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(stateRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            indexPolicyStateRoot: policyRoot,
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await context.indexCodebase(codebasePath);
+
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        const policyPath = path.join(
+            policyRoot,
+            `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`,
+        );
+        const pointerPath = path.join(resolveNavigationSidecarRoot(stateRoot, canonicalRoot), 'current.json');
+        const collectionName = context.resolveCollectionName(codebasePath);
+        const markerDocument = vectorDatabase.collections.get(collectionName)?.get(INDEX_COMPLETION_MARKER_DOC_ID);
+        assert.ok(markerDocument && typeof markerDocument.metadata === 'object');
+
+        const currentMarker = structuredClone(markerDocument.metadata) as Record<string, unknown>;
+        const markerNavigation = currentMarker.navigation as {
+            status: 'sealed';
+            generationId: string;
+            symbolRegistryManifestHash: string;
+            relationshipManifestHash: string;
+            sealHash: string;
+        };
+        markerDocument.metadata = {
+            ...currentMarker,
+            kind: 'satori_index_completion_v2',
+            navigationGenerationId: markerNavigation.generationId,
+            symbolRegistryManifestHash: markerNavigation.symbolRegistryManifestHash,
+            relationshipManifestHash: markerNavigation.relationshipManifestHash,
+        };
+        delete (markerDocument.metadata as Record<string, unknown>).navigation;
+
+        const currentPolicy = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
+        const policyNavigation = currentPolicy.navigation as { status: 'sealed'; generationId: string };
+        const legacyPolicyPayload = {
+            schemaVersion: 'satori_index_policy_v2',
+            canonicalRoot,
+            customExtensions: currentPolicy.customExtensions,
+            customIgnorePatterns: currentPolicy.customIgnorePatterns,
+            fileBasedIgnorePatterns: currentPolicy.fileBasedIgnorePatterns,
+            profile: currentPolicy.profile,
+            supportedExtensions: currentPolicy.supportedExtensions,
+            effectiveIgnorePatterns: currentPolicy.effectiveIgnorePatterns,
+            policyHash: currentPolicy.policyHash,
+            collectionName,
+            navigationGenerationId: policyNavigation.generationId,
+        };
+        fs.writeFileSync(policyPath, JSON.stringify({
+            ...legacyPolicyPayload,
+            documentDigest: crypto.createHash('sha256')
+                .update(JSON.stringify(legacyPolicyPayload), 'utf8')
+                .digest('hex'),
+        }), 'utf8');
+
+        const legacyPointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')) as Record<string, unknown>;
+        legacyPointer.schemaVersion = 'navigation_current_v2';
+        delete legacyPointer.navigationSealHash;
+        const legacyPointerBytes = JSON.stringify(legacyPointer);
+        const legacyPolicyBytes = fs.readFileSync(policyPath, 'utf8');
+        const legacyMarker = structuredClone(markerDocument.metadata);
+        fs.writeFileSync(pointerPath, legacyPointerBytes, 'utf8');
+
+        assert.deepEqual(
+            await context.getIndexCompletionMarkerForValidation(codebasePath),
+            { status: 'requires_reindex' },
+        );
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), legacyPolicyBytes);
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), legacyPointerBytes);
+        assert.deepEqual(markerDocument.metadata, legacyMarker);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context resolves an explicit reindex policy from current inputs without admitting retired policy bytes', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-fresh-reindex-policy-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const policyRoot = path.join(tempRoot, 'policies');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        fs.writeFileSync(path.join(codebasePath, 'satori.toml'), '[index]\nprofile = "minimal"\n', 'utf8');
+        fs.writeFileSync(path.join(codebasePath, '.satoriignore'), 'generated/**\n', 'utf8');
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            indexPolicyStateRoot: policyRoot,
+            symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
+        });
+        await context.indexCodebase(codebasePath);
+
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        const policyPath = path.join(
+            policyRoot,
+            `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`,
+        );
+        const legacyPolicyBytes = JSON.stringify({
+            schemaVersion: 'satori_index_policy_v2',
+            canonicalRoot,
+            customExtensions: ['.legacy'],
+            customIgnorePatterns: ['legacy/**'],
+            fileBasedIgnorePatterns: [],
+            profile: 'default',
+            supportedExtensions: ['.legacy'],
+            effectiveIgnorePatterns: ['legacy/**'],
+            policyHash: 'a'.repeat(64),
+            collectionName: context.resolveCollectionName(codebasePath),
+            navigationGenerationId: 'legacy-generation',
+            documentDigest: 'b'.repeat(64),
+        });
+        fs.writeFileSync(policyPath, legacyPolicyBytes, 'utf8');
+
+        await assert.rejects(
+            context.resolveIndexPolicyForCodebase(codebasePath),
+            /index policy v2 requires reindex/i,
+        );
+        const candidate = await context.resolveIndexPolicyForReindex(codebasePath, {
+            customExtensions: ['.fresh'],
+            customIgnorePatterns: ['manual/**'],
+        });
+
+        assert.equal(candidate.profile, 'minimal');
+        assert.deepEqual(candidate.customExtensions, ['.fresh']);
+        assert.deepEqual(candidate.customIgnorePatterns, ['manual/**']);
+        assert.ok(candidate.fileBasedIgnorePatterns.includes('generated/**'));
+        assert.ok(candidate.supportedExtensions.includes('.fresh'));
+        assert.equal(candidate.supportedExtensions.includes('.legacy'), false);
+        assert.ok(candidate.effectiveIgnorePatterns.includes('manual/**'));
+        assert.ok(candidate.effectiveIgnorePatterns.includes('generated/**'));
+        assert.equal(candidate.effectiveIgnorePatterns.includes('legacy/**'), false);
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), legacyPolicyBytes);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -3825,19 +4422,20 @@ test('Context prior generation receipt fails closed on profile policy and naviga
 
         const restored = await context.proveIndexedGeneration(codebasePath);
         assert.ok(restored);
-        context.publishResolvedIndexPolicy(restored.policy, {
-            collectionName: context.resolveStagedCollectionName(codebasePath, 'replacement'),
-            navigationGenerationId: restored.navigation?.generationId,
-            navigationSealHash: restored.navigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            restored.policy,
+            sealedPolicyBinding(
+                context.resolveStagedCollectionName(codebasePath, 'replacement'),
+                restored.navigation,
+            ),
+        );
         assert.notEqual(context.getIndexAuthorityObservation(codebasePath), initialAuthorityObservation);
         assert.equal(await context.proveIndexedGeneration(codebasePath, restored), null);
 
-        context.publishResolvedIndexPolicy(restored.policy, {
-            collectionName: restored.collectionName,
-            navigationGenerationId: restored.navigation?.generationId,
-            navigationSealHash: restored.navigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            restored.policy,
+            sealedPolicyBinding(restored.collectionName, restored.navigation),
+        );
         const rebound = await context.proveIndexedGeneration(codebasePath);
         assert.ok(rebound?.navigation);
         const currentPath = path.join(resolveNavigationSidecarRoot(stateRoot, codebasePath), 'current.json');
@@ -3848,6 +4446,40 @@ test('Context prior generation receipt fails closed on profile policy and naviga
         }), 'utf8');
         assert.notEqual(context.getIndexAuthorityObservation(codebasePath), initialAuthorityObservation);
         assert.equal(await context.proveIndexedGeneration(codebasePath, rebound), null);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context navigation authority observation changes when a bound manifest is modified in place', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-navigation-manifest-observation-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        const receipt = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(receipt?.navigation);
+        const initialObservation = context.getIndexAuthorityObservation(codebasePath);
+        assert.ok(initialObservation);
+
+        const relationshipManifestPath = path.join(
+            resolveNavigationSidecarRoot(stateRoot, codebasePath),
+            'generations',
+            receipt!.navigation!.generationId,
+            'relationships',
+            'manifest.json',
+        );
+        fs.appendFileSync(relationshipManifestPath, ' ', 'utf8');
+
+        assert.notEqual(context.getIndexAuthorityObservation(codebasePath), initialObservation);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -3871,11 +4503,10 @@ test('Context proven generation rejects a navigation pointer changed after activ
         const acceptedPolicy = await context.resolveIndexPolicyForCodebase(codebasePath);
         const acceptedNavigation = await context.getCurrentNavigationGeneration(codebasePath);
         assert.ok(acceptedNavigation);
-        context.publishResolvedIndexPolicy(acceptedPolicy, {
-            collectionName: context.resolveCollectionName(codebasePath),
-            navigationGenerationId: acceptedNavigation?.generationId,
-            navigationSealHash: acceptedNavigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            acceptedPolicy,
+            sealedPolicyBinding(context.resolveCollectionName(codebasePath), acceptedNavigation),
+        );
         assert.ok(await context.resolveProvenGeneration(codebasePath));
 
         let rebound = false;
@@ -3918,21 +4549,22 @@ test('Context proven generation rejects a same-hash policy rebound to another co
         const acceptedPolicy = await context.resolveIndexPolicyForCodebase(codebasePath);
         const navigation = await context.getCurrentNavigationGeneration(codebasePath);
         assert.ok(navigation);
-        context.publishResolvedIndexPolicy(acceptedPolicy, {
-            collectionName: context.resolveCollectionName(codebasePath),
-            navigationGenerationId: navigation?.generationId,
-            navigationSealHash: navigation?.navigationSealHash,
-        });
+        context.publishResolvedIndexPolicy(
+            acceptedPolicy,
+            sealedPolicyBinding(context.resolveCollectionName(codebasePath), navigation),
+        );
 
         let rebound = false;
         vectorDatabase.queryHook = (call) => {
             if (!rebound && call.filter.includes(`id == "${INDEX_COMPLETION_MARKER_DOC_ID}"`)) {
                 rebound = true;
-                context.publishResolvedIndexPolicy(acceptedPolicy, {
-                    collectionName: `${context.resolveCollectionName(codebasePath)}__gen_rebound`,
-                    navigationGenerationId: navigation?.generationId,
-                    navigationSealHash: navigation?.navigationSealHash,
-                });
+                context.publishResolvedIndexPolicy(
+                    acceptedPolicy,
+                    sealedPolicyBinding(
+                        `${context.resolveCollectionName(codebasePath)}__gen_rebound`,
+                        navigation,
+                    ),
+                );
             }
         };
 
@@ -4093,12 +4725,13 @@ test('Context.reindexByChange writes changed chunks to the active staged collect
         await vectorDatabase.dropCollection(stableCollection);
         context.publishResolvedIndexPolicy(stableGeneration.policy, {
             collectionName: stagedCollection,
-            ...(stableGeneration.marker.navigationGenerationId
-                ? { navigationGenerationId: stableGeneration.marker.navigationGenerationId }
-                : {}),
-            ...(stableGeneration.marker.navigationSealHash
-                ? { navigationSealHash: stableGeneration.marker.navigationSealHash }
-                : {}),
+            navigation: stableGeneration.marker.navigation.status === 'sealed'
+                ? {
+                    status: 'sealed',
+                    generationId: stableGeneration.marker.navigation.generationId,
+                    sealHash: stableGeneration.marker.navigation.sealHash,
+                }
+                : { status: 'not_bound' },
         });
         assert.equal(await context.getActiveIndexedCollectionName(codebasePath), stagedCollection);
 
@@ -4622,8 +5255,9 @@ test('Context.indexCodebase limit_reached writes completion marker without symbo
         assert.equal(registry.status, 'missing');
         const marker = await context.getIndexCompletionMarker(codebasePath);
         assert.ok(marker);
-        assert.equal(marker?.kind, 'satori_index_completion_v2');
+        assert.equal(marker?.kind, 'satori_index_completion_v3');
         assert.equal(marker?.indexStatus, 'limit_reached');
+        assert.deepEqual(marker?.navigation, { status: 'not_bound' });
         assert.equal(progress.at(-1)?.phase, 'Indexing stopped at chunk limit');
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -5779,7 +6413,7 @@ test('Context.repairIndex fingerprint mismatch returns requires_reindex, not rep
             endLine: 0,
             fileExtension: '.satori_meta',
             metadata: {
-                kind: 'satori_index_completion_v2',
+                kind: 'satori_index_completion_v3',
                 codebasePath,
                 fingerprint: {
                     embeddingProvider: 'MismatchedProvider',
@@ -5787,12 +6421,17 @@ test('Context.repairIndex fingerprint mismatch returns requires_reindex, not rep
                     embeddingDimension: 9999,
                     vectorStoreProvider: 'Milvus',
                     schemaVersion: 'dense_v3',
+                    parserVersion: LANGUAGE_PARSER_VERSION,
+                    extractorVersion: SYMBOL_EXTRACTOR_VERSION,
+                    relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
                 },
                 indexedFiles: 1,
                 totalChunks: 1,
                 completedAt: new Date().toISOString(),
                 runId: 'mismatched-run-id',
-                indexPolicyHash: 'test-policy',
+                indexPolicyHash: 'a'.repeat(64),
+                indexStatus: 'completed',
+                navigation: { status: 'not_bound' },
             }
         };
         await vectorDatabase.insert(collectionName, [mismatchedMarkerDoc]);

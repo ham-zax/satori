@@ -39,6 +39,7 @@ test('computeSymbolQualitySummary returns symbol_rich when most eligible files h
     // 3/5 = 0.60 → symbol_rich
     assert.equal(summary.status, 'symbol_rich');
     assert.equal(summary.basis, 'symbol_registry');
+    assert.equal(summary.evidenceAvailability, 'ready');
     assert.equal(summary.eligibleFiles, 5);
     assert.equal(summary.filesWithNonFileSymbols, 3);
     assert.equal(summary.fileOwnerOnlyFiles, 2);
@@ -136,6 +137,7 @@ test('unknownSymbolQualitySummary is stable', () => {
     const summary = unknownSymbolQualitySummary();
     assert.equal(summary.status, 'unknown');
     assert.equal(summary.basis, 'symbol_registry');
+    assert.equal(summary.evidenceAvailability, 'missing');
     assert.equal(formatSymbolQualityMarker(summary), 'symbolQuality=unknown');
 });
 

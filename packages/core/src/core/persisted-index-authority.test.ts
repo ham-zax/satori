@@ -1,0 +1,220 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import {
+    buildCanonicalIndexPolicyDocument,
+    inspectCompletionMarker,
+    inspectIndexPolicyDocument,
+    type CanonicalCompletionMarker,
+    type CanonicalIndexPolicyPayload,
+} from './persisted-index-authority';
+
+const SHA_A = 'a'.repeat(64);
+const SHA_B = 'b'.repeat(64);
+const SHA_C = 'c'.repeat(64);
+const SYMBOL_MANIFEST = `symmanifest_${'d'.repeat(32)}`;
+
+function fingerprint() {
+    return {
+        embeddingProvider: 'test',
+        embeddingModel: 'test-model',
+        embeddingDimension: 4,
+        vectorStoreProvider: 'memory',
+        schemaVersion: 'schema-v1',
+        parserVersion: 'parser-v1',
+        extractorVersion: 'extractor-v1',
+        relationshipVersion: 'relationship-v1',
+    };
+}
+
+function canonicalMarker(
+    navigation: CanonicalCompletionMarker['navigation'] = { status: 'not_bound' },
+): CanonicalCompletionMarker {
+    return {
+        kind: 'satori_index_completion_v3',
+        codebasePath: '/repo',
+        fingerprint: fingerprint(),
+        indexedFiles: 1,
+        totalChunks: 2,
+        completedAt: '2026-07-13T00:00:00.000Z',
+        runId: 'run-1',
+        indexPolicyHash: SHA_A,
+        indexStatus: 'completed',
+        navigation,
+    };
+}
+
+test('completion marker inspector admits only complete canonical v3 shapes', () => {
+    const notBound = inspectCompletionMarker(canonicalMarker());
+    assert.equal(notBound.status, 'current');
+
+    const sealed = inspectCompletionMarker(canonicalMarker({
+        status: 'sealed',
+        generationId: 'generation-1',
+        symbolRegistryManifestHash: SYMBOL_MANIFEST,
+        relationshipManifestHash: SHA_B,
+        sealHash: SHA_C,
+    }));
+    assert.equal(sealed.status, 'current');
+
+    const partial = structuredClone(canonicalMarker()) as Record<string, unknown>;
+    partial.navigation = { status: 'sealed', generationId: 'generation-1' };
+    assert.deepEqual(inspectCompletionMarker(partial), {
+        status: 'corrupt',
+        reason: 'canonical completion marker navigation binding is invalid',
+    });
+
+    const mixed = { ...canonicalMarker(), navigationGenerationId: 'generation-1' };
+    assert.deepEqual(inspectCompletionMarker(mixed), {
+        status: 'corrupt',
+        reason: 'canonical completion marker envelope is invalid',
+    });
+});
+
+test('completion marker inspector requires reindex for every retired marker schema', () => {
+    const legacyV2 = {
+        ...canonicalMarker(),
+        kind: 'satori_index_completion_v2',
+        navigationGenerationId: 'generation-1',
+        symbolRegistryManifestHash: SYMBOL_MANIFEST,
+        relationshipManifestHash: SHA_B,
+        navigationSealHash: SHA_C,
+    };
+    delete (legacyV2 as { navigation?: unknown }).navigation;
+    assert.deepEqual(inspectCompletionMarker(legacyV2), {
+        status: 'requires_reindex',
+        reason: 'completion marker v2 requires reindex',
+    });
+
+    const preSeal = { ...legacyV2 } as Record<string, unknown>;
+    delete preSeal.navigationSealHash;
+    assert.deepEqual(inspectCompletionMarker(preSeal), {
+        status: 'requires_reindex',
+        reason: 'completion marker v2 requires reindex',
+    });
+
+    const missingAnalyzerIdentity = structuredClone(legacyV2) as Record<string, unknown>;
+    delete (missingAnalyzerIdentity.fingerprint as Record<string, unknown>).relationshipVersion;
+    assert.deepEqual(inspectCompletionMarker(missingAnalyzerIdentity), {
+        status: 'requires_reindex',
+        reason: 'completion marker v2 requires reindex',
+    });
+
+    assert.deepEqual(inspectCompletionMarker({ kind: 'satori_index_completion_v1' }), {
+        status: 'requires_reindex',
+        reason: 'completion marker v1 requires reindex',
+    });
+});
+
+function policyPayload(
+    navigation: CanonicalIndexPolicyPayload['navigation'] = { status: 'not_bound' },
+): CanonicalIndexPolicyPayload {
+    return {
+        schemaVersion: 'satori_index_policy_v3',
+        canonicalRoot: '/repo',
+        customExtensions: [],
+        customIgnorePatterns: [],
+        fileBasedIgnorePatterns: [],
+        profile: 'default',
+        supportedExtensions: ['.ts'],
+        effectiveIgnorePatterns: [],
+        policyHash: SHA_A,
+        collectionName: 'collection-1',
+        navigation,
+    };
+}
+
+test('policy inspector uses one fixed canonical v3 digest payload', () => {
+    const document = buildCanonicalIndexPolicyDocument(policyPayload({
+        status: 'sealed',
+        generationId: 'generation-1',
+        sealHash: SHA_C,
+    }));
+    const inspected = inspectIndexPolicyDocument(document, '/repo');
+    assert.equal(inspected.status, 'current');
+
+    const tampered = { ...document, collectionName: 'collection-2' };
+    assert.deepEqual(inspectIndexPolicyDocument(tampered, '/repo'), {
+        status: 'corrupt',
+        reason: 'canonical index policy document digest is invalid',
+    });
+
+    const mixed = { ...document, navigationGenerationId: 'generation-1' };
+    assert.deepEqual(inspectIndexPolicyDocument(mixed, '/repo'), {
+        status: 'corrupt',
+        reason: 'canonical index policy payload is invalid',
+    });
+});
+
+test('policy inspector requires reindex for every retired policy schema', () => {
+    const payloadBase = {
+        schemaVersion: 'satori_index_policy_v2',
+        canonicalRoot: '/repo',
+        customExtensions: [],
+        customIgnorePatterns: [],
+        fileBasedIgnorePatterns: [],
+        profile: 'default',
+        supportedExtensions: ['.ts'],
+        effectiveIgnorePatterns: [],
+        policyHash: SHA_A,
+        collectionName: 'collection-1',
+        navigationGenerationId: 'generation-1',
+    };
+    const legacyPreSeal = {
+        ...payloadBase,
+        documentDigest: crypto.createHash('sha256').update(JSON.stringify(payloadBase)).digest('hex'),
+    };
+    assert.deepEqual(inspectIndexPolicyDocument(legacyPreSeal, '/repo'), {
+        status: 'requires_reindex',
+        reason: 'index policy v2 requires reindex',
+    });
+
+    const sealedPayload = { ...payloadBase, navigationSealHash: SHA_C };
+    const legacySealed = {
+        ...sealedPayload,
+        documentDigest: crypto.createHash('sha256').update(JSON.stringify(sealedPayload)).digest('hex'),
+    };
+    assert.deepEqual(inspectIndexPolicyDocument(legacySealed, '/repo'), {
+        status: 'requires_reindex',
+        reason: 'index policy v2 requires reindex',
+    });
+});
+
+test('authority inspectors reserve unsupported for recognizable numeric future schemas', () => {
+    for (const kind of ['satori_index_completion_v4', 'satori_index_completion_v99']) {
+        assert.deepEqual(inspectCompletionMarker({ kind }), {
+            status: 'unsupported',
+            reason: 'completion marker schema is unsupported',
+        });
+    }
+    for (const schemaVersion of ['satori_index_policy_v4', 'satori_index_policy_v99']) {
+        assert.deepEqual(inspectIndexPolicyDocument({ schemaVersion }, '/repo'), {
+            status: 'unsupported',
+            reason: 'index policy schema is unsupported',
+        });
+    }
+});
+
+test('authority inspectors classify arbitrary and nonexistent older schemas as corrupt', () => {
+    for (const value of [
+        {},
+        { kind: 'garbage' },
+        { kind: 'satori_index_completion_beta' },
+    ]) {
+        assert.deepEqual(inspectCompletionMarker(value), {
+            status: 'corrupt',
+            reason: 'completion marker schema is invalid',
+        });
+    }
+    for (const value of [
+        {},
+        { schemaVersion: 'garbage' },
+        { schemaVersion: 'satori_index_policy_beta' },
+        { schemaVersion: 'satori_index_policy_v1' },
+    ]) {
+        assert.deepEqual(inspectIndexPolicyDocument(value, '/repo'), {
+            status: 'corrupt',
+            reason: 'index policy schema is invalid',
+        });
+    }
+});

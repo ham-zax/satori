@@ -3,6 +3,7 @@ export * from './embedding';
 export * from './vectordb';
 export * from './types';
 export * from './context';
+export * from './core/persisted-index-authority';
 export * from './sync/synchronizer';
 export * from './sync/root-bound-fs';
 export * from './utils';

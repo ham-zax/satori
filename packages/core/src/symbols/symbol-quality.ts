@@ -3,10 +3,9 @@
  * Does not claim parser/fallback cause; does not re-run parsers or splitters.
  */
 import { getLanguageCapabilityDeclaration } from '../languages/capabilities';
-import type { SymbolKind, SymbolRecord, SymbolRegistryManifest, SymbolRegistryManifestFile } from './contracts';
+import type { SymbolKind, SymbolRecord, SymbolRegistryManifestFile } from './contracts';
 import type { SymbolRegistry } from './registry';
-import { readSymbolRegistryManifest } from './sidecar';
-import type { ReadSymbolRegistryManifestResult, ReadSymbolRegistrySidecarResult } from './sidecar';
+import type { ReadSymbolRegistrySidecarResult } from './sidecar';
 import type { NavigationSymbolQualityAggregate } from './sidecar';
 
 export type SymbolQualityStatus =
@@ -17,6 +16,7 @@ export type SymbolQualityStatus =
     | 'unknown';
 
 export type SymbolQualityBasis = 'symbol_registry';
+export type SymbolQualityEvidenceAvailability = 'ready' | 'missing' | 'unverified';
 
 export interface SymbolQualityLanguageBreakdown {
     language: string;
@@ -34,7 +34,7 @@ export interface SymbolQualitySummary {
     nonFileSymbolCount: number;
     languages: SymbolQualityLanguageBreakdown[];
     message: string;
-    evidenceAvailability?: 'ready' | 'missing' | 'corrupt' | 'incompatible' | 'unverified';
+    evidenceAvailability: SymbolQualityEvidenceAvailability;
 }
 
 export interface SymbolQualityFileInput {
@@ -233,6 +233,7 @@ export function computeSymbolQualitySummary(input: {
         nonFileSymbolCount,
         languages,
         message: messageForStatus(status),
+        evidenceAvailability: 'ready',
     };
 }
 
@@ -247,24 +248,6 @@ export function computeSymbolQualitySummaryFromRegistry(registry: SymbolRegistry
             kind: symbol.kind as SymbolKind | string,
         })),
     });
-}
-
-export function computeSymbolQualitySummaryFromManifest(
-    manifest: SymbolRegistryManifest,
-): SymbolQualitySummary {
-    const summary = computeSymbolQualitySummary({
-        files: manifest.files.map((file) => ({ path: file.path, language: file.language })),
-        symbols: manifest.files
-            .filter((file) => file.symbolCount > 1)
-            .map((file) => ({ file: file.path, kind: 'function' })),
-    });
-    return {
-        ...summary,
-        nonFileSymbolCount: manifest.files.reduce(
-            (count, file) => count + Math.max(0, file.symbolCount - 1),
-            0,
-        ),
-    };
 }
 
 export function computeSymbolQualitySummaryFromAggregate(
@@ -312,26 +295,14 @@ export function computeSymbolQualitySummaryFromAggregate(
         nonFileSymbolCount,
         languages,
         message: messageForStatus(status),
+        evidenceAvailability: 'ready',
     };
 }
 
-export function computeSymbolQualitySummaryFromManifestRead(
-    read: ReadSymbolRegistryManifestResult,
+export function unknownSymbolQualitySummary(
+    message?: string,
+    evidenceAvailability: SymbolQualityEvidenceAvailability = 'missing',
 ): SymbolQualitySummary {
-    if (read.status !== 'ok') {
-        return unknownSymbolQualitySummary(
-            read.status === 'missing'
-                ? 'Observed symbol quality unavailable (symbol registry missing).'
-                : `Observed symbol quality unavailable (${read.reason || 'registry unreadable'}).`,
-        );
-    }
-    if (read.manifest.files.length === 0) {
-        return unknownSymbolQualitySummary('Observed symbol quality unavailable (empty registry).');
-    }
-    return computeSymbolQualitySummaryFromManifest(read.manifest);
-}
-
-export function unknownSymbolQualitySummary(message?: string): SymbolQualitySummary {
     return {
         status: 'unknown',
         basis: 'symbol_registry',
@@ -341,6 +312,7 @@ export function unknownSymbolQualitySummary(message?: string): SymbolQualitySumm
         nonFileSymbolCount: 0,
         languages: [],
         message: message || messageForStatus('unknown'),
+        evidenceAvailability,
     };
 }
 
@@ -352,27 +324,13 @@ export function computeSymbolQualitySummaryFromSidecarRead(
             read.status === 'missing'
                 ? 'Observed symbol quality unavailable (symbol registry missing).'
                 : `Observed symbol quality unavailable (${read.reason || 'registry unreadable'}).`,
+            read.status === 'missing' ? 'missing' : 'unverified',
         );
     }
     if (read.registry.manifest.files.length === 0) {
-        return unknownSymbolQualitySummary('Observed symbol quality unavailable (empty registry).');
+        return unknownSymbolQualitySummary('Observed symbol quality unavailable (empty registry).', 'ready');
     }
     return computeSymbolQualitySummaryFromRegistry(read.registry);
-}
-
-/**
- * Load registry from navigation sidecars and compute observed quality.
- * Never throws for missing/incompatible registry.
- */
-export async function resolveSymbolQualitySummary(input: {
-    normalizedRootPath: string;
-    stateRoot?: string;
-}): Promise<SymbolQualitySummary> {
-    const read = await readSymbolRegistryManifest({
-        stateRoot: input.stateRoot,
-        normalizedRootPath: input.normalizedRootPath,
-    });
-    return computeSymbolQualitySummaryFromManifestRead(read);
 }
 
 /** Compact marker for list_codebases / log lines. */

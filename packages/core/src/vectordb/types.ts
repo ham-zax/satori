@@ -1,3 +1,8 @@
+import type {
+    CanonicalCompletionFingerprint,
+    CanonicalCompletionMarker,
+} from '../core/persisted-index-authority';
+
 export type VectorRecord = Record<string, unknown>;
 
 export interface VectorDocumentMetadata extends VectorRecord {
@@ -82,40 +87,9 @@ export interface VectorStoreBackendInfo {
     address?: string;
 }
 
-export interface IndexCompletionFingerprint {
-    embeddingProvider: string;
-    embeddingModel: string;
-    embeddingDimension: number;
-    vectorStoreProvider: string;
-    schemaVersion: string;
-    /** Absent only on legacy markers; current runtimes always write all three versions. */
-    parserVersion?: string;
-    extractorVersion?: string;
-    relationshipVersion?: string;
-}
+export type IndexCompletionFingerprint = CanonicalCompletionFingerprint;
 
-export interface IndexCompletionMarkerDocument extends VectorDocumentMetadata {
-    kind: 'satori_index_completion_v2';
-    codebasePath: string;
-    fingerprint: IndexCompletionFingerprint;
-    indexedFiles: number;
-    totalChunks: number;
-    completedAt: string;
-    runId: string;
-    /** Deterministic identity of the effective file-selection policy used for this generation. */
-    indexPolicyHash: string;
-    /**
-     * Full-index outcome sealed into the marker.
-     * Absent / omitted on legacy markers is treated as `completed`.
-     * `limit_reached` means partial vector proof only (no complete navigation seal).
-     */
-    indexStatus?: 'completed' | 'limit_reached';
-    navigationGenerationId?: string;
-    symbolRegistryManifestHash?: string;
-    relationshipManifestHash?: string;
-    /** Canonical SHA-256 digest of the published navigation generation seal. */
-    navigationSealHash?: string;
-}
+export type IndexCompletionMarkerDocument = CanonicalCompletionMarker & VectorDocumentMetadata;
 
 export const INDEX_COMPLETION_MARKER_DOC_ID = '__satori_index_completion_marker_v1__';
 export const INDEX_COMPLETION_MARKER_FILE_EXTENSION = '.satori_meta';

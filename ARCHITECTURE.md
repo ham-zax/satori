@@ -309,7 +309,9 @@ Rerank decision:
 ```
 
 Mismatch on any field -> `requires_reindex`.
-Legacy v1/v2 snapshots auto-migrate on load but get flagged as legacy.
+Legacy v1/v2 local snapshot documents auto-migrate for bookkeeping on load but remain flagged as legacy; this does not promote persisted index authority.
+
+Persisted index authority does not auto-migrate. The only canonical tuple is completion marker `satori_index_completion_v3`, policy document `satori_index_policy_v3`, and navigation pointer `navigation_current_v3`. Forward writes publish only v3. Known retired completion markers and navigation pointers are v1/v2; the first persisted policy schema was v2. Those retired formats, pre-seal authority, and mixed-version authority require `manage_index(action="reindex")`; read paths only classify the state and never write or upgrade it.
 
 ### 5.3 Gate Reasons
 
@@ -347,18 +349,20 @@ Readiness is layered. Snapshot status alone is **not** proof.
 |-------|-----------------|------------|
 | A. Snapshot searchable | `~/.satori` snapshot | Status is `indexed` or `sync_completed` |
 | B. Runtime fingerprint gate | Snapshot fingerprint vs current runtime | Provider, model, dimension, vector store, and `schemaVersion` match; not legacy-unverified / missing |
-| C. Completion proof | Marker doc in the vector collection (`satori_index_completion_v2`) | Shape valid, path matches, fingerprint matches runtime → `validateCompletionProof` outcome `valid`; v1 is reported as legacy policy-unsealed proof |
+| C. Completion proof | Marker doc in the vector collection (`satori_index_completion_v3`) plus durable `satori_index_policy_v3` authority | Shape valid, path and policy binding match, fingerprint matches runtime, and no older/mixed authority is present → `validateCompletionProof` outcome `valid` |
 | D. Collection presence | Configured vector backend | Collection for the root still exists |
 
 Implementation path: `TrackedRootReadiness.prepareTrackedRootForRead` returns `state: "ready"` only when those layers agree for the access mode.
 
-**Navigation nuance:** under fingerprint / completion-proof mismatch, source-backed `file_outline` / `call_graph` may still run; semantic search must not pretend the vector index matches the current runtime.
+**Navigation nuance:** canonical v3 may intentionally bind no navigation generation. This `not_bound` state remains semantically searchable but `file_outline`, `call_graph`, and symbol opens are unavailable. Older, pre-seal, mixed, fingerprint-mismatched, or otherwise invalid completion authority requires reindex rather than source-backed acceptance or read-time migration.
 
 #### What invalidates that proof
 
 | Condition | Typical outcome |
 |-----------|-----------------|
-| Marker missing, wrong kind, bad payload, or path mismatch | `stale_local` (local snapshot can lie) |
+| Completion marker or navigation pointer is v1/v2, policy is v2, or authority is pre-seal/mixed-version | `requires_reindex` (no read-time migration) |
+| Completion marker, policy, or pointer has a recognizable unknown future schema | internal `unsupported_authority` → public `requires_reindex`; never repair or overwrite it |
+| Marker missing, unrelated wrong kind, bad current payload, or path mismatch | `stale_local` (local snapshot can lie) |
 | Marker fingerprint ≠ runtime fingerprint | `fingerprint_mismatch` → `requires_reindex` |
 | Snapshot fingerprint mismatch / missing / legacy unverified | `requires_reindex` |
 | Vector collection gone | `missing_collection` (fail closed; no implicit rebuild on read) |
@@ -393,6 +397,7 @@ Snapshot recovery may restore local state from an existing valid marker, but doe
 repair only when vector payload can be proven complete and fingerprint provenance is trusted
 ```
 
+- Repair operates only on canonical v3 authority. It never converts v1, v2, pre-seal, or mixed persisted state; those states require reindex.
 - Marker present and fingerprint matches runtime → repair may re-prove (rebuild nav sidecars, rewrite marker).
 - Marker **missing**, but a **verified** snapshot fingerprint matches runtime and payload coverage is complete → repair may still succeed (this is the missing-marker recovery path).
 - Marker missing and no trusted matching fingerprint → refuse (do not forge current fingerprint over unproven vectors).

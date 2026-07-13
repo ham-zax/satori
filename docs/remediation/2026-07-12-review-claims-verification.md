@@ -1,5 +1,10 @@
 # 2026-07-12 Review Claims Verification
 
+> Historical record: schema and outcome names in this report describe the
+> reviewed 2026-07-12 worktree. The current persisted-authority contract is the
+> v3-only hard cut documented in `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md`;
+> v1/v2 references below are not supported compatibility paths.
+
 ## Scope
 
 This report began by revalidating the supplied review claims against `HEAD`

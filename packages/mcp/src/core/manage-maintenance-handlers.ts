@@ -51,7 +51,7 @@ type ToolTextResponse = {
 };
 
 type ManageMaintenanceHandlersHost = {
-    context: Pick<Context, "clearIndex">;
+    context: Pick<Context, "clearIndex"> & Partial<Pick<Context, "inspectSourceFreshnessCheckpoint">>;
     snapshotManager: Pick<SnapshotManager, "removeCodebaseCompletely" | "getLatestOperation" | "startOperation" | "transitionOperation" | "commitOperationPhase" | "saveCodebaseSnapshot">;
     syncManager: Pick<SyncManager, "ensureFreshness">;
     trackedRootReadiness: Pick<
@@ -172,6 +172,23 @@ function collectErrorFragments(
             return;
         }
     }
+}
+
+function operationMatchesLiveSyncLease(
+    lease: RootMutationLease | undefined,
+    operation: IndexOperationReceipt | undefined,
+): operation is IndexOperationReceipt {
+    return Boolean(
+        lease
+        && lease.action === "sync"
+        && operation
+        && operation.action === "sync"
+        && operation.id === lease.operationId
+        && operation.canonicalRoot === lease.canonicalRoot
+        && operation.generation === lease.generation
+        && operation.writer.ownerId === lease.ownerId
+        && operation.writer.pid === lease.pid
+    );
 }
 
 function formatUnknownError(error: unknown): string {
@@ -462,6 +479,33 @@ export class ManageMaintenanceHandlers {
             const snapshotCorruptionWarning = this.host.getSnapshotCorruptionWarning();
             await this.host.recoverStaleIndexingStateIfNeeded(absolutePath);
 
+            const liveSyncMutation = this.host.mutationLeaseCoordinator?.getActiveLease(absolutePath);
+            const currentOperation = typeof this.host.snapshotManager.getLatestOperation === "function"
+                ? this.host.snapshotManager.getLatestOperation(absolutePath)
+                : undefined;
+            if (liveSyncMutation?.action === "sync") {
+                const matchingOperation = operationMatchesLiveSyncLease(liveSyncMutation, currentOperation)
+                    ? currentOperation
+                    : undefined;
+                return this.host.manageResponse(
+                    "status",
+                    liveSyncMutation.canonicalRoot,
+                    "not_ready",
+                    `Codebase '${liveSyncMutation.canonicalRoot}' is being synchronized. ${formatActiveMutationStatusLine(liveSyncMutation)}`,
+                    {
+                        detail,
+                        reason: "indexing",
+                        hints: {
+                            status: this.host.buildStatusHint(liveSyncMutation.canonicalRoot),
+                            retryAfterMs: this.host.getManageRetryAfterMs(),
+                            indexing: this.host.buildIndexingMetadata(liveSyncMutation.canonicalRoot),
+                            activeMutation: liveSyncMutation,
+                        },
+                        ...(matchingOperation ? { operation: matchingOperation } : {}),
+                    },
+                );
+            }
+
             const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absolutePath);
             if (trackedRootState.state === "requires_reindex") {
                 const operation = typeof this.host.snapshotManager.getLatestOperation === "function"
@@ -492,6 +536,15 @@ export class ManageMaintenanceHandlers {
                     },
                 );
             }
+
+            const sourceCheckpointEvidence = trackedRootState.state === "ready"
+                && trackedRootState.vectorReceipt?.marker.indexStatus === "completed"
+                && typeof this.host.context.inspectSourceFreshnessCheckpoint === "function"
+                ? await this.host.context.inspectSourceFreshnessCheckpoint(
+                    trackedRootState.root.path,
+                    trackedRootState.vectorReceipt.collectionName,
+                )
+                : null;
 
             let statusMessage = "";
             let envelopePath = absolutePath;
@@ -644,6 +697,17 @@ export class ManageMaintenanceHandlers {
                     },
                 };
                 statusMessage += `\n⚠️ Local navigation is ${trackedRootState.navigationStatus}; vector search remains proven, but symbol navigation requires manage_index repair.`;
+            }
+            if (sourceCheckpointEvidence && sourceCheckpointEvidence.status !== "valid") {
+                envelopeHints = {
+                    ...(envelopeHints || {}),
+                    reindex: this.host.buildReindexHint(trackedRootState.state === "ready" ? trackedRootState.root.path : envelopePath),
+                    sourceFreshness: {
+                        status: sourceCheckpointEvidence.status,
+                        action: "Run manage_index reindex to restore a source-bound incremental-sync baseline.",
+                    },
+                };
+                statusMessage += `\n⚠️ Source freshness checkpoint is ${sourceCheckpointEvidence.status}; proven vector search remains available, but incremental sync is disabled until reindex.`;
             }
 
             // F9: observed symbol quality from registry (not parser-cause diagnosis).
@@ -922,6 +986,29 @@ export class ManageMaintenanceHandlers {
                             status: this.host.buildStatusHint(absolutePath),
                         },
                         ...(decision.operation ? { operation: decision.operation } : {}),
+                    },
+                );
+            }
+
+            if (decision.mode === "skipped_source_checkpoint_unavailable") {
+                return this.host.manageResponse(
+                    "sync",
+                    absolutePath,
+                    "requires_reindex",
+                    this.host.buildReindexInstruction(
+                        absolutePath,
+                        `Incremental sync is unavailable because its source checkpoint is ${decision.checkpointStatus || "unavailable"}.`,
+                    ),
+                    {
+                        reason: "requires_reindex",
+                        hints: {
+                            reindex: this.host.buildReindexHint(absolutePath),
+                            status: this.host.buildStatusHint(absolutePath),
+                            sourceFreshness: {
+                                status: decision.checkpointStatus || "unavailable",
+                                message: decision.errorMessage,
+                            },
+                        },
                     },
                 );
             }

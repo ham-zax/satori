@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     Context,
+    FileSynchronizer,
     createLanguageAnalysisService,
     resetSharedRuntimeNavigationStoreForTests,
 } from '@zokizuan/satori-core';
@@ -306,7 +307,59 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
         });
         await context.recreateSynchronizerForCodebase(repoPath);
         await context.indexCodebase(repoPath);
-        context.getActiveIndexedCollectionName = async () => context.resolveCollectionName(repoPath);
+        const activeCollectionName = context.resolveCollectionName(repoPath);
+        const checkpointMarker = {
+            kind: 'satori_index_completion_v3' as const,
+            codebasePath: fs.realpathSync(repoPath),
+            runId: 'run_ignore_failure_fixture',
+            indexPolicyHash: 'a'.repeat(64),
+            indexedFiles: 3,
+            totalChunks: 6,
+            completedAt: '2026-06-18T00:00:00.000Z',
+            indexStatus: 'completed' as const,
+            navigation: { status: 'not_bound' as const },
+            fingerprint: {
+                embeddingProvider: 'TestEmbedding',
+                embeddingModel: 'test',
+                embeddingDimension: 4,
+                vectorStoreProvider: 'InMemory',
+                schemaVersion: 'hybrid_v3',
+                parserVersion: 'test',
+                extractorVersion: 'test',
+                relationshipVersion: 'test',
+            },
+        };
+        const checkpointReceipt = {
+            collectionName: activeCollectionName,
+            policyDocumentDigest: 'b'.repeat(64),
+            marker: checkpointMarker,
+        };
+        (context as unknown as {
+            proveVectorGeneration: () => Promise<typeof checkpointReceipt>;
+            proveIndexedGeneration: () => Promise<typeof checkpointReceipt>;
+        }).proveVectorGeneration = async () => checkpointReceipt;
+        (context as unknown as {
+            proveIndexedGeneration: () => Promise<typeof checkpointReceipt>;
+        }).proveIndexedGeneration = async () => checkpointReceipt;
+        const checkpointSynchronizer = new FileSynchronizer(
+            repoPath,
+            [],
+            ['.ts'],
+            {
+                checkpointIdentity: activeCollectionName,
+                checkpointAuthority: {
+                    collectionName: activeCollectionName,
+                    markerRunId: checkpointMarker.runId,
+                    indexPolicyHash: checkpointMarker.indexPolicyHash,
+                },
+            },
+        );
+        await checkpointSynchronizer.initialize(undefined, undefined, {
+            deferSnapshotPublication: true,
+        });
+        const preparedCheckpoint = await checkpointSynchronizer.prepareChanges({ forceFullHash: true });
+        await preparedCheckpoint.commit();
+        context.getActiveIndexedCollectionName = async () => activeCollectionName;
 
         const { snapshotManager, info } = createMutableSnapshotManager(repoPath);
         snapshotManager.setCodebaseIndexManifest?.(repoPath, context.getTrackedRelativePaths(repoPath));

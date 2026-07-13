@@ -159,7 +159,7 @@ test('handleGetIndexingStatus includes fingerprint diagnostics when access gate 
     });
 });
 
-test('handleGetIndexingStatus includes active writer evidence on requires_reindex', async () => {
+test('handleGetIndexingStatus prioritizes a live sync lease over previous requires_reindex state', async () => {
     await withTempRepo(async (repoPath) => {
         const stateDir = path.join(path.dirname(repoPath), 'mutation-leases');
         const activeOwner = new MutationLeaseCoordinator({ stateDir, ownerId: 'active-owner' });
@@ -198,12 +198,161 @@ test('handleGetIndexingStatus includes active writer evidence on requires_reinde
 
             const response = await handlers.handleGetIndexingStatus({ path: repoPath });
             const payload = JSON.parse(response.content[0]?.text || '{}');
-            assert.equal(payload.status, 'requires_reindex');
+            assert.equal(payload.status, 'not_ready');
+            assert.equal(payload.reason, 'indexing');
             assert.deepEqual(payload.hints?.activeMutation, activeResult.lease);
-            assert.match(payload.humanText, /Active mutation: sync/);
+            assert.match(payload.humanText, /being synchronized/i);
             assert.equal(payload.hints?.activeMutation?.expiresAt, undefined);
         } finally {
             activeOwner.release(activeResult.lease);
         }
+    });
+});
+
+test('handleGetIndexingStatus gates on a live sync lease regardless of operation receipt state', async () => {
+    await withTempRepo(async (repoPath) => {
+        const stateDir = path.join(path.dirname(repoPath), 'live-sync-status-leases');
+        const activeOwner = new MutationLeaseCoordinator({ stateDir, ownerId: 'live-sync-owner' });
+        const statusCoordinator = new MutationLeaseCoordinator({ stateDir, ownerId: 'status-owner' });
+        const activeResult = activeOwner.acquire(repoPath, 'sync');
+        assert.equal(activeResult.acquired, true);
+        if (!activeResult.acquired) return;
+
+        let markerProbes = 0;
+        const matchingOperation = {
+            id: activeResult.lease.operationId,
+            action: 'sync' as const,
+            canonicalRoot: activeResult.lease.canonicalRoot,
+            generation: activeResult.lease.generation,
+            acceptedAt: activeResult.lease.acquiredAt,
+            phase: 'writing' as const,
+            lastDurableTransitionAt: activeResult.lease.acquiredAt,
+            runtimeFingerprint: RUNTIME_FINGERPRINT,
+            writer: {
+                ownerId: activeResult.lease.ownerId,
+                pid: activeResult.lease.pid,
+                satoriVersion: 'test',
+            },
+        };
+        let currentOperation: typeof matchingOperation | undefined = matchingOperation;
+        const snapshotManager = {
+            getLatestOperation: () => currentOperation,
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => ({
+                status: 'indexed',
+                indexedFiles: 1,
+                totalChunks: 1,
+                indexStatus: 'completed',
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: 'verified',
+            }),
+        } as unknown as HandlerSnapshotManager;
+        const context = {
+            getIndexCompletionMarker: async () => {
+                markerProbes += 1;
+                throw new Error('withdrawn marker must not be classified during a live sync');
+            },
+        } as unknown as HandlerContext;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            null,
+            statusCoordinator,
+        );
+
+        try {
+            for (const receipt of [
+                matchingOperation,
+                undefined,
+                { ...matchingOperation, id: 'stale-operation' },
+                { ...matchingOperation, phase: 'completed' as const },
+            ]) {
+                currentOperation = receipt;
+                const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+                const payload = JSON.parse(response.content[0]?.text || '{}');
+                assert.equal(payload.status, 'not_ready');
+                assert.equal(payload.reason, 'indexing');
+                assert.deepEqual(payload.hints.activeMutation, activeResult.lease);
+                assert.equal(payload.hints.create, undefined);
+                assert.match(payload.humanText, /being synchronized/i);
+                if (receipt?.id === activeResult.lease.operationId) {
+                    assert.equal(payload.operation.phase, receipt.phase);
+                } else {
+                    assert.equal(payload.operation, undefined);
+                }
+            }
+            assert.equal(markerProbes, 0);
+        } finally {
+            activeOwner.release(activeResult.lease);
+        }
+    });
+});
+
+test('handleGetIndexingStatus preserves vector readiness while exposing a missing source checkpoint', async () => {
+    await withTempRepo(async (repoPath) => {
+        const collectionName = 'hybrid_code_chunks_checkpoint_status';
+        const info = {
+            status: 'indexed' as const,
+            indexedFiles: 1,
+            totalChunks: 2,
+            indexStatus: 'completed' as const,
+            lastUpdated: new Date('2026-07-14T00:00:00.000Z').toISOString(),
+            indexFingerprint: RUNTIME_FINGERPRINT,
+            fingerprintSource: 'verified' as const,
+        };
+        const context = {
+            inspectSourceFreshnessCheckpoint: async (_path: string, identity?: string) => {
+                assert.equal(identity, collectionName);
+                return { status: 'missing' as const, message: 'checkpoint missing' };
+            },
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => info,
+        } as unknown as HandlerSnapshotManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            {} as unknown as HandlerSyncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+        const access = handlers as unknown as {
+            trackedRootReadiness: {
+                prepareTrackedRootForRead: (path: string) => Promise<unknown>;
+            };
+        };
+        access.trackedRootReadiness.prepareTrackedRootForRead = async () => ({
+            state: 'ready',
+            root: { path: repoPath, info },
+            vectorReceipt: {
+                collectionName,
+                marker: { indexStatus: 'completed' },
+            },
+            navigationStatus: 'valid',
+        });
+
+        const response = await handlers.handleGetIndexingStatus({ path: repoPath });
+        const payload = JSON.parse(response.content[0]?.text || '{}') as {
+            status?: string;
+            humanText?: string;
+            hints?: Record<string, unknown>;
+        };
+
+        assert.equal(payload.status, 'ok');
+        assert.match(payload.humanText || '', /fully indexed and ready for search/i);
+        assert.match(payload.humanText || '', /source freshness checkpoint is missing/i);
+        assert.match(payload.humanText || '', /incremental sync is disabled until reindex/i);
+        assert.equal((payload.hints?.sourceFreshness as { status?: string } | undefined)?.status, 'missing');
+        assert.ok(payload.hints?.reindex);
+        assert.equal(payload.hints?.create, undefined);
     });
 });

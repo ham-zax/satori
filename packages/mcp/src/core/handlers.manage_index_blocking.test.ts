@@ -1300,6 +1300,53 @@ test('handleSyncCodebase routes through ensureFreshness and does not call raw re
     });
 });
 
+test('handleSyncCodebase routes an unavailable source checkpoint to reindex without claiming sync success', async () => {
+    await withTempRepo(async (repoPath) => {
+        const snapshotManager = {
+            getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
+            getIndexingCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getCodebaseStatus: () => 'indexed',
+            getCodebaseInfo: () => ({
+                status: 'indexed',
+                indexedFiles: 10,
+                totalChunks: 20,
+                indexStatus: 'completed',
+                lastUpdated: new Date().toISOString(),
+            }),
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+            saveCodebaseSnapshot: () => undefined,
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = {
+            getWatchDebounceMs: () => 2000,
+            ensureFreshness: async () => ({
+                mode: 'skipped_source_checkpoint_unavailable',
+                checkedAt: new Date().toISOString(),
+                thresholdMs: 0,
+                checkpointStatus: 'missing',
+                errorMessage: 'generation checkpoint is missing',
+            }),
+        } as unknown as HandlerSyncManager;
+        const handlers = new ToolHandlers(
+            {} as unknown as HandlerContext,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+        );
+
+        const response = await handlers.handleSyncCodebase({ path: repoPath });
+        const envelope = parseManageEnvelope(response);
+
+        assert.equal(envelope.status, 'requires_reindex');
+        assert.equal(envelope.reason, 'requires_reindex');
+        assert.equal((envelope.hints?.sourceFreshness as { status?: string } | undefined)?.status, 'missing');
+        assert.match(envelope.humanText, /source checkpoint is missing/i);
+        assert.match(envelope.humanText, /reindex/i);
+        assert.equal(envelope.syncStats, undefined);
+    });
+});
+
 test('handleSyncCodebase surfaces ignore reconcile failure from ensureFreshness', async () => {
     await withTempRepo(async (repoPath) => {
         const context = {} as unknown as HandlerContext;

@@ -61,6 +61,48 @@ test('search front door rebinds freshness when post-freshness root identity chan
     }
 });
 
+test('search front door preserves vector search with a source-checkpoint warning', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-search-frontdoor-checkpoint-warning-'));
+    const ready = {
+        state: 'ready' as const,
+        root: { path: tempRoot, info: { status: 'indexed' as const } },
+    };
+    const host = {
+        prepareInitialTrackedRootRead: async () => ready,
+        preparePostFreshnessTrackedRootRead: async () => ready,
+        ensureSearchFreshness: async () => ({
+            mode: 'skipped_source_checkpoint_unavailable' as const,
+            checkedAt: 'now',
+            thresholdMs: 60_000,
+            checkpointStatus: 'missing' as const,
+        }),
+        noteFreshnessMode: () => undefined,
+        buildFreshnessBlockedSearchPayload: () => null,
+        isPartialIndexNavigationUnavailable: () => false,
+        partialIndexWarnings: [],
+        canSyncStaleLocal: () => false,
+        trackedRootReadiness: {},
+    } as unknown as SearchFrontDoorHost;
+    try {
+        const result = await runSearchFrontDoor({
+            path: tempRoot,
+            query: 'owner',
+            scope: 'runtime',
+            groupBy: 'symbol',
+            resultMode: 'grouped',
+            limit: 5,
+        }, host);
+        assert.equal(result.kind, 'ready');
+        if (result.kind !== 'ready') return;
+        assert.equal(
+            result.partialIndexSearchWarnings.includes('SOURCE_FRESHNESS_CHECKPOINT_UNAVAILABLE'),
+            true,
+        );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('search front door rebinds root identity before returning a freshness block', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-search-frontdoor-blocked-'));
     const rootA = path.join(tempRoot, 'repo');

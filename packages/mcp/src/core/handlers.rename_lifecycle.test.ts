@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
     Context,
     createLanguageAnalysisService,
+    FileSynchronizer,
     resetSharedRuntimeNavigationStoreForTests,
     resolveNavigationSidecarRoot,
 } from '@zokizuan/satori-core';
@@ -232,6 +233,32 @@ async function withTempState<T>(fn: (input: { repoPath: string; stateRoot: strin
 
 function parsePayload(response: { content?: Array<{ text?: string }> }): JsonObject {
     return JSON.parse(response.content?.[0]?.text || '{}') as JsonObject;
+}
+
+async function publishCurrentAuthorityCheckpoint(
+    context: Context,
+    codebasePath: string,
+): Promise<void> {
+    const collectionName = await context.getActiveIndexedCollectionName(codebasePath);
+    const marker = await context.getIndexCompletionMarker(codebasePath);
+    assert.ok(collectionName);
+    assert.ok(marker);
+
+    const synchronizer = new FileSynchronizer(
+        codebasePath,
+        context.getActiveIgnorePatterns(codebasePath),
+        context.getIndexedExtensionsForCodebase(codebasePath),
+        {
+            checkpointIdentity: collectionName,
+            checkpointAuthority: {
+                collectionName,
+                markerRunId: marker.runId,
+                indexPolicyHash: marker.indexPolicyHash,
+            },
+        },
+    );
+    await synchronizer.initialize();
+    context.registerSynchronizer(context.resolveCollectionName(codebasePath), synchronizer);
 }
 
 function createSnapshotManager(repoPath: string): SnapshotManager {
@@ -542,6 +569,7 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         });
         await context.recreateSynchronizerForCodebase(repoPath);
         await context.indexCodebase(repoPath);
+        await publishCurrentAuthorityCheckpoint(context, repoPath);
         context.getActiveIndexedCollectionName = async () => context.resolveCollectionName(repoPath);
 
         let syncTriggered = false;
@@ -713,6 +741,7 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
         });
         await context.recreateSynchronizerForCodebase(repoPath);
         await context.indexCodebase(repoPath);
+        await publishCurrentAuthorityCheckpoint(context, repoPath);
         context.getActiveIndexedCollectionName = async () => context.resolveCollectionName(repoPath);
 
         let ensureFreshnessCalls = 0;

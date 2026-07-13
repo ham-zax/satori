@@ -6,6 +6,7 @@ import {
     deleteCollectionWithVerification,
     IndexPolicyPublicationError,
     RemoteCollectionDeletePendingError,
+    SynchronizerCheckpointPublicationError,
 } from "@zokizuan/satori-core";
 import type {
     CustomIndexPolicyUpdate,
@@ -269,6 +270,34 @@ function formatUnknownError(error: unknown): string {
         return JSON.stringify(error);
     } catch {
         return String(error);
+    }
+}
+
+function assertCheckpointMatchesIndexedSources(
+    indexedFiles: number,
+    indexedFileHashes: ReadonlyMap<string, string>,
+    checkpoint: import("@zokizuan/satori-core").PreparedFileChangeSet,
+): void {
+    if (indexedFileHashes.size !== indexedFiles) {
+        throw new Error(
+            `Completed full index source coverage is inconsistent: ${indexedFiles} indexed files but ${indexedFileHashes.size} source identities.`,
+        );
+    }
+    if (!checkpoint.changes.fullHashRun) {
+        throw new Error("Full index source checkpoint did not hash every selected file; refusing to publish candidate authority.");
+    }
+    if (checkpoint.changes.partialScan) {
+        throw new Error("Full index source checkpoint was incomplete; refusing to publish source freshness.");
+    }
+    if (indexedFileHashes.size !== checkpoint.fileHashes.size) {
+        throw new Error(
+            `Full index source changed while indexing (indexed ${indexedFileHashes.size} files, observed ${checkpoint.fileHashes.size}); retry reindex.`,
+        );
+    }
+    for (const [relativePath, indexedHash] of indexedFileHashes) {
+        if (checkpoint.fileHashes.get(relativePath) !== indexedHash) {
+            throw new Error(`Full index source changed while indexing at '${relativePath}'; retry reindex.`);
+        }
     }
 }
 
@@ -1301,7 +1330,18 @@ export class ManageIndexingHandlers {
         let candidatePolicy: ResolvedIndexPolicy | null = null;
         let candidatePolicyPublished = false;
         let candidateAuthorityForRollback: ReturnType<Context['captureDurableIndexAuthority']> | null = null;
+        let expectedCandidateAuthority: Awaited<ReturnType<Context['proveVectorGeneration']>> = null;
+        let candidateMarkerRunId: string | undefined;
         let writingReceiptPublished = false;
+        let fullIndexCheckpoint: import("@zokizuan/satori-core").PreparedFileChangeSet | undefined;
+        let fullIndexSynchronizer: import("@zokizuan/satori-core").FileSynchronizer | undefined;
+        let fullIndexCheckpointCommitted = false;
+        let candidateAuthorityCommitted = false;
+        let publishedIndexStats: {
+            indexedFiles: number;
+            totalChunks: number;
+            status: "completed" | "limit_reached";
+        } | null = null;
         const assertMutationCurrent = mutationLease
             ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease)
             : undefined;
@@ -1430,12 +1470,30 @@ export class ManageIndexingHandlers {
             candidatePolicy = forceReindex
                 ? await this.host.context.resolveIndexPolicyForReindex(absolutePath, policyUpdate)
                 : await this.host.context.resolveIndexPolicyForCodebase(absolutePath, policyUpdate);
+            candidateMarkerRunId = crypto.randomUUID();
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
             const ignorePatterns = candidatePolicy.effectiveIgnorePatterns;
             const supportedExtensions = candidatePolicy.supportedExtensions;
             console.log(`[BACKGROUND-INDEX] Using ${ignorePatterns.length} effective ignore patterns (policy=${candidatePolicy.policyHash.slice(0, 12)}).`);
-            const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns, supportedExtensions);
-            await synchronizer.initialize(assertMutationCurrent, publishMutation);
+            const synchronizer = new FileSynchronizer(
+                absolutePath,
+                ignorePatterns,
+                supportedExtensions,
+                {
+                    checkpointIdentity: targetCollectionName,
+                    checkpointAuthority: {
+                        collectionName: targetCollectionName,
+                        markerRunId: candidateMarkerRunId,
+                        indexPolicyHash: candidatePolicy.policyHash,
+                    },
+                },
+            );
+            fullIndexSynchronizer = synchronizer;
+            await synchronizer.initialize(
+                assertMutationCurrent,
+                publishMutation,
+                { deferSnapshotPublication: true },
+            );
 
             await this.host.context.ensureCollectionPrepared(
                 absolutePath,
@@ -1443,7 +1501,6 @@ export class ManageIndexingHandlers {
                     ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
                     : undefined,
             );
-            this.host.context.registerSynchronizer(this.host.resolveCollectionName(absolutePath), synchronizer);
 
             console.log(`[BACKGROUND-INDEX] Starting indexing for: ${absolutePath}`);
 
@@ -1477,6 +1534,23 @@ export class ManageIndexingHandlers {
                 indexPolicy: candidatePolicy,
             });
             navigationCandidate = stats.navigationCandidate;
+            publishedIndexStats = {
+                indexedFiles: stats.indexedFiles,
+                totalChunks: stats.totalChunks,
+                status: stats.status,
+            };
+            if (stats.status === "completed") {
+                // The checkpoint is authoritative only when it describes the exact
+                // source bytes consumed by this candidate generation.
+                fullIndexCheckpoint = await synchronizer.prepareChanges({ forceFullHash: true });
+                assertCheckpointMatchesIndexedSources(stats.indexedFiles, stats.indexedFileHashes, fullIndexCheckpoint);
+                // Publish the candidate-scoped checkpoint before any canonical
+                // authority selects its collection. A crash can now leave only
+                // an unreferenced checkpoint, never new authority with an old
+                // root-global freshness baseline.
+                await fullIndexCheckpoint.commit(assertMutationCurrent, publishMutation);
+                fullIndexCheckpointCommitted = true;
+            }
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
             if (mutationLease) {
                 this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
@@ -1547,13 +1621,10 @@ export class ManageIndexingHandlers {
                     assertMutationCurrent,
                     undefined,
                     candidatePolicy.policyHash,
+                    candidateMarkerRunId,
                 );
             }
 
-            await this.host.syncManager.recordCurrentIgnoreControlSignature(absolutePath, mutationLease);
-            if (mutationLease) {
-                this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
-            }
             persistBackgroundPhase("publishing");
             // Full navigation rebuild only for completed indexes; partial indexes have no registry seal.
             if (stats.status === "completed") {
@@ -1579,6 +1650,7 @@ export class ManageIndexingHandlers {
                     assertMutationCurrent,
                     stats.navigationCandidate,
                     candidatePolicy.policyHash,
+                    candidateMarkerRunId,
                 );
             }
             if (mutationLease) {
@@ -1604,13 +1676,34 @@ export class ManageIndexingHandlers {
                 );
                 candidatePolicyPublished = true;
                 candidateAuthorityForRollback = this.host.context.captureDurableIndexAuthority(absolutePath);
+                expectedCandidateAuthority = await this.host.context.proveVectorGeneration(absolutePath);
+                if (
+                    expectedCandidateAuthority?.collectionName !== targetCollectionName
+                    || expectedCandidateAuthority.marker.indexStatus !== "completed"
+                    || expectedCandidateAuthority.marker.indexedFiles !== stats.indexedFiles
+                    || expectedCandidateAuthority.marker.totalChunks !== stats.totalChunks
+                    || expectedCandidateAuthority.marker.indexPolicyHash !== candidatePolicy.policyHash
+                ) {
+                    throw new Error(`Candidate vector authority for '${absolutePath}' could not be proven before navigation publication.`);
+                }
                 await this.host.context.publishNavigationCandidate(
                     stats.navigationCandidate,
                     assertMutationCurrent,
                     publishMutation,
                 );
                 candidateAuthorityForRollback = this.host.context.captureDurableIndexAuthority(absolutePath);
+                candidateAuthorityCommitted = true;
             }
+            if (stats.status === "completed") {
+                if (!fullIndexCheckpointCommitted) {
+                    throw new Error(`Full index checkpoint was not committed for '${absolutePath}'.`);
+                }
+                this.host.context.registerSynchronizer(this.host.resolveCollectionName(absolutePath), synchronizer);
+            }
+            if (stats.status === "completed") {
+                await this.host.syncManager.recordCurrentIgnoreControlSignature(absolutePath, mutationLease);
+            }
+            assertMutationCurrent?.();
             persistBackgroundPhase("completed", () => {
                 this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified", targetCollectionName);
                 this.host.snapshotManager.setCodebaseIndexManifest(absolutePath, this.host.getContextTrackedRelativePaths(absolutePath));
@@ -1629,6 +1722,16 @@ export class ManageIndexingHandlers {
                         : undefined,
                 );
                 if (droppedCollections.length > 0) {
+                    const { FileSynchronizer } = await import("@zokizuan/satori-core");
+                    for (const droppedCollection of droppedCollections) {
+                        assertMutationCurrent?.();
+                        await FileSynchronizer.deleteSnapshotForGeneration(
+                            absolutePath,
+                            droppedCollection,
+                            assertMutationCurrent,
+                            publishMutation,
+                        );
+                    }
                     console.log(`[BACKGROUND-INDEX] 🧹 Retired ${droppedCollections.length} superseded collection(s): ${droppedCollections.join(", ")}`);
                 }
             } catch (pruneError) {
@@ -1655,8 +1758,71 @@ export class ManageIndexingHandlers {
                 candidateAuthorityForRollback = this.host.context.captureDurableIndexAuthority(absolutePath);
             }
 
+            if (error instanceof SynchronizerCheckpointPublicationError && error.committed) {
+                fullIndexCheckpointCommitted = true;
+            }
+
             if (mutationLease && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease) === false) {
                 console.error(`[BACKGROUND-INDEX] Refusing stale terminal transition for '${absolutePath}' after mutation lease loss.`);
+                return;
+            }
+
+            const committedIndexStats = publishedIndexStats;
+            if (
+                fullIndexCheckpointCommitted
+                && !candidateAuthorityCommitted
+                && committedIndexStats?.status === "completed"
+                && targetCollectionName
+                && expectedCandidateAuthority
+            ) {
+                try {
+                    const provenCandidate = await this.host.context.proveIndexedGeneration(absolutePath);
+                    candidateAuthorityCommitted = provenCandidate?.collectionName === targetCollectionName
+                        && provenCandidate.policyDocumentDigest === expectedCandidateAuthority.policyDocumentDigest
+                        && this.host.context.indexCompletionMarkersEqual(
+                            provenCandidate.marker,
+                            expectedCandidateAuthority.marker,
+                        );
+                } catch {
+                    candidateAuthorityCommitted = false;
+                }
+            }
+            if (fullIndexCheckpointCommitted && candidateAuthorityCommitted && committedIndexStats) {
+                if (fullIndexSynchronizer) {
+                    this.host.context.registerSynchronizer(
+                        this.host.resolveCollectionName(absolutePath),
+                        fullIndexSynchronizer,
+                    );
+                }
+                console.error(
+                    `[BACKGROUND-INDEX] Candidate authority and source checkpoint for '${absolutePath}' committed before lifecycle acknowledgement failed; retaining the committed generation.`,
+                );
+                try {
+                    persistBackgroundPhase("completed", () => {
+                        this.host.snapshotManager.setCodebaseIndexed(
+                            absolutePath,
+                            committedIndexStats,
+                            this.host.runtimeFingerprint,
+                            "verified",
+                            targetCollectionName,
+                        );
+                        this.host.snapshotManager.setCodebaseIndexManifest(
+                            absolutePath,
+                            this.host.getContextTrackedRelativePaths(absolutePath),
+                        );
+                    });
+                    if (!mutationLease) {
+                        this.host.saveSnapshotIfSupported();
+                    }
+                    this.host.setIndexingStats({
+                        indexedFiles: committedIndexStats.indexedFiles,
+                        totalChunks: committedIndexStats.totalChunks,
+                    });
+                } catch (acknowledgementError) {
+                    console.error(
+                        `[BACKGROUND-INDEX] Failed to persist completion acknowledgement for committed generation '${absolutePath}': ${formatUnknownError(acknowledgementError)}`,
+                    );
+                }
                 return;
             }
 
@@ -1665,6 +1831,7 @@ export class ManageIndexingHandlers {
                 errorMessage = await this.host.buildCollectionLimitMessage(absolutePath);
             }
 
+            let candidateMarkerWithdrawn = false;
             try {
                 await this.host.clearIndexCompletionMarker(
                     absolutePath,
@@ -1672,12 +1839,22 @@ export class ManageIndexingHandlers {
                         ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
                         : undefined,
                 );
+                candidateMarkerWithdrawn = true;
             } catch (clearError) {
                 console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
             }
-            const assertMutationCurrent = mutationLease
-                ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
-                : undefined;
+            if (candidateMarkerWithdrawn && fullIndexCheckpointCommitted && fullIndexSynchronizer) {
+                try {
+                    await fullIndexSynchronizer.deleteOwnedSnapshot(
+                        assertMutationCurrent,
+                        publishMutation,
+                    );
+                } catch (checkpointCleanupError) {
+                    console.warn(
+                        `[BACKGROUND-INDEX] Failed to remove unreferenced candidate checkpoint for '${absolutePath}': ${formatUnknownError(checkpointCleanupError)}`,
+                    );
+                }
+            }
             try {
                 await this.cleanupFailedStagedCollection(absolutePath, targetCollectionName, assertMutationCurrent);
             } catch (cleanupError) {

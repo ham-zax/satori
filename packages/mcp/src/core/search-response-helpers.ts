@@ -90,6 +90,15 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
             action: "Narrow the query with path: or sync the repo if changed-file recency should affect ranking.",
         };
     }
+    if (code === WARNING_CODES.SOURCE_FRESHNESS_CHECKPOINT_UNAVAILABLE) {
+        return {
+            code,
+            severity: "degraded",
+            blocksUse: false,
+            message: "Vector search is using the proven generation, but its durable source-freshness checkpoint is unavailable, so current-source freshness is unverified.",
+            action: "Run manage_index reindex to restore the checkpoint; incremental sync remains disabled until then.",
+        };
+    }
     if (code === WARNING_CODES.FILTER_MUST_UNSATISFIED) {
         return {
             code,

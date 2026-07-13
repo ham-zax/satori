@@ -51,6 +51,15 @@ test("navigation repair warning preserves vector usability and recommends repair
     assert.match(warning?.action ?? "", /do not reindex/i);
 });
 
+test("source checkpoint warning preserves vector usability but requires reindex", () => {
+    const [warning] = buildSearchWarningDetails(["SOURCE_FRESHNESS_CHECKPOINT_UNAVAILABLE"]);
+    assert.equal(warning?.blocksUse, false);
+    assert.equal(warning?.severity, "degraded");
+    assert.match(warning?.message ?? "", /current-source freshness is unverified/i);
+    assert.match(warning?.action ?? "", /^Run manage_index reindex/i);
+    assert.match(warning?.action ?? "", /incremental sync remains disabled/i);
+});
+
 function baseGroup(partial: Partial<SearchGroupResult> = {}): SearchGroupResult {
     return {
         target: {

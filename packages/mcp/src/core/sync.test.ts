@@ -446,7 +446,7 @@ test('ensureFreshness does not treat mutation lease loss as a missing root', asy
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
-test('ensureFreshness passes trusted snapshot collection to incremental sync', async () => {
+test('ensureFreshness lets Core resolve incremental authority instead of trusting lifecycle metadata', async () => {
     const codebasePath = createTempDir();
     const committedCollection = 'hybrid_code_chunks_committed';
     let receivedOptions: unknown;
@@ -488,10 +488,130 @@ test('ensureFreshness passes trusted snapshot collection to incremental sync', a
 
     assert.equal(decision.mode, 'synced');
     assert.deepEqual(receivedOptions, {
-        targetCollectionName: committedCollection,
         maintainCompletionMarker: true,
     });
     assert.equal(persistedCollection, committedCollection);
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness disables incremental sync when a completed generation checkpoint is missing or corrupt', async () => {
+    const codebasePath = createTempDir();
+    const committedCollection = 'hybrid_code_chunks_checkpoint_evidence';
+    let checkpointStatus: 'valid' | 'missing' | 'corrupt' = 'valid';
+    let syncCalls = 0;
+    const context = {
+        async inspectSourceFreshnessCheckpoint() {
+            return checkpointStatus === 'valid'
+                ? { status: 'valid' as const, observationToken: 'checkpoint-v1', merkleRoot: 'a'.repeat(64) }
+                : { status: checkpointStatus, message: `checkpoint ${checkpointStatus}` };
+        },
+        getRegisteredSourceFreshnessCheckpointObservation() {
+            return checkpointStatus === 'valid' ? 'checkpoint-v1' : null;
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: committedCollection };
+        },
+        getActiveIgnorePatterns() {
+            return [];
+        },
+        hasSynchronizerForCodebase() {
+            return true;
+        },
+        getTrackedRelativePaths() {
+            return ['index.ts'];
+        },
+    };
+    const snapshot = {
+        getCodebaseStatus: () => 'indexed',
+        getCodebaseInfo: () => ({ indexStatus: 'completed' }),
+        getCodebaseCollectionName: () => committedCollection,
+        getCodebaseIgnoreControlSignature: () => 'current',
+        setCodebaseIndexManifest() {},
+        setCodebaseSyncCompleted() {},
+        saveCodebaseSnapshot() {},
+    };
+    const manager = new SyncManager(context as unknown as SyncContext, snapshot as unknown as SyncSnapshotManager, {
+        watchEnabled: true,
+        now: () => 10_000,
+    });
+    const access = manager as unknown as SyncManagerTestAccess;
+    access.watcherModeStarted = true;
+    access.watchers.set(codebasePath, { close: async () => undefined });
+
+    const initial = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+    assert.equal(initial.mode, 'synced');
+    assert.equal(syncCalls, 1);
+    assert.ok(manager.getPreparedReadObservation(codebasePath));
+
+    const warm = await manager.ensureFreshness(codebasePath, 60_000, { skipIgnoreControlCheck: true });
+    assert.equal(warm.mode, 'skipped_recent');
+    assert.equal(syncCalls, 1);
+
+    checkpointStatus = 'missing';
+    assert.equal(manager.getPreparedReadObservation(codebasePath), null);
+    const missing = await manager.ensureFreshness(codebasePath, 60_000, { skipIgnoreControlCheck: true });
+    assert.equal(missing.mode, 'skipped_source_checkpoint_unavailable');
+    assert.equal(missing.checkpointStatus, 'missing');
+    assert.equal(syncCalls, 1);
+
+    checkpointStatus = 'corrupt';
+    const corrupt = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
+    assert.equal(corrupt.mode, 'skipped_source_checkpoint_unavailable');
+    assert.equal(corrupt.checkpointStatus, 'corrupt');
+    assert.equal(syncCalls, 1);
+
+    await manager.unwatchCodebase(codebasePath);
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness validates the authority checkpoint before ignore reconciliation', async () => {
+    const codebasePath = createTempDir();
+    let reloadCalls = 0;
+    let syncCalls = 0;
+    const context = {
+        async inspectSourceFreshnessCheckpoint() {
+            return { status: 'missing' as const, message: 'authority checkpoint missing' };
+        },
+        async reloadIgnoreRulesForCodebase() {
+            reloadCalls += 1;
+            return [];
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return { added: 0, removed: 0, modified: 0, changedFiles: [] };
+        },
+        getActiveIgnorePatterns() {
+            return [];
+        },
+        hasSynchronizerForCodebase() {
+            return true;
+        },
+        getTrackedRelativePaths() {
+            return ['index.ts'];
+        },
+    };
+    const snapshot = {
+        getCodebaseStatus: () => 'indexed',
+        getCodebaseInfo: () => ({ indexStatus: 'completed' }),
+        getCodebaseIgnoreControlSignature: () => 'stale-signature',
+        getCodebaseIndexedPaths: () => ['index.ts'],
+        saveCodebaseSnapshot() {},
+    };
+    fs.writeFileSync(path.join(codebasePath, '.gitignore'), '*.generated.ts\n', 'utf8');
+    const manager = new SyncManager(
+        context as unknown as SyncContext,
+        snapshot as unknown as SyncSnapshotManager,
+        { watchEnabled: false },
+    );
+
+    const regular = await manager.ensureFreshness(codebasePath, 0);
+    assert.equal(regular.mode, 'skipped_source_checkpoint_unavailable');
+    const watcher = await manager.ensureFreshness(codebasePath, 0, { reason: 'ignore_change' });
+    assert.equal(watcher.mode, 'skipped_source_checkpoint_unavailable');
+    assert.equal(reloadCalls, 0);
+    assert.equal(syncCalls, 0);
+
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 

@@ -34,6 +34,7 @@ export type FreshnessDecisionMode =
     | 'coalesced'
     | 'skipped_indexing'
     | 'skipped_requires_reindex'
+    | 'skipped_source_checkpoint_unavailable'
     | 'skipped_mutation_in_progress'
     | 'skipped_missing_path'
     | 'reconciled_ignore_change'
@@ -58,6 +59,7 @@ export interface FreshnessDecision {
     fallbackStats?: { added: number; removed: number; modified: number };
     activeMutation?: RootMutationLease;
     operation?: IndexOperationReceipt;
+    checkpointStatus?: 'missing' | 'corrupt';
 }
 
 export type PreparedReadObservation = {
@@ -66,7 +68,7 @@ export type PreparedReadObservation = {
 };
 
 interface SyncExecutionOutcome {
-    mode: Exclude<FreshnessDecisionMode, 'coalesced' | 'skipped_recent'>;
+    mode: Exclude<FreshnessDecisionMode, 'coalesced' | 'skipped_recent' | 'skipped_source_checkpoint_unavailable'>;
     stats?: SyncStats;
     activeMutation?: RootMutationLease;
     operation?: IndexOperationReceipt;
@@ -154,6 +156,7 @@ export class SyncManager {
     private pendingIgnoreChangeEdits: Map<string, number> = new Map();
     private activeIgnoreReconciles: Map<string, Promise<FreshnessDecision>> = new Map();
     private freshnessEpochs: Map<string, number> = new Map();
+    private sourceCheckpointObservations: Map<string, string> = new Map();
     private readonly now: () => number;
     private readonly onSyncCompleted?: SyncManagerOptions['onSyncCompleted'];
     private readonly mutationLeaseCoordinator?: MutationLeaseCoordinator;
@@ -173,6 +176,9 @@ export class SyncManager {
     }
 
     public getPreparedReadObservation(codebasePath: string): PreparedReadObservation | null {
+        const checkpointInspectionSupported = typeof this.context.inspectSourceFreshnessCheckpoint === 'function';
+        const checkpointObservation = this.sourceCheckpointObservations.get(codebasePath);
+        const currentCheckpointObservation = this.context.getRegisteredSourceFreshnessCheckpointObservation?.(codebasePath);
         if (
             !this.watchEnabled
             || !this.watcherModeStarted
@@ -180,12 +186,54 @@ export class SyncManager {
             || this.debounceTimers.has(codebasePath)
             || this.activeSyncs.has(codebasePath)
             || this.activeIgnoreReconciles.has(codebasePath)
+            || (checkpointInspectionSupported && (
+                !checkpointObservation
+                || currentCheckpointObservation !== checkpointObservation
+            ))
         ) {
             return null;
         }
         return {
             freshnessEpoch: this.freshnessEpochs.get(codebasePath) ?? 0,
             watcherHealthy: true,
+        };
+    }
+
+    private async inspectSourceFreshnessCheckpoint(codebasePath: string) {
+        const status = this.snapshotManager.getCodebaseStatus(codebasePath);
+        if (status !== 'indexed' && status !== 'sync_completed') return null;
+        const info = this.snapshotManager.getCodebaseInfo?.(codebasePath) as { indexStatus?: unknown } | undefined;
+        if (info?.indexStatus === 'limit_reached') return null;
+        const inspect = this.context.inspectSourceFreshnessCheckpoint;
+        if (typeof inspect !== 'function') return null;
+        return inspect.call(this.context, codebasePath);
+    }
+
+    private async validateSourceFreshnessCheckpoint(
+        codebasePath: string,
+        checkedAt: string,
+        thresholdMs: number,
+    ): Promise<FreshnessDecision | null> {
+        const checkpointEvidence = await this.inspectSourceFreshnessCheckpoint(codebasePath);
+        if (checkpointEvidence?.status === 'valid') {
+            const previousObservation = this.sourceCheckpointObservations.get(codebasePath);
+            this.sourceCheckpointObservations.set(codebasePath, checkpointEvidence.observationToken);
+            if (previousObservation && previousObservation !== checkpointEvidence.observationToken) {
+                this.bumpFreshnessEpoch(codebasePath);
+            }
+            return null;
+        }
+        if (!checkpointEvidence) return null;
+
+        this.sourceCheckpointObservations.delete(codebasePath);
+        this.lastSyncTimes.delete(codebasePath);
+        this.bumpFreshnessEpoch(codebasePath);
+        return {
+            mode: 'skipped_source_checkpoint_unavailable',
+            checkedAt,
+            thresholdMs,
+            checkpointStatus: checkpointEvidence.status,
+            errorMessage: checkpointEvidence.message,
         };
     }
 
@@ -305,12 +353,50 @@ export class SyncManager {
         thresholdMs: number = 60000,
         options: EnsureFreshnessOptions = {}
     ): Promise<FreshnessDecision> {
+        const checkedAtMs = this.now();
+        const checkedAt = new Date(checkedAtMs).toISOString();
+
         if (options.reason === 'ignore_change') {
+            const checkpointFailure = await this.validateSourceFreshnessCheckpoint(
+                codebasePath,
+                checkedAt,
+                thresholdMs,
+            );
+            if (checkpointFailure) return checkpointFailure;
             return this.runIgnoreReconcile(codebasePath, options.coalescedEdits, undefined, options.mutationLease);
         }
 
-        const checkedAtMs = this.now();
-        const checkedAt = new Date(checkedAtMs).toISOString();
+        // Join a live mutation before inspecting its checkpoint. The owner may be
+        // between marker withdrawal and checkpoint publication.
+        if (this.activeSyncs.has(codebasePath)) {
+            console.log(`[SYNC] 🛡️ Request Coalesced: Attaching to active sync for '${codebasePath}'`);
+            const outcome = await this.activeSyncs.get(codebasePath);
+            const lastSync = this.lastSyncTimes.get(codebasePath);
+            return {
+                mode: 'coalesced',
+                checkedAt,
+                thresholdMs,
+                lastSyncAt: lastSync ? new Date(lastSync).toISOString() : undefined,
+                ageMs: lastSync ? Math.max(0, checkedAtMs - lastSync) : undefined,
+                stats: outcome?.stats ? {
+                    added: outcome.stats.added,
+                    removed: outcome.stats.removed,
+                    modified: outcome.stats.modified,
+                } : undefined,
+                activeMutation: outcome?.activeMutation,
+                operation: outcome?.operation,
+            };
+        }
+
+        // Source-freshness ownership is a precondition for every incremental path,
+        // including ignore reconciliation. The identity comes from Core authority,
+        // never from the lifecycle snapshot.
+        const checkpointFailure = await this.validateSourceFreshnessCheckpoint(
+            codebasePath,
+            checkedAt,
+            thresholdMs,
+        );
+        if (checkpointFailure) return checkpointFailure;
 
         let currentIgnoreControlSignature: string | undefined;
         if (options.skipIgnoreControlCheck !== true) {
@@ -338,27 +424,6 @@ export class SyncManager {
                 }
 
             }
-        }
-
-        // 1. Coalescing: Join existing in-flight sync
-        if (this.activeSyncs.has(codebasePath)) {
-            console.log(`[SYNC] 🛡️ Request Coalesced: Attaching to active sync for '${codebasePath}'`);
-            const outcome = await this.activeSyncs.get(codebasePath);
-            const lastSync = this.lastSyncTimes.get(codebasePath);
-            return {
-                mode: 'coalesced',
-                checkedAt,
-                thresholdMs,
-                lastSyncAt: lastSync ? new Date(lastSync).toISOString() : undefined,
-                ageMs: lastSync ? Math.max(0, checkedAtMs - lastSync) : undefined,
-                stats: outcome?.stats ? {
-                    added: outcome.stats.added,
-                    removed: outcome.stats.removed,
-                    modified: outcome.stats.modified,
-                } : undefined,
-                activeMutation: outcome?.activeMutation,
-                operation: outcome?.operation,
-            };
         }
 
         // 2. Throttling: Skip if recently synced
@@ -398,6 +463,12 @@ export class SyncManager {
 
         this.activeSyncs.set(codebasePath, syncPromise);
         const outcome = await syncPromise;
+        const committedCheckpoint = await this.inspectSourceFreshnessCheckpoint(codebasePath);
+        if (committedCheckpoint?.status === 'valid') {
+            this.sourceCheckpointObservations.set(codebasePath, committedCheckpoint.observationToken);
+        } else {
+            this.sourceCheckpointObservations.delete(codebasePath);
+        }
         const lastSyncedAt = this.lastSyncTimes.get(codebasePath);
         return {
             mode: outcome.mode,
@@ -539,6 +610,7 @@ export class SyncManager {
                             this.mutationLeaseCoordinator.publishWhileCurrent(mutationLease, publish);
                         }
                         : undefined,
+                    { requireAuthorityCheckpoint: true },
                 );
                 this.assertMutationCurrent(mutationLease);
             }
@@ -706,19 +778,46 @@ export class SyncManager {
                 return { mode: 'skipped_missing_path', operation: lastDurableOperation };
             }
 
+            const assertCurrent = lease
+                ? () => this.assertMutationCurrent(lease)
+                : undefined;
+            const publishCurrent = lease
+                ? (publish: () => void) => {
+                    if (!this.mutationLeaseCoordinator) {
+                        throw new Error(`Cannot publish sync checkpoint for '${codebasePath}' without a mutation lease coordinator.`);
+                    }
+                    this.mutationLeaseCoordinator.publishWhileCurrent(lease, publish);
+                }
+                : undefined;
+            const fencedCheckpoint = await this.inspectSourceFreshnessCheckpoint(codebasePath);
+            if (fencedCheckpoint && fencedCheckpoint.status !== 'valid') {
+                throw new Error(
+                    `Incremental sync cannot continue because its authoritative source checkpoint is ${fencedCheckpoint.status}: ${fencedCheckpoint.message}`,
+                );
+            }
+            if (fencedCheckpoint?.status === 'valid') {
+                this.sourceCheckpointObservations.set(codebasePath, fencedCheckpoint.observationToken);
+                const registeredObservation = this.context.getRegisteredSourceFreshnessCheckpointObservation?.(codebasePath);
+                if (
+                    registeredObservation !== fencedCheckpoint.observationToken
+                    && typeof this.context.recreateSynchronizerForCodebase === 'function'
+                ) {
+                    await this.context.recreateSynchronizerForCodebase(
+                        codebasePath,
+                        assertCurrent,
+                        publishCurrent,
+                        { requireAuthorityCheckpoint: true },
+                    );
+                    this.assertMutationCurrent(lease);
+                }
+            }
+
             // Incremental sync
-            const collectionName = this.snapshotManager.getCodebaseCollectionName?.(codebasePath);
             const syncOptions = {
-                ...(collectionName ? { targetCollectionName: collectionName } : {}),
                 maintainCompletionMarker: true,
-                ...(lease ? {
-                    assertMutationCurrent: () => this.assertMutationCurrent(lease),
-                    publishMutation: (publish: () => void) => {
-                        if (!this.mutationLeaseCoordinator) {
-                            throw new Error(`Cannot publish sync checkpoint for '${codebasePath}' without a mutation lease coordinator.`);
-                        }
-                        this.mutationLeaseCoordinator.publishWhileCurrent(lease, publish);
-                    },
+                ...(assertCurrent && publishCurrent ? {
+                    assertMutationCurrent: assertCurrent,
+                    publishMutation: publishCurrent,
                 } : {}),
             };
             if (lease) {
@@ -785,7 +884,7 @@ export class SyncManager {
                 this.mutationLeaseCoordinator?.assertCurrent(lease);
             }
             const operation = this.persistOwnedOperationPhase(lease, releaseLease, "completed", () => {
-                this.snapshotManager.setCodebaseSyncCompleted(codebasePath, stats, undefined, 'verified', stats.collectionName || collectionName);
+                this.snapshotManager.setCodebaseSyncCompleted(codebasePath, stats, undefined, 'verified', stats.collectionName);
             });
             if (operation) {
                 lastDurableOperation = operation;
@@ -1092,6 +1191,7 @@ export class SyncManager {
         this.lastSyncTimes.delete(codebasePath);
         this.ignoreRulesVersions.delete(codebasePath);
         this.freshnessEpochs.delete(codebasePath);
+        this.sourceCheckpointObservations.delete(codebasePath);
         this.activeIgnoreReconciles.delete(codebasePath);
     }
 

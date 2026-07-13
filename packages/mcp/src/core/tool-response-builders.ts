@@ -413,6 +413,7 @@ export class ToolResponseBuilders {
 
             case "synced":
             case "skipped_recent":
+            case "skipped_source_checkpoint_unavailable":
             case "reconciled_ignore_change":
             case "skipped_mutation_in_progress":
                 return null;

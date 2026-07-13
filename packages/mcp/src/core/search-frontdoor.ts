@@ -10,6 +10,7 @@ import type {
 } from "./search-types.js";
 import { SEARCH_RESPONSE_FORMAT_VERSION } from "./search-types.js";
 import type { FreshnessDecision } from "./sync.js";
+import { WARNING_CODES } from "./warnings.js";
 import type {
     CompletionProbeDebugHint,
     TrackedRootReadiness,
@@ -357,6 +358,12 @@ export async function runSearchFrontDoor(
         generationReceipt = postFreshnessRootState.generationReceipt;
         navigationStatus = postFreshnessRootState.navigationStatus;
         partialIndexSearchWarnings = buildReadinessWarnings(host, postFreshnessRootState);
+        if (freshnessDecision.mode === "skipped_source_checkpoint_unavailable") {
+            partialIndexSearchWarnings = [
+                ...partialIndexSearchWarnings,
+                WARNING_CODES.SOURCE_FRESHNESS_CHECKPOINT_UNAVAILABLE,
+            ];
+        }
         return {
             kind: "ready",
             absolutePath,

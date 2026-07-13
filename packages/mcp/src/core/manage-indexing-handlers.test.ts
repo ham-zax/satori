@@ -4,7 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { IndexPolicyPublicationError } from "@zokizuan/satori-core";
+import {
+    FileSynchronizer,
+    IndexPolicyPublicationError,
+    SynchronizerCheckpointPublicationError,
+} from "@zokizuan/satori-core";
 import { ManageIndexingHandlers } from "./manage-indexing-handlers.js";
 import type {
     IndexFingerprint,
@@ -26,6 +30,36 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     extractorVersion: "extractor-v1",
     relationshipVersion: "relationships-v1",
 };
+
+const DEFAULT_INDEX_SOURCE = "export const value = 1;\n";
+
+function sourceHashes(sources: Readonly<Record<string, string>>): ReadonlyMap<string, string> {
+    return new Map(Object.entries(sources).map(([relativePath, content]) => [
+        relativePath,
+        crypto.createHash("sha256").update(content).digest("hex"),
+    ]));
+}
+
+function completedIndexResult(
+    sources: Readonly<Record<string, string>> = { "index.ts": DEFAULT_INDEX_SOURCE },
+    options: { totalChunks?: number } = {},
+) {
+    return {
+        indexedFiles: Object.keys(sources).length,
+        totalChunks: options.totalChunks ?? Object.keys(sources).length,
+        status: "completed" as const,
+        indexedFileHashes: sourceHashes(sources),
+    };
+}
+
+function partialIndexResult(totalChunks: number) {
+    return {
+        indexedFiles: 1,
+        totalChunks,
+        status: "limit_reached" as const,
+        indexedFileHashes: sourceHashes({ "index.ts": DEFAULT_INDEX_SOURCE }),
+    };
+}
 
 function buildMarker(codebasePath: string, overrides: Record<string, unknown> = {}) {
     return {
@@ -68,10 +102,9 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-mcp-manage-indexing-"));
     const repoPath = path.join(tempDir, "repo");
     fs.mkdirSync(repoPath, { recursive: true });
-    fs.writeFileSync(path.join(repoPath, "index.ts"), "export const value = 1;\n");
-    return fn(repoPath).finally(() => {
-        const digest = crypto.createHash("md5").update(path.resolve(repoPath)).digest("hex");
-        fs.rmSync(path.join(os.homedir(), ".satori", "merkle", `${digest}.json`), { force: true });
+    fs.writeFileSync(path.join(repoPath, "index.ts"), DEFAULT_INDEX_SOURCE);
+    return fn(repoPath).finally(async () => {
+        await FileSynchronizer.deleteSnapshot(repoPath);
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
 }
@@ -272,7 +305,12 @@ function createFailedIndexingHarness(
                 assertMutationCurrent?: () => void;
                 publishMutation?: (publish: () => void) => void;
             },
-        ) => Promise<{ indexedFiles: number; totalChunks: number; status: "completed" | "limit_reached" }>;
+        ) => Promise<{
+            indexedFiles: number;
+            totalChunks: number;
+            status: "completed" | "limit_reached";
+            indexedFileHashes: ReadonlyMap<string, string>;
+        }>;
         beforeHasCollection?: (collectionName: string) => void;
         touchWatchedCodebase?: () => Promise<void>;
         rebuildCallGraphForIndex?: () => Promise<void>;
@@ -286,6 +324,7 @@ function createFailedIndexingHarness(
         policyPublicationDocumentDigest?: string;
         legacyRollback?: boolean;
         proveVectorGenerationError?: Error;
+        recordCurrentIgnoreControlSignature?: () => Promise<void>;
     } = {},
 ) {
     const droppedCollections: string[] = [];
@@ -299,6 +338,13 @@ function createFailedIndexingHarness(
     let reindexPolicyResolutionCalls = 0;
     let writeCollectionOverride: string | null = null;
     let indexedSnapshots = 0;
+    let registeredSynchronizers = 0;
+    let publishedPolicyCollection: string | null = null;
+    let publishedPolicyHash: string | null = null;
+    let publishedPolicyDocumentDigest: string | null = null;
+    let publishedMarker: ReturnType<typeof buildMarker> | null = null;
+    let publishedMarkerCollection: string | null = null;
+    let navigationPublished = false;
     const publishedSnapshots: Array<{ status: string; collectionName?: string }> = [];
 
     const vectorStore = {
@@ -314,6 +360,7 @@ function createFailedIndexingHarness(
 
     const context = {
         getVectorStore: () => vectorStore,
+        indexCompletionMarkersEqual: (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right),
         loadResolvedIgnorePatterns: async () => undefined,
         resolveIndexPolicyForCodebase: async (_root: string, update: { customExtensions?: string[]; customIgnorePatterns?: string[] } = {}) => {
             standardPolicyResolutionCalls += 1;
@@ -324,7 +371,7 @@ function createFailedIndexingHarness(
                 customIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
                 supportedExtensions: ['.ts', ...(update.customExtensions ?? publishedCustomExtensions)],
                 effectiveIgnorePatterns: update.customIgnorePatterns ?? publishedCustomIgnorePatterns,
-                policyHash: JSON.stringify(update),
+                policyHash: crypto.createHash('sha256').update(JSON.stringify(update)).digest('hex'),
             };
         },
         resolveIndexPolicyForReindex: async (_root: string, update: { customExtensions?: string[]; customIgnorePatterns?: string[] } = {}) => {
@@ -336,7 +383,7 @@ function createFailedIndexingHarness(
                 customIgnorePatterns: update.customIgnorePatterns ?? [],
                 supportedExtensions: ['.ts', ...(update.customExtensions ?? [])],
                 effectiveIgnorePatterns: update.customIgnorePatterns ?? [],
-                policyHash: JSON.stringify(update),
+                policyHash: crypto.createHash('sha256').update(JSON.stringify(update)).digest('hex'),
             };
         },
         publishResolvedIndexPolicy: (
@@ -363,6 +410,9 @@ function createFailedIndexingHarness(
             const publish = () => {
                 publishedCustomExtensions = [...policy.customExtensions];
                 publishedCustomIgnorePatterns = [...policy.customIgnorePatterns];
+                publishedPolicyCollection = binding.collectionName;
+                publishedPolicyHash = policy.policyHash;
+                publishedPolicyDocumentDigest = receipt.documentDigest ?? null;
                 publicationEvents.push('policy:publish');
             };
             if (publishMutation) {
@@ -417,7 +467,9 @@ function createFailedIndexingHarness(
                 existingCollections.add(writeCollectionOverride);
             }
         },
-        registerSynchronizer: () => undefined,
+        registerSynchronizer: () => {
+            registeredSynchronizers += 1;
+        },
         getEmbeddingEngine: () => ({
             getProvider: () => "VoyageAI",
             getDimension: () => 1024,
@@ -443,12 +495,30 @@ function createFailedIndexingHarness(
                 }
                 : result;
         },
-        publishCompletedIndexMarker: async (_path: string, _files: number, _chunks: number, _collection: string, status: string) => {
+        publishCompletedIndexMarker: async (_path: string, _files: number, _chunks: number, _collection: string, status: string, _guard?: unknown, _candidate?: unknown, policyHash?: string, runId?: string) => {
+            publishedMarkerCollection = _collection;
+            publishedMarker = buildMarker("repo", {
+                indexedFiles: _files,
+                totalChunks: _chunks,
+                indexStatus: status,
+                indexPolicyHash: policyHash ?? 'a'.repeat(64),
+                runId: runId ?? 'run_candidate',
+                navigation: status === "completed"
+                    ? {
+                        status: "sealed",
+                        generationId: "candidate-generation",
+                        symbolRegistryManifestHash: "manifest-hash",
+                        relationshipManifestHash: "relationship-manifest-hash",
+                        sealHash: "navigation-seal-hash",
+                    }
+                    : { status: "not_bound" },
+            });
             publicationEvents.push(`marker:${status}`);
         },
         publishNavigationCandidate: async (candidate: { generationId: string }) => {
             publicationEvents.push(`navigation:publish:${candidate.generationId}`);
             await options.publishNavigationCandidate?.(candidate);
+            navigationPublished = true;
         },
         discardNavigationCandidate: async (candidate: { generationId: string }) => {
             publicationEvents.push(`navigation:discard:${candidate.generationId}`);
@@ -494,6 +564,28 @@ function createFailedIndexingHarness(
             };
         },
         proveVectorGeneration: async (root: string) => {
+            if (
+                publishedMarker
+                && publishedMarkerCollection
+                && publishedPolicyCollection === publishedMarkerCollection
+                && publishedPolicyHash === publishedMarker.indexPolicyHash
+            ) {
+                return {
+                    collectionName: publishedMarkerCollection,
+                    marker: publishedMarker,
+                    policyDocumentDigest: publishedPolicyDocumentDigest ?? 'a'.repeat(64),
+                    policy: {
+                        canonicalRoot: path.resolve(root),
+                        profile: 'default' as const,
+                        customExtensions: [...publishedCustomExtensions],
+                        customIgnorePatterns: [...publishedCustomIgnorePatterns],
+                        fileBasedIgnorePatterns: [],
+                        supportedExtensions: ['.ts', ...publishedCustomExtensions],
+                        effectiveIgnorePatterns: [...publishedCustomIgnorePatterns],
+                        policyHash: publishedPolicyHash,
+                    },
+                };
+            }
             if (options.proveVectorGenerationError) throw options.proveVectorGenerationError;
             if (!options.previousIndexedInfo || typeof options.previousIndexedInfo.collectionName !== 'string') return null;
             return {
@@ -515,6 +607,10 @@ function createFailedIndexingHarness(
                 },
             };
         },
+        proveIndexedGeneration: async (root: string) => {
+            if (!navigationPublished) return null;
+            return context.proveVectorGeneration(root);
+        },
     };
 
     const host = {
@@ -532,7 +628,8 @@ function createFailedIndexingHarness(
             setCodebaseCallGraphSidecar: () => undefined,
         },
         syncManager: {
-            recordCurrentIgnoreControlSignature: async () => undefined,
+            recordCurrentIgnoreControlSignature: options.recordCurrentIgnoreControlSignature
+                ?? (async () => undefined),
         },
         runtimeFingerprint: RUNTIME_FINGERPRINT,
         resolveCollectionName,
@@ -563,6 +660,12 @@ function createFailedIndexingHarness(
         failedSnapshots,
         get indexedSnapshots() {
             return indexedSnapshots;
+        },
+        get registeredSynchronizers() {
+            return registeredSynchronizers;
+        },
+        get publishedMarker() {
+            return publishedMarker;
         },
         get reindexPolicyResolutionCalls() {
             return reindexPolicyResolutionCalls;
@@ -752,8 +855,8 @@ test("background worker leaves lease release to its launcher", async () => {
         assert.equal(acquired.acquired, true);
         if (!acquired.acquired) return;
 
-        let finishIndexing!: (value: { indexedFiles: number; totalChunks: number; status: "completed" }) => void;
-        const indexing = new Promise<{ indexedFiles: number; totalChunks: number; status: "completed" }>((resolve) => {
+        let finishIndexing!: (value: ReturnType<typeof completedIndexResult>) => void;
+        const indexing = new Promise<ReturnType<typeof completedIndexResult>>((resolve) => {
             finishIndexing = resolve;
         });
         let signalIndexStarted!: () => void;
@@ -779,7 +882,7 @@ test("background worker leaves lease release to its launcher", async () => {
         assert.equal(coordinator.isCurrent(acquired.lease), true);
         assert.equal(indexPublicationRan, true);
 
-        finishIndexing({ indexedFiles: 1, totalChunks: 1, status: "completed" });
+        finishIndexing(completedIndexResult());
         await background;
         assert.equal(coordinator.isCurrent(acquired.lease), true);
         coordinator.release(acquired.lease);
@@ -967,7 +1070,7 @@ test("handleReindexCodebase canonicalizes once before ownership, preflight, and 
 test("background indexing treats watcher touch as best effort after proof", async () => {
     await withTempRepo(async (repoPath) => {
         const harness = createFailedIndexingHarness(new Set(), {
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
             touchWatchedCodebase: async () => {
                 throw new Error("watcher touch failed");
             },
@@ -985,10 +1088,268 @@ test("background indexing treats watcher touch as best effort after proof", asyn
     });
 });
 
+test("background reindex publishes an exact post-index source checkpoint with the new authority", async () => {
+    await withTempRepo(async (repoPath) => {
+        const sourcePath = path.join(repoPath, "index.ts");
+        const staleSynchronizer = new FileSynchronizer(repoPath, [], [".ts"]);
+        await staleSynchronizer.initialize();
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(repoPath);
+        const staleSnapshot = fs.readFileSync(snapshotPath, "utf8");
+        fs.writeFileSync(sourcePath, "export const value = 2;\n", "utf8");
+
+        const harness = createFailedIndexingHarness(new Set(), {
+            indexCodebase: async () => completedIndexResult({ "index.ts": "export const value = 2;\n" }),
+        });
+        await harness.handler.startBackgroundIndexing(repoPath, true);
+
+        const candidateCollection = resolveCollectionName(repoPath);
+        const candidateSnapshotPath = FileSynchronizer.getSnapshotPathForGeneration(repoPath, candidateCollection);
+        assert.equal(fs.readFileSync(snapshotPath, "utf8"), staleSnapshot);
+        assert.equal(fs.existsSync(candidateSnapshotPath), true);
+        const verifier = new FileSynchronizer(repoPath, [], [".ts"], {
+            checkpointIdentity: candidateCollection,
+            checkpointAuthority: {
+                collectionName: candidateCollection,
+                markerRunId: harness.publishedMarker?.runId ?? 'missing-run-id',
+                indexPolicyHash: harness.publishedMarker?.indexPolicyHash ?? 'a'.repeat(64),
+            },
+        });
+        await verifier.initialize(undefined, undefined, { requireExistingCheckpoint: true });
+        const firstFreshnessCheck = await verifier.prepareChanges({ forceFullHash: true });
+        assert.deepEqual(firstFreshnessCheck.changes.added, []);
+        assert.deepEqual(firstFreshnessCheck.changes.removed, []);
+        assert.deepEqual(firstFreshnessCheck.changes.modified, []);
+        assert.equal(harness.indexedSnapshots, 1);
+    });
+});
+
+test("background reindex rejects an ABA source mismatch between indexed bytes and checkpoint", async () => {
+    await withTempRepo(async (repoPath) => {
+        const sourcePath = path.join(repoPath, "index.ts");
+        const baselineSynchronizer = new FileSynchronizer(repoPath, [], [".ts"]);
+        await baselineSynchronizer.initialize();
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(repoPath);
+        const baselineSnapshot = fs.readFileSync(snapshotPath, "utf8");
+        const harness = createFailedIndexingHarness(new Set(), {
+            indexCodebase: async () => {
+                const indexedContent = "export const value = 2;\n";
+                fs.writeFileSync(sourcePath, indexedContent, "utf8");
+                const indexedHash = crypto.createHash("sha256").update(indexedContent).digest("hex");
+                fs.writeFileSync(sourcePath, "export const value = 1;\n", "utf8");
+                return {
+                    indexedFiles: 1,
+                    totalChunks: 1,
+                    status: "completed",
+                    indexedFileHashes: new Map([["index.ts", indexedHash]]),
+                };
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(repoPath, true);
+
+        assert.equal(fs.readFileSync(snapshotPath, "utf8"), baselineSnapshot);
+        assert.equal(harness.indexedSnapshots, 0);
+        assert.equal(harness.failedSnapshots.length, 1);
+        assert.deepEqual(harness.publicationEvents, ["navigation:discard:candidate-generation"]);
+    });
+});
+
+test("background reindex does not publish authority when checkpoint acknowledgement fails after commit", async () => {
+    await withTempRepo(async (repoPath) => {
+        const sourcePath = path.join(repoPath, "index.ts");
+        const baselineSynchronizer = new FileSynchronizer(repoPath, [], [".ts"]);
+        await baselineSynchronizer.initialize();
+        fs.writeFileSync(sourcePath, "export const value = 2;\n", "utf8");
+
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), "checkpoint-commit-ack-leases"),
+            ownerId: "checkpoint-commit-ack-owner",
+        });
+        const acquired = coordinator.acquire(repoPath, "reindex");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+
+        const originalPrepareChanges = FileSynchronizer.prototype.prepareChanges;
+        FileSynchronizer.prototype.prepareChanges = async function prepareWithFailedAcknowledgement(options) {
+            const prepared = await originalPrepareChanges.call(this, options);
+            return {
+                ...prepared,
+                commit: async (...args) => {
+                    const receipt = await prepared.commit(...args);
+                    throw new SynchronizerCheckpointPublicationError(
+                        "checkpoint acknowledgement failed",
+                        receipt,
+                        new Error("checkpoint acknowledgement failed"),
+                    );
+                },
+            };
+        };
+
+        const existingCollections = new Set<string>();
+        const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
+            indexCodebase: async () => completedIndexResult({ "index.ts": "export const value = 2;\n" }),
+        });
+        const candidateCollection = `${resolveCollectionName(repoPath)}__gen_checkpoint_ack`;
+
+        try {
+            await harness.handler.startBackgroundIndexing(
+                repoPath,
+                true,
+                candidateCollection,
+                acquired.lease,
+            );
+        } finally {
+            FileSynchronizer.prototype.prepareChanges = originalPrepareChanges;
+            coordinator.release(acquired.lease);
+        }
+
+        assert.equal(harness.authorityEvents.includes("restore"), false);
+        assert.equal(harness.registeredSynchronizers, 0);
+        assert.deepEqual(harness.publishedSnapshots, []);
+        assert.equal(harness.failedSnapshots.length, 1);
+        assert.deepEqual(harness.publicationEvents, ["navigation:discard:candidate-generation"]);
+        assert.equal(
+            fs.existsSync(FileSynchronizer.getSnapshotPathForGeneration(repoPath, candidateCollection)),
+            false,
+        );
+    });
+});
+
+test("limit_reached indexing publishes no synchronizer checkpoint or ignore signature", async () => {
+    await withTempRepo(async (repoPath) => {
+        let ignoreSignatureWrites = 0;
+        const harness = createFailedIndexingHarness(new Set(), {
+            indexCodebase: async () => partialIndexResult(2),
+            recordCurrentIgnoreControlSignature: async () => {
+                ignoreSignatureWrites += 1;
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(repoPath, false);
+
+        assert.equal(harness.indexedSnapshots, 1);
+        assert.equal(harness.registeredSynchronizers, 0);
+        assert.equal(ignoreSignatureWrites, 0);
+        assert.equal(fs.existsSync(FileSynchronizer.getSnapshotPathForCodebase(repoPath)), false);
+        assert.deepEqual(harness.publicationEvents, ["policy:publish", "marker:limit_reached"]);
+    });
+});
+
+test("background reindex leaves the prior source checkpoint unchanged when authority publication fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const sourcePath = path.join(repoPath, "index.ts");
+        const staleSynchronizer = new FileSynchronizer(repoPath, [], [".ts"]);
+        await staleSynchronizer.initialize();
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(repoPath);
+        const staleSnapshot = fs.readFileSync(snapshotPath, "utf8");
+        fs.writeFileSync(sourcePath, "export const value = 2;\n", "utf8");
+
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), "checkpoint-publication-failure-leases"),
+            ownerId: "checkpoint-publication-failure-owner",
+        });
+        const acquired = coordinator.acquire(repoPath, "reindex");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+        const harness = createFailedIndexingHarness(new Set(), {
+            mutationLeaseCoordinator: coordinator,
+            indexCodebase: async () => completedIndexResult({ "index.ts": "export const value = 2;\n" }),
+            publishNavigationCandidate: async () => {
+                throw new Error("navigation pointer publication failed");
+            },
+        });
+
+        const candidateCollection = `${resolveCollectionName(repoPath)}__gen_candidate`;
+        try {
+            await harness.handler.startBackgroundIndexing(
+                repoPath,
+                true,
+                candidateCollection,
+                acquired.lease,
+            );
+        } finally {
+            coordinator.release(acquired.lease);
+        }
+
+        assert.equal(fs.readFileSync(snapshotPath, "utf8"), staleSnapshot);
+        const verifier = new FileSynchronizer(repoPath, [], [".ts"]);
+        await verifier.initialize();
+        const pending = await verifier.prepareChanges();
+        assert.deepEqual(pending.changes.modified, ["index.ts"]);
+        assert.equal(harness.indexedSnapshots, 0);
+        assert.equal(
+            fs.existsSync(FileSynchronizer.getSnapshotPathForGeneration(repoPath, candidateCollection)),
+            false,
+        );
+    });
+});
+
+test("background reindex retains committed authority when lifecycle acknowledgement fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const sourcePath = path.join(repoPath, "index.ts");
+        const staleSynchronizer = new FileSynchronizer(repoPath, [], [".ts"]);
+        await staleSynchronizer.initialize();
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(repoPath);
+        fs.writeFileSync(sourcePath, "export const value = 2;\n", "utf8");
+
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), "checkpoint-acknowledgement-leases"),
+            ownerId: "checkpoint-acknowledgement-owner",
+        });
+        const acquired = coordinator.acquire(repoPath, "reindex");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+        let checkpointObserved = false;
+        const existingCollections = new Set<string>();
+        const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
+            indexCodebase: async () => completedIndexResult({ "index.ts": "export const value = 2;\n" }),
+            recordCurrentIgnoreControlSignature: async () => {
+                const verifier = new FileSynchronizer(repoPath, [], [".ts"], {
+                    checkpointIdentity: candidateCollection,
+                    checkpointAuthority: {
+                        collectionName: candidateCollection,
+                        markerRunId: harness.publishedMarker?.runId ?? 'missing-run-id',
+                        indexPolicyHash: harness.publishedMarker?.indexPolicyHash ?? 'a'.repeat(64),
+                    },
+                });
+                await verifier.initialize(undefined, undefined, { requireExistingCheckpoint: true });
+                const pending = await verifier.prepareChanges({ forceFullHash: true });
+                checkpointObserved = pending.changes.modified.length === 0;
+                throw new Error("ignore-control acknowledgement failed");
+            },
+        });
+        const candidateCollection = `${resolveCollectionName(repoPath)}__gen_candidate`;
+
+        try {
+            await harness.handler.startBackgroundIndexing(
+                repoPath,
+                true,
+                candidateCollection,
+                acquired.lease,
+            );
+        } finally {
+            coordinator.release(acquired.lease);
+        }
+
+        assert.equal(checkpointObserved, true);
+        assert.equal(existingCollections.has(candidateCollection), true);
+        assert.equal(harness.authorityEvents.includes("restore"), false);
+        assert.equal(harness.publicationEvents.includes("navigation:discard:candidate-generation"), false);
+        assert.deepEqual(harness.publishedSnapshots, [{ status: "completed", collectionName: candidateCollection }]);
+        assert.equal(fs.existsSync(snapshotPath), true);
+        assert.equal(
+            fs.existsSync(FileSynchronizer.getSnapshotPathForGeneration(repoPath, candidateCollection)),
+            true,
+        );
+    });
+});
+
 test("background indexing resolves create policy normally and force reindex policy without persisted authority", async () => {
     await withTempRepo(async (repoPath) => {
         const createHarness = createFailedIndexingHarness(new Set(), {
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
         });
 
         await createHarness.handler.startBackgroundIndexing(repoPath, false);
@@ -997,7 +1358,7 @@ test("background indexing resolves create policy normally and force reindex poli
         assert.equal(createHarness.reindexPolicyResolutionCalls, 0);
 
         const reindexHarness = createFailedIndexingHarness(new Set(), {
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
         });
 
         await reindexHarness.handler.startBackgroundIndexing(repoPath, true);
@@ -1020,7 +1381,7 @@ test("force reindex continues when retired authority prevents optional previous-
                 totalChunks: 1,
             },
             proveVectorGenerationError: new Error("index policy v2 requires reindex"),
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
         });
 
         await harness.handler.startBackgroundIndexing(repoPath, true);
@@ -1036,7 +1397,7 @@ test("background indexing publishes partial custom-policy updates without erasin
         const harness = createFailedIndexingHarness(new Set(), {
             initialCustomExtensions: ['.foo'],
             initialCustomIgnorePatterns: ['private/**'],
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
         });
 
         await harness.handler.startBackgroundIndexing(
@@ -1061,7 +1422,7 @@ test("background indexing preserves the previous proven collection when navigati
         const harness = createFailedIndexingHarness(existingCollections, {
             initialCustomExtensions: ['.foo'],
             initialCustomIgnorePatterns: ['private/**'],
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
             previousIndexedInfo: {
                 status: "indexing",
                 indexedFiles: 3,
@@ -1121,7 +1482,7 @@ test("background indexing restores the sealed previous policy when navigation po
             mutationLeaseCoordinator: coordinator,
             initialCustomExtensions: ['.foo'],
             initialCustomIgnorePatterns: ['private/**'],
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
             previousIndexedInfo: {
                 status: "indexing",
                 indexedFiles: 3,
@@ -1174,7 +1535,7 @@ test("background indexing restores captured absent authority when first navigati
         const existingCollections = new Set<string>();
         const harness = createFailedIndexingHarness(existingCollections, {
             mutationLeaseCoordinator: coordinator,
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
             publishNavigationCandidate: async () => {
                 throw new Error("initial navigation pointer publication failed");
             },
@@ -1221,7 +1582,7 @@ test("background indexing restores captured authority when a committed policy re
         const harness = createFailedIndexingHarness(existingCollections, {
             mutationLeaseCoordinator: coordinator,
             omitPolicyPublicationDocumentDigest: true,
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
             publishNavigationCandidate: async () => {
                 throw new Error("initial navigation pointer publication failed");
             },
@@ -1277,7 +1638,7 @@ test("background indexing restores captured authority for every malformed policy
                 const harness = createFailedIndexingHarness(existingCollections, {
                     mutationLeaseCoordinator: coordinator,
                     policyPublicationDocumentDigest: invalidDigest,
-                    indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+                    indexCodebase: async () => completedIndexResult(),
                     publishNavigationCandidate: async () => {
                         throw new Error("initial navigation pointer publication failed");
                     },
@@ -1307,6 +1668,10 @@ test("background indexing restores captured authority for every malformed policy
 
 test("background indexing restores an existing generation when policy commits before acknowledgement fails", async () => {
     await withTempRepo(async (repoPath) => {
+        const baselineSynchronizer = new FileSynchronizer(repoPath, [], [".ts"]);
+        await baselineSynchronizer.initialize();
+        const checkpointPath = FileSynchronizer.getSnapshotPathForCodebase(repoPath);
+        const checkpointBefore = fs.readFileSync(checkpointPath, "utf8");
         const coordinator = new MutationLeaseCoordinator({
             stateDir: path.join(path.dirname(repoPath), 'ack-existing-rollback-lease-state'),
             ownerId: 'ack-existing-rollback-owner',
@@ -1320,7 +1685,7 @@ test("background indexing restores an existing generation when policy commits be
         const harness = createFailedIndexingHarness(existingCollections, {
             mutationLeaseCoordinator: coordinator,
             initialCustomIgnorePatterns: ['private/**'],
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
             previousIndexedInfo: {
                 status: "indexing",
                 indexedFiles: 3,
@@ -1349,6 +1714,7 @@ test("background indexing restores an existing generation when policy commits be
         assert.deepEqual(harness.authorityEvents, ['capture', 'capture', 'restore']);
         assert.deepEqual(harness.failedSnapshots, []);
         assert.deepEqual(harness.publishedSnapshots, [{ status: 'completed', collectionName: previousCollection }]);
+        assert.equal(fs.readFileSync(checkpointPath, "utf8"), checkpointBefore);
     });
 });
 
@@ -1365,7 +1731,7 @@ test("background indexing restores absent authority when initial policy commits 
         const existingCollections = new Set<string>();
         const harness = createFailedIndexingHarness(existingCollections, {
             mutationLeaseCoordinator: coordinator,
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(),
             failPolicyPublicationAfterCommit: true,
         });
 
@@ -1383,6 +1749,7 @@ test("background indexing restores absent authority when initial policy commits 
         assert.deepEqual(harness.publicationEvents, ['marker:completed', 'policy:publish', 'navigation:discard:candidate-generation']);
         assert.deepEqual(harness.authorityEvents, ['capture', 'capture', 'restore']);
         assert.equal(harness.failedSnapshots.length, 1);
+        assert.equal(fs.existsSync(FileSynchronizer.getSnapshotPathForCodebase(repoPath)), false);
     });
 });
 
@@ -1394,7 +1761,7 @@ test("background indexing does not replace a previous complete generation with l
         const harness = createFailedIndexingHarness(existingCollections, {
             initialCustomExtensions: ['.foo'],
             initialCustomIgnorePatterns: ['private/**'],
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 2, status: "limit_reached" }),
+            indexCodebase: async () => partialIndexResult(2),
             previousIndexedInfo: {
                 status: "indexing",
                 indexedFiles: 3,
@@ -1441,7 +1808,7 @@ test("background indexing preserves a complete generation after it transitions t
         const stagedCollection = `${previousCollection}__gen_partial_after_sync`;
         const existingCollections = new Set([previousCollection]);
         const harness = createFailedIndexingHarness(existingCollections, {
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 2, status: "limit_reached" }),
+            indexCodebase: async () => partialIndexResult(2),
             previousIndexedInfo: {
                 status: "sync_completed",
                 added: 1,
@@ -1530,7 +1897,7 @@ test("startBackgroundIndexing restores captured legacy authority after candidate
                 fingerprintSource: "verified",
                 collectionName: previousCollection,
             },
-            indexCodebase: async () => ({ indexedFiles: 4, totalChunks: 12, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(undefined, { totalChunks: 12 }),
             publishNavigationCandidate: async () => {
                 throw new Error("failure after candidate authority publication");
             },
@@ -1569,7 +1936,7 @@ test("startBackgroundIndexing refuses durable authority rollback without a mutat
                 fingerprintSource: "verified",
                 collectionName: previousCollection,
             },
-            indexCodebase: async () => ({ indexedFiles: 4, totalChunks: 12, status: "completed" }),
+            indexCodebase: async () => completedIndexResult(undefined, { totalChunks: 12 }),
             publishNavigationCandidate: async () => {
                 throw new Error("failure after candidate authority publication");
             },
@@ -1623,7 +1990,7 @@ test("background indexing never restores captured authority after lease loss fol
         const existingCollections = new Set<string>([stagedCollection]);
         const harness = createFailedIndexingHarness(existingCollections, {
             mutationLeaseCoordinator: coordinator,
-            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: 'completed' }),
+            indexCodebase: async () => completedIndexResult(),
             publishNavigationCandidate: async () => {
                 coordinator.release(acquired.lease);
                 throw new Error('candidate publication lost its mutation lease');

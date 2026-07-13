@@ -9,8 +9,6 @@ import {
 } from "@zokizuan/satori-core";
 import type {
     CustomIndexPolicyUpdate,
-    CurrentNavigationGeneration,
-    IndexCompletionMarkerDocument,
     RepairProof,
     RepairSnapshotEvidence,
     ResolvedIndexPolicy,
@@ -67,10 +65,6 @@ type IndexProfileView = {
     profile: string;
     configPath?: string;
 };
-
-function isIndexPolicyDocumentDigest(value: unknown): value is string {
-    return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
-}
 
 function classifyRepairSnapshotEvidence(info: Record<string, unknown> | undefined): RepairSnapshotEvidence {
     const fingerprint = info?.indexFingerprint;
@@ -176,19 +170,6 @@ type ManageIndexingHandlersHost = {
     assertIndexMutationCapabilities(): void;
     mutationLeaseCoordinator: MutationLeaseCoordinator | null;
 };
-
-type ProvenGenerationResolver = {
-    resolveProvenGeneration(codebasePath: string): Promise<{
-        collectionName: string;
-        marker: IndexCompletionMarkerDocument;
-        navigation: CurrentNavigationGeneration | null;
-        policy: ResolvedIndexPolicy;
-    } | null>;
-};
-
-function resolveProvenGeneration(context: Context, codebasePath: string) {
-    return (context as Context & ProvenGenerationResolver).resolveProvenGeneration(codebasePath);
-}
 
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
@@ -839,7 +820,7 @@ export class ManageIndexingHandlers {
                 && Number(previousTotalChunks) >= 0
             ) {
                 try {
-                    const provenGeneration = await resolveProvenGeneration(this.host.context, failurePath);
+                    const provenGeneration = await this.host.context.proveVectorGeneration(failurePath);
                     restorePreviousLifecycle = provenGeneration?.collectionName === previousCollectionName
                         && provenGeneration.marker.indexStatus !== "limit_reached"
                         && provenGeneration.marker.indexedFiles === Number(previousIndexedFiles)
@@ -1298,11 +1279,9 @@ export class ManageIndexingHandlers {
         let lastSaveTime = 0;
         let targetCollectionName: string | undefined;
         let navigationCandidate: import("@zokizuan/satori-core").StagedNavigationSidecarGeneration | undefined;
-        let previousNavigation: import("@zokizuan/satori-core").CurrentNavigationGeneration | null = null;
-        let previousPolicy: ResolvedIndexPolicy | null = null;
         let candidatePolicy: ResolvedIndexPolicy | null = null;
         let candidatePolicyPublished = false;
-        let candidatePolicyDocumentDigest: string | null = null;
+        let candidateAuthorityForRollback: ReturnType<Context['captureDurableIndexAuthority']> | null = null;
         let writingReceiptPublished = false;
         const assertMutationCurrent = mutationLease
             ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease)
@@ -1359,6 +1338,7 @@ export class ManageIndexingHandlers {
             : "";
         const previousIndexedFiles = previousInfo?.indexedFiles;
         const previousTotalChunks = previousInfo?.totalChunks;
+        const previousAuthority = this.host.context.captureDurableIndexAuthority(absolutePath);
         let previousCompleteGeneration = previousInfo?.indexStatus === "completed"
             && previousInfo?.fingerprintSource === "verified"
             && previousFingerprint !== null
@@ -1382,7 +1362,7 @@ export class ManageIndexingHandlers {
             : null;
 
         if (previousCompleteGeneration) {
-            const provenGeneration = await resolveProvenGeneration(this.host.context, absolutePath);
+            const provenGeneration = await this.host.context.proveVectorGeneration(absolutePath);
             if (
                 provenGeneration?.collectionName !== previousCompleteGeneration.collectionName
                 || provenGeneration.marker.indexStatus === "limit_reached"
@@ -1390,9 +1370,6 @@ export class ManageIndexingHandlers {
                 || provenGeneration.marker.totalChunks !== previousCompleteGeneration.totalChunks
             ) {
                 previousCompleteGeneration = null;
-            } else {
-                previousNavigation = provenGeneration.navigation;
-                previousPolicy = provenGeneration.policy;
             }
         }
 
@@ -1424,10 +1401,6 @@ export class ManageIndexingHandlers {
             console.log(`[BACKGROUND-INDEX] Using index profile '${profileConfig.profile}'${profileConfig.configPath ? ` from ${profileConfig.configPath}` : " (default)"}`);
 
             candidatePolicy = await this.host.context.resolveIndexPolicyForCodebase(absolutePath, policyUpdate);
-            if (!previousCompleteGeneration) {
-                previousNavigation = await this.host.context.getCurrentNavigationGeneration(absolutePath).catch(() => null);
-            }
-
             const { FileSynchronizer } = await import("@zokizuan/satori-core");
             const ignorePatterns = candidatePolicy.effectiveIgnorePatterns;
             const supportedExtensions = candidatePolicy.supportedExtensions;
@@ -1526,16 +1499,13 @@ export class ManageIndexingHandlers {
             }
 
             if (stats.status === "limit_reached") {
-                const policyReceipt = this.host.context.publishResolvedIndexPolicy(
+                this.host.context.publishResolvedIndexPolicy(
                     candidatePolicy,
                     { collectionName: targetCollectionName },
                     publishMutation,
                 );
                 candidatePolicyPublished = true;
-                candidatePolicyDocumentDigest = policyReceipt?.operation === "publish"
-                    && isIndexPolicyDocumentDigest(policyReceipt.documentDigest)
-                    ? policyReceipt.documentDigest
-                    : null;
+                candidateAuthorityForRollback = this.host.context.captureDurableIndexAuthority(absolutePath);
                 await this.host.context.publishCompletedIndexMarker(
                     absolutePath,
                     stats.indexedFiles,
@@ -1587,24 +1557,23 @@ export class ManageIndexingHandlers {
                 console.warn(`[BACKGROUND-INDEX] Failed to refresh watcher for '${absolutePath}' after index proof: ${formatUnknownError(watcherError)}`);
             }
             if (stats.status === "completed" && stats.navigationCandidate) {
-                const policyReceipt = this.host.context.publishResolvedIndexPolicy(
+                this.host.context.publishResolvedIndexPolicy(
                     candidatePolicy,
                     {
                         collectionName: targetCollectionName,
                         navigationGenerationId: stats.navigationCandidate.generationId,
+                        navigationSealHash: stats.navigationCandidate.navigationSealHash,
                     },
                     publishMutation,
                 );
                 candidatePolicyPublished = true;
-                candidatePolicyDocumentDigest = policyReceipt?.operation === "publish"
-                    && isIndexPolicyDocumentDigest(policyReceipt.documentDigest)
-                    ? policyReceipt.documentDigest
-                    : null;
+                candidateAuthorityForRollback = this.host.context.captureDurableIndexAuthority(absolutePath);
                 await this.host.context.publishNavigationCandidate(
                     stats.navigationCandidate,
                     assertMutationCurrent,
                     publishMutation,
                 );
+                candidateAuthorityForRollback = this.host.context.captureDurableIndexAuthority(absolutePath);
             }
             persistBackgroundPhase("completed", () => {
                 this.host.snapshotManager.setCodebaseIndexed(absolutePath, stats, this.host.runtimeFingerprint, "verified", targetCollectionName);
@@ -1644,20 +1613,10 @@ export class ManageIndexingHandlers {
 
             if (error instanceof IndexPolicyPublicationError && error.committed) {
                 console.error(
-                    `[BACKGROUND-INDEX] Policy publication for '${absolutePath}' committed before acknowledgement failed; preserving candidate artifacts for the current owner or startup recovery.`,
+                    `[BACKGROUND-INDEX] Policy publication for '${absolutePath}' committed before acknowledgement failed; restoring the captured durable authority.`,
                 );
-                return;
-            }
-
-            if (
-                candidatePolicyPublished
-                && !candidatePolicyDocumentDigest
-                && (!previousPolicy || !previousCompleteGeneration)
-            ) {
-                console.error(
-                    `[BACKGROUND-INDEX] Policy publication for '${absolutePath}' committed without an authoritative document digest; preserving candidate artifacts because the absent prior policy state cannot be safely restored with compare-and-clear.`,
-                );
-                return;
+                candidatePolicyPublished = true;
+                candidateAuthorityForRollback = this.host.context.captureDurableIndexAuthority(absolutePath);
             }
 
             if (mutationLease && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease) === false) {
@@ -1699,44 +1658,28 @@ export class ManageIndexingHandlers {
                     console.warn(`[BACKGROUND-INDEX] Failed to discard navigation candidate '${navigationCandidate.generationId}': ${formatUnknownError(navigationCleanupError)}`);
                 }
             }
-            if (previousNavigation && navigationCandidate) {
-                try {
-                    await this.host.context.restoreNavigationGeneration(
-                        absolutePath,
-                        previousNavigation,
-                        assertMutationCurrent,
-                        publishMutation,
-                    );
-                } catch (navigationRestoreError) {
-                    console.error(`[BACKGROUND-INDEX] Failed to restore previous navigation generation '${previousNavigation.generationId}': ${formatUnknownError(navigationRestoreError)}`);
-                }
-            }
             if (candidatePolicyPublished) {
                 try {
-                    if (previousPolicy && previousCompleteGeneration) {
-                        this.host.context.publishResolvedIndexPolicy(
-                            previousPolicy,
-                            {
-                                collectionName: previousCompleteGeneration.collectionName,
-                                ...(previousNavigation ? { navigationGenerationId: previousNavigation.generationId } : {}),
-                            },
-                            publishMutation,
-                        );
-                    } else {
-                        if (!publishMutation) {
-                            throw new Error(`Cannot restore absent policy state for '${absolutePath}' without a fenced policy mutation.`);
-                        }
-                        if (!candidatePolicyDocumentDigest) {
-                            throw new Error(`Cannot restore absent policy state for '${absolutePath}' without the committed candidate policy document digest.`);
-                        }
-                        this.host.context.clearPublishedIndexPolicy(
-                            absolutePath,
-                            publishMutation,
-                            candidatePolicyDocumentDigest,
-                        );
+                    if (!candidateAuthorityForRollback) {
+                        throw new Error('Cannot restore durable index authority without captured candidate ownership evidence.');
                     }
+                    if (!publishMutation) {
+                        throw new Error('Cannot restore durable index authority without a current mutation fence.');
+                    }
+                    await this.host.context.restoreDurableIndexAuthority(
+                        previousAuthority,
+                        publishMutation,
+                        candidateAuthorityForRollback,
+                        mutationLease
+                            ? {
+                                ownerId: mutationLease.ownerId,
+                                generation: mutationLease.generation,
+                                operationId: mutationLease.operationId,
+                            }
+                            : undefined,
+                    );
                 } catch (policyRestoreError) {
-                    console.error(`[BACKGROUND-INDEX] Failed to restore previous index policy state for '${absolutePath}': ${formatUnknownError(policyRestoreError)}`);
+                    console.error(`[BACKGROUND-INDEX] Failed to restore previous durable index authority for '${absolutePath}': ${formatUnknownError(policyRestoreError)}`);
                 }
             }
             assertMutationCurrent?.();

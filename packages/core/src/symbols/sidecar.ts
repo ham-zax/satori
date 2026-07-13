@@ -127,11 +127,12 @@ export interface WriteNavigationSidecarGenerationResult extends WriteSymbolRegis
 export interface StagedNavigationSidecarGeneration extends WriteNavigationSidecarGenerationResult {
     normalizedRootPath: string;
     relationshipManifestHash: string;
+    navigationSealHash: string;
 }
 
 export type NavigationGenerationPointerCandidate = Pick<
     StagedNavigationSidecarGeneration,
-    'rootPath' | 'normalizedRootPath' | 'generationId' | 'manifestHash' | 'relationshipManifestHash'
+    'rootPath' | 'normalizedRootPath' | 'generationId' | 'manifestHash' | 'relationshipManifestHash' | 'navigationSealHash'
 >;
 
 export interface CurrentNavigationGeneration {
@@ -139,6 +140,7 @@ export interface CurrentNavigationGeneration {
     generationRoot: string;
     symbolRegistryManifestHash: string;
     relationshipManifestHash: string;
+    navigationSealHash?: string;
 }
 
 export type ReadNavigationGenerationSealResult =
@@ -246,6 +248,38 @@ function serializeJson(value: unknown): string {
 
 function hashSerializedJson(value: unknown): string {
     return crypto.createHash('sha256').update(serializeJson(value), 'utf8').digest('hex');
+}
+
+export function computeNavigationGenerationSealHash(seal: NavigationGenerationSeal): string {
+    return hashSerializedJson(seal);
+}
+
+function buildNavigationSymbolQualityAggregate(registry: SymbolRegistry): NavigationSymbolQualityAggregate {
+    const nonFileSymbolsByPath = new Map<string, number>();
+    for (const symbol of registry.symbols) {
+        if (symbol.kind !== 'file') {
+            nonFileSymbolsByPath.set(symbol.file, (nonFileSymbolsByPath.get(symbol.file) ?? 0) + 1);
+        }
+    }
+    const languageStats = new Map<string, NavigationSymbolQualityAggregate['languages'][number]>();
+    for (const file of registry.manifest.files) {
+        const language = file.language.trim().toLowerCase() || 'unknown';
+        const stats = languageStats.get(language) ?? {
+            language,
+            indexedFiles: 0,
+            filesWithNonFileSymbols: 0,
+            nonFileSymbolCount: 0,
+        };
+        const nonFileSymbolCount = nonFileSymbolsByPath.get(file.path) ?? 0;
+        stats.indexedFiles += 1;
+        stats.filesWithNonFileSymbols += nonFileSymbolCount > 0 ? 1 : 0;
+        stats.nonFileSymbolCount += nonFileSymbolCount;
+        languageStats.set(language, stats);
+    }
+    return {
+        indexedFileCount: registry.manifest.files.length,
+        languages: [...languageStats.values()].sort((left, right) => compareStrings(left.language, right.language)),
+    };
 }
 
 function uniqueSidecarEntryName(kind: string): string {
@@ -529,6 +563,7 @@ async function publishCurrentGenerationPointer(
         generationId: string;
         symbolRegistryManifestHash: string;
         relationshipManifestHash: string;
+        navigationSealHash?: string;
     },
     beforePublish?: () => void,
     publishMutation?: (publish: () => void) => void,
@@ -621,44 +656,16 @@ export async function stageNavigationSidecarGeneration(
             ...symbolIndex.files.map((file) => ({ path: file.shardPath, hash: file.shardHash })),
             ...relationshipManifest.files.map((file) => ({ path: file.shardPath, hash: file.shardHash })),
         ].sort((left, right) => compareStrings(left.path, right.path));
-        const nonFileSymbolsByPath = new Map<string, number>();
-        for (const symbol of input.registry.symbols) {
-            if (symbol.kind !== 'file') {
-                nonFileSymbolsByPath.set(symbol.file, (nonFileSymbolsByPath.get(symbol.file) ?? 0) + 1);
-            }
-        }
-        const languageStats = new Map<string, {
-            language: string;
-            indexedFiles: number;
-            filesWithNonFileSymbols: number;
-            nonFileSymbolCount: number;
-        }>();
-        for (const file of input.registry.manifest.files) {
-            const language = file.language.trim().toLowerCase() || 'unknown';
-            const stats = languageStats.get(language) ?? {
-                language,
-                indexedFiles: 0,
-                filesWithNonFileSymbols: 0,
-                nonFileSymbolCount: 0,
-            };
-            const nonFileSymbolCount = nonFileSymbolsByPath.get(file.path) ?? 0;
-            stats.indexedFiles += 1;
-            stats.filesWithNonFileSymbols += nonFileSymbolCount > 0 ? 1 : 0;
-            stats.nonFileSymbolCount += nonFileSymbolCount;
-            languageStats.set(language, stats);
-        }
         const seal: NavigationGenerationSeal = {
             schemaVersion: NAVIGATION_GENERATION_SEAL_SCHEMA_VERSION,
             generationId,
             symbolRegistryManifestHash: symbolResult.manifestHash,
             relationshipManifestHash: relationshipResult.manifestHash,
             artifactSetHash: hashSerializedJson(artifactSet),
-            symbolQuality: {
-                indexedFileCount: input.registry.manifest.files.length,
-                languages: [...languageStats.values()].sort((left, right) => compareStrings(left.language, right.language)),
-            },
+            symbolQuality: buildNavigationSymbolQualityAggregate(input.registry),
         };
         await writeJson(path.join(generationRoot, NAVIGATION_GENERATION_SEAL_FILE_NAME), seal);
+        const navigationSealHash = computeNavigationGenerationSealHash(seal);
 
         return {
             rootPath,
@@ -670,6 +677,7 @@ export async function stageNavigationSidecarGeneration(
             relationshipManifestHash: relationshipResult.manifestHash,
             relationshipCount: relationshipResult.relationshipCount,
             relationshipFileShardCount: relationshipResult.fileShardCount,
+            navigationSealHash,
         };
     } finally {
         await fs.promises.rm(buildStateRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -687,6 +695,7 @@ export async function publishNavigationSidecarGeneration(
             generationId: candidate.generationId,
             symbolRegistryManifestHash: candidate.manifestHash,
             relationshipManifestHash: candidate.relationshipManifestHash,
+            navigationSealHash: candidate.navigationSealHash,
         },
         options.beforePublish,
         options.publishMutation,
@@ -892,19 +901,22 @@ function isCurrentGenerationPointer(value: unknown): value is {
     generationId: string;
     symbolRegistryManifestHash: string;
     relationshipManifestHash: string;
+    navigationSealHash?: string;
 } {
     return isRecord(value)
         && value.schemaVersion === CURRENT_GENERATION_SCHEMA_VERSION
         && isNonEmptyString(value.generationId)
         && /^[a-zA-Z0-9_-]+$/.test(value.generationId)
         && isNonEmptyString(value.symbolRegistryManifestHash)
-        && isNonEmptyString(value.relationshipManifestHash);
+        && isNonEmptyString(value.relationshipManifestHash)
+        && (value.navigationSealHash === undefined
+            || (typeof value.navigationSealHash === 'string' && /^[a-f0-9]{64}$/.test(value.navigationSealHash)));
 }
 
-function isNavigationGenerationSeal(value: unknown): value is NavigationGenerationSeal {
-    if (!isRecord(value)) return false;
+export function parseNavigationGenerationSeal(value: unknown): NavigationGenerationSeal | null {
+    if (!isRecord(value)) return null;
     const quality = value.symbolQuality;
-    return value.schemaVersion === NAVIGATION_GENERATION_SEAL_SCHEMA_VERSION
+    const structurallyValid = value.schemaVersion === NAVIGATION_GENERATION_SEAL_SCHEMA_VERSION
         && isNonEmptyString(value.generationId)
         && /^[a-zA-Z0-9_-]+$/.test(value.generationId)
         && typeof value.symbolRegistryManifestHash === 'string'
@@ -921,7 +933,20 @@ function isNavigationGenerationSeal(value: unknown): value is NavigationGenerati
             && isNonNegativeInteger(entry.indexedFiles)
             && isNonNegativeInteger(entry.filesWithNonFileSymbols)
             && entry.filesWithNonFileSymbols <= entry.indexedFiles
-            && isNonNegativeInteger(entry.nonFileSymbolCount));
+            && isNonNegativeInteger(entry.nonFileSymbolCount)
+            && entry.nonFileSymbolCount >= entry.filesWithNonFileSymbols);
+    if (!structurallyValid || !isRecord(quality) || !Array.isArray(quality.languages)) return null;
+    let indexedFileTotal = 0;
+    let previousLanguage: string | null = null;
+    for (const rawEntry of quality.languages) {
+        const entry = rawEntry as NavigationSymbolQualityAggregate['languages'][number];
+        if (previousLanguage !== null && compareStrings(previousLanguage, entry.language) >= 0) return null;
+        previousLanguage = entry.language;
+        indexedFileTotal += entry.indexedFiles;
+        if (!Number.isSafeInteger(indexedFileTotal)) return null;
+    }
+    if (indexedFileTotal !== quality.indexedFileCount) return null;
+    return value as unknown as NavigationGenerationSeal;
 }
 
 export async function readNavigationGenerationSeal(
@@ -936,6 +961,9 @@ export async function readNavigationGenerationSeal(
         return { status: 'corrupt', rootPath, reason: error instanceof Error ? error.message : String(error) };
     }
     if (!generation) return { status: 'missing', rootPath, reason: 'navigation generation pointer is missing' };
+    if (!generation.navigationSealHash) {
+        return { status: 'incompatible', rootPath, reason: 'navigation generation predates seal binding' };
+    }
     let value: unknown;
     try {
         value = await readJson(path.join(generation.generationRoot, NAVIGATION_GENERATION_SEAL_FILE_NAME));
@@ -944,17 +972,58 @@ export async function readNavigationGenerationSeal(
             ? { status: 'missing', rootPath, reason: 'navigation generation seal is missing' }
             : { status: 'corrupt', rootPath, reason: error instanceof Error ? error.message : String(error) };
     }
-    if (!isNavigationGenerationSeal(value)) {
+    const seal = parseNavigationGenerationSeal(value);
+    if (!seal) {
         return { status: 'corrupt', rootPath, reason: 'navigation generation seal is invalid' };
     }
     if (
-        value.generationId !== generation.generationId
-        || value.symbolRegistryManifestHash !== generation.symbolRegistryManifestHash
-        || value.relationshipManifestHash !== generation.relationshipManifestHash
+        seal.generationId !== generation.generationId
+        || seal.symbolRegistryManifestHash !== generation.symbolRegistryManifestHash
+        || seal.relationshipManifestHash !== generation.relationshipManifestHash
+        || computeNavigationGenerationSealHash(seal) !== generation.navigationSealHash
     ) {
         return { status: 'incompatible', rootPath, reason: 'navigation generation seal does not match current pointer' };
     }
-    return { status: 'ok', rootPath, seal: value };
+    return { status: 'ok', rootPath, seal };
+}
+
+export async function verifyNavigationGenerationSealArtifacts(input: {
+    stateRoot?: string;
+    normalizedRootPath: string;
+    registry: SymbolRegistry;
+    relationshipManifest: RelationshipManifest;
+}): Promise<ReadNavigationGenerationSealResult> {
+    const sealRead = await readNavigationGenerationSeal(input.stateRoot, input.normalizedRootPath);
+    if (sealRead.status !== 'ok') return sealRead;
+    const generation = await resolveCurrentNavigationGeneration(input.stateRoot, input.normalizedRootPath);
+    if (!generation) {
+        return { status: 'missing', rootPath: sealRead.rootPath, reason: 'navigation generation pointer is missing' };
+    }
+    let symbolIndex: unknown;
+    try {
+        symbolIndex = await readJson(path.join(generation.generationRoot, SYMBOLS_DIR_NAME, 'index.json'));
+    } catch (error) {
+        return { status: 'corrupt', rootPath: sealRead.rootPath, reason: error instanceof Error ? error.message : String(error) };
+    }
+    if (!isSymbolIndexFile(symbolIndex) || !isRelationshipManifest(input.relationshipManifest)) {
+        return { status: 'corrupt', rootPath: sealRead.rootPath, reason: 'navigation artifact manifests are invalid' };
+    }
+    const artifactSet = [
+        ...symbolIndex.files.map((file) => ({ path: file.shardPath, hash: file.shardHash })),
+        ...input.relationshipManifest.files.map((file) => ({ path: file.shardPath, hash: file.shardHash })),
+    ].sort((left, right) => compareStrings(left.path, right.path));
+    const expectedSeal: NavigationGenerationSeal = {
+        schemaVersion: NAVIGATION_GENERATION_SEAL_SCHEMA_VERSION,
+        generationId: generation.generationId,
+        symbolRegistryManifestHash: generation.symbolRegistryManifestHash,
+        relationshipManifestHash: generation.relationshipManifestHash,
+        artifactSetHash: hashSerializedJson(artifactSet),
+        symbolQuality: buildNavigationSymbolQualityAggregate(input.registry),
+    };
+    if (computeNavigationGenerationSealHash(expectedSeal) !== computeNavigationGenerationSealHash(sealRead.seal)) {
+        return { status: 'incompatible', rootPath: sealRead.rootPath, reason: 'navigation generation seal does not match validated artifacts' };
+    }
+    return sealRead;
 }
 
 export async function resolveCurrentNavigationGeneration(
@@ -987,6 +1056,7 @@ export async function resolveCurrentNavigationGeneration(
         generationRoot,
         symbolRegistryManifestHash: rawPointer.symbolRegistryManifestHash,
         relationshipManifestHash: rawPointer.relationshipManifestHash,
+        ...(rawPointer.navigationSealHash ? { navigationSealHash: rawPointer.navigationSealHash } : {}),
     };
 }
 

@@ -128,7 +128,12 @@ type ToolHandlersTestOverrides = {
     getChangedFilesForCodebase: (repoPath: string) => ChangedFilesState;
     parseGitStatusChangedPaths: (status: string) => Set<string>;
     changedFilesCache: Map<string, ChangedFilesCacheEntry>;
-    validateCompletionProof: () => Promise<{ outcome: string; reason?: string }>;
+    validateCompletionProof: () => Promise<{
+        outcome: string;
+        reason?: string;
+        navigationStatus?: string;
+        generationReceipt?: unknown;
+    }>;
     probeLocalSearchCollectionState: (codebasePath: string) => Promise<{ state: string; collectionName?: string }>;
     sortGroupedSearchResults: (grouped: SortableGroupedSearchResult[], debug: boolean) => boolean;
 };
@@ -465,7 +470,8 @@ function createHandlers(
 ) {
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-        semanticSearch: async () => searchResults
+        semanticSearch: async () => searchResults,
+        semanticSearchInProvenGeneration: async () => searchResults,
     } as unknown as HandlerContext;
 
     const snapshotManager = {
@@ -529,8 +535,71 @@ function createHandlers(
         reranker || null,
         options?.gitignoreForceReloadEveryN
     );
+    (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({
+        outcome: 'valid',
+        navigationStatus: 'valid',
+        generationReceipt: {
+            navigation: { navigationSealHash: 'a'.repeat(64) },
+        },
+    });
     return handlers;
 }
+
+test('handleSearchCode does not use registry navigation when valid completion proof omits navigation evidence', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/legacy.ts';
+            const content = 'export function orphanedRegistryOwner() { return true; }\n';
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{
+                    content: content.trim(),
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function orphanedRegistryOwner()',
+                    breadcrumbs: ['function orphanedRegistryOwner()'],
+                }],
+            });
+            const handlers = createHandlers(repoPath, [{
+                content: 'return true;',
+                relativePath,
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                score: 0.99,
+            }]);
+            (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({
+                outcome: 'valid',
+            });
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'orphanedRegistryOwner',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debugMode: 'ranking',
+            });
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0]?.target?.symbolId, undefined);
+            assert.notEqual(payload.hints?.debugSearch?.exactRegistry?.status, 'hit');
+            assert.ok(payload.warnings?.some(
+                (warning: { code?: string }) => warning.code === 'NAVIGATION_REPAIR_REQUIRED',
+            ));
+            const repairWarning = payload.warnings?.find(
+                (warning: { code?: string }) => warning.code === 'NAVIGATION_REPAIR_REQUIRED',
+            );
+            assert.match(repairWarning?.action ?? '', /^Run manage_index repair/i);
+        });
+    });
+});
 
 function parseSemanticSearchInvocation(args: unknown[]): ParsedSemanticSearchInvocation {
     if (args.length === 1 && args[0] && typeof args[0] === 'object') {
@@ -613,6 +682,34 @@ test('handleSearchCode semantic path publishes closed debug projections for ever
                 query: 'where is session validation handled',
                 scope: 'runtime',
                 resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                ...(mode === 'none' ? {} : { debugMode: mode }),
+            });
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assertClosedDebugProjection(payload, mode);
+        }
+    });
+});
+
+test('handleSearchCode raw semantic path publishes closed debug projections for every mode', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+        }]);
+        for (const mode of ['none', 'summary', 'ranking', 'freshness', 'full'] as const) {
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'where is session validation handled',
+                scope: 'runtime',
+                resultMode: 'raw',
                 groupBy: 'symbol',
                 limit: 5,
                 ...(mode === 'none' ? {} : { debugMode: mode }),
@@ -7487,9 +7584,15 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
         assert.ok(Array.isArray(payload.warnings));
-        assert.equal(payload.warnings[0].code, 'SEARCH_PASS_FAILED:expanded');
-        assert.equal(payload.warnings[0].severity, 'degraded');
-        assert.match(payload.warnings[0].message, /expanded semantic search pass failed/);
+        assert.deepEqual(warningCodes(payload), [
+            'NAVIGATION_REPAIR_REQUIRED',
+            'SEARCH_PASS_FAILED:expanded'
+        ]);
+        const passWarning = payload.warnings.find(
+            (warning: { code?: string }) => warning.code === 'SEARCH_PASS_FAILED:expanded'
+        );
+        assert.equal(passWarning?.severity, 'degraded');
+        assert.match(passWarning?.message ?? '', /expanded semantic search pass failed/);
     });
 });
 
@@ -7697,8 +7800,14 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
             assert.equal(payload.results.length, 1);
             assert.equal(payload.results[0].target.symbolId, undefined);
             assert.equal(payload.results[0].target.file, 'src/primary.ts');
-            assert.deepEqual(warningCodes(payload), ['SEARCH_PASS_FAILED:expanded']);
-            assert.equal(payload.warnings[0].severity, 'degraded');
+            assert.deepEqual(warningCodes(payload), [
+                'NAVIGATION_REPAIR_REQUIRED',
+                'SEARCH_PASS_FAILED:expanded'
+            ]);
+            const passWarning = payload.warnings.find(
+                (warning: { code?: string }) => warning.code === 'SEARCH_PASS_FAILED:expanded'
+            );
+            assert.equal(passWarning?.severity, 'degraded');
             assert.equal(response.meta?.searchDiagnostics?.searchPassFailureCount, 1);
         });
     });
@@ -7770,7 +7879,7 @@ test('handleSearchCode ignores fault injection env outside test mode', { concurr
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
             assert.equal(payload.results.length, 2);
-            assert.equal(payload.warnings, undefined);
+            assert.deepEqual(warningCodes(payload), ['NAVIGATION_REPAIR_REQUIRED']);
             assert.equal(response.meta?.searchDiagnostics?.searchPassFailureCount, 0);
         });
     });

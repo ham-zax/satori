@@ -85,6 +85,8 @@ type FinalizeSearchResultsInput = {
     searchSymbolRegistry?: SymbolRegistry;
     searchSymbolRegistryManifestHash?: string;
     execution: Extract<SearchExecutionOutcome, { kind: "ok" }>;
+    navigationAuthority: "valid" | "unavailable";
+    navigationStatus?: "valid" | "not_bound" | "missing" | "incompatible" | "corrupt" | "unverified";
 };
 
 export type SearchResultFinalizationHost = {
@@ -321,11 +323,18 @@ export async function finalizeSearchResults(
 
     const needsRegistryRepair = input.groupBy === "symbol"
         && scored.some((candidate) => !candidate.result.ownerSymbolKey || !candidate.result.ownerSymbolInstanceId);
-    let searchSymbolRegistry = input.searchSymbolRegistry;
-    let searchSymbolRegistryManifestHash = input.searchSymbolRegistryManifestHash;
-    let searchSymbolRegistryUnavailableReason: CallGraphUnavailableReason | undefined;
+    let searchSymbolRegistry = input.navigationAuthority === "valid" ? input.searchSymbolRegistry : undefined;
+    let searchSymbolRegistryManifestHash = input.navigationAuthority === "valid"
+        ? input.searchSymbolRegistryManifestHash
+        : undefined;
+    let searchSymbolRegistryUnavailableReason: CallGraphUnavailableReason | undefined =
+        input.navigationAuthority === "valid"
+            ? undefined
+            : input.navigationStatus === "missing"
+                ? "missing_symbol_registry"
+                : "incompatible_symbol_registry";
 
-    if (input.groupBy === "symbol" && !searchSymbolRegistry) {
+    if (input.navigationAuthority === "valid" && input.groupBy === "symbol" && !searchSymbolRegistry) {
         const registryState = await host.measureSearchPhase(
             "registryLoad",
             () => host.loadRegistryManifest(input.effectiveRoot),
@@ -355,14 +364,20 @@ export async function finalizeSearchResults(
         }
     }
 
-    const callGraphNavigationState = await host.measureSearchPhase(
-        "navigationValidation",
-        () => host.loadRegistryValidatedCallGraphSidecar({
-            codebaseRoot: input.effectiveRoot,
-            registryManifestHash: searchSymbolRegistryManifestHash,
-            registryUnavailableReason: searchSymbolRegistryUnavailableReason,
-        }),
-    );
+    const callGraphNavigationState = input.navigationAuthority === "valid"
+        ? await host.measureSearchPhase(
+            "navigationValidation",
+            () => host.loadRegistryValidatedCallGraphSidecar({
+                codebaseRoot: input.effectiveRoot,
+                registryManifestHash: searchSymbolRegistryManifestHash,
+                registryUnavailableReason: searchSymbolRegistryUnavailableReason,
+            }),
+        )
+        : {
+            relationshipReady: false,
+            relationshipUnavailableReason: searchSymbolRegistryUnavailableReason
+                ?? "incompatible_symbol_registry",
+        };
     if (callGraphNavigationState.warning) {
         searchWarnings.push(`SEARCH_${callGraphNavigationState.warning}`);
         finalizedSearchWarnings = Array.from(new Set(searchWarnings)).sort();
@@ -389,7 +404,9 @@ export async function finalizeSearchResults(
         previewMaxBytes: SEARCH_GROUP_PREVIEW_MAX_BYTES,
         navigationHelpers: host.getSearchNavigationHelpers(),
         parseIndexedAtMs: (indexedAt?: string) => host.parseIndexedAtMs(indexedAt),
-        resolveOwner: (result) => host.resolveSearchOwnerFromRegistry(result as SearchResultLike, searchSymbolRegistry, input.queryPlan),
+        resolveOwner: (result) => input.navigationAuthority === "valid"
+            ? host.resolveSearchOwnerFromRegistry(result as SearchResultLike, searchSymbolRegistry, input.queryPlan)
+            : {},
     });
 
     if (groupedSearchResults.warnings.length > 0) {

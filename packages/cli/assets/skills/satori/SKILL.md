@@ -37,6 +37,7 @@ Satori exposes exactly six MCP tools:
 - Pass the user's requested path; if Satori resolves an indexed parent, use the returned `codebaseRoot` for result navigation.
 - Treat `warnings[]` as usable-but-degraded results unless `blocksUse=true`; read each warning's `action` before deciding whether to sync, narrow, or verify.
 - `NAVIGATION_REPAIR_REQUIRED` means vector completion evidence remains valid but local symbol/relationship sidecars are missing, corrupt, or incompatible; run `manage_index(action="repair")`, not reindex, to rebuild local navigation.
+- Indexes created before navigation-seal publication may remain vector-searchable while navigation is reported incompatible/unverified; use the same `manage_index(action="repair")` route to publish sealed local navigation.
 - Grouped `formatVersion: 2` results contain canonical facts, not per-result tool calls: inspect `target`, `quality`, `navigation.graph`, required graph-ready `navigation.inbound="verify"`, and optional `callerSearchTerm`.
 - Use `debugMode=summary|ranking|freshness|full` only when the corresponding diagnostics are required. Existing `debug=true` selects `full`. Inspect `hints.debugSummary` before deeper `debugSearch` evidence.
 

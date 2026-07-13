@@ -91,6 +91,7 @@ type SearchExactFastPathInput = {
     dirtyFilesNotFreshened: boolean;
     rankingProvenance: SearchDebugHint["rankingProvenance"];
     previewMaxBytes: number;
+    navigationAuthority: "valid" | "unavailable";
 };
 
 type SearchExactFastPathHandled = {
@@ -166,6 +167,19 @@ export async function runExactRegistryFastPath(
     if (!eligible) {
         return {
             kind: "continue",
+            exactRegistryFallbackForTrackedLexical: false,
+        };
+    }
+    if (input.navigationAuthority !== "valid") {
+        return {
+            kind: "continue",
+            exactRegistryDebug: {
+                attempted: false,
+                status: "miss",
+                reason: "navigation_unavailable",
+                inspectedSymbolCount: 0,
+                filteredSymbolCount: 0,
+            },
             exactRegistryFallbackForTrackedLexical: false,
         };
     }

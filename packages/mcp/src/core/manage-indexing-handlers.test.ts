@@ -265,11 +265,13 @@ function createFailedIndexingHarness(
         failPolicyPublicationAfterCommit?: boolean;
         omitPolicyPublicationDocumentDigest?: boolean;
         policyPublicationDocumentDigest?: string;
+        legacyRollback?: boolean;
     } = {},
 ) {
     const droppedCollections: string[] = [];
     const failedSnapshots: Array<{ path: string; errorMessage: string; progress?: number }> = [];
     const publicationEvents: string[] = [];
+    const authorityEvents: string[] = [];
     const clearedExpectedDocumentDigests: Array<string | undefined> = [];
     let publishedCustomExtensions = [...(options.initialCustomExtensions ?? [])];
     let publishedCustomIgnorePatterns = [...(options.initialCustomIgnorePatterns ?? [])];
@@ -347,6 +349,23 @@ function createFailedIndexingHarness(
                 publicationEvents.push('policy:clear');
             });
         },
+        captureDurableIndexAuthority: () => {
+            authorityEvents.push('capture');
+            return {
+                canonicalRoot: '/test/repo',
+                policyDocument: { content: '{"legacyPolicy":true}', digest: 'b'.repeat(64) },
+                navigationPointer: { content: '{"legacyPointer":true}', digest: 'c'.repeat(64) },
+                testPolicy: {
+                    customExtensions: [...publishedCustomExtensions],
+                    customIgnorePatterns: [...publishedCustomIgnorePatterns],
+                },
+            };
+        },
+        restoreDurableIndexAuthority: async (snapshot: { testPolicy?: { customExtensions: string[]; customIgnorePatterns: string[] } }) => {
+            authorityEvents.push('restore');
+            publishedCustomExtensions = [...(snapshot.testPolicy?.customExtensions ?? [])];
+            publishedCustomIgnorePatterns = [...(snapshot.testPolicy?.customIgnorePatterns ?? [])];
+        },
         getCurrentNavigationGeneration: async () => null,
         restoreNavigationGeneration: async () => {
             publicationEvents.push('navigation:restore');
@@ -416,6 +435,7 @@ function createFailedIndexingHarness(
             }
             : null,
         resolveProvenGeneration: async (root: string) => {
+            if (options.legacyRollback) return null;
             if (!options.previousIndexedInfo || typeof options.previousIndexedInfo.collectionName !== 'string') return null;
             return {
                 collectionName: options.previousIndexedInfo.collectionName,
@@ -431,6 +451,33 @@ function createFailedIndexingHarness(
                     indexStatus: options.previousIndexedInfo.indexStatus === 'limit_reached' ? 'limit_reached' as const : 'completed' as const,
                 },
                 navigation: null,
+                policy: {
+                    canonicalRoot: path.resolve(root),
+                    profile: 'default' as const,
+                    customExtensions: [...publishedCustomExtensions],
+                    customIgnorePatterns: [...publishedCustomIgnorePatterns],
+                    fileBasedIgnorePatterns: [],
+                    supportedExtensions: ['.ts', ...publishedCustomExtensions],
+                    effectiveIgnorePatterns: [...publishedCustomIgnorePatterns],
+                    policyHash: 'policy-hash',
+                },
+            };
+        },
+        proveVectorGeneration: async (root: string) => {
+            if (!options.previousIndexedInfo || typeof options.previousIndexedInfo.collectionName !== 'string') return null;
+            return {
+                collectionName: options.previousIndexedInfo.collectionName,
+                marker: {
+                    kind: 'satori_index_completion_v2',
+                    codebasePath: 'repo',
+                    fingerprint: RUNTIME_FINGERPRINT,
+                    indexedFiles: Number(options.previousIndexedInfo.indexedFiles ?? 0),
+                    totalChunks: Number(options.previousIndexedInfo.totalChunks ?? 0),
+                    completedAt: new Date(0).toISOString(),
+                    runId: 'test-run',
+                    indexPolicyHash: 'policy-hash',
+                    indexStatus: 'completed' as const,
+                },
                 policy: {
                     canonicalRoot: path.resolve(root),
                     profile: 'default' as const,
@@ -494,6 +541,7 @@ function createFailedIndexingHarness(
         },
         publishedSnapshots,
         publicationEvents,
+        authorityEvents,
         clearedExpectedDocumentDigests,
         get publishedCustomExtensions() {
             return publishedCustomExtensions;
@@ -539,6 +587,15 @@ function createIndexLaunchHarness(
                     indexStatus: 'completed',
                 },
                 navigation: null,
+            } : null,
+            proveVectorGeneration: async () => options.initialIndexed ? {
+                collectionName: resolveCollectionName(repoPath),
+                marker: {
+                    kind: 'satori_index_completion_v2',
+                    indexedFiles: 3,
+                    totalChunks: 9,
+                    indexStatus: 'completed',
+                },
             } : null,
             getActiveIndexedCollectionName: async () => options.initialIndexed ? resolveCollectionName(repoPath) : null,
             getIndexCompletionMarker: async () => options.initialIndexed ? {
@@ -976,10 +1033,18 @@ test("background indexing preserves the previous proven collection when navigati
 
 test("background indexing restores the sealed previous policy when navigation pointer publication fails", async () => {
     await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'sealed-rollback-lease-state'),
+            ownerId: 'sealed-rollback-owner',
+        });
+        const acquired = coordinator.acquire(repoPath, 'reindex');
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
         const previousCollection = resolveCollectionName(repoPath);
         const stagedCollection = `${previousCollection}__gen_candidate`;
         const existingCollections = new Set([previousCollection]);
         const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
             initialCustomExtensions: ['.foo'],
             initialCustomIgnorePatterns: ['private/**'],
             indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
@@ -1001,7 +1066,7 @@ test("background indexing restores the sealed previous policy when navigation po
             repoPath,
             true,
             stagedCollection,
-            undefined,
+            acquired.lease,
             undefined,
             { customIgnorePatterns: ['generated/**'] },
         );
@@ -1015,14 +1080,14 @@ test("background indexing restores the sealed previous policy when navigation po
             'policy:publish',
             'navigation:publish:candidate-generation',
             'navigation:discard:candidate-generation',
-            'policy:publish',
         ]);
+        assert.deepEqual(harness.authorityEvents, ['capture', 'capture', 'restore']);
         assert.deepEqual(harness.publishedSnapshots, [{ status: 'completed', collectionName: previousCollection }]);
         assert.deepEqual(harness.failedSnapshots, []);
     });
 });
 
-test("background indexing restores absent policy state when first navigation publication fails", async () => {
+test("background indexing restores captured absent authority when first navigation publication fails", async () => {
     await withTempRepo(async (repoPath) => {
         const coordinator = new MutationLeaseCoordinator({
             stateDir: path.join(path.dirname(repoPath), "initial-policy-rollback-leases"),
@@ -1057,18 +1122,18 @@ test("background indexing restores absent policy state when first navigation pub
         assert.equal(existingCollections.has(collectionName), false);
         assert.deepEqual(harness.publishedCustomExtensions, []);
         assert.deepEqual(harness.publishedCustomIgnorePatterns, []);
-        assert.deepEqual(harness.clearedExpectedDocumentDigests, ['a'.repeat(64)]);
+        assert.deepEqual(harness.clearedExpectedDocumentDigests, []);
         assert.deepEqual(harness.publicationEvents, [
             'marker:completed',
             'policy:publish',
             'navigation:publish:candidate-generation',
             'navigation:discard:candidate-generation',
-            'policy:clear',
         ]);
+        assert.deepEqual(harness.authorityEvents, ['capture', 'capture', 'restore']);
     });
 });
 
-test("background indexing preserves candidate artifacts when a committed policy receipt lacks its digest", async () => {
+test("background indexing restores captured authority when a committed policy receipt lacks its digest", async () => {
     await withTempRepo(async (repoPath) => {
         const coordinator = new MutationLeaseCoordinator({
             stateDir: path.join(path.dirname(repoPath), "missing-policy-digest-leases"),
@@ -1101,19 +1166,21 @@ test("background indexing preserves candidate artifacts when a committed policy 
             coordinator.release(acquired.lease);
         }
 
-        assert.equal(existingCollections.has(collectionName), true);
-        assert.deepEqual(harness.publishedCustomIgnorePatterns, ['generated/**']);
+        assert.equal(existingCollections.has(collectionName), false);
+        assert.deepEqual(harness.publishedCustomIgnorePatterns, []);
         assert.deepEqual(harness.clearedExpectedDocumentDigests, []);
         assert.deepEqual(harness.publicationEvents, [
             'marker:completed',
             'policy:publish',
             'navigation:publish:candidate-generation',
+            'navigation:discard:candidate-generation',
         ]);
-        assert.deepEqual(harness.failedSnapshots, []);
+        assert.deepEqual(harness.authorityEvents, ['capture', 'capture', 'restore']);
+        assert.equal(harness.failedSnapshots.length, 1);
     });
 });
 
-test("background indexing preserves candidate artifacts for every malformed policy receipt digest", async (t) => {
+test("background indexing restores captured authority for every malformed policy receipt digest", async (t) => {
     const invalidDigests = [
         "",
         "abc",
@@ -1155,20 +1222,29 @@ test("background indexing preserves candidate artifacts for every malformed poli
                     coordinator.release(acquired.lease);
                 }
 
-                assert.equal(existingCollections.has(collectionName), true);
+                assert.equal(existingCollections.has(collectionName), false);
                 assert.deepEqual(harness.clearedExpectedDocumentDigests, []);
-                assert.equal(harness.publicationEvents.includes("navigation:discard:candidate-generation"), false);
+                assert.equal(harness.publicationEvents.includes("navigation:discard:candidate-generation"), true);
+                assert.deepEqual(harness.authorityEvents, ['capture', 'capture', 'restore']);
             });
         });
     }
 });
 
-test("background indexing preserves an existing candidate when policy commits before acknowledgement fails", async () => {
+test("background indexing restores an existing generation when policy commits before acknowledgement fails", async () => {
     await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'ack-existing-rollback-lease-state'),
+            ownerId: 'ack-existing-rollback-owner',
+        });
+        const acquired = coordinator.acquire(repoPath, 'reindex');
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
         const previousCollection = resolveCollectionName(repoPath);
         const stagedCollection = `${previousCollection}__gen_candidate`;
         const existingCollections = new Set([previousCollection]);
         const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
             initialCustomIgnorePatterns: ['private/**'],
             indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
             previousIndexedInfo: {
@@ -1187,25 +1263,34 @@ test("background indexing preserves an existing candidate when policy commits be
             repoPath,
             true,
             stagedCollection,
-            undefined,
+            acquired.lease,
             undefined,
             { customIgnorePatterns: ['generated/**'] },
         );
 
         assert.equal(existingCollections.has(previousCollection), true);
-        assert.equal(existingCollections.has(stagedCollection), true);
-        assert.deepEqual(harness.droppedCollections, []);
-        assert.deepEqual(harness.publicationEvents, ['marker:completed', 'policy:publish']);
+        assert.equal(existingCollections.has(stagedCollection), false);
+        assert.deepEqual(harness.droppedCollections, [stagedCollection]);
+        assert.deepEqual(harness.publicationEvents, ['marker:completed', 'policy:publish', 'navigation:discard:candidate-generation']);
+        assert.deepEqual(harness.authorityEvents, ['capture', 'capture', 'restore']);
         assert.deepEqual(harness.failedSnapshots, []);
-        assert.deepEqual(harness.publishedSnapshots, []);
+        assert.deepEqual(harness.publishedSnapshots, [{ status: 'completed', collectionName: previousCollection }]);
     });
 });
 
-test("background indexing preserves an initial candidate when policy commits before acknowledgement fails", async () => {
+test("background indexing restores absent authority when initial policy commits before acknowledgement fails", async () => {
     await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'ack-initial-rollback-lease-state'),
+            ownerId: 'ack-initial-rollback-owner',
+        });
+        const acquired = coordinator.acquire(repoPath, 'create');
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
         const stagedCollection = `${resolveCollectionName(repoPath)}__gen_initial`;
         const existingCollections = new Set<string>();
         const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
             indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: "completed" }),
             failPolicyPublicationAfterCommit: true,
         });
@@ -1214,16 +1299,16 @@ test("background indexing preserves an initial candidate when policy commits bef
             repoPath,
             false,
             stagedCollection,
-            undefined,
+            acquired.lease,
             undefined,
             { customIgnorePatterns: ['generated/**'] },
         );
 
-        assert.equal(existingCollections.has(stagedCollection), true);
-        assert.deepEqual(harness.droppedCollections, []);
-        assert.deepEqual(harness.publicationEvents, ['marker:completed', 'policy:publish']);
-        assert.deepEqual(harness.failedSnapshots, []);
-        assert.deepEqual(harness.publishedSnapshots, []);
+        assert.equal(existingCollections.has(stagedCollection), false);
+        assert.deepEqual(harness.droppedCollections, [stagedCollection]);
+        assert.deepEqual(harness.publicationEvents, ['marker:completed', 'policy:publish', 'navigation:discard:candidate-generation']);
+        assert.deepEqual(harness.authorityEvents, ['capture', 'capture', 'restore']);
+        assert.equal(harness.failedSnapshots.length, 1);
     });
 });
 
@@ -1348,6 +1433,80 @@ test("startBackgroundIndexing keeps stable collection after non-staged failure",
     });
 });
 
+test("startBackgroundIndexing restores captured legacy authority after candidate publication fails", async () => {
+    await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), "legacy-rollback-lease-state"),
+            ownerId: "legacy-rollback-owner",
+        });
+        const acquired = coordinator.acquire(repoPath, "reindex");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+        const previousCollection = resolveCollectionName(repoPath);
+        const stagedCollection = `${previousCollection}__gen_legacy_rollback`;
+        const existingCollections = new Set<string>([previousCollection]);
+        const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
+            legacyRollback: true,
+            previousIndexedInfo: {
+                indexedFiles: 3,
+                totalChunks: 9,
+                indexStatus: "completed",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+                collectionName: previousCollection,
+            },
+            indexCodebase: async () => ({ indexedFiles: 4, totalChunks: 12, status: "completed" }),
+            publishNavigationCandidate: async () => {
+                throw new Error("failure after candidate authority publication");
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            true,
+            stagedCollection,
+            acquired.lease,
+        );
+
+        assert.equal(existingCollections.has(previousCollection), true);
+        assert.deepEqual(harness.publishedSnapshots, [{ status: "completed", collectionName: previousCollection }]);
+        assert.deepEqual(harness.publicationEvents, [
+            "marker:completed",
+            "policy:publish",
+            "navigation:publish:candidate-generation",
+            "navigation:discard:candidate-generation",
+        ]);
+        assert.deepEqual(harness.authorityEvents, ["capture", "capture", "restore"]);
+    });
+});
+
+test("startBackgroundIndexing refuses durable authority rollback without a mutation fence", async () => {
+    await withTempRepo(async (repoPath) => {
+        const previousCollection = resolveCollectionName(repoPath);
+        const stagedCollection = `${previousCollection}__gen_unfenced_rollback`;
+        const existingCollections = new Set<string>([previousCollection]);
+        const harness = createFailedIndexingHarness(existingCollections, {
+            previousIndexedInfo: {
+                indexedFiles: 3,
+                totalChunks: 9,
+                indexStatus: "completed",
+                indexFingerprint: RUNTIME_FINGERPRINT,
+                fingerprintSource: "verified",
+                collectionName: previousCollection,
+            },
+            indexCodebase: async () => ({ indexedFiles: 4, totalChunks: 12, status: "completed" }),
+            publishNavigationCandidate: async () => {
+                throw new Error("failure after candidate authority publication");
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(repoPath, true, stagedCollection);
+
+        assert.deepEqual(harness.authorityEvents, ["capture", "capture"]);
+    });
+});
+
 test("startBackgroundIndexing does not clean or publish failure after lease loss during cleanup", async () => {
     await withTempRepo(async (repoPath) => {
         const stateDir = path.join(path.dirname(repoPath), "lease-state");
@@ -1374,6 +1533,39 @@ test("startBackgroundIndexing does not clean or publish failure after lease loss
         assert.deepEqual(droppedCollections, []);
         assert.equal(existingCollections.has(stagedCollection), true);
         assert.deepEqual(failedSnapshots, []);
+    });
+});
+
+test("background indexing never restores captured authority after lease loss following candidate publication", async () => {
+    await withTempRepo(async (repoPath) => {
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'rollback-lease-loss-state'),
+            ownerId: 'rollback-owner-a',
+        });
+        const acquired = coordinator.acquire(repoPath, 'create');
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+        const stagedCollection = `${resolveCollectionName(repoPath)}__gen_lease_loss`;
+        const existingCollections = new Set<string>([stagedCollection]);
+        const harness = createFailedIndexingHarness(existingCollections, {
+            mutationLeaseCoordinator: coordinator,
+            indexCodebase: async () => ({ indexedFiles: 1, totalChunks: 1, status: 'completed' }),
+            publishNavigationCandidate: async () => {
+                coordinator.release(acquired.lease);
+                throw new Error('candidate publication lost its mutation lease');
+            },
+        });
+
+        await harness.handler.startBackgroundIndexing(
+            repoPath,
+            false,
+            stagedCollection,
+            acquired.lease,
+        );
+
+        assert.deepEqual(harness.authorityEvents, ['capture', 'capture']);
+        assert.equal(existingCollections.has(stagedCollection), true);
+        assert.deepEqual(harness.failedSnapshots, []);
     });
 });
 

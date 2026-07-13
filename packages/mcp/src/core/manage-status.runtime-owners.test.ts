@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+    SYMBOL_REGISTRY_SCHEMA_VERSION,
+    buildSymbolRegistry,
+    writeSymbolRegistrySidecar,
+} from "@zokizuan/satori-core";
 import { ManageMaintenanceHandlers } from "./manage-maintenance-handlers.js";
 import type { RuntimeOwnersSummary } from "./runtime-owner.js";
 
@@ -39,6 +44,7 @@ test("handleGetIndexingStatus includes runtimeOwners hint and status line", asyn
             trackedRootReadiness: {
                 prepareTrackedRootForRead: async () => ({
                     state: "ready" as const,
+                    navigationStatus: "valid" as const,
                     root: {
                         path: repoPath,
                         info: { status: "indexed" as const, lastUpdated: new Date().toISOString() },
@@ -119,6 +125,27 @@ test("handleGetIndexingStatus includes runtimeOwners hint and status line", asyn
 
 test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns null", async () => {
     await withTempRepo(async (repoPath) => {
+        const previousStateRoot = process.env.SATORI_STATE_ROOT;
+        const stateRoot = path.join(path.dirname(repoPath), 'state');
+        process.env.SATORI_STATE_ROOT = stateRoot;
+        await writeSymbolRegistrySidecar({
+            stateRoot,
+            registry: buildSymbolRegistry({
+                manifest: {
+                    schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+                    normalizedRootPath: repoPath,
+                    rootFingerprint: 'status-test-root',
+                    indexPolicyHash: 'status-test-policy',
+                    languageRouterVersion: 'status-test-router',
+                    extractorVersion: 'status-test-extractor',
+                    relationshipVersion: 'status-test-relationships',
+                    builtAt: '2026-01-01T00:00:00.000Z',
+                    files: [],
+                },
+                symbols: [],
+            }),
+        });
+        try {
         let ownerSummaryCalls = 0;
         let compatibilityCalls = 0;
         const host = {
@@ -128,6 +155,7 @@ test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns nu
             trackedRootReadiness: {
                 prepareTrackedRootForRead: async () => ({
                     state: "ready" as const,
+                    navigationStatus: "valid" as const,
                     root: {
                         path: repoPath,
                         info: { status: "indexed" as const, lastUpdated: new Date().toISOString() },
@@ -208,9 +236,14 @@ test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns nu
         assert.equal(envelope.languageCapabilities, undefined);
         assert.deepEqual(Object.keys(envelope.symbolQuality as Record<string, unknown>).sort(), [
             "basis",
+            "evidenceAvailability",
             "message",
             "status",
         ]);
+        assert.equal(
+            (envelope.symbolQuality as Record<string, unknown>).evidenceAvailability,
+            "missing",
+        );
         assert.doesNotMatch(String(envelope.humanText || ""), /Runtime owners:/);
         assert.doesNotMatch(String(envelope.humanText || ""), /none live/);
         assert.doesNotMatch(String(envelope.humanText || ""), /COMPATIBILITY_DIAGNOSTIC/);
@@ -224,7 +257,15 @@ test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns nu
         assert.equal(capabilitiesEnvelope.detail, "capabilities");
         assert.ok(capabilitiesEnvelope.languageCapabilities);
         assert.ok((capabilitiesEnvelope.symbolQuality as Record<string, unknown>).languages);
+        assert.equal(
+            (capabilitiesEnvelope.symbolQuality as Record<string, unknown>).evidenceAvailability,
+            "missing",
+        );
         assert.equal(ownerSummaryCalls, 0);
         assert.equal(compatibilityCalls, 0);
+        } finally {
+            if (previousStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+            else process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
     });
 });

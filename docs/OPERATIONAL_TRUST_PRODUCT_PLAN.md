@@ -38,7 +38,7 @@ The mutation-ownership, durable-receipt, repair-evidence, and verified-installat
 - Startup recovery acquires a mutation lease per root, skips roots with a live writer, and reuses the fenced recovery helper rather than writing lifecycle state without a lease.
 - `manage_index status` exposes a live `hints.activeMutation` record. It does not report an expiry because ownership is based on process liveness, not elapsed lease age.
 - Lost generations refuse stale background terminal publication.
-- The durable-transition audit fences vector inserts and deletes, completion-marker publication, symbol and relationship sidecars, SQLite navigation publication, call-graph publication (including fenced snapshot commit with in-memory sidecar rollback on fence failure), Merkle checkpoint commits, snapshot lifecycle publication, and staged-failure cleanup.
+- The durable-transition audit fences vector inserts and deletes, completion-marker publication, symbol and relationship sidecars, SQLite navigation publication, call-graph publication (including fenced snapshot commit with in-memory sidecar rollback on fence failure), Merkle checkpoint commits, snapshot lifecycle publication, and staged-failure cleanup. Failed reindex publication restores captured policy and navigation-pointer bytes rather than reconstructing legacy authority through the forward seal-required publisher; a candidate-authority compare-and-swap rejects stale workers, while an fsynced restoration journal makes the cross-directory policy/pointer swap recoverable after process interruption.
 - Snapshot v3 persists the latest operation receipt independently from lifecycle entries, including completed clear receipts.
 - Create, reindex, sync, repair, clear, stale recovery, and cross-root eviction publish receipts through the same transactional snapshot commit.
 - Receipt commits roll back in-memory receipt and lifecycle mutations when persistence fails, reject stale local or disk authority, and return only the post-save authoritative receipt.
@@ -322,7 +322,7 @@ Reuse the existing language capability declarations and combine them with observ
 
 Status owns the per-root summary. Search results retain their existing per-result capability evidence. A compatible relationship sidecar with zero observed edges is distinct from an unsupported language.
 
-Implementation state: `manage_index status` exposes the summary. It reads the symbol registry once and reuses that exact generation for symbol quality and language evidence. Relationship shards are still fully validated before reporting compatible call-graph evidence; this I/O is intentional fail-closed proof rather than a manifest-only capability claim.
+Implementation state: `manage_index status` exposes the summary. Summary and diagnostics read the compact, digest-bound navigation seal and never fall back to the per-file registry manifest; capabilities/full may load the exact registry generation for language evidence. Relationship shards are still fully validated before reporting compatible call-graph evidence; this I/O is intentional fail-closed proof rather than a manifest-only capability claim.
 
 ## P1: One Local Stack
 

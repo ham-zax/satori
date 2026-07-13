@@ -83,6 +83,36 @@ test('validateCompletionProof accepts non-negative integer marker counts', async
     assert.equal(result.outcome, 'valid');
 });
 
+test('validateCompletionProof preserves deterministic policy-authority corruption', async () => {
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => ({ status: 'policy_authority_invalid' }),
+    });
+
+    assert.equal(result.outcome, 'policy_incompatible');
+    assert.equal(result.reason, 'invalid_policy_authority');
+});
+
+test('validateCompletionProof preserves an explicitly unbound navigation generation', async () => {
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        runtimeFingerprint: RUNTIME_FINGERPRINT,
+        getIndexCompletionMarker: async () => ({
+            status: 'valid_v2',
+            collectionName: 'generation-b',
+            marker: marker(),
+            navigationProof: {
+                status: 'not_bound',
+            },
+        }),
+    });
+
+    assert.equal(result.outcome, 'valid');
+    assert.equal(result.navigationStatus, 'not_bound');
+    assert.equal(result.generationReceipt, undefined);
+});
+
 test('validateCompletionProof preserves the proven bound collection identity', async () => {
     const result = await validateCompletionProof({
         codebasePath: '/repo/a',
@@ -132,6 +162,69 @@ test('validateCompletionProof accepts only a fully bound cloned generation recei
         assert.equal(rejected.outcome, 'valid');
         assert.equal(rejected.generationReceipt, undefined);
     }
+});
+
+test('validateCompletionProof falls back to a valid generation receipt when additive vector evidence is malformed', async () => {
+    const supplied = generationReceipt();
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        getIndexCompletionMarker: async () => ({
+            status: 'valid_v2',
+            collectionName: 'generation-b',
+            marker: marker(),
+            generationReceipt: supplied,
+            vectorReceipt: { malformed: true },
+        }),
+    });
+
+    assert.equal(result.outcome, 'valid');
+    assert.ok(result.generationReceipt);
+    assert.equal(result.vectorReceipt?.collectionName, 'generation-b');
+});
+
+test('validateCompletionProof rejects impossible navigation seal marker combinations', async () => {
+    for (const invalidMarker of [marker({ navigationSealHash: 'b'.repeat(64) })]) {
+        const result = await validateCompletionProof({
+            codebasePath: '/repo/a',
+            getIndexCompletionMarker: async () => invalidMarker,
+        });
+        assert.equal(result.outcome, 'stale_local');
+        assert.equal(result.reason, 'invalid_payload');
+    }
+});
+
+test('validateCompletionProof rejects a receipt whose navigation seal is not marker-bound', async () => {
+    const sealedMarker = marker({
+        navigationGenerationId: 'generation-a',
+        symbolRegistryManifestHash: 'symbols',
+        relationshipManifestHash: 'relationships',
+        navigationSealHash: 'b'.repeat(64),
+    });
+    const result = await validateCompletionProof({
+        codebasePath: '/repo/a',
+        getIndexCompletionMarker: async () => ({
+            status: 'valid_v2',
+            collectionName: 'generation-b',
+            marker: sealedMarker,
+            generationReceipt: generationReceipt({
+                marker: sealedMarker,
+                navigation: {
+                    generationId: 'generation-a',
+                    generationRoot: '/state/generation-a',
+                    symbolRegistryManifestHash: 'symbols',
+                    relationshipManifestHash: 'relationships',
+                    navigationSealHash: 'c'.repeat(64),
+                },
+                observations: {
+                    profileFileToken: null,
+                    policyFileToken: 'policy-token',
+                    navigationToken: 'navigation-token',
+                },
+            }),
+        }),
+    });
+    assert.equal(result.outcome, 'valid');
+    assert.equal(result.generationReceipt, undefined);
 });
 
 test('validateCompletionProof classifies v1 markers as legacy policy-unsealed proof', async () => {

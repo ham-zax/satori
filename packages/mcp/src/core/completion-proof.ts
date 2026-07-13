@@ -5,7 +5,7 @@ import {
     parseIndexFingerprint,
     type IndexFingerprint,
 } from "../config.js";
-import type { ProvenGenerationReceipt } from "@zokizuan/satori-core";
+import type { ProvenGenerationReceipt, ProvenVectorGenerationReceipt } from "@zokizuan/satori-core";
 
 export type CompletionProofOutcome = "valid" | "stale_local" | "fingerprint_mismatch" | "policy_incompatible" | "probe_failed";
 
@@ -17,6 +17,7 @@ export type CompletionProofReason =
     | "invalid_payload"
     | "fingerprint_mismatch"
     | "runtime_policy_incompatible"
+    | "invalid_policy_authority"
     | "probe_failed";
 
 export type CompletionProofValidationResult = {
@@ -24,8 +25,9 @@ export type CompletionProofValidationResult = {
     reason?: CompletionProofReason;
     marker?: ValidatedCompletionMarker;
     collectionName?: string;
+    vectorReceipt?: ProvenVectorGenerationReceipt;
     generationReceipt?: ProvenGenerationReceipt;
-    navigationStatus?: "valid" | "missing" | "incompatible" | "corrupt";
+    navigationStatus?: "valid" | "not_bound" | "missing" | "incompatible" | "corrupt" | "unverified";
 };
 
 export type ValidatedCompletionMarker = {
@@ -41,6 +43,7 @@ export type ValidatedCompletionMarker = {
     navigationGenerationId?: string;
     symbolRegistryManifestHash?: string;
     relationshipManifestHash?: string;
+    navigationSealHash?: string;
 };
 
 export type CompletionMarkerReader = (codebasePath: string) => Promise<unknown>;
@@ -50,10 +53,12 @@ type CompletionMarkerEvidence =
         status: 'valid_v2';
         marker: unknown;
         collectionName?: string;
+        vectorReceipt?: unknown;
         generationReceipt?: unknown;
-        navigationStatus?: "valid" | "missing" | "incompatible" | "corrupt";
+        navigationStatus?: "valid" | "not_bound" | "missing" | "incompatible" | "corrupt" | "unverified";
     }
     | { status: 'invalid_v2' }
+    | { status: 'policy_authority_invalid' }
     | { status: 'runtime_policy_incompatible' }
     | { status: 'legacy_v1'; marker: unknown }
     | { status: 'missing' };
@@ -95,13 +100,19 @@ function parseCompletionMarkerEvidence(value: unknown): CompletionMarkerEvidence
             ...(record.generationReceipt !== undefined
                 ? { generationReceipt: record.generationReceipt }
                 : {}),
+            ...(record.vectorReceipt !== undefined
+                ? { vectorReceipt: record.vectorReceipt }
+                : {}),
             ...(isNavigationStatus((record.navigationProof as { status?: unknown } | undefined)?.status)
-                ? { navigationStatus: (record.navigationProof as { status: "valid" | "missing" | "incompatible" | "corrupt" }).status }
+                ? { navigationStatus: (record.navigationProof as { status: "valid" | "not_bound" | "missing" | "incompatible" | "corrupt" }).status }
                 : {}),
         };
     }
     if (record.status === 'invalid_v2') {
         return { status: 'invalid_v2' };
+    }
+    if (record.status === 'policy_authority_invalid') {
+        return { status: 'policy_authority_invalid' };
     }
     if (record.status === 'runtime_policy_incompatible') {
         return { status: 'runtime_policy_incompatible' };
@@ -113,16 +124,16 @@ function parseCompletionMarkerEvidence(value: unknown): CompletionMarkerEvidence
     return null;
 }
 
-function isNavigationStatus(value: unknown): value is "valid" | "missing" | "incompatible" | "corrupt" {
-    return value === "valid" || value === "missing" || value === "incompatible" || value === "corrupt";
+function isNavigationStatus(value: unknown): value is "valid" | "not_bound" | "missing" | "incompatible" | "corrupt" {
+    return value === "valid" || value === "not_bound" || value === "missing" || value === "incompatible" || value === "corrupt";
 }
 
-function cloneProvenGenerationReceipt(
+function cloneProvenVectorGenerationReceipt(
     value: unknown,
     expectedCodebasePath: string,
     expectedCollectionName: string,
     expectedMarker: ValidatedCompletionMarker,
-): ProvenGenerationReceipt | null {
+): ProvenVectorGenerationReceipt | null {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
     const policy = record.policy as Record<string, unknown> | undefined;
@@ -153,23 +164,60 @@ function cloneProvenGenerationReceipt(
         || !observations
         || (observations.profileFileToken !== null && typeof observations.profileFileToken !== "string")
         || typeof observations.policyFileToken !== "string"
-        || (observations.navigationToken !== null && typeof observations.navigationToken !== "string")
     ) return null;
+    return {
+        collectionName: record.collectionName as string,
+        marker: structuredClone(receiptMarker),
+        policy: structuredClone(policy) as unknown as ProvenVectorGenerationReceipt["policy"],
+        policyDocumentDigest: record.policyDocumentDigest as string,
+        exactPayloadCount: record.exactPayloadCount as number,
+        observations: {
+            profileFileToken: observations.profileFileToken as string | null,
+            policyFileToken: observations.policyFileToken as string,
+        },
+    };
+}
+
+function cloneProvenGenerationReceipt(
+    value: unknown,
+    expectedCodebasePath: string,
+    expectedCollectionName: string,
+    expectedMarker: ValidatedCompletionMarker,
+): ProvenGenerationReceipt | null {
+    const vectorReceipt = cloneProvenVectorGenerationReceipt(
+        value,
+        expectedCodebasePath,
+        expectedCollectionName,
+        expectedMarker,
+    );
+    if (!vectorReceipt || !value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    const observations = record.observations as Record<string, unknown>;
+    if (observations.navigationToken !== null && typeof observations.navigationToken !== "string") return null;
     const navigation = record.navigation as Record<string, unknown> | null | undefined;
     if (expectedMarker.navigationGenerationId) {
         if (
-            !navigation
+            !expectedMarker.navigationSealHash
+            || !navigation
             || navigation.generationId !== expectedMarker.navigationGenerationId
             || navigation.symbolRegistryManifestHash !== expectedMarker.symbolRegistryManifestHash
             || navigation.relationshipManifestHash !== expectedMarker.relationshipManifestHash
+            || navigation.navigationSealHash !== expectedMarker.navigationSealHash
             || typeof navigation.generationRoot !== "string"
             || navigation.generationRoot.length === 0
             || typeof observations.navigationToken !== "string"
         ) return null;
-    } else if (navigation !== null || observations.navigationToken !== null) {
+    } else if (expectedMarker.navigationSealHash || navigation !== null || observations.navigationToken !== null) {
         return null;
     }
-    return structuredClone(value) as ProvenGenerationReceipt;
+    return {
+        ...vectorReceipt,
+        navigation: structuredClone(navigation) as ProvenGenerationReceipt["navigation"],
+        observations: {
+            ...vectorReceipt.observations,
+            navigationToken: observations.navigationToken as string | null,
+        },
+    };
 }
 
 function trimTrailingSeparators(inputPath: string): string {
@@ -261,6 +309,13 @@ export function parseCompletionMarker(
     ) {
         return null;
     }
+    if (record.navigationSealHash !== undefined
+        && (typeof record.navigationSealHash !== 'string' || !/^[a-f0-9]{64}$/.test(record.navigationSealHash))) {
+        return null;
+    }
+    if (record.navigationSealHash !== undefined && typeof record.navigationGenerationId !== 'string') {
+        return null;
+    }
 
     return {
         kind: 'satori_index_completion_v2',
@@ -278,6 +333,9 @@ export function parseCompletionMarker(
             navigationGenerationId: record.navigationGenerationId,
             symbolRegistryManifestHash: record.symbolRegistryManifestHash as string,
             relationshipManifestHash: record.relationshipManifestHash as string,
+            ...(typeof record.navigationSealHash === 'string'
+                ? { navigationSealHash: record.navigationSealHash }
+                : {}),
         } : {}),
     };
 }
@@ -333,6 +391,9 @@ export async function validateCompletionProof(args: {
     if (evidence?.status === 'invalid_v2') {
         return { outcome: 'stale_local', reason: 'invalid_payload' };
     }
+    if (evidence?.status === 'policy_authority_invalid') {
+        return { outcome: 'policy_incompatible', reason: 'invalid_policy_authority' };
+    }
     if (evidence?.status === 'runtime_policy_incompatible') {
         return { outcome: 'policy_incompatible', reason: 'runtime_policy_incompatible' };
     }
@@ -372,6 +433,17 @@ export async function validateCompletionProof(args: {
             markerShape.marker,
         )
         : null;
+    const clonedVectorReceipt = evidence?.status === "valid_v2"
+        && evidence.collectionName
+        && evidence.vectorReceipt !== undefined
+        ? cloneProvenVectorGenerationReceipt(
+            evidence.vectorReceipt,
+            codebasePath,
+            evidence.collectionName,
+            markerShape.marker,
+        )
+        : null;
+    const vectorReceipt = clonedVectorReceipt ?? generationReceipt;
 
     return {
         outcome: "valid",
@@ -381,6 +453,9 @@ export async function validateCompletionProof(args: {
             : {}),
         ...(generationReceipt
             ? { generationReceipt }
+            : {}),
+        ...(vectorReceipt
+            ? { vectorReceipt }
             : {}),
         ...(evidence?.status === "valid_v2" && evidence.navigationStatus
             ? { navigationStatus: evidence.navigationStatus }

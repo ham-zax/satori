@@ -9,6 +9,7 @@ export type ExactRegistryLookupReason =
     | "normalized_identity"
     | "label"
     | "registry_unavailable"
+    | "navigation_unavailable"
     | "not_identifier_like"
     | "quoted_literal"
     | "no_match"

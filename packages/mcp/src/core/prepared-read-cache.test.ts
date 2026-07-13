@@ -39,3 +39,28 @@ test("prepared read cache selects the deepest matching tracked root", () => {
         (root) => root === "/repo" ? "parent" : "child",
     ), { root: "/repo/packages/child" });
 });
+
+test("prepared read cache exposes a cloned vector candidate without evicting on navigation observation drift", () => {
+    const cache = new PreparedReadCache<{ receipt: { collectionName: string } }>();
+    cache.seed("/repo", { receipt: { collectionName: "generation-a" } }, "navigation-1", 0);
+
+    const candidate = cache.getCandidate(
+        "/repo/src/index.ts",
+        1,
+        (targetPath, root) => targetPath === root || targetPath.startsWith(`${root}/`),
+    );
+    assert.deepEqual(candidate, {
+        root: "/repo",
+        state: { receipt: { collectionName: "generation-a" } },
+        observation: "navigation-1",
+    });
+    assert.ok(candidate);
+    candidate.state.receipt.collectionName = "forged";
+
+    assert.deepEqual(cache.getCandidate(
+        "/repo/src/index.ts",
+        2,
+        (targetPath, root) => targetPath === root || targetPath.startsWith(`${root}/`),
+    )?.state, { receipt: { collectionName: "generation-a" } });
+    assert.equal(cache.size, 1);
+});

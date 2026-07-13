@@ -18,6 +18,21 @@ export class PreparedReadCache<T> {
         isWithinRoot: (targetPath: string, root: string) => boolean,
         observe: (root: string) => string | null,
     ): T | null {
+        const candidate = this.getCandidate(absolutePath, nowMs, isWithinRoot);
+        if (!candidate) return null;
+        const current = observe(candidate.root);
+        if (!current || current !== candidate.observation) {
+            this.entries.delete(candidate.root);
+            return null;
+        }
+        return candidate.state;
+    }
+
+    public getCandidate(
+        absolutePath: string,
+        nowMs: number,
+        isWithinRoot: (targetPath: string, root: string) => boolean,
+    ): { root: string; state: T; observation: string } | null {
         for (const [root, entry] of this.entries) {
             if (nowMs - entry.lastUsedAtMs > this.idleMs) {
                 this.entries.delete(root);
@@ -30,15 +45,14 @@ export class PreparedReadCache<T> {
         if (!match) return null;
 
         const [root, entry] = match;
-        const current = observe(root);
-        if (!current || current !== entry.observation) {
-            this.entries.delete(root);
-            return null;
-        }
         entry.lastUsedAtMs = nowMs;
         this.entries.delete(root);
         this.entries.set(root, entry);
-        return structuredClone(entry.state);
+        return {
+            root,
+            state: structuredClone(entry.state),
+            observation: entry.observation,
+        };
     }
 
     public seed(root: string, state: T, observation: string | null, nowMs: number): void {

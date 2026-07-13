@@ -15,7 +15,7 @@ import type {
     TrackedRootEntry,
     TrackedRootReadinessState,
 } from "./tracked-root-readiness.js";
-import type { ProvenGenerationReceipt } from "@zokizuan/satori-core";
+import type { ProvenGenerationReceipt, ProvenVectorGenerationReceipt } from "@zokizuan/satori-core";
 
 type SearchFrontDoorContext = Pick<
     SearchRequestInput,
@@ -32,8 +32,9 @@ export type SearchFrontDoorReady = {
     freshnessDecision: FreshnessDecision;
     partialIndexSearchWarnings: string[];
     proofDebugHint?: CompletionProbeDebugHint;
+    vectorReceipt?: ProvenVectorGenerationReceipt;
     generationReceipt?: ProvenGenerationReceipt;
-    navigationStatus?: "valid" | "missing" | "incompatible" | "corrupt";
+    navigationStatus?: "valid" | "not_bound" | "missing" | "incompatible" | "corrupt" | "unverified";
     preparedObservation?: string;
 };
 
@@ -114,7 +115,7 @@ function buildReadinessWarnings(
 ): string[] {
     return [
         ...buildPartialIndexWarnings(host, state.root),
-        ...(state.navigationStatus && state.navigationStatus !== "valid"
+        ...(state.navigationStatus !== "valid"
             ? ["NAVIGATION_REPAIR_REQUIRED"]
             : []),
     ];
@@ -283,6 +284,7 @@ export async function runSearchFrontDoor(
     let partialIndexSearchWarnings = trackedRootState.state === "ready"
         ? buildReadinessWarnings(host, trackedRootState)
         : [];
+    let vectorReceipt = trackedRootState.state === "ready" ? trackedRootState.vectorReceipt : undefined;
     let generationReceipt = trackedRootState.state === "ready" ? trackedRootState.generationReceipt : undefined;
     let navigationStatus = trackedRootState.state === "ready" ? trackedRootState.navigationStatus : undefined;
 
@@ -318,6 +320,7 @@ export async function runSearchFrontDoor(
             searchableRoot = postFreshnessRootState.root;
             effectiveRoot = observedRoot;
             proofDebugHint = postFreshnessRootState.proofDebugHint;
+            vectorReceipt = postFreshnessRootState.vectorReceipt;
             generationReceipt = postFreshnessRootState.generationReceipt;
             navigationStatus = postFreshnessRootState.navigationStatus;
             partialIndexSearchWarnings = buildReadinessWarnings(host, postFreshnessRootState);
@@ -336,6 +339,7 @@ export async function runSearchFrontDoor(
         searchableRoot = postFreshnessRootState.root;
         effectiveRoot = observedRoot;
         proofDebugHint = postFreshnessRootState.proofDebugHint;
+        vectorReceipt = postFreshnessRootState.vectorReceipt;
         generationReceipt = postFreshnessRootState.generationReceipt;
         navigationStatus = postFreshnessRootState.navigationStatus;
         partialIndexSearchWarnings = buildReadinessWarnings(host, postFreshnessRootState);
@@ -347,6 +351,7 @@ export async function runSearchFrontDoor(
             freshnessDecision,
             partialIndexSearchWarnings,
             proofDebugHint,
+            vectorReceipt,
             generationReceipt,
             navigationStatus,
             preparedObservation: postFreshnessRootState.preparedObservation,

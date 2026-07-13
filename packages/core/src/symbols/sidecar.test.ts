@@ -12,6 +12,8 @@ import {
 } from './registry';
 import {
     clearSymbolRegistrySidecar,
+    computeNavigationGenerationSealHash,
+    parseNavigationGenerationSeal,
     readRelationshipSidecar,
     readNavigationGenerationSeal,
     readSymbolRegistryManifest,
@@ -22,6 +24,7 @@ import {
     writeNavigationSidecarGeneration,
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
+    verifyNavigationGenerationSealArtifacts,
 } from './sidecar';
 import type { RelationshipRecord, SymbolRecord, SymbolRegistryManifest } from './contracts';
 
@@ -1304,6 +1307,7 @@ test('writeNavigationSidecarGeneration publishes symbols and relationships throu
         assert.equal(seal.status, 'ok');
         if (seal.status === 'ok') {
             assert.equal(seal.seal.generationId, first.generationId);
+            assert.equal(computeNavigationGenerationSealHash(seal.seal), first.navigationSealHash);
             assert.deepEqual(seal.seal.symbolQuality, {
                 indexedFileCount: 1,
                 languages: [{
@@ -1343,7 +1347,92 @@ test('writeNavigationSidecarGeneration publishes symbols and relationships throu
         assert.equal(loaded.status, 'ok');
         assert.equal(loaded.manifestHash, first.manifestHash);
         assert.equal(loaded.registry?.manifest.files[0].hash, 'hash-auth-v1');
+        assert.equal(loaded.status, 'ok');
+        if (loaded.status === 'ok') {
+            const relationships = await readRelationshipSidecar({
+                stateRoot,
+                normalizedRootPath: '/repo',
+                expectedSymbolRegistryManifestHash: loaded.manifestHash,
+            });
+            assert.equal(relationships.status, 'ok');
+            if (relationships.status === 'ok') {
+                assert.equal((await verifyNavigationGenerationSealArtifacts({
+                    stateRoot,
+                    normalizedRootPath: '/repo',
+                    registry: loaded.registry,
+                    relationshipManifest: relationships.manifest,
+                })).status, 'ok');
+            }
+        }
     });
+});
+
+test('readNavigationGenerationSeal rejects a seal that is not bound by the current pointer', async () => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([{ path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 }]),
+            symbols: [symbol],
+        });
+        const generation = await writeNavigationSidecarGeneration({
+            stateRoot,
+            registry,
+            records: [],
+            analysisByFile: new Map([['src/auth.ts', { moduleBindings: [], callSites: [] }]]),
+        });
+        const pointerPath = path.join(generation.rootPath, 'current.json');
+        const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')) as Record<string, unknown>;
+        delete pointer.navigationSealHash;
+        fs.writeFileSync(pointerPath, JSON.stringify(pointer), 'utf8');
+
+        const seal = await readNavigationGenerationSeal(stateRoot, '/repo');
+        assert.equal(seal.status, 'incompatible');
+        assert.match(seal.reason, /predates seal binding/i);
+    });
+});
+
+test('navigation generation seal parsing enforces canonical aggregate invariants', () => {
+    const base = {
+        schemaVersion: 'navigation_generation_seal_v1',
+        generationId: 'generation-a',
+        symbolRegistryManifestHash: `symmanifest_${'a'.repeat(32)}`,
+        relationshipManifestHash: 'b'.repeat(64),
+        artifactSetHash: 'c'.repeat(64),
+        symbolQuality: {
+            indexedFileCount: 2,
+            languages: [
+                { language: 'javascript', indexedFiles: 1, filesWithNonFileSymbols: 0, nonFileSymbolCount: 0 },
+                { language: 'typescript', indexedFiles: 1, filesWithNonFileSymbols: 1, nonFileSymbolCount: 2 },
+            ],
+        },
+    };
+
+    assert.ok(parseNavigationGenerationSeal(base));
+    assert.equal(parseNavigationGenerationSeal({
+        ...base,
+        symbolQuality: { ...base.symbolQuality, indexedFileCount: 1 },
+    }), null);
+    assert.equal(parseNavigationGenerationSeal({
+        ...base,
+        symbolQuality: { ...base.symbolQuality, languages: [...base.symbolQuality.languages].reverse() },
+    }), null);
+    assert.equal(parseNavigationGenerationSeal({
+        ...base,
+        symbolQuality: { ...base.symbolQuality, languages: [base.symbolQuality.languages[0], base.symbolQuality.languages[0]] },
+    }), null);
+    assert.equal(parseNavigationGenerationSeal({
+        ...base,
+        symbolQuality: {
+            indexedFileCount: 1,
+            languages: [{ language: 'typescript', indexedFiles: 1, filesWithNonFileSymbols: 1, nonFileSymbolCount: 0 }],
+        },
+    }), null);
 });
 
 test('staged navigation remains unreadable until its generation pointer is published', async () => {

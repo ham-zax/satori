@@ -34,6 +34,7 @@ import {
 import {
     loadSatoriRepoConfig,
     SATORI_REPO_CONFIG_FILENAME,
+    SatoriRepoConfigAuthorityError,
     SatoriRepoConfig,
 } from '../config/repo-config';
 import { getLanguageIdFromFilename } from '../language';
@@ -47,6 +48,8 @@ import {
     buildSymbolRegistry,
     clearSymbolRegistrySidecar,
     computeSymbolRegistryManifestHash,
+    computeNavigationGenerationSealHash,
+    parseNavigationGenerationSeal,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveCurrentNavigationGeneration,
@@ -55,6 +58,7 @@ import {
     discardNavigationSidecarGeneration,
     publishNavigationSidecarGeneration,
     stageNavigationSidecarGeneration,
+    verifyNavigationGenerationSealArtifacts,
 } from '../symbols';
 import type {
     CurrentNavigationGeneration,
@@ -198,6 +202,12 @@ export interface ResolvedIndexPolicy {
     policyHash: string;
 }
 
+type IndexPolicyBinding = {
+    collectionName: string;
+    navigationGenerationId?: string;
+    navigationSealHash?: string;
+};
+
 export interface ProvenVectorGenerationReceipt {
     readonly collectionName: string;
     readonly marker: IndexCompletionMarkerDocument;
@@ -218,8 +228,8 @@ export interface ProvenGenerationReceipt extends Omit<ProvenVectorGenerationRece
 }
 
 export type NavigationGenerationProof =
-    | { status: 'valid'; generation: CurrentNavigationGeneration | null; observationToken: string | null }
-    | { status: 'missing' | 'incompatible' | 'corrupt' };
+    | { status: 'valid'; generation: CurrentNavigationGeneration; observationToken: string }
+    | { status: 'not_bound' | 'missing' | 'incompatible' | 'corrupt' };
 
 export type IndexPolicyPublicationReceipt =
     | {
@@ -230,6 +240,7 @@ export type IndexPolicyPublicationReceipt =
         policyHash: string;
         collectionName: string;
         navigationGenerationId?: string;
+        navigationSealHash?: string;
     }
     | {
         status: 'committed';
@@ -251,6 +262,13 @@ export class IndexPolicyPublicationError extends Error {
     }
 }
 
+class IndexPolicyAuthorityError extends Error {
+    constructor(message: string, readonly authorityCause: unknown) {
+        super(message);
+        this.name = 'IndexPolicyAuthorityError';
+    }
+}
+
 export type CompletionMarkerValidationEvidence =
     | {
         status: 'valid_v2';
@@ -261,9 +279,57 @@ export type CompletionMarkerValidationEvidence =
         generationReceipt?: ProvenGenerationReceipt;
     }
     | { status: 'invalid_v2' }
+    | { status: 'policy_authority_invalid' }
     | { status: 'runtime_policy_incompatible' }
     | { status: 'legacy_v1'; marker: unknown }
     | { status: 'missing' };
+
+export type PreparedGenerationRevalidation = {
+    vectorReceipt: ProvenVectorGenerationReceipt;
+    navigationProof: NavigationGenerationProof;
+    generationReceipt?: ProvenGenerationReceipt;
+};
+
+export type IndexAuthorityObservations = {
+    vector: string;
+    navigation: string;
+};
+
+export type DurableIndexAuthorityArtifact = {
+    content: string;
+    digest: string;
+};
+
+export type DurableIndexAuthoritySnapshot = {
+    canonicalRoot: string;
+    policyDocument: DurableIndexAuthorityArtifact | null;
+    navigationPointer: DurableIndexAuthorityArtifact | null;
+};
+
+type DurableAuthorityRestoreEntry = {
+    targetPath: string;
+    temporaryPath: string;
+    displacedPath: string;
+    content: string | null;
+    digest: string | null;
+    expectedDigest: string | null;
+};
+
+type DurableAuthorityRestoreTransaction = {
+    schemaVersion: 1;
+    id: string;
+    canonicalRoot: string;
+    phase: 'prepared' | 'swapping' | 'committed';
+    nextEntry: number;
+    mutationOwner?: { ownerId: string; generation: number; operationId: string };
+    entries: DurableAuthorityRestoreEntry[];
+};
+
+export type DurableAuthorityMutationOwner = {
+    ownerId: string;
+    generation: number;
+    operationId: string;
+};
 
 interface CodebaseIgnoreState {
     canonicalRoot: string;
@@ -357,11 +423,7 @@ export class Context {
     private policyFileTokensByCodebase: Map<string, string | null>;
     private policyDocumentDigestsByCodebase: Map<string, string>;
     private policyRuntimeCompatibilityByCodebase: Map<string, boolean>;
-    private publishedPolicyBindingsByCodebase: Map<string, {
-        policyHash: string;
-        collectionName: string;
-        navigationGenerationId?: string;
-    }>;
+    private publishedPolicyBindingsByCodebase: Map<string, IndexPolicyBinding & { policyHash: string }>;
     private publishedResolvedPoliciesByCodebase: Map<string, ResolvedIndexPolicy>;
     private readonly indexPolicyStateRoot: string;
     private ignoreStateByCollection: Map<string, CodebaseIgnoreState>;
@@ -432,6 +494,7 @@ export class Context {
             ?? path.join(os.homedir(), '.satori', 'index-policy');
         this.ignoreStateByCollection = new Map();
         this.symbolRegistryStateRoot = config.symbolRegistryStateRoot;
+        this.recoverDurableIndexAuthorityTransactions();
 
         console.log(`[Context] 🔧 Initialized with ${this.supportedExtensions.length} supported extensions and ${this.baseIgnorePatterns.length} base ignore patterns`);
         if (envCustomExtensions.length > 0) {
@@ -735,6 +798,13 @@ export class Context {
         ) {
             return null;
         }
+        if (parsed.navigationSealHash !== undefined
+            && (typeof parsed.navigationSealHash !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.navigationSealHash))) {
+            return null;
+        }
+        if (parsed.navigationSealHash !== undefined && typeof parsed.navigationGenerationId !== 'string') {
+            return null;
+        }
 
         return {
             kind: 'satori_index_completion_v2',
@@ -750,6 +820,9 @@ export class Context {
                 navigationGenerationId: parsed.navigationGenerationId,
                 symbolRegistryManifestHash: parsed.symbolRegistryManifestHash as string,
                 relationshipManifestHash: parsed.relationshipManifestHash as string,
+                ...(typeof parsed.navigationSealHash === 'string'
+                    ? { navigationSealHash: parsed.navigationSealHash }
+                    : {}),
             } : {}),
         };
     }
@@ -879,6 +952,7 @@ export class Context {
             && left.navigationGenerationId === right.navigationGenerationId
             && left.symbolRegistryManifestHash === right.symbolRegistryManifestHash
             && left.relationshipManifestHash === right.relationshipManifestHash
+            && left.navigationSealHash === right.navigationSealHash
             && this.indexCompletionFingerprintsMatch(left.fingerprint, right.fingerprint)
             && this.indexCompletionFingerprintsMatch(right.fingerprint, left.fingerprint);
     }
@@ -886,12 +960,13 @@ export class Context {
     private markerMatchesSealedAuthority(
         marker: IndexCompletionMarkerDocument,
         policy: ResolvedIndexPolicy,
-        binding: { policyHash: string; collectionName: string; navigationGenerationId?: string },
+        binding: IndexPolicyBinding & { policyHash: string },
     ): boolean {
         return this.indexCompletionFingerprintsMatch(marker.fingerprint, this.buildIndexCompletionFingerprint())
             && marker.indexPolicyHash === policy.policyHash
             && binding.policyHash === marker.indexPolicyHash
-            && (binding.navigationGenerationId ?? undefined) === (marker.navigationGenerationId ?? undefined);
+            && (binding.navigationGenerationId ?? undefined) === (marker.navigationGenerationId ?? undefined)
+            && (binding.navigationSealHash ?? undefined) === (marker.navigationSealHash ?? undefined);
     }
 
     private cloneIndexCompletionMarker(marker: IndexCompletionMarkerDocument): IndexCompletionMarkerDocument {
@@ -931,10 +1006,14 @@ export class Context {
                 navigationGenerationId: navigationCandidate.generationId,
                 symbolRegistryManifestHash: navigationCandidate.manifestHash,
                 relationshipManifestHash: navigationCandidate.relationshipManifestHash,
+                navigationSealHash: navigationCandidate.navigationSealHash,
             } : currentNavigation ? {
                 navigationGenerationId: currentNavigation.generationId,
                 symbolRegistryManifestHash: currentNavigation.symbolRegistryManifestHash,
                 relationshipManifestHash: currentNavigation.relationshipManifestHash,
+                ...(currentNavigation.navigationSealHash
+                    ? { navigationSealHash: currentNavigation.navigationSealHash }
+                    : {}),
             } : {}),
         }, collectionName, assertMutationCurrent);
     }
@@ -1062,7 +1141,17 @@ export class Context {
         return proven?.collectionName ?? null;
     }
 
+    private async getActiveVectorCollectionName(codebasePath: string): Promise<string | null> {
+        const proven = await this.proveVectorGeneration(codebasePath);
+        return proven?.collectionName ?? null;
+    }
+
     public getIndexAuthorityObservation(codebasePath: string): string | null {
+        const observations = this.getIndexAuthorityObservations(codebasePath);
+        return observations ? JSON.stringify(observations) : null;
+    }
+
+    public getIndexAuthorityObservations(codebasePath: string): IndexAuthorityObservations | null {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const profileFileToken = this.resolveRepoConfigObservationToken(canonicalRoot);
         const policyFileToken = this.resolveCustomIndexPolicyFileToken(canonicalRoot);
@@ -1081,20 +1170,24 @@ export class Context {
         ) {
             return null;
         }
-        const navigationToken = binding.navigationGenerationId
-            ? this.resolveNavigationObservationToken(canonicalRoot, binding.navigationGenerationId)
-            : null;
-        if (binding.navigationGenerationId && !navigationToken) return null;
-        return JSON.stringify({
+        const navigationObservation = binding.navigationGenerationId
+            ? this.resolveNavigationObservation(canonicalRoot, binding.navigationGenerationId)
+            : { status: 'not_bound' as const };
+        return {
+            vector: JSON.stringify({
             canonicalRoot,
             profileFileToken,
             policyFileToken,
             policyDocumentDigest,
             policyHash: policy.policyHash,
             collectionName: binding.collectionName,
+            }),
+            navigation: JSON.stringify({
             navigationGenerationId: binding.navigationGenerationId ?? null,
-            navigationToken,
-        });
+            navigationSealHash: binding.navigationSealHash ?? null,
+                observation: navigationObservation,
+            }),
+        };
     }
 
     private async proveGenerationAuthority(
@@ -1158,6 +1251,7 @@ export class Context {
         if (priorReceipt && !this.indexCompletionMarkersEqual(initialMarker, priorReceipt.marker)) {
             return null;
         }
+        if (requireNavigation && !initialMarker.navigationGenerationId) return null;
 
         const exactPayloadCount = await this.countIndexedPayloadExactly(
             policyBinding.collectionName,
@@ -1183,10 +1277,12 @@ export class Context {
             &&
             initialMarker.navigationGenerationId
             && (
-                !navigation
+                !initialMarker.navigationSealHash
+                || !navigation
                 || navigation.generationId !== initialMarker.navigationGenerationId
                 || navigation.symbolRegistryManifestHash !== initialMarker.symbolRegistryManifestHash
                 || navigation.relationshipManifestHash !== initialMarker.relationshipManifestHash
+                || navigation.navigationSealHash !== initialMarker.navigationSealHash
             )
         ) {
             return null;
@@ -1206,6 +1302,13 @@ export class Context {
                 stateRoot: this.symbolRegistryStateRoot,
             });
             if (relationshipRead.status !== 'ok') return null;
+            const sealProof = await verifyNavigationGenerationSealArtifacts({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: canonicalRoot,
+                registry: registryRead.registry,
+                relationshipManifest: relationshipRead.manifest,
+            });
+            if (sealProof.status !== 'ok') return null;
         }
         const navigationToken = navigation
             ? this.resolveNavigationObservationToken(canonicalRoot, navigation.generationId)
@@ -1241,6 +1344,8 @@ export class Context {
             || finalBinding.policyHash !== initialMarker.indexPolicyHash
             || finalBinding.collectionName !== policyBinding.collectionName
             || (finalBinding.navigationGenerationId ?? undefined) !== (initialMarker.navigationGenerationId ?? undefined)
+            || (finalBinding.navigationSealHash ?? undefined) !== (initialMarker.navigationSealHash ?? undefined)
+            || (requireNavigation && navigation?.navigationSealHash !== finalMarker.navigationSealHash)
             || this.policyDocumentDigestsByCodebase.get(canonicalRoot) !== policyDocumentDigest
         ) {
             return null;
@@ -1266,10 +1371,10 @@ export class Context {
         return requireNavigation
             ? {
                 ...vectorReceipt,
-                navigation: navigation ? { ...navigation } : null,
+                navigation: { ...navigation! },
                 observations: {
                     ...vectorReceipt.observations,
-                    navigationToken: finalNavigationToken,
+                    navigationToken: finalNavigationToken!,
                 },
             }
             : vectorReceipt;
@@ -1295,8 +1400,9 @@ export class Context {
         validateArtifacts = false,
     ): Promise<NavigationGenerationProof> {
         if (!marker.navigationGenerationId) {
-            return { status: 'valid', generation: null, observationToken: null };
+            return { status: 'not_bound' };
         }
+        if (!marker.navigationSealHash) return { status: 'incompatible' };
         let generation: CurrentNavigationGeneration | null;
         try {
             generation = await resolveCurrentNavigationGeneration(this.symbolRegistryStateRoot, canonicalRoot);
@@ -1308,6 +1414,7 @@ export class Context {
             generation.generationId !== marker.navigationGenerationId
             || generation.symbolRegistryManifestHash !== marker.symbolRegistryManifestHash
             || generation.relationshipManifestHash !== marker.relationshipManifestHash
+            || generation.navigationSealHash !== marker.navigationSealHash
         ) {
             return { status: 'incompatible' };
         }
@@ -1327,6 +1434,13 @@ export class Context {
             if (relationshipRead.status !== 'ok') {
                 return { status: relationshipRead.status };
             }
+            const sealProof = await verifyNavigationGenerationSealArtifacts({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: canonicalRoot,
+                registry: registryRead.registry,
+                relationshipManifest: relationshipRead.manifest,
+            });
+            if (sealProof.status !== 'ok') return { status: sealProof.status };
         }
         try {
             const observation = this.resolveNavigationObservation(canonicalRoot, generation.generationId);
@@ -1338,10 +1452,10 @@ export class Context {
         }
     }
 
-    public async revalidateProvenGeneration(
+    public async revalidateProvenVectorGeneration(
         codebasePath: string,
-        receipt: ProvenGenerationReceipt,
-    ): Promise<ProvenGenerationReceipt | null> {
+        receipt: ProvenVectorGenerationReceipt,
+    ): Promise<ProvenVectorGenerationReceipt | null> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         if (
             receipt.exactPayloadCount !== receipt.marker.totalChunks
@@ -1364,24 +1478,20 @@ export class Context {
             || !binding
             || this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot) !== true
             || binding.collectionName !== receipt.collectionName
-            || binding.policyHash !== receipt.marker.indexPolicyHash
+            || !this.markerMatchesSealedAuthority(receipt.marker, policy, binding)
             || this.policyDocumentDigestsByCodebase.get(canonicalRoot) !== receipt.policyDocumentDigest
             || !(await this.vectorDatabase.hasCollection(receipt.collectionName))
         ) return null;
 
         const marker = await this.resolveCompletionMarkerForCollection(canonicalRoot, receipt.collectionName);
         if (!marker || !this.indexCompletionMarkersEqual(marker, receipt.marker)) return null;
-        const navigationProof = await this.proveNavigationGeneration(canonicalRoot, marker);
         if (
-            navigationProof.status !== 'valid'
-            || navigationProof.observationToken !== receipt.observations.navigationToken
-            || this.resolveRepoConfigObservationToken(canonicalRoot) !== initialProfileToken
+            this.resolveRepoConfigObservationToken(canonicalRoot) !== initialProfileToken
             || this.resolveCustomIndexPolicyFileToken(canonicalRoot) !== initialPolicyToken
         ) return null;
         return {
             collectionName: binding.collectionName,
             marker: this.cloneIndexCompletionMarker(marker),
-            navigation: navigationProof.generation,
             policy: {
                 ...policy,
                 customExtensions: [...policy.customExtensions],
@@ -1395,8 +1505,79 @@ export class Context {
             observations: {
                 profileFileToken: initialProfileToken,
                 policyFileToken: initialPolicyToken,
+            },
+        };
+    }
+
+    public async revalidateProvenGeneration(
+        codebasePath: string,
+        receipt: ProvenGenerationReceipt,
+    ): Promise<ProvenGenerationReceipt | null> {
+        const vectorReceipt = await this.revalidateProvenVectorGeneration(codebasePath, receipt);
+        if (!vectorReceipt) return null;
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const initialProfileToken = vectorReceipt.observations.profileFileToken;
+        const initialPolicyToken = vectorReceipt.observations.policyFileToken;
+        const navigationProof = await this.proveNavigationGeneration(canonicalRoot, vectorReceipt.marker);
+        if (
+            navigationProof.status !== 'valid'
+            || navigationProof.observationToken !== receipt.observations.navigationToken
+            || this.resolveRepoConfigObservationToken(canonicalRoot) !== initialProfileToken
+            || this.resolveCustomIndexPolicyFileToken(canonicalRoot) !== initialPolicyToken
+        ) return null;
+        return {
+            ...vectorReceipt,
+            navigation: navigationProof.generation,
+            observations: {
+                ...vectorReceipt.observations,
                 navigationToken: navigationProof.observationToken,
             },
+        };
+    }
+
+    public async revalidatePreparedGeneration(
+        codebasePath: string,
+        receipt: ProvenVectorGenerationReceipt,
+        options?: {
+            priorGenerationReceipt?: ProvenGenerationReceipt;
+            navigationObservationChanged?: boolean;
+        },
+    ): Promise<PreparedGenerationRevalidation | null> {
+        const vectorReceipt = await this.revalidateProvenVectorGeneration(codebasePath, receipt);
+        if (!vectorReceipt) return null;
+        const navigationProof = await this.proveNavigationGeneration(
+            this.canonicalizeCodebasePath(codebasePath),
+            vectorReceipt.marker,
+            options?.navigationObservationChanged === true,
+        );
+        if (
+            navigationProof.status === 'valid'
+            && options?.priorGenerationReceipt
+            && options.navigationObservationChanged !== true
+            && (
+                !options.priorGenerationReceipt.navigation
+                || !options.priorGenerationReceipt.observations.navigationToken
+                ||
+                navigationProof.generation.navigationSealHash
+                    !== options.priorGenerationReceipt.navigation.navigationSealHash
+                || navigationProof.observationToken
+                    !== options.priorGenerationReceipt.observations.navigationToken
+            )
+        ) return null;
+        const generationReceipt = navigationProof.status === 'valid'
+            ? {
+                ...vectorReceipt,
+                navigation: navigationProof.generation,
+                observations: {
+                    ...vectorReceipt.observations,
+                    navigationToken: navigationProof.observationToken,
+                },
+            }
+            : undefined;
+        return {
+            vectorReceipt,
+            navigationProof,
+            ...(generationReceipt ? { generationReceipt } : {}),
         };
     }
 
@@ -1406,7 +1587,7 @@ export class Context {
 
     private async publishResolvedIndexPolicyForMarker(
         policy: ResolvedIndexPolicy,
-        binding: { collectionName: string; navigationGenerationId?: string },
+        binding: IndexPolicyBinding,
         marker: IndexCompletionMarkerDocument,
         publishMutation?: (publish: () => void) => void,
     ): Promise<void> {
@@ -1424,6 +1605,7 @@ export class Context {
                 || receipt.policyHash !== policy.policyHash
                 || receipt.collectionName !== binding.collectionName
                 || (receipt.navigationGenerationId ?? undefined) !== (binding.navigationGenerationId ?? undefined)
+                || (receipt.navigationSealHash ?? undefined) !== (binding.navigationSealHash ?? undefined)
             ) {
                 throw error;
             }
@@ -1441,6 +1623,7 @@ export class Context {
                 || (proven.marker.navigationGenerationId ?? undefined) !== (marker.navigationGenerationId ?? undefined)
                 || proven.marker.symbolRegistryManifestHash !== marker.symbolRegistryManifestHash
                 || proven.marker.relationshipManifestHash !== marker.relationshipManifestHash
+                || proven.marker.navigationSealHash !== marker.navigationSealHash
             ) {
                 throw error;
             }
@@ -1467,6 +1650,7 @@ export class Context {
             currentBinding?.policyHash === marker.indexPolicyHash
             && currentBinding.collectionName === collectionName
             && (currentBinding.navigationGenerationId ?? undefined) === (marker.navigationGenerationId ?? undefined)
+            && (currentBinding.navigationSealHash ?? undefined) === (marker.navigationSealHash ?? undefined)
         ) {
             return;
         }
@@ -1475,6 +1659,7 @@ export class Context {
             ...(marker.navigationGenerationId
                 ? { navigationGenerationId: marker.navigationGenerationId }
                 : {}),
+            ...(marker.navigationSealHash ? { navigationSealHash: marker.navigationSealHash } : {}),
         }, marker, publishMutation);
     }
 
@@ -1611,6 +1796,7 @@ export class Context {
                 await this.publishResolvedIndexPolicyForMarker(indexPolicy, {
                     collectionName: this.getWriteCollectionName(codebasePath),
                     ...(navigationCandidate ? { navigationGenerationId: navigationCandidate.generationId } : {}),
+                    ...(navigationCandidate ? { navigationSealHash: navigationCandidate.navigationSealHash } : {}),
                 }, marker, options.publishMutation);
             }
             progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
@@ -1669,6 +1855,7 @@ export class Context {
                 await this.publishResolvedIndexPolicyForMarker(indexPolicy, {
                     collectionName: this.getWriteCollectionName(codebasePath),
                     ...(navigationCandidate ? { navigationGenerationId: navigationCandidate.generationId } : {}),
+                    ...(navigationCandidate ? { navigationSealHash: navigationCandidate.navigationSealHash } : {}),
                 }, marker, options.publishMutation);
             }
         } else {
@@ -2197,6 +2384,32 @@ export class Context {
         threshold: number = 0.5,
         filterExpr?: string
     ): Promise<SemanticSearchResult[]> {
+        return this.semanticSearchWithReceipt(
+            undefined,
+            requestOrCodebasePath,
+            query,
+            topK,
+            threshold,
+            filterExpr,
+        );
+    }
+
+    public async semanticSearchInProvenGeneration(
+        receipt: ProvenVectorGenerationReceipt,
+        request: SemanticSearchRequest,
+    ): Promise<SemanticSearchResult[]> {
+        return this.semanticSearchWithReceipt(receipt, request, undefined, 5, 0.5, undefined, true);
+    }
+
+    private async semanticSearchWithReceipt(
+        receipt: ProvenVectorGenerationReceipt | undefined,
+        requestOrCodebasePath: SemanticSearchRequest | string,
+        query?: string,
+        topK: number = 5,
+        threshold: number = 0.5,
+        filterExpr?: string,
+        requestBoundReceipt = false,
+    ): Promise<SemanticSearchResult[]> {
         const request = this.normalizeSemanticSearchRequest(requestOrCodebasePath, query, topK, threshold, filterExpr);
         const resolvedRequest = this.resolveSemanticSearchRequest(request);
         const codebasePath = resolvedRequest.codebasePath;
@@ -2218,7 +2431,12 @@ export class Context {
             return normalized.length > 0 ? normalized : undefined;
         };
 
-        const collectionName = await this.getActiveIndexedCollectionName(codebasePath);
+        const revalidatedReceipt = receipt && !requestBoundReceipt
+            ? await this.revalidateProvenVectorGeneration(codebasePath, receipt)
+            : receipt ?? null;
+        const collectionName = receipt
+            ? revalidatedReceipt?.collectionName ?? null
+            : await this.getActiveVectorCollectionName(codebasePath);
         console.log(`[Context] 🔍 Using collection: ${collectionName}`);
 
         // Check if collection exists and has data
@@ -2501,11 +2719,14 @@ export class Context {
      */
     async getIndexCompletionMarkerForValidation(codebasePath: string): Promise<CompletionMarkerValidationEvidence> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        let policyAuthorityInvalid = false;
         try {
             this.refreshRuntimePolicyAuthority(canonicalRoot);
-        } catch {
+        } catch (error) {
             // Marker evidence remains readable even when policy proof is malformed.
+            if (error instanceof IndexPolicyAuthorityError) policyAuthorityInvalid = true;
         }
+        if (policyAuthorityInvalid) return { status: 'policy_authority_invalid' };
         const boundCollection = this.publishedPolicyBindingsByCodebase.get(canonicalRoot)?.collectionName;
         const publishedPolicy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
         if (
@@ -2515,12 +2736,20 @@ export class Context {
         ) {
             return { status: 'runtime_policy_incompatible' };
         }
-        const vectorGeneration = await this.proveGenerationAuthority(
-            codebasePath,
-            undefined,
-            false,
-            true,
-        ) as ProvenVectorGenerationReceipt | null;
+        let vectorGeneration: ProvenVectorGenerationReceipt | null;
+        try {
+            vectorGeneration = await this.proveGenerationAuthority(
+                codebasePath,
+                undefined,
+                false,
+                true,
+            ) as ProvenVectorGenerationReceipt | null;
+        } catch (error) {
+            if (error instanceof IndexPolicyAuthorityError) {
+                return { status: 'policy_authority_invalid' };
+            }
+            throw error;
+        }
         if (vectorGeneration) {
             const navigationProof = await this.proveNavigationGeneration(canonicalRoot, vectorGeneration.marker, true);
             const generationReceipt = navigationProof.status === 'valid'
@@ -2714,7 +2943,7 @@ export class Context {
 
     publishResolvedIndexPolicy(
         policy: ResolvedIndexPolicy,
-        binding: { collectionName: string; navigationGenerationId?: string },
+        binding: IndexPolicyBinding,
         publishMutation?: (publish: () => void) => void,
     ): IndexPolicyPublicationReceipt {
         const canonicalRoot = this.canonicalizeCodebasePath(policy.canonicalRoot);
@@ -2727,6 +2956,290 @@ export class Context {
             publishMutation,
             () => this.activateResolvedIndexPolicy(policy, binding),
         );
+    }
+
+    public captureDurableIndexAuthority(codebasePath: string): DurableIndexAuthoritySnapshot {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const navigationRoot = resolveNavigationSidecarRoot(this.symbolRegistryStateRoot, canonicalRoot);
+        const capture = (artifactPath: string): DurableIndexAuthorityArtifact | null => {
+            try {
+                const content = fs.readFileSync(artifactPath, 'utf8');
+                return {
+                    content,
+                    digest: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+                };
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+                throw error;
+            }
+        };
+        return {
+            canonicalRoot,
+            policyDocument: capture(this.resolveCustomIndexPolicyPath(canonicalRoot)),
+            navigationPointer: capture(path.join(navigationRoot, 'current.json')),
+        };
+    }
+
+    private durableAuthorityRestoreRoot(): string {
+        return path.join(this.indexPolicyStateRoot, 'restore-transactions');
+    }
+
+    private fsyncPath(targetPath: string): void {
+        const fd = fs.openSync(targetPath, 'r');
+        try {
+            fs.fsyncSync(fd);
+        } finally {
+            fs.closeSync(fd);
+        }
+    }
+
+    private writeDurableAuthorityRestoreTransaction(
+        journalPath: string,
+        transaction: DurableAuthorityRestoreTransaction,
+    ): void {
+        const temporaryJournalPath = `${journalPath}.tmp-${process.pid}-${crypto.randomUUID()}`;
+        fs.writeFileSync(temporaryJournalPath, JSON.stringify(transaction), 'utf8');
+        this.fsyncPath(temporaryJournalPath);
+        fs.renameSync(temporaryJournalPath, journalPath);
+        this.fsyncPath(path.dirname(journalPath));
+    }
+
+    private artifactMatchesPath(
+        artifactPath: string,
+        artifact: DurableIndexAuthorityArtifact | null,
+    ): boolean {
+        try {
+            const content = fs.readFileSync(artifactPath, 'utf8');
+            return Boolean(
+                artifact
+                && crypto.createHash('sha256').update(content, 'utf8').digest('hex') === artifact.digest
+            );
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return artifact === null;
+            throw error;
+        }
+    }
+
+    private completeDurableAuthorityRestoreTransaction(
+        journalPath: string,
+        transaction: DurableAuthorityRestoreTransaction,
+    ): void {
+        transaction.phase = 'swapping';
+        this.writeDurableAuthorityRestoreTransaction(journalPath, transaction);
+        for (let index = transaction.nextEntry; index < transaction.entries.length; index += 1) {
+            const entry = transaction.entries[index];
+            if (!entry) throw new Error('Durable authority restoration entry is missing.');
+            const desired = entry.content === null
+                ? null
+                : { content: entry.content, digest: entry.digest! };
+            if (!this.artifactMatchesPath(entry.targetPath, desired)) {
+                if (!fs.existsSync(entry.displacedPath) && fs.existsSync(entry.targetPath)) {
+                    fs.renameSync(entry.targetPath, entry.displacedPath);
+                    this.fsyncPath(path.dirname(entry.targetPath));
+                }
+                if (entry.content === null) {
+                    fs.rmSync(entry.targetPath, { force: true });
+                } else if (fs.existsSync(entry.temporaryPath)) {
+                    fs.renameSync(entry.temporaryPath, entry.targetPath);
+                } else {
+                    fs.writeFileSync(entry.targetPath, entry.content, 'utf8');
+                }
+                if (entry.content !== null) this.fsyncPath(entry.targetPath);
+                this.fsyncPath(path.dirname(entry.targetPath));
+            }
+            if (!this.artifactMatchesPath(entry.targetPath, desired)) {
+                throw new Error(`Durable authority restoration digest verification failed for '${entry.targetPath}'.`);
+            }
+            transaction.nextEntry = index + 1;
+            this.writeDurableAuthorityRestoreTransaction(journalPath, transaction);
+        }
+        transaction.phase = 'committed';
+        this.writeDurableAuthorityRestoreTransaction(journalPath, transaction);
+        for (const entry of transaction.entries) {
+            fs.rmSync(entry.temporaryPath, { force: true });
+            fs.rmSync(entry.displacedPath, { force: true });
+            this.fsyncPath(path.dirname(entry.targetPath));
+        }
+        fs.rmSync(journalPath, { force: true });
+        this.fsyncPath(path.dirname(journalPath));
+    }
+
+    private parseDurableAuthorityRestoreTransaction(
+        journalPath: string,
+    ): DurableAuthorityRestoreTransaction {
+        const parsed = JSON.parse(fs.readFileSync(journalPath, 'utf8')) as DurableAuthorityRestoreTransaction;
+        if (
+            parsed?.schemaVersion !== 1
+            || typeof parsed.id !== 'string'
+            || typeof parsed.canonicalRoot !== 'string'
+            || !['prepared', 'swapping', 'committed'].includes(parsed.phase)
+            || !Number.isSafeInteger(parsed.nextEntry)
+            || !Array.isArray(parsed.entries)
+            || parsed.entries.length !== 2
+        ) throw new Error(`Durable authority restoration journal '${journalPath}' is invalid.`);
+        const canonicalRoot = this.canonicalizeCodebasePath(parsed.canonicalRoot);
+        const expectedTargets = [
+            this.resolveCustomIndexPolicyPath(canonicalRoot),
+            path.join(resolveNavigationSidecarRoot(this.symbolRegistryStateRoot, canonicalRoot), 'current.json'),
+        ];
+        for (const [index, entry] of parsed.entries.entries()) {
+            if (
+                !entry
+                || entry.targetPath !== expectedTargets[index]
+                || typeof entry.temporaryPath !== 'string'
+                || typeof entry.displacedPath !== 'string'
+                || (entry.content !== null && typeof entry.content !== 'string')
+                || (entry.digest !== null && !/^[a-f0-9]{64}$/.test(entry.digest))
+                || (entry.expectedDigest !== null && !/^[a-f0-9]{64}$/.test(entry.expectedDigest))
+                || ((entry.content === null) !== (entry.digest === null))
+                || (entry.content !== null
+                    && crypto.createHash('sha256').update(entry.content, 'utf8').digest('hex') !== entry.digest)
+            ) throw new Error(`Durable authority restoration journal '${journalPath}' has an invalid entry.`);
+        }
+        return parsed;
+    }
+
+    private recoverDurableIndexAuthorityTransactions(): void {
+        const journalRoot = this.durableAuthorityRestoreRoot();
+        if (!fs.existsSync(journalRoot)) return;
+        for (const name of fs.readdirSync(journalRoot).filter((entry) => entry.endsWith('.json')).sort()) {
+            const journalPath = path.join(journalRoot, name);
+            const transaction = this.parseDurableAuthorityRestoreTransaction(journalPath);
+            this.withIndexPolicyMutationLock(transaction.canonicalRoot, () => {
+                if (transaction.phase === 'prepared') {
+                    for (const entry of transaction.entries) {
+                        const expected = entry.expectedDigest === null
+                            ? null
+                            : { content: '', digest: entry.expectedDigest };
+                        if (!this.artifactMatchesPath(entry.targetPath, expected)) {
+                            throw new Error(
+                                `Prepared durable authority restoration '${transaction.id}' no longer owns current authority.`,
+                            );
+                        }
+                    }
+                }
+                this.completeDurableAuthorityRestoreTransaction(journalPath, transaction);
+            });
+        }
+    }
+
+    public async restoreDurableIndexAuthority(
+        snapshot: DurableIndexAuthoritySnapshot,
+        publishMutation: (publish: () => void) => void,
+        expectedCurrent: DurableIndexAuthoritySnapshot,
+        mutationOwner?: DurableAuthorityMutationOwner,
+    ): Promise<void> {
+        const canonicalRoot = this.canonicalizeCodebasePath(snapshot.canonicalRoot);
+        if (canonicalRoot !== snapshot.canonicalRoot) {
+            throw new Error('Durable index authority snapshot root is not canonical.');
+        }
+        const validateArtifact = (
+            name: string,
+            artifact: DurableIndexAuthorityArtifact | null,
+        ): void => {
+            if (!artifact) return;
+            if (!/^[a-f0-9]{64}$/.test(artifact.digest)) {
+                throw new Error(`Captured ${name} digest is invalid.`);
+            }
+            const digest = crypto.createHash('sha256').update(artifact.content, 'utf8').digest('hex');
+            if (digest !== artifact.digest) {
+                throw new Error(`Captured ${name} bytes do not match their digest.`);
+            }
+        };
+        validateArtifact('index policy', snapshot.policyDocument);
+        validateArtifact('navigation pointer', snapshot.navigationPointer);
+        if (expectedCurrent.canonicalRoot !== canonicalRoot) {
+            throw new Error('Expected durable index authority root does not match the restoration root.');
+        }
+        validateArtifact('expected index policy', expectedCurrent.policyDocument);
+        validateArtifact('expected navigation pointer', expectedCurrent.navigationPointer);
+
+        const policyPath = this.resolveCustomIndexPolicyPath(canonicalRoot);
+        const navigationRoot = resolveNavigationSidecarRoot(this.symbolRegistryStateRoot, canonicalRoot);
+        const pointerPath = path.join(navigationRoot, 'current.json');
+        fs.mkdirSync(path.dirname(policyPath), { recursive: true });
+        fs.mkdirSync(navigationRoot, { recursive: true });
+        const id = crypto.randomUUID();
+        const entries: DurableAuthorityRestoreEntry[] = [
+            { targetPath: policyPath, artifact: snapshot.policyDocument, expected: expectedCurrent.policyDocument },
+            { targetPath: pointerPath, artifact: snapshot.navigationPointer, expected: expectedCurrent.navigationPointer },
+        ].map((entry) => ({
+            targetPath: entry.targetPath,
+            temporaryPath: `${entry.targetPath}.restore-${id}`,
+            displacedPath: `${entry.targetPath}.rollback-${id}`,
+            content: entry.artifact?.content ?? null,
+            digest: entry.artifact?.digest ?? null,
+            expectedDigest: entry.expected?.digest ?? null,
+        }));
+        for (const entry of entries) {
+            if (entry.content !== null) {
+                fs.writeFileSync(entry.temporaryPath, entry.content, 'utf8');
+                this.fsyncPath(entry.temporaryPath);
+            }
+        }
+        const journalRoot = this.durableAuthorityRestoreRoot();
+        fs.mkdirSync(journalRoot, { recursive: true });
+        const journalPath = path.join(journalRoot, `${id}.json`);
+        const transaction: DurableAuthorityRestoreTransaction = {
+            schemaVersion: 1,
+            id,
+            canonicalRoot,
+            phase: 'prepared',
+            nextEntry: 0,
+            ...(mutationOwner ? { mutationOwner: { ...mutationOwner } } : {}),
+            entries,
+        };
+        this.writeDurableAuthorityRestoreTransaction(journalPath, transaction);
+
+        let publicationCount = 0;
+        let committed = false;
+        try {
+            publishMutation(() => {
+                publicationCount += 1;
+                if (publicationCount > 1) {
+                    throw new Error('Durable index authority restoration invoked publish more than once.');
+                }
+                this.withIndexPolicyMutationLock(canonicalRoot, () => {
+                    const current = this.captureDurableIndexAuthority(canonicalRoot);
+                    if (
+                        !this.artifactMatchesPath(policyPath, expectedCurrent.policyDocument)
+                        || !this.artifactMatchesPath(pointerPath, expectedCurrent.navigationPointer)
+                        || current.canonicalRoot !== expectedCurrent.canonicalRoot
+                    ) {
+                        throw new Error('Durable index authority changed after rollback capture; refusing stale restoration.');
+                    }
+                    this.completeDurableAuthorityRestoreTransaction(journalPath, transaction);
+                    committed = true;
+                });
+            });
+            if (publicationCount !== 1 || !committed) {
+                throw new Error('Durable index authority restoration returned without publishing.');
+            }
+        } catch (error) {
+            if (transaction.phase === 'prepared') {
+                for (const entry of entries) fs.rmSync(entry.temporaryPath, { force: true });
+                fs.rmSync(journalPath, { force: true });
+                this.fsyncPath(journalRoot);
+            }
+            throw error;
+        }
+
+        this.clearResolvedIndexPolicyRuntime(canonicalRoot);
+        this.policyFileTokensByCodebase.delete(canonicalRoot);
+        this.refreshRuntimePolicyAuthority(canonicalRoot);
+        const sqlitePath = resolveNavigationSqlitePath(this.symbolRegistryStateRoot, canonicalRoot);
+        fs.rmSync(sqlitePath, { force: true });
+        try {
+            await importNavigationToSqlite({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: canonicalRoot,
+            });
+        } catch (error) {
+            fs.rmSync(sqlitePath, { force: true });
+            console.warn(
+                `[Context] ⚠️  Durable authority was restored for '${canonicalRoot}', but its derived navigation sqlite cache could not be rebuilt: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
     }
 
     clearPublishedIndexPolicy(
@@ -2862,7 +3375,7 @@ export class Context {
 
     private activateResolvedIndexPolicy(
         policy: ResolvedIndexPolicy,
-        binding: { collectionName: string; navigationGenerationId?: string },
+        binding: IndexPolicyBinding,
     ): void {
         const canonicalRoot = policy.canonicalRoot;
         this.runtimeCustomExtensionsByCodebase.set(canonicalRoot, [...policy.customExtensions]);
@@ -2875,6 +3388,7 @@ export class Context {
             policyHash: policy.policyHash,
             collectionName: binding.collectionName,
             ...(binding.navigationGenerationId ? { navigationGenerationId: binding.navigationGenerationId } : {}),
+            ...(binding.navigationSealHash ? { navigationSealHash: binding.navigationSealHash } : {}),
         });
         this.publishedResolvedPoliciesByCodebase.set(canonicalRoot, {
             ...policy,
@@ -2921,7 +3435,17 @@ export class Context {
     }
 
     private refreshRuntimePolicyAuthority(canonicalRoot: string): void {
-        this.loadIndexProfileForCodebase(canonicalRoot);
+        try {
+            this.loadIndexProfileForCodebase(canonicalRoot);
+        } catch (error) {
+            if (error instanceof SatoriRepoConfigAuthorityError) {
+                throw new IndexPolicyAuthorityError(
+                    `Malformed repository profile authority for '${canonicalRoot}': ${error.message}`,
+                    error,
+                );
+            }
+            throw error;
+        }
         this.loadCustomIndexPolicy(canonicalRoot);
         this.recomputePublishedPolicyRuntimeCompatibility(canonicalRoot);
     }
@@ -4478,6 +5002,9 @@ export class Context {
         assertMutationCurrent?: () => void,
         publishMutation?: (publish: () => void) => void,
     ): Promise<void> {
+        if (!generation.navigationSealHash) {
+            throw new Error('Cannot restore a navigation generation that predates seal binding.');
+        }
         const rootPath = path.dirname(path.dirname(generation.generationRoot));
         await publishNavigationSidecarGeneration({
             rootPath,
@@ -4485,6 +5012,7 @@ export class Context {
             generationId: generation.generationId,
             manifestHash: generation.symbolRegistryManifestHash,
             relationshipManifestHash: generation.relationshipManifestHash,
+            navigationSealHash: generation.navigationSealHash,
         }, {
             beforePublish: assertMutationCurrent,
             publishMutation,
@@ -5092,34 +5620,47 @@ export class Context {
         if (!pointerToken || !sealToken) return { status: 'missing' };
 
         let pointer: Record<string, unknown>;
-        let seal: Record<string, unknown>;
+        let rawSeal: unknown;
         try {
             pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8')) as Record<string, unknown>;
-            seal = JSON.parse(fs.readFileSync(sealPath, 'utf8')) as Record<string, unknown>;
+            rawSeal = JSON.parse(fs.readFileSync(sealPath, 'utf8')) as unknown;
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { status: 'missing' };
             if (error instanceof SyntaxError) return { status: 'corrupt' };
             throw error;
         }
-        if (
-            pointer.generationId !== generationId
-            || seal.schemaVersion !== 'navigation_generation_seal_v1'
-            || seal.generationId !== generationId
-            || typeof seal.symbolRegistryManifestHash !== 'string'
-            || typeof seal.relationshipManifestHash !== 'string'
-            || typeof seal.artifactSetHash !== 'string'
-            || !/^[a-f0-9]{64}$/.test(seal.artifactSetHash)
-        ) return { status: 'corrupt' };
+        const seal = parseNavigationGenerationSeal(rawSeal);
+        if (!seal || pointer.generationId !== generationId || seal.generationId !== generationId) {
+            return { status: 'corrupt' };
+        }
+        const navigationSealHash = computeNavigationGenerationSealHash(seal);
         if (
             pointer.symbolRegistryManifestHash !== seal.symbolRegistryManifestHash
             || pointer.relationshipManifestHash !== seal.relationshipManifestHash
+            || typeof pointer.navigationSealHash !== 'string'
+            || pointer.navigationSealHash !== navigationSealHash
         ) return { status: 'incompatible' };
+        const symbolsDirectoryToken = this.resolveFilesystemObservationToken(path.join(generationRoot, 'symbols'));
+        const relationshipsDirectoryToken = this.resolveFilesystemObservationToken(path.join(generationRoot, 'relationships'));
+        const symbolShardDirectoryToken = this.resolveFilesystemObservationToken(path.join(generationRoot, 'symbols', 'by-file'));
+        const relationshipShardDirectoryToken = this.resolveFilesystemObservationToken(path.join(generationRoot, 'relationships', 'by-file'));
+        if (
+            !symbolsDirectoryToken
+            || !relationshipsDirectoryToken
+            || !symbolShardDirectoryToken
+            || !relationshipShardDirectoryToken
+        ) return { status: 'missing' };
         return { status: 'valid', token: JSON.stringify({
             pointerToken,
             sealToken,
+            symbolsDirectoryToken,
+            relationshipsDirectoryToken,
+            symbolShardDirectoryToken,
+            relationshipShardDirectoryToken,
             symbolRegistryManifestHash: seal.symbolRegistryManifestHash,
             relationshipManifestHash: seal.relationshipManifestHash,
             artifactSetHash: seal.artifactSetHash,
+            navigationSealHash,
         }) };
     }
 
@@ -5137,7 +5678,7 @@ export class Context {
 
     private resolveVerifiedIndexPolicyDocumentDigest(policyPath: string): string {
         const parsed = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
-        const payload = {
+        const payloadBase = {
             schemaVersion: parsed.schemaVersion,
             canonicalRoot: parsed.canonicalRoot,
             customExtensions: parsed.customExtensions,
@@ -5150,6 +5691,9 @@ export class Context {
             collectionName: parsed.collectionName,
             navigationGenerationId: parsed.navigationGenerationId,
         };
+        const payload = Object.prototype.hasOwnProperty.call(parsed, 'navigationSealHash')
+            ? { ...payloadBase, navigationSealHash: parsed.navigationSealHash }
+            : payloadBase;
         const expectedDigest = crypto.createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex');
         if (parsed.documentDigest !== expectedDigest) {
             throw new Error('Removed index policy document digest is invalid.');
@@ -5181,8 +5725,9 @@ export class Context {
             this.policyFileTokensByCodebase.set(canonicalRoot, null);
             return;
         }
+        const document = fs.readFileSync(this.resolveCustomIndexPolicyPath(canonicalRoot), 'utf8');
         try {
-            const parsed = JSON.parse(fs.readFileSync(this.resolveCustomIndexPolicyPath(canonicalRoot), 'utf8')) as unknown;
+            const parsed = JSON.parse(document) as unknown;
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
                 throw new Error('Custom index policy document is not an object.');
             }
@@ -5219,7 +5764,7 @@ export class Context {
             if (!profile) {
                 throw new Error('Custom index policy profile is malformed.');
             }
-            const payload = {
+            const payloadBase = {
                 schemaVersion: 'satori_index_policy_v2',
                 canonicalRoot,
                 customExtensions: normalizeSupportedExtensions(extensions),
@@ -5232,6 +5777,15 @@ export class Context {
                 collectionName: typeof record.collectionName === 'string' ? record.collectionName : '',
                 navigationGenerationId: typeof record.navigationGenerationId === 'string' ? record.navigationGenerationId : '',
             };
+            const hasNavigationSealHash = Object.prototype.hasOwnProperty.call(record, 'navigationSealHash');
+            const payload = hasNavigationSealHash
+                ? {
+                    ...payloadBase,
+                    navigationSealHash: typeof record.navigationSealHash === 'string'
+                        ? record.navigationSealHash
+                        : '',
+                }
+                : payloadBase;
             const expectedDigest = crypto.createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex');
             if (record.documentDigest !== expectedDigest) {
                 throw new Error('Custom index policy document digest is invalid.');
@@ -5241,9 +5795,19 @@ export class Context {
                 extensions: payload.supportedExtensions,
                 ignorePatterns: payload.effectiveIgnorePatterns,
             }), 'utf8').digest('hex');
+            if (
+                hasNavigationSealHash
+                && 'navigationSealHash' in payload
+                && Boolean(payload.navigationGenerationId) !== Boolean(payload.navigationSealHash)
+            ) {
+                throw new Error('Custom index policy navigation generation and seal bindings are inconsistent.');
+            }
             if (!/^[a-f0-9]{64}$/.test(payload.policyHash) || payload.policyHash !== expectedPolicyHash
                 || !payload.collectionName.trim()
-                || (payload.navigationGenerationId && !/^[a-zA-Z0-9_-]+$/.test(payload.navigationGenerationId))) {
+                || (payload.navigationGenerationId && !/^[a-zA-Z0-9_-]+$/.test(payload.navigationGenerationId))
+                || ('navigationSealHash' in payload
+                    && payload.navigationSealHash
+                    && !/^[a-f0-9]{64}$/.test(payload.navigationSealHash))) {
                 throw new Error('Custom index policy generation binding is invalid.');
             }
             this.activateResolvedIndexPolicy({
@@ -5258,6 +5822,9 @@ export class Context {
             }, {
                 collectionName: payload.collectionName,
                 ...(payload.navigationGenerationId ? { navigationGenerationId: payload.navigationGenerationId } : {}),
+                ...('navigationSealHash' in payload && payload.navigationSealHash
+                    ? { navigationSealHash: payload.navigationSealHash }
+                    : {}),
             });
             this.loadedCustomPolicyRoots.add(canonicalRoot);
             this.policyFileTokensByCodebase.set(canonicalRoot, currentToken);
@@ -5267,13 +5834,16 @@ export class Context {
             this.policyFileTokensByCodebase.delete(canonicalRoot);
             this.policyRuntimeCompatibilityByCodebase.delete(canonicalRoot);
             this.policyDocumentDigestsByCodebase.delete(canonicalRoot);
-            throw new Error(`Malformed custom index policy for '${canonicalRoot}': ${error instanceof Error ? error.message : String(error)}`);
+            throw new IndexPolicyAuthorityError(
+                `Malformed custom index policy for '${canonicalRoot}': ${error instanceof Error ? error.message : String(error)}`,
+                error,
+            );
         }
     }
 
     private persistCustomIndexPolicy(
         policy: ResolvedIndexPolicy,
-        binding: { collectionName: string; navigationGenerationId?: string },
+        binding: IndexPolicyBinding,
         publishMutation?: (publish: () => void) => void,
         activate?: () => void,
     ): IndexPolicyPublicationReceipt {
@@ -5283,6 +5853,12 @@ export class Context {
         }
         if (binding.navigationGenerationId && !/^[a-zA-Z0-9_-]+$/.test(binding.navigationGenerationId)) {
             throw new Error('Index policy navigation generation binding is invalid.');
+        }
+        if (binding.navigationSealHash && !/^[a-f0-9]{64}$/.test(binding.navigationSealHash)) {
+            throw new Error('Index policy navigation seal binding is invalid.');
+        }
+        if (Boolean(binding.navigationGenerationId) !== Boolean(binding.navigationSealHash)) {
+            throw new Error('Index policy navigation generation and seal bindings must be published together.');
         }
         const expectedPolicyHash = crypto.createHash('sha256').update(JSON.stringify({
             profile: policy.profile,
@@ -5389,6 +5965,7 @@ export class Context {
             policyHash: policy.policyHash,
             collectionName: binding.collectionName,
             navigationGenerationId: binding.navigationGenerationId ?? '',
+            navigationSealHash: binding.navigationSealHash ?? '',
         };
         const documentDigest = crypto.createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex');
         const receipt: IndexPolicyPublicationReceipt = {
@@ -5399,6 +5976,7 @@ export class Context {
             policyHash: policy.policyHash,
             collectionName: binding.collectionName,
             ...(binding.navigationGenerationId ? { navigationGenerationId: binding.navigationGenerationId } : {}),
+            ...(binding.navigationSealHash ? { navigationSealHash: binding.navigationSealHash } : {}),
         };
         fs.writeFileSync(temporaryPath, JSON.stringify({ ...payload, documentDigest }, null, 2));
         let publicationCount = 0;

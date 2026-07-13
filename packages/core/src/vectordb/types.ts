@@ -113,6 +113,8 @@ export interface IndexCompletionMarkerDocument extends VectorDocumentMetadata {
     navigationGenerationId?: string;
     symbolRegistryManifestHash?: string;
     relationshipManifestHash?: string;
+    /** Canonical SHA-256 digest of the published navigation generation seal. */
+    navigationSealHash?: string;
 }
 
 export const INDEX_COMPLETION_MARKER_DOC_ID = '__satori_index_completion_marker_v1__';

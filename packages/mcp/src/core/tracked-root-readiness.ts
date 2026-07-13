@@ -1,4 +1,8 @@
-import { compareContractStrings, type ProvenGenerationReceipt } from "@zokizuan/satori-core";
+import {
+    compareContractStrings,
+    type ProvenGenerationReceipt,
+    type ProvenVectorGenerationReceipt,
+} from "@zokizuan/satori-core";
 import type { CodebaseInfo } from "../config.js";
 import type { CallGraphDirection, CallGraphSymbolRef } from "./call-graph.js";
 import type {
@@ -69,6 +73,7 @@ export type TrackedRootReadinessState =
         state: "ready";
         root: TrackedRootEntry;
         proofDebugHint?: CompletionProbeDebugHint;
+        vectorReceipt?: ProvenVectorGenerationReceipt;
         generationReceipt?: ProvenGenerationReceipt;
         navigationStatus?: CompletionProofValidationResult['navigationStatus'];
         preparedObservation?: string;
@@ -382,6 +387,7 @@ export class TrackedRootReadiness {
         absolutePath: string,
         accessMode: "semantic" | "navigation" = "semantic",
         onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
+        options: { observePreparedRead?: (root: string) => string | null } = {},
     ): Promise<TrackedRootReadinessState> {
         this.measurePhase("snapshot_reload", () => this.host.refreshSnapshotStateFromDisk(), onPhase);
 
@@ -429,6 +435,7 @@ export class TrackedRootReadiness {
         }
 
         const effectiveRoot = searchableRoot.path;
+        const preparedObservationBefore = options.observePreparedRead?.(effectiveRoot);
         const gateResult = this.measurePhase(
             "fingerprint_gate",
             () => this.host.enforceFingerprintGate(effectiveRoot),
@@ -503,12 +510,18 @@ export class TrackedRootReadiness {
             };
         }
 
+        const preparedObservationAfter = options.observePreparedRead?.(effectiveRoot);
         return {
             state: "ready",
             root: searchableRoot,
             proofDebugHint,
+            ...(completionProof.vectorReceipt ? { vectorReceipt: completionProof.vectorReceipt } : {}),
             ...(completionProof.generationReceipt ? { generationReceipt: completionProof.generationReceipt } : {}),
-            ...(completionProof.navigationStatus ? { navigationStatus: completionProof.navigationStatus } : {}),
+            navigationStatus: completionProof.navigationStatus ?? 'unverified',
+            ...(preparedObservationBefore
+                && preparedObservationAfter === preparedObservationBefore
+                ? { preparedObservation: preparedObservationAfter }
+                : {}),
         };
     }
 }

@@ -7,6 +7,7 @@ import {
     Context,
     createLanguageAnalysisService,
     resetSharedRuntimeNavigationStoreForTests,
+    resolveNavigationSidecarRoot,
 } from '@zokizuan/satori-core';
 import type {
     CollectionDetails,
@@ -55,7 +56,7 @@ type SearchGroup = {
     target: {
         file: string;
         span: { startLine: number; endLine: number };
-        symbolId: string;
+        symbolId?: string;
     };
     displayLabel: string;
     navigation: { graph: string; callerSearchTerm?: string };
@@ -90,6 +91,9 @@ class TestEmbedding implements Embedding {
 
 class InMemoryVectorDatabase implements VectorDatabase {
     readonly collections = new Map<string, Map<string, VectorDocument>>();
+    payloadCountQueryCount = 0;
+    markerQueryCount = 0;
+    hasCollectionCount = 0;
 
     private listDocuments(collectionName: string, filterExpr?: string): VectorDocument[] {
         const collection = this.collections.get(collectionName);
@@ -124,6 +128,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 
     async hasCollection(collectionName: string): Promise<boolean> {
+        this.hasCollectionCount += 1;
         return this.collections.has(collectionName);
     }
 
@@ -178,6 +183,17 @@ class InMemoryVectorDatabase implements VectorDatabase {
         outputFields: string[],
         limit: number = 1000,
     ): Promise<Record<string, unknown>[]> {
+        if (filterExpr.includes('__satori_index_completion_marker_v1__')) {
+            this.markerQueryCount += 1;
+        }
+        if (
+            filterExpr === 'fileExtension != ".satori_meta"'
+            && outputFields.length === 1
+            && outputFields[0] === 'id'
+            && limit > 1
+        ) {
+            this.payloadCountQueryCount += 1;
+        }
         return this.listDocuments(collectionName, filterExpr).slice(0, limit).map((document) => {
             const row: Record<string, unknown> = {};
             for (const field of outputFields) {
@@ -341,6 +357,167 @@ test('cached exact search cannot survive direct collection deletion', async () =
     });
 });
 
+test('cached exact search downgrades navigation after direct symbol shard deletion', async () => {
+    await withTempState(async ({ repoPath, stateRoot }) => {
+        fs.writeFileSync(
+            path.join(repoPath, 'src', 'owner.ts'),
+            'export function cachedShardOwner() { return true; }\n',
+            'utf8',
+        );
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            languageAnalyzer: createLanguageAnalysisService(),
+            symbolRegistryStateRoot: stateRoot,
+        });
+        await context.indexCodebase(repoPath);
+        const receipt = await context.resolveProvenGeneration(repoPath);
+        assert.ok(receipt?.navigation);
+        vectorDatabase.payloadCountQueryCount = 0;
+        const syncManager = {
+            getPreparedReadObservation: () => ({ freshnessEpoch: 1 }),
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: '2026-06-18T00:00:00.000Z',
+                thresholdMs: 180000,
+            }),
+            touchWatchedCodebase: async () => undefined,
+        } as unknown as SyncManager;
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(stateRoot, 'leases'),
+            ownerId: 'cached-shard-search-test',
+        });
+        const handlers = new ToolHandlers(
+            context,
+            createSnapshotManager(repoPath),
+            syncManager,
+            receipt!.marker.fingerprint,
+            CAPABILITIES,
+            () => Date.parse('2026-06-18T00:00:00.000Z'),
+            undefined,
+            null,
+            undefined,
+            undefined,
+            null,
+            coordinator,
+        );
+        const first = parsePayload(await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'cachedShardOwner',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        }));
+        assert.equal(first.status, 'ok', JSON.stringify(first));
+        assert.ok(vectorDatabase.payloadCountQueryCount > 0);
+        const coldPayloadCountQueries = vectorDatabase.payloadCountQueryCount;
+
+        const originalReadFileSync = fs.readFileSync;
+        let navigationShardReads = 0;
+        fs.readFileSync = ((targetPath: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+            if (
+                typeof targetPath === 'string'
+                && targetPath.includes(`${path.sep}generations${path.sep}`)
+                && targetPath.includes(`${path.sep}by-file${path.sep}`)
+            ) {
+                navigationShardReads += 1;
+            }
+            return (originalReadFileSync as (...readArgs: unknown[]) => unknown)(targetPath, ...args);
+        }) as typeof fs.readFileSync;
+        let warm: JsonObject;
+        try {
+            warm = parsePayload(await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'cachedShardOwner',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+            }));
+        } finally {
+            fs.readFileSync = originalReadFileSync;
+        }
+        assert.equal(warm.status, 'ok', JSON.stringify(warm));
+        assert.equal(vectorDatabase.payloadCountQueryCount, coldPayloadCountQueries);
+        assert.equal(navigationShardReads, 0);
+
+        const mutation = coordinator.acquire(repoPath, 'sync');
+        assert.equal(mutation.acquired, true);
+        const duringMutation = parsePayload(await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'cachedShardOwner',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        }));
+        assert.equal(duringMutation.status, 'not_ready', JSON.stringify(duringMutation));
+        assert.equal(duringMutation.reason, 'indexing');
+        if (mutation.acquired) coordinator.release(mutation.lease);
+        const afterMutationGenerationChange = parsePayload(await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'cachedShardOwner',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        }));
+        assert.equal(afterMutationGenerationChange.status, 'ok', JSON.stringify(afterMutationGenerationChange));
+        assert.ok(vectorDatabase.payloadCountQueryCount > coldPayloadCountQueries);
+
+        const semantic = parsePayload(await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where does the runtime decide whether an owner is cached',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        }));
+        assert.equal(semantic.status, 'ok', JSON.stringify(semantic));
+        const semanticPayloadCountQueries = vectorDatabase.payloadCountQueryCount;
+        const semanticMarkerQueries = vectorDatabase.markerQueryCount;
+        const semanticCollectionProbes = vectorDatabase.hasCollectionCount;
+        const warmSemantic = parsePayload(await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where does the runtime decide whether an owner is cached',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        }));
+        assert.equal(warmSemantic.status, 'ok', JSON.stringify(warmSemantic));
+        assert.equal(vectorDatabase.payloadCountQueryCount, semanticPayloadCountQueries);
+        assert.equal(vectorDatabase.markerQueryCount - semanticMarkerQueries, 1);
+        assert.equal(vectorDatabase.hasCollectionCount - semanticCollectionProbes, 1);
+
+        const generationRoot = path.join(
+            resolveNavigationSidecarRoot(stateRoot, repoPath),
+            'generations',
+            receipt!.navigation!.generationId,
+        );
+        const symbolIndex = JSON.parse(fs.readFileSync(path.join(generationRoot, 'symbols', 'index.json'), 'utf8')) as {
+            files: Array<{ shardPath: string }>;
+        };
+        assert.ok(symbolIndex.files[0]?.shardPath);
+        fs.rmSync(path.join(generationRoot, symbolIndex.files[0]!.shardPath));
+
+        const degraded = parsePayload(await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'cachedShardOwner',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debugMode: 'ranking',
+        }));
+        assert.equal(degraded.status, 'ok', JSON.stringify(degraded));
+        assert.equal(vectorDatabase.payloadCountQueryCount, semanticPayloadCountQueries);
+        assert.notEqual(degraded.results?.[0]?.navigation?.graph, 'ready');
+        assert.equal(degraded.results?.[0]?.target?.symbolId, undefined);
+        assert.ok(
+            Array.isArray(degraded.warnings)
+            && degraded.warnings.some((warning) => warning?.code === 'NAVIGATION_REPAIR_REQUIRED'),
+            JSON.stringify(degraded),
+        );
+        assert.equal(degraded.hints?.debugSearch?.exactRegistry?.reason, 'navigation_unavailable');
+    });
+});
+
 test('MCP handlers reject stale rename symbols and publish new navigation after incremental sync', async () => {
     await withTempState(async ({ repoPath, stateRoot }) => {
         const oldRelativePath = 'src/old.ts';
@@ -390,10 +567,20 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
             () => Date.parse('2026-06-18T00:00:00.000Z'),
         );
         const testHandlers = handlers as unknown as {
-            validateCompletionProof: () => Promise<{ outcome: 'valid' }>;
+            validateCompletionProof: () => Promise<Record<string, unknown>>;
         };
-        testHandlers.validateCompletionProof = async () => ({ outcome: 'valid' });
-
+        testHandlers.validateCompletionProof = async () => {
+            const receipt = await context.proveIndexedGeneration(repoPath);
+            assert.ok(receipt);
+            return {
+                outcome: 'valid',
+                marker: receipt.marker,
+                collectionName: receipt.collectionName,
+                vectorReceipt: receipt,
+                generationReceipt: receipt,
+                navigationStatus: 'valid',
+            };
+        };
         const initialOutline = parsePayload(await handlers.handleFileOutline({
             path: repoPath,
             file: oldRelativePath,
@@ -551,10 +738,20 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
             () => Date.parse('2026-06-18T00:00:00.000Z'),
         );
         const testHandlers = handlers as unknown as {
-            validateCompletionProof: () => Promise<{ outcome: 'valid' }>;
+            validateCompletionProof: () => Promise<Record<string, unknown>>;
         };
-        testHandlers.validateCompletionProof = async () => ({ outcome: 'valid' });
-
+        testHandlers.validateCompletionProof = async () => {
+            const receipt = await context.proveIndexedGeneration(repoPath);
+            assert.ok(receipt);
+            return {
+                outcome: 'valid',
+                marker: receipt.marker,
+                collectionName: receipt.collectionName,
+                vectorReceipt: receipt,
+                generationReceipt: receipt,
+                navigationStatus: 'valid',
+            };
+        };
         const initialOutline = parsePayload(await handlers.handleFileOutline({
             path: repoPath,
             file: relativePath,

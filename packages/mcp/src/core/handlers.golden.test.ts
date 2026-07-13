@@ -59,7 +59,7 @@ type SearchFixtureResult = {
     symbolLabel: string;
 };
 type ToolHandlersTestOverrides = {
-    validateCompletionProof: (repoPath: string) => Promise<{ outcome: 'ok' }>;
+    validateCompletionProof: (repoPath: string) => Promise<Record<string, unknown>>;
 };
 
 function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
@@ -267,7 +267,13 @@ function createHandlers(repoPath: string, searchResults: SearchFixtureResult[] =
         CAPABILITIES,
         () => Date.parse('2026-01-01T01:00:00.000Z'),
     );
-    (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({ outcome: 'ok' });
+    (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({
+        outcome: 'valid',
+        navigationStatus: 'valid',
+        generationReceipt: {
+            navigation: { navigationSealHash: 'a'.repeat(64) },
+        },
+    });
     return { handlers, snapshotManager, syncManager };
 }
 

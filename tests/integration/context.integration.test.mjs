@@ -557,6 +557,7 @@ test('integration: ignore negation patterns keep explicitly unignored files inde
     context.publishResolvedIndexPolicy(policy, {
       collectionName: context.resolveCollectionName(codebasePath),
       navigationGenerationId: stats.navigationCandidate?.generationId,
+      navigationSealHash: stats.navigationCandidate?.navigationSealHash,
     });
     assert.equal(stats.indexedFiles, 2);
 
@@ -593,6 +594,7 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
     context.publishResolvedIndexPolicy(policy, {
       collectionName: context.resolveCollectionName(codebasePath),
       navigationGenerationId: stats.navigationCandidate?.generationId,
+      navigationSealHash: stats.navigationCandidate?.navigationSealHash,
     });
 
     fs.writeFileSync(path.join(codebasePath, 'generated/drop.ts'), 'export const dropped = false;', 'utf8');

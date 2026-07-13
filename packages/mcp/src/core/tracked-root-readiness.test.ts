@@ -93,3 +93,23 @@ test("validated bound collection proof avoids a duplicate collection probe", asy
     assert.equal(result.state, "ready");
     assert.equal(collectionProbes, 0);
 });
+
+test("tracked readiness binds one completion proof to one stable prepared-read observation", async () => {
+    let completionProofCalls = 0;
+    const host = createHost();
+    host.validateCompletionProof = async () => {
+        completionProofCalls += 1;
+        return { outcome: "valid", collectionName: "bound-generation" };
+    };
+
+    const result = await new TrackedRootReadiness(host).prepareTrackedRootForRead(
+        "/repo/src/index.ts",
+        "semantic",
+        undefined,
+        { observePreparedRead: () => "stable-observation" },
+    );
+
+    assert.equal(result.state, "ready");
+    assert.equal(result.state === "ready" ? result.preparedObservation : undefined, "stable-observation");
+    assert.equal(completionProofCalls, 1);
+});

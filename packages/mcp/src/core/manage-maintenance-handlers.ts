@@ -3,13 +3,12 @@ import {
     COLLECTION_LIMIT_MESSAGE,
     RemoteCollectionDeletePendingError,
     computeSymbolQualitySummaryFromAggregate,
-    computeSymbolQualitySummaryFromManifestRead,
     computeSymbolQualitySummaryFromSidecarRead,
     formatSymbolQualityMarker,
-    readSymbolRegistryManifest,
     readSymbolRegistrySidecar,
     readNavigationGenerationSeal,
     resolveLanguageCapabilityEvidence,
+    unknownSymbolQualitySummary,
     type Context,
     type LanguageCapabilityEvidenceSummary,
     type SymbolQualitySummary,
@@ -651,30 +650,48 @@ export class ManageMaintenanceHandlers {
             let languageCapabilities: LanguageCapabilityEvidenceSummary | undefined;
             // Attach observed quality for lifecycle statuses that refer to a real root path.
             if (envelopeStatus === "ok" || envelopeStatus === "not_ready" || envelopeStatus === "not_indexed") {
+                const sealRead = await readNavigationGenerationSeal(undefined, envelopePath);
                 if (includeCapabilities) {
                     const registryRead = await readSymbolRegistrySidecar({
                         normalizedRootPath: envelopePath,
                     });
-                    symbolQuality = computeSymbolQualitySummaryFromSidecarRead(registryRead);
+                    const evidenceAvailability: NonNullable<SymbolQualitySummary['evidenceAvailability']> =
+                        trackedRootState.state === 'ready'
+                            && trackedRootState.navigationStatus === 'valid'
+                            && sealRead.status === 'ok'
+                            && registryRead.status === 'ok'
+                            ? 'ready'
+                            : sealRead.status !== 'ok'
+                                ? sealRead.status
+                                : registryRead.status === 'ok'
+                                ? 'unverified'
+                                : registryRead.status;
+                    symbolQuality = {
+                        ...computeSymbolQualitySummaryFromSidecarRead(registryRead),
+                        evidenceAvailability,
+                    };
                     languageCapabilities = await resolveLanguageCapabilityEvidence({
                         normalizedRootPath: envelopePath,
-                        searchable: envelopeStatus === "ok",
+                        searchable: envelopeStatus === "ok" && evidenceAvailability === 'ready',
                         registryRead,
                     });
                 } else {
-                    const sealRead = await readNavigationGenerationSeal(undefined, envelopePath);
+                    const evidenceAvailability: NonNullable<SymbolQualitySummary['evidenceAvailability']> =
+                        trackedRootState.state === 'ready'
+                            && trackedRootState.navigationStatus === 'valid'
+                            && sealRead.status === 'ok'
+                            ? 'ready'
+                            : sealRead.status === 'ok'
+                                ? 'unverified'
+                                : sealRead.status;
                     const compactSymbolQuality = sealRead.status === 'ok'
                         ? computeSymbolQualitySummaryFromAggregate(sealRead.seal.symbolQuality)
-                        : computeSymbolQualitySummaryFromManifestRead(
-                            await readSymbolRegistryManifest({ normalizedRootPath: envelopePath }),
+                        : unknownSymbolQualitySummary(
+                            `Observed symbol quality unavailable (${sealRead.reason}).`,
                         );
                     symbolQuality = {
                         ...compactSymbolQuality,
-                        evidenceAvailability: trackedRootState.state === 'ready'
-                            ? trackedRootState.navigationStatus === 'valid'
-                                ? 'ready'
-                                : trackedRootState.navigationStatus ?? 'unverified'
-                            : 'unverified',
+                        evidenceAvailability,
                     };
                 }
                 if (envelopeStatus === "ok") {
@@ -750,6 +767,7 @@ export class ManageMaintenanceHandlers {
                                 status: symbolQuality.status,
                                 basis: symbolQuality.basis,
                                 message: symbolQuality.message,
+                                evidenceAvailability: symbolQuality.evidenceAvailability ?? 'unverified',
                             },
                     } : {}),
                     ...(languageCapabilities ? { languageCapabilities } : {}),

@@ -69,7 +69,7 @@ export interface ManageIndexToolHint {
 
 export type ManageCompactSymbolQuality = Pick<
     SymbolQualitySummary,
-    "status" | "basis" | "message"
+    "status" | "basis" | "message" | "evidenceAvailability"
 >;
 
 export interface ManageIndexResponseEnvelope {

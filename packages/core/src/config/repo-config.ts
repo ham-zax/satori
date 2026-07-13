@@ -9,6 +9,16 @@ export interface SatoriRepoConfig {
     profile: IndexProfile;
 }
 
+export class SatoriRepoConfigAuthorityError extends Error {
+    public readonly authorityCause?: unknown;
+
+    constructor(message: string, authorityCause?: unknown) {
+        super(message);
+        this.name = 'SatoriRepoConfigAuthorityError';
+        this.authorityCause = authorityCause;
+    }
+}
+
 function stripTomlComment(line: string): string {
     let inString = false;
     let escaped = false;
@@ -36,7 +46,14 @@ function stripTomlComment(line: string): string {
 function parseTomlScalar(rawValue: string): string {
     const value = stripTomlComment(rawValue).trim();
     if (value.startsWith('"') && value.endsWith('"')) {
-        return JSON.parse(value) as string;
+        try {
+            return JSON.parse(value) as string;
+        } catch (error) {
+            throw new SatoriRepoConfigAuthorityError(
+                `Invalid quoted value in ${SATORI_REPO_CONFIG_FILENAME}.`,
+                error,
+            );
+        }
     }
     return value;
 }
@@ -64,7 +81,7 @@ export function parseSatoriRepoConfig(content: string, configPath: string): Sato
         }
         profile = normalizeIndexProfile(parseTomlScalar(profileMatch[1] || ''));
         if (!profile) {
-            throw new Error(`Invalid ${SATORI_REPO_CONFIG_FILENAME} index.profile in ${configPath}. Expected one of: default, minimal, all-text.`);
+            throw new SatoriRepoConfigAuthorityError(`Invalid ${SATORI_REPO_CONFIG_FILENAME} index.profile in ${configPath}. Expected one of: default, minimal, all-text.`);
         }
     }
 

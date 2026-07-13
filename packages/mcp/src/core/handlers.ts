@@ -6,7 +6,8 @@ import {
     Context,
     COLLECTION_LIMIT_MESSAGE,
     type IndexCompletionMarkerDocument,
-    type ProvenGenerationReceipt,
+    type ProvenVectorGenerationReceipt,
+    type PreparedGenerationRevalidation,
     createRuntimeNavigationStore,
     type NavigationStore,
     VoyageAIReranker,
@@ -266,6 +267,10 @@ type IndexProfileView = {
 };
 
 type ContextLifecycleCapabilities = IndexCompletionMarkerContext & {
+    getIndexAuthorityObservations?: (codebasePath: string) => {
+        vector: string;
+        navigation: string;
+    } | null;
     resolveCollectionName?: (codebasePath: string) => string;
     resolveStagedCollectionName?: (codebasePath: string, generationId: string) => string;
     setWriteCollectionOverride?: (codebasePath: string, collectionName: string | null) => void;
@@ -274,11 +279,40 @@ type ContextLifecycleCapabilities = IndexCompletionMarkerContext & {
     getIndexedExtensionsForCodebase?: (codebasePath: string) => string[];
     getIndexedExtensions?: () => string[];
     getTrackedRelativePaths?: (codebasePath: string) => string[];
-    revalidateProvenGeneration?: (
+    revalidatePreparedGeneration?: (
         codebasePath: string,
-        receipt: ProvenGenerationReceipt,
-    ) => Promise<ProvenGenerationReceipt | null>;
+        receipt: ProvenVectorGenerationReceipt,
+        options?: {
+            priorGenerationReceipt?: import('@zokizuan/satori-core').ProvenGenerationReceipt;
+            navigationObservationChanged?: boolean;
+        },
+    ) => Promise<PreparedGenerationRevalidation | null>;
+    semanticSearchInProvenGeneration?: (
+        receipt: ProvenVectorGenerationReceipt,
+        request: import('@zokizuan/satori-core').SemanticSearchRequest,
+    ) => Promise<import('@zokizuan/satori-core').SemanticSearchResult[]>;
 };
+
+type PreparedReadObservationSnapshot = {
+    vectorAuthority: string;
+    navigationAuthority: string;
+    freshnessEpoch: number;
+    mutationGeneration: number;
+};
+
+function parsePreparedReadObservation(value: string): PreparedReadObservationSnapshot | null {
+    try {
+        const parsed = JSON.parse(value) as Partial<PreparedReadObservationSnapshot>;
+        return typeof parsed.vectorAuthority === 'string'
+            && typeof parsed.navigationAuthority === 'string'
+            && typeof parsed.freshnessEpoch === 'number'
+            && typeof parsed.mutationGeneration === 'number'
+            ? parsed as PreparedReadObservationSnapshot
+            : null;
+    } catch {
+        return null;
+    }
+}
 
 type SnapshotAccessGateResult = {
     allowed: boolean;
@@ -898,12 +932,13 @@ export class ToolHandlers {
         try {
             const syncObservation = this.syncManager.getPreparedReadObservation(codebasePath);
             const mutationObservation = this.mutationLeaseCoordinator?.observe(codebasePath);
-            const authorityObservation = this.context.getIndexAuthorityObservation(codebasePath);
+            const authorityObservation = this.contextLifecycle().getIndexAuthorityObservations?.(codebasePath);
             if (!syncObservation || !mutationObservation || mutationObservation.mutationActive || !authorityObservation) {
                 return null;
             }
             return JSON.stringify({
-                authorityObservation,
+                vectorAuthority: authorityObservation.vector,
+                navigationAuthority: authorityObservation.navigation,
                 freshnessEpoch: syncObservation.freshnessEpoch,
                 mutationGeneration: mutationObservation.generation,
             });
@@ -913,32 +948,55 @@ export class ToolHandlers {
     }
 
     private async getCachedPreparedRead(absolutePath: string): Promise<Extract<TrackedRootReadinessState, { state: 'ready' }> | null> {
-        const cached = this.preparedReadCache.get(
+        const candidate = this.preparedReadCache.getCandidate(
             absolutePath,
             this.now(),
             (targetPath, root) => this.isPathWithinCodebase(targetPath, root),
-            (root) => this.getPreparedReadObservation(root),
         );
-        if (!cached?.generationReceipt) return null;
+        const cached = candidate?.state;
+        if (!cached?.vectorReceipt) return null;
         const root = cached.root.path;
         const observationBefore = this.getPreparedReadObservation(root);
-        const revalidate = this.contextLifecycle().revalidateProvenGeneration;
+        const revalidate = this.contextLifecycle().revalidatePreparedGeneration;
         if (!observationBefore || typeof revalidate !== 'function') {
             this.preparedReadCache.evict(root);
             return null;
         }
-        const receipt = await revalidate.call(this.context, root, cached.generationReceipt).catch(() => null);
-        const observationAfter = this.getPreparedReadObservation(root);
-        if (!receipt || observationAfter !== observationBefore) {
+        const cachedObservation = candidate ? parsePreparedReadObservation(candidate.observation) : null;
+        const currentObservation = observationBefore ? parsePreparedReadObservation(observationBefore) : null;
+        if (
+            !cachedObservation
+            || !currentObservation
+            || cachedObservation.vectorAuthority !== currentObservation.vectorAuthority
+            || cachedObservation.freshnessEpoch !== currentObservation.freshnessEpoch
+            || cachedObservation.mutationGeneration !== currentObservation.mutationGeneration
+        ) {
             this.preparedReadCache.evict(root);
             return null;
         }
-        return { ...cached, generationReceipt: receipt, preparedObservation: observationBefore };
+        const navigationObservationChanged =
+            cachedObservation.navigationAuthority !== currentObservation.navigationAuthority;
+        const proof = await revalidate.call(this.context, root, cached.vectorReceipt, {
+            ...(cached.generationReceipt ? { priorGenerationReceipt: cached.generationReceipt } : {}),
+            navigationObservationChanged,
+        }).catch(() => null);
+        const observationAfter = this.getPreparedReadObservation(root);
+        if (!proof || observationAfter !== observationBefore) {
+            this.preparedReadCache.evict(root);
+            return null;
+        }
+        return {
+            ...cached,
+            vectorReceipt: proof.vectorReceipt,
+            generationReceipt: proof.generationReceipt,
+            navigationStatus: proof.navigationProof.status,
+            preparedObservation: observationBefore,
+        };
     }
 
     private seedPreparedRead(state: Extract<TrackedRootReadinessState, { state: 'ready' }>): void {
         const root = state.root.path;
-        if (!state.generationReceipt || !state.preparedObservation) {
+        if (!state.vectorReceipt || !state.preparedObservation) {
             this.preparedReadCache.evict(root);
             return;
         }
@@ -954,25 +1012,20 @@ export class ToolHandlers {
         absolutePath: string,
         onPhase: (phase: ReadinessPhase, durationMs: number) => void,
     ): Promise<TrackedRootReadinessState> {
-        const initialState = await this.trackedRootReadiness.prepareTrackedRootForRead(
+        const state = await this.trackedRootReadiness.prepareTrackedRootForRead(
             absolutePath,
             'semantic',
             onPhase,
+            { observePreparedRead: (root) => this.getPreparedReadObservation(root) },
         );
-        if (initialState.state !== 'ready') return initialState;
-        const root = initialState.root.path;
-        const observationBefore = this.getPreparedReadObservation(root);
-        if (!observationBefore) return initialState;
-        const provenState = await this.trackedRootReadiness.prepareTrackedRootForRead(
-            root,
-            'semantic',
-            onPhase,
-        );
-        if (provenState.state !== 'ready') return provenState;
-        const preparedObservation = this.getPreparedReadObservation(root);
-        return preparedObservation === observationBefore
-            ? { ...provenState, preparedObservation }
-            : provenState;
+        if (
+            state.state === 'ready'
+            && this.mutationLeaseCoordinator?.getActiveLease(state.root.path)
+        ) {
+            this.preparedReadCache.evict(state.root.path);
+            return { state: 'indexing', codebasePath: state.root.path };
+        }
+        return state;
     }
 
     private getSyncWatchDebounceMs(): number {
@@ -2669,6 +2722,7 @@ export class ToolHandlers {
                 proofDebugHint,
                 partialIndexSearchWarnings,
                 freshnessDecision,
+                vectorReceipt,
                 generationReceipt,
                 navigationStatus,
                 preparedObservation,
@@ -2732,6 +2786,29 @@ export class ToolHandlers {
                 exactMatchPinningApplied: false,
                 registryRepairGroupCount: 0,
             };
+            const navigationAuthority = navigationStatus === 'valid'
+                && generationReceipt?.navigation
+                && generationReceipt.navigation.navigationSealHash
+                ? 'valid' as const
+                : 'unavailable' as const;
+            if (
+                preparedObservation
+                && this.getPreparedReadObservation(effectiveRoot) !== preparedObservation
+            ) {
+                this.preparedReadCache.evict(effectiveRoot);
+                const payload = this.buildNotReadySearchPayload(effectiveRoot, {
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit,
+                });
+                return {
+                    content: [{ type: 'text', text: this.stringifyToolJson(payload) }],
+                    meta: { searchDiagnostics },
+                };
+            }
             const exactFastPath = await runExactRegistryFastPath({
                 absolutePath,
                 effectiveRoot,
@@ -2762,6 +2839,7 @@ export class ToolHandlers {
                 dirtyFilesNotFreshened: initialDirtyFilesNotFreshened,
                 rankingProvenance: initialRankingProvenance,
                 previewMaxBytes: SEARCH_GROUP_PREVIEW_MAX_BYTES,
+                navigationAuthority,
             }, {
                 searchQuerySupport: this.searchQuerySupport,
                 measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
@@ -2783,6 +2861,7 @@ export class ToolHandlers {
                     state: 'ready',
                     root: searchableRoot,
                     proofDebugHint,
+                    vectorReceipt,
                     generationReceipt,
                     navigationStatus,
                     preparedObservation,
@@ -2802,6 +2881,25 @@ export class ToolHandlers {
                 };
             }
 
+            if (
+                preparedObservation
+                && this.getPreparedReadObservation(effectiveRoot) !== preparedObservation
+            ) {
+                this.preparedReadCache.evict(effectiveRoot);
+                const payload = this.buildNotReadySearchPayload(effectiveRoot, {
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit,
+                });
+                return {
+                    content: [{ type: 'text', text: this.stringifyToolJson(payload) }],
+                    meta: { searchDiagnostics },
+                };
+            }
+
             const execution = await runSearchExecution({
                 effectiveRoot,
                 scope: input.scope,
@@ -2817,7 +2915,9 @@ export class ToolHandlers {
                 observedChangedFilesState: initialObservedChangedFilesState,
             }, {
                 searchQuerySupport: this.searchQuerySupport,
-                semanticSearch: (request) => this.context.semanticSearch(request),
+                semanticSearch: (request) => vectorReceipt
+                    ? this.contextLifecycle().semanticSearchInProvenGeneration!(vectorReceipt, request)
+                    : this.context.semanticSearch(request),
                 reranker: this.reranker,
                 shouldForceSearchPassFailure: (passId) => this.shouldForceSearchPassFailure(passId),
                 classifyVectorBackendError,
@@ -2889,6 +2989,8 @@ export class ToolHandlers {
                 searchSymbolRegistry,
                 searchSymbolRegistryManifestHash,
                 execution,
+                navigationAuthority,
+                navigationStatus,
             }, {
                 searchQuerySupport: this.searchQuerySupport,
                 measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
@@ -2908,6 +3010,7 @@ export class ToolHandlers {
                 state: 'ready',
                 root: searchableRoot,
                 proofDebugHint,
+                vectorReceipt,
                 generationReceipt,
                 navigationStatus,
                 preparedObservation,

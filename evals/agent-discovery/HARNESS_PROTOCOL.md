@@ -1,0 +1,224 @@
+# Satori Agent-Discovery Harness Protocol
+
+Protocol version: `satori-agent-discovery-v1`
+
+This file defines collection and grading behavior for
+`AGENT_INSTRUCTIONS.md`. Do not include this file or
+`evaluator-tasks.json` in model context.
+
+## Isolation and fairness
+
+1. Use one clean Git revision for every paired run. Record the revision and
+   verify the production worktree is unchanged afterward.
+2. Prepare or synchronize Satori before measurement. Setup time and setup calls
+   are excluded from both arms.
+3. Use a fresh model context for every task and arm. Do not expose the other
+   arm's transcript or result.
+4. Do not expose evaluator-only expected answers to the model. Do not let the
+   native arm search outside the allowed production roots.
+5. For the native arm, expose the harness's ordinary default local search,
+   file-listing, and bounded range-read tools. Do not replace them with a
+   benchmark-only shell recipe when the harness normally provides tools such as
+   `Grep`, `Glob`, or `Read`.
+6. Supply `NATIVE_TOOL_PROFILE` as JSON. Name every available native tool, map
+   it to `text_search`, `file_list`, and/or `range_read`, and state any enforced
+   line or output bound. Enforce root, test-exclusion, read-size, and read-only
+   constraints in the harness rather than trusting the model's self-check.
+   Reject events outside that declared profile.
+7. Use the same model, model version, system instructions, temperature,
+   reasoning setting, context limit, and task prompt for a paired run. Tool
+   availability is the only intended arm difference.
+8. Use temperature `0`, or the provider's lowest deterministic setting when
+   zero is unavailable. Record the actual setting.
+9. Count tool schemas and all repeated conversation context in API input-token
+   usage. This is part of the real agent overhead.
+10. Run at least three paired repetitions. Alternate order:
+
+   ```text
+   repetition 1: native, satori
+   repetition 2: satori, native
+   repetition 3: native, satori
+   ```
+
+11. Do not pool results from different models, harnesses, or native tool
+    profiles. Report each combination separately.
+12. Record the complete tool definitions supplied to the model, their SHA-256,
+    and their UTF-8 byte count. A difference in tool-schema input is part of the
+    measured arm overhead.
+13. Report median and range for three samples. Do not report percentile claims
+    from three samples.
+
+## Tool-result normalization
+
+Record both the raw tool result and the exact model-visible result. Cap each
+model-visible tool result at 32,768 UTF-8 bytes:
+
+1. Serialize the result exactly as it will be shown to the model.
+2. If it exceeds the cap, retain the longest valid UTF-8 prefix that leaves room
+   for `\n[TRUNCATED AT 32768 UTF-8 BYTES]\n`.
+3. For line-oriented text, end the retained prefix at the last complete newline.
+4. Append the marker.
+5. Record `truncated=true`, raw bytes, and visible bytes.
+
+Do not silently use provider-specific truncation as the benchmark rule.
+
+## Authoritative measurements
+
+Capture these values from actual events; model claims are not authoritative:
+
+- `taskWallTimeMs`: task dispatch through final response receipt.
+- `timeToFirstCorrectTargetMs`: task dispatch through the first visible tool
+  result containing the expected owner file and symbol together.
+- `timeToFirstOwnerSourceMs`: task dispatch through the first visible owner
+  implementation body.
+- `modelApiLatencyMs`: sum of model API request durations, excluding tool
+  execution.
+- `toolLatencyMs`: sum of measured tool-call durations.
+- `apiInputTokens`: sum of provider-reported input tokens for every model call.
+- `apiOutputTokens`: sum of provider-reported output tokens for every model call.
+- `reasoningTokens` and `cachedInputTokens`: record separately when exposed;
+  otherwise use `null`.
+- `visibleToolResultBytes`: sum of normalized UTF-8 tool-result bytes delivered
+  to the model.
+- `rawToolResultBytes`: sum before normalization.
+- `modelTurns`: number of model API calls, including the final answer call.
+- `toolCalls`: number of actual tool calls.
+- `stepsToFirstCorrectTarget`: 1-based tool-call ordinal for the first correct
+  owner target.
+- `stepsToFirstOwnerSource`: 1-based tool-call ordinal for the first owner body.
+- `stepsToVerifiedAnswer`: last tool-call ordinal required to establish all
+  mandatory evidence.
+- `finalResponseBytes`: UTF-8 bytes in the final model response.
+
+Use provider token usage exactly as reported. Never retokenize one provider's
+transcript with another tokenizer and present it as authoritative token usage.
+UTF-8 byte counts are the cross-provider comparison metric.
+
+## Event ledger
+
+Preserve one ordered event per model call and tool call with:
+
+```json
+{
+  "sequence": 1,
+  "kind": "model|tool",
+  "startedAt": "RFC-3339 timestamp",
+  "durationMs": 123,
+  "operation": "tool name or model response",
+  "request": {},
+  "rawResultBytes": 1000,
+  "visibleResultBytes": 1000,
+  "truncated": false,
+  "usage": {
+    "inputTokens": 100,
+    "outputTokens": 20,
+    "reasoningTokens": null,
+    "cachedInputTokens": null
+  }
+}
+```
+
+Fields that do not apply to an event must be `null`, not omitted. Preserve the
+provider's raw usage object separately.
+
+## Harness output JSON
+
+Write one JSON file per run with this top-level shape. This wrapper is the
+portable result exchanged between harnesses:
+
+```json
+{
+  "protocolVersion": "satori-agent-discovery-v1",
+  "runId": "harness-unique-id",
+  "pairedRunId": "shared-id-for-native-and-satori",
+  "repetition": 1,
+  "taskId": "known-exact-target",
+  "arm": "native",
+  "environment": {
+    "gitRevision": "40-character commit",
+    "worktreeCleanBefore": true,
+    "worktreeCleanAfter": true,
+    "instructionsSha256": "hex",
+    "evaluatorTasksSha256": "hex",
+    "taskPromptSha256": "hex",
+    "harnessName": "name",
+    "harnessVersion": "version",
+    "platform": "platform",
+    "architecture": "architecture",
+    "agentPromptBytes": 0,
+    "toolProfile": {
+      "profileId": "harness-and-arm-specific-id",
+      "tools": [],
+      "definitionsSha256": "hex",
+      "definitionsBytes": 0
+    },
+    "satoriOperationId": null,
+    "satoriGeneration": null,
+    "satoriRuntimeFingerprint": null
+  },
+  "model": {
+    "provider": "provider",
+    "name": "model",
+    "version": "version-or-null",
+    "temperature": 0,
+    "reasoningSetting": "setting-or-null",
+    "contextLimit": 0
+  },
+  "agentResult": {},
+  "measurements": {
+    "taskWallTimeMs": 0,
+    "timeToFirstCorrectTargetMs": 0,
+    "timeToFirstOwnerSourceMs": 0,
+    "modelApiLatencyMs": 0,
+    "toolLatencyMs": 0,
+    "apiInputTokens": 0,
+    "apiOutputTokens": 0,
+    "reasoningTokens": null,
+    "cachedInputTokens": null,
+    "visibleToolResultBytes": 0,
+    "rawToolResultBytes": 0,
+    "modelTurns": 0,
+    "toolCalls": 0,
+    "stepsToFirstCorrectTarget": 0,
+    "stepsToFirstOwnerSource": 0,
+    "stepsToVerifiedAnswer": 0,
+    "finalResponseBytes": 0
+  },
+  "events": [],
+  "grade": {
+    "passed": false,
+    "failureReasons": []
+  }
+}
+```
+
+Use `null`, not zero, for a measurement that could not be observed. For a
+Satori arm, record the proven setup operation identity, generation, and runtime
+fingerprint when the status contract exposes them. These provenance values do
+not count as measured calls.
+
+## Grading
+
+Grade from the raw event ledger and `evaluator-tasks.json`, not from the model's
+confidence or self-check.
+
+A run passes only when:
+
+- the owner file, symbol, and complete inclusive span match;
+- every task-specific fact exactly matches `evaluator-tasks.json`;
+- the required caller and callee/helper relationships are supported;
+- every operation and argument obeys the selected arm;
+- the final step ledger matches the real tool sequence;
+- no answer key, test, documentation, Git history, or prior result was accessed.
+
+The primary paired comparison reports correctness first. Compare latency,
+tokens, bytes, and steps only among correct runs. Report failed and violating
+runs separately; do not turn them into fast successes.
+
+Before running against a new production revision, verify that every hidden
+owner and relationship still resolves to the configured file, symbol, and span.
+If it does not, stop and version the task key. Never adjust an expected answer
+after seeing a model's result.
+
+Raw event ledgers can contain source code and local paths. Keep all results
+local unless the repository owner explicitly approves sharing them.

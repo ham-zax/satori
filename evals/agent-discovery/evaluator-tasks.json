@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "protocolVersion": "satori-agent-discovery-v1",
+  "name": "Satori paired autonomous code-discovery tasks",
+  "modelVisible": false,
+  "sourceScope": [
+    "packages/core/src",
+    "packages/mcp/src"
+  ],
+  "tasks": [
+    {
+      "id": "known-exact-target",
+      "kind": "known_target",
+      "expected": {
+        "ownerFile": "packages/mcp/src/core/search-exact-fast-path.ts",
+        "ownerSymbol": "runExactRegistryFastPath",
+        "ownerSpan": {
+          "startLine": 164,
+          "endLine": 429
+        },
+        "requiredRelations": [
+          {
+            "relation": "caller",
+            "symbol": "handleSearchCode",
+            "file": "packages/mcp/src/core/handlers.ts"
+          },
+          {
+            "relation": "callee",
+            "symbol": "findExactRegistryMatch",
+            "file": "packages/mcp/src/core/search/exact-registry.ts"
+          }
+        ],
+        "taskFacts": {
+          "exactMatchResolver": "findExactRegistryMatch",
+          "checksEligibility": true,
+          "requiresNavigationAuthority": true,
+          "handledHitAvoidsSemanticRetrieval": true,
+          "handledHitAvoidsReranking": true
+        }
+      }
+    },
+    {
+      "id": "unknown-freshness-reuse",
+      "kind": "unknown_target",
+      "expected": {
+        "ownerFile": "packages/mcp/src/core/search-frontdoor.ts",
+        "ownerSymbol": "runSearchFrontDoor",
+        "ownerSpan": {
+          "startLine": 231,
+          "endLine": 394
+        },
+        "requiredRelations": [
+          {
+            "relation": "caller",
+            "symbol": "handleSearchCode",
+            "file": "packages/mcp/src/core/handlers.ts"
+          },
+          {
+            "relation": "helper",
+            "symbol": "freshnessDecisionPreservesAuthority",
+            "file": "packages/mcp/src/core/search-frontdoor.ts",
+            "span": {
+              "startLine": 135,
+              "endLine": 138
+            }
+          },
+          {
+            "relation": "second_readiness_proof",
+            "symbol": "preparePostFreshnessTrackedRootRead",
+            "file": "packages/mcp/src/core/search-frontdoor.ts"
+          }
+        ],
+        "taskFacts": {
+          "acceptedFreshnessModes": [
+            "skipped_recent",
+            "skipped_source_checkpoint_unavailable"
+          ],
+          "requiresFirstAttempt": true,
+          "requiresReadyInitialState": true,
+          "requiresExistingObservation": true,
+          "requiresInitialObservationMatch": true,
+          "requiresStableObservation": true,
+          "secondProofSymbol": "preparePostFreshnessTrackedRootRead"
+        }
+      }
+    }
+  ]
+}

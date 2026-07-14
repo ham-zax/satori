@@ -9,6 +9,7 @@ command_local.txt
 *.backup.*
 AGENTS.md.backup*
 *_local.txt
+docs/SATORI_REPOSITORY_MAP.md
 
 # Production builds
 dist/

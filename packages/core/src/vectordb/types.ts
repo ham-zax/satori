@@ -61,6 +61,12 @@ export interface HybridSearchOptions {
     filterExpr?: string;
 }
 
+export interface SparseSearchOptions {
+    topK?: number;
+    filterExpr?: string;
+    dropRatioSearch?: number;
+}
+
 export interface RerankStrategy {
     strategy: 'rrf' | 'weighted';
     params?: VectorRecord;
@@ -168,6 +174,16 @@ export interface VectorDatabase {
      * @param options Hybrid search options including reranking
      */
     hybridSearch(collectionName: string, searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]>;
+
+    /**
+     * Search the server-generated BM25 sparse field without a dense query vector.
+     * Implementations for hybrid collections should expose this capability.
+     */
+    sparseSearch?(
+        collectionName: string,
+        queryText: string,
+        options?: SparseSearchOptions,
+    ): Promise<HybridSearchResult[]>;
 
     /**
      * Delete documents

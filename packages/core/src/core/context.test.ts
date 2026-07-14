@@ -30,6 +30,7 @@ import type {
     HybridSearchResult,
     IndexCompletionFingerprint,
     SearchOptions,
+    SparseSearchOptions,
     VectorDatabase,
     VectorDocument,
     VectorSearchResult,
@@ -206,6 +207,10 @@ class InMemoryVectorDatabase implements VectorDatabase {
     readonly collections = new Map<string, Map<string, VectorDocument>>();
     readonly queryCalls: Array<{ collectionName: string; filter: string; outputFields: string[] }> = [];
     listCollectionsCalls = 0;
+    searchCalls = 0;
+    hybridSearchCalls = 0;
+    readonly hybridSearchRequests: HybridSearchRequest[][] = [];
+    sparseSearchCalls = 0;
     queryHook?: (call: { collectionName: string; filter: string; outputFields: string[] }) => void | Promise<void>;
     readonly mutationCalls: Array<
         'payload_insert' | 'payload_delete' | 'marker_insert' | 'marker_delete'
@@ -284,14 +289,24 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 
     async search(collectionName: string, _queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
+        this.searchCalls += 1;
         return this.listDocuments(collectionName, options?.filterExpr)
             .slice(0, options?.topK ?? 1000)
             .map((document, index) => ({ document, score: 1 - (index / 1000) }));
     }
 
-    async hybridSearch(collectionName: string, _searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]> {
+    async hybridSearch(collectionName: string, searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]> {
+        this.hybridSearchCalls += 1;
+        this.hybridSearchRequests.push(searchRequests);
         return this.listDocuments(collectionName, options?.filterExpr)
             .slice(0, options?.limit ?? 1000)
+            .map((document, index) => ({ document, score: 1 - (index / 1000) }));
+    }
+
+    async sparseSearch(collectionName: string, _queryText: string, options?: SparseSearchOptions): Promise<HybridSearchResult[]> {
+        this.sparseSearchCalls += 1;
+        return this.listDocuments(collectionName, options?.filterExpr)
+            .slice(0, options?.topK ?? 1000)
             .map((document, index) => ({ document, score: 1 - (index / 1000) }));
     }
 
@@ -3779,6 +3794,215 @@ test('Context keeps vector retrieval usable but rejects strict proof when no nav
             vectorDatabase.queryCalls.filter((call) => call.filter.includes(`id == \"${INDEX_COMPLETION_MARKER_DOC_ID}\"`)).length,
             0,
         );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context hybrid search uses the proven collection without a non-gating query probe', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-hybrid-no-probe-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const hybridValue = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const embedding = new CountingTestEmbedding();
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(vectorReceipt);
+
+        vectorDatabase.queryCalls.length = 0;
+        const embedCallsBefore = embedding.embedCalls;
+        vectorDatabase.queryHook = () => {
+            throw new Error('hybrid search must not issue a query probe');
+        };
+        const results = await context.semanticSearchInProvenGeneration(vectorReceipt!, {
+            codebasePath,
+            query: 'hybridValue',
+            topK: 5,
+            retrievalMode: 'hybrid',
+            scorePolicy: { kind: 'topk_only' },
+        });
+
+        assert.ok(results.length > 0);
+        assert.equal(embedding.embedCalls, embedCallsBefore + 1);
+        assert.equal(vectorDatabase.queryCalls.length, 0);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context lexical retrieval uses sparse search without embedding or dense retrieval', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sparse-only-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const sparseOnlyValue = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const embedding = new CountingTestEmbedding();
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(vectorReceipt);
+
+        const embedCallsBefore = embedding.embedCalls;
+        const denseCallsBefore = vectorDatabase.searchCalls;
+        const hybridCallsBefore = vectorDatabase.hybridSearchCalls;
+        const sparseCallsBefore = vectorDatabase.sparseSearchCalls;
+        const results = await context.semanticSearchInProvenGeneration(vectorReceipt!, {
+            codebasePath,
+            query: 'sparseOnlyValue',
+            topK: 5,
+            retrievalMode: 'lexical',
+            scorePolicy: { kind: 'topk_only' },
+        });
+
+        assert.ok(results.length > 0);
+        assert.equal(results[0]?.backendScoreKind, 'lexical_rank');
+        assert.equal(embedding.embedCalls, embedCallsBefore);
+        assert.equal(vectorDatabase.searchCalls, denseCallsBefore);
+        assert.equal(vectorDatabase.hybridSearchCalls, hybridCallsBefore);
+        assert.equal(vectorDatabase.sparseSearchCalls, sparseCallsBefore + 1);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context lexical retrieval falls back to one sparse hybrid request when the shortcut is unavailable', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sparse-fallback-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const sparseFallbackValue = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        Object.defineProperty(vectorDatabase, 'sparseSearch', { value: undefined });
+        const embedding = new CountingTestEmbedding();
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(vectorReceipt);
+
+        const embedCallsBefore = embedding.embedCalls;
+        const denseCallsBefore = vectorDatabase.searchCalls;
+        const hybridCallsBefore = vectorDatabase.hybridSearchCalls;
+        const results = await context.semanticSearchInProvenGeneration(vectorReceipt!, {
+            codebasePath,
+            query: 'sparseFallbackValue',
+            topK: 5,
+            retrievalMode: 'lexical',
+            scorePolicy: { kind: 'topk_only' },
+        });
+
+        assert.ok(results.length > 0);
+        assert.equal(results[0]?.backendScoreKind, 'lexical_rank');
+        assert.equal(embedding.embedCalls, embedCallsBefore);
+        assert.equal(vectorDatabase.searchCalls, denseCallsBefore);
+        assert.equal(vectorDatabase.hybridSearchCalls, hybridCallsBefore + 1);
+        assert.deepEqual(vectorDatabase.hybridSearchRequests.at(-1), [{
+            data: 'sparseFallbackValue',
+            anns_field: 'sparse_vector',
+            param: { drop_ratio_search: 0.2 },
+            limit: 5,
+        }]);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context hybrid search still surfaces collection failure without a query probe', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-hybrid-failure-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const hybridValue = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(vectorReceipt);
+        const collectionName = vectorReceipt!.collectionName;
+        await vectorDatabase.dropCollection(collectionName);
+        vectorDatabase.hybridSearch = async () => {
+            throw new Error(`Collection not found: ${collectionName}`);
+        };
+
+        vectorDatabase.queryCalls.length = 0;
+        await assert.rejects(
+            context.semanticSearchInProvenGeneration(vectorReceipt!, {
+                codebasePath,
+                query: 'hybridValue',
+                topK: 5,
+                retrievalMode: 'hybrid',
+                scorePolicy: { kind: 'topk_only' },
+            }),
+            /Collection not found/,
+        );
+        assert.equal(vectorDatabase.queryCalls.length, 0);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context sparse retrieval surfaces collection failure without embedding fallback', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sparse-failure-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const sparseValue = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const embedding = new CountingTestEmbedding();
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(vectorReceipt);
+        const collectionName = vectorReceipt!.collectionName;
+        const embedCallsBefore = embedding.embedCalls;
+        vectorDatabase.sparseSearch = async () => {
+            throw new Error(`Collection not found: ${collectionName}`);
+        };
+
+        await assert.rejects(
+            context.semanticSearchInProvenGeneration(vectorReceipt!, {
+                codebasePath,
+                query: 'sparseValue',
+                topK: 5,
+                retrievalMode: 'lexical',
+                scorePolicy: { kind: 'topk_only' },
+            }),
+            /Collection not found/,
+        );
+        assert.equal(embedding.embedCalls, embedCallsBefore);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

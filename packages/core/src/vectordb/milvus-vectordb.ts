@@ -17,6 +17,7 @@ import {
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,
+    SparseSearchOptions,
     CollectionDetails,
     VectorStoreBackendInfo,
     VectorDocumentMetadata,
@@ -1013,6 +1014,40 @@ export class MilvusVectorDatabase implements VectorDatabase {
             console.error(`[MilvusDB] ❌ Failed to perform hybrid search on collection '${collectionName}':`, error);
             throw error;
         }
+    }
+
+    async sparseSearch(
+        collectionName: string,
+        queryText: string,
+        options?: SparseSearchOptions,
+    ): Promise<HybridSearchResult[]> {
+        await this.ensureInitialized();
+        await this.ensureLoaded(collectionName);
+
+        if (!this.client) {
+            throw new Error('MilvusClient is not initialized after ensureInitialized().');
+        }
+
+        const searchParams: SearchSimpleReq = {
+            collection_name: collectionName,
+            data: [queryText],
+            anns_field: 'sparse_vector',
+            limit: options?.topK ?? 10,
+            metric_type: 'BM25',
+            params: {
+                drop_ratio_search: options?.dropRatioSearch ?? 0.2,
+            },
+            output_fields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
+        };
+        if (options?.filterExpr && options.filterExpr.trim().length > 0) {
+            searchParams.expr = options.filterExpr;
+        }
+
+        const searchResult = await this.client.search(searchParams);
+        if (!searchResult.results || searchResult.results.length === 0) {
+            return [];
+        }
+        return (searchResult.results as unknown as MilvusResultRow[]).map(toHybridSearchResult);
     }
 
     /**

@@ -17,6 +17,7 @@ import {
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,
+    SparseSearchOptions,
     COLLECTION_LIMIT_MESSAGE,
     CollectionDetails,
     VectorStoreBackendInfo,
@@ -48,7 +49,7 @@ type MilvusRestSearchRow = {
 type MilvusRestSearchRequest = {
     collectionName: string;
     dbName?: string;
-    data: number[][];
+    data: number[][] | string[];
     annsField: string;
     limit: number;
     outputFields: string[];
@@ -1005,6 +1006,40 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
             console.error(`[MilvusRestfulDB] ❌ Failed to perform hybrid search on collection '${collectionName}':`, error);
             throw error;
         }
+    }
+
+    async sparseSearch(
+        collectionName: string,
+        queryText: string,
+        options?: SparseSearchOptions,
+    ): Promise<HybridSearchResult[]> {
+        await this.ensureInitialized();
+        await this.ensureLoaded(collectionName);
+
+        const restfulConfig = this.config as MilvusRestfulConfig;
+        const searchRequest: MilvusRestSearchRequest = {
+            collectionName,
+            dbName: restfulConfig.database,
+            data: [queryText],
+            annsField: 'sparse_vector',
+            limit: options?.topK ?? 10,
+            outputFields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
+            searchParams: {
+                metricType: 'BM25',
+                params: {
+                    drop_ratio_search: options?.dropRatioSearch ?? 0.2,
+                },
+            },
+        };
+        if (options?.filterExpr && options.filterExpr.trim().length > 0) {
+            searchRequest.filter = options.filterExpr;
+        }
+
+        const response = await this.makeRequest<MilvusRestSearchRow[]>('/entities/search', 'POST', searchRequest);
+        if (!isSuccessCode(response.code)) {
+            throw new Error(`Sparse search failed: ${response.message || 'Unknown error'}`);
+        }
+        return (Array.isArray(response.data) ? response.data : []).map(toHybridSearchResult);
     }
 
     async checkCollectionLimit(): Promise<boolean> {

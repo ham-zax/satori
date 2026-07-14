@@ -2609,8 +2609,10 @@ export class Context {
         const request = this.normalizeSemanticSearchRequest(requestOrCodebasePath, query, topK, threshold, filterExpr);
         const resolvedRequest = this.resolveSemanticSearchRequest(request);
         const codebasePath = resolvedRequest.codebasePath;
-        const isHybrid = resolvedRequest.retrievalMode !== 'dense' && this.getIsHybrid() === true;
-        const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
+        const hybridCollection = this.getIsHybrid() === true;
+        const isSparseOnly = resolvedRequest.retrievalMode === 'lexical' && hybridCollection;
+        const isHybrid = resolvedRequest.retrievalMode === 'hybrid' && hybridCollection;
+        const searchType = isSparseOnly ? 'sparse search' : isHybrid ? 'hybrid search' : 'semantic search';
         const requestId = crypto.randomUUID();
         console.log(`[Context] 🔍 Executing ${searchType}: query_length=${resolvedRequest.query.length}, request_id=${requestId}, root=${codebasePath}`);
         const effectiveFilterExpr = this.buildSemanticSearchFilterExpr(resolvedRequest.filterExpr);
@@ -2626,6 +2628,32 @@ export class Context {
                 .slice(0, 2);
             return normalized.length > 0 ? normalized : undefined;
         };
+        const toSemanticSearchResult = (
+            result: HybridSearchResult | VectorSearchResult,
+            backendScoreKind: 'dense_similarity' | 'lexical_rank' | 'rrf_fusion',
+        ): SemanticSearchResult => ({
+            content: result.document.content,
+            relativePath: result.document.relativePath,
+            startLine: result.document.startLine,
+            endLine: result.document.endLine,
+            startByte: typeof result.document.metadata.startByte === 'number'
+                ? result.document.metadata.startByte
+                : undefined,
+            endByte: typeof result.document.metadata.endByte === 'number'
+                ? result.document.metadata.endByte
+                : undefined,
+            language: result.document.metadata.language || 'unknown',
+            score: result.score,
+            breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs),
+            indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
+            symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
+            symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined,
+            symbolKind: typeof result.document.metadata.symbolKind === 'string' ? result.document.metadata.symbolKind : undefined,
+            ownerSymbolKey: typeof result.document.metadata.ownerSymbolKey === 'string' ? result.document.metadata.ownerSymbolKey : undefined,
+            ownerSymbolInstanceId: typeof result.document.metadata.ownerSymbolInstanceId === 'string' ? result.document.metadata.ownerSymbolInstanceId : undefined,
+            backendScore: result.score,
+            backendScoreKind,
+        });
 
         const revalidatedReceipt = receipt && !requestBoundReceipt
             ? await this.revalidateProvenVectorGeneration(codebasePath, receipt)
@@ -2641,15 +2669,34 @@ export class Context {
             return [];
         }
 
-        if (isHybrid === true) {
-            try {
-                // Check collection stats to see if it has data
-                await this.vectorDatabase.query(collectionName, '', ['id'], 1);
-                console.log(`[Context] 🔍 Collection '${collectionName}' exists and appears to have data`);
-            } catch (error) {
-                console.log(`[Context] ⚠️  Collection '${collectionName}' exists but may be empty or not properly indexed:`, error);
-            }
+        if (isSparseOnly) {
+            const searchResults = this.vectorDatabase.sparseSearch
+                ? await this.vectorDatabase.sparseSearch(
+                    collectionName,
+                    resolvedRequest.query,
+                    {
+                        topK: resolvedRequest.topK,
+                        dropRatioSearch: 0.2,
+                        filterExpr: effectiveFilterExpr,
+                    },
+                )
+                : await this.vectorDatabase.hybridSearch(
+                    collectionName,
+                    [{
+                        data: resolvedRequest.query,
+                        anns_field: 'sparse_vector',
+                        param: { drop_ratio_search: 0.2 },
+                        limit: resolvedRequest.topK,
+                    }],
+                    {
+                        limit: resolvedRequest.topK,
+                        filterExpr: effectiveFilterExpr,
+                    },
+                );
+            return searchResults.map((result) => toSemanticSearchResult(result, 'lexical_rank'));
+        }
 
+        if (isHybrid) {
             // 1. Generate query vector
             console.log(`[Context] 🔍 Generating query embedding: query_length=${resolvedRequest.query.length}, request_id=${requestId}`);
             const queryEmbedding: EmbeddingVector = await this.embedding.embed(resolvedRequest.query);
@@ -2694,29 +2741,7 @@ export class Context {
             console.log(`[Context] 🔍 Raw search results count: ${searchResults.length}`);
 
             // 4. Convert to semantic search result format
-            const results: SemanticSearchResult[] = searchResults.map(result => ({
-                content: result.document.content,
-                relativePath: result.document.relativePath,
-                startLine: result.document.startLine,
-                endLine: result.document.endLine,
-                startByte: typeof result.document.metadata.startByte === 'number'
-                    ? result.document.metadata.startByte
-                    : undefined,
-                endByte: typeof result.document.metadata.endByte === 'number'
-                    ? result.document.metadata.endByte
-                    : undefined,
-                language: result.document.metadata.language || 'unknown',
-                score: result.score,
-                breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs),
-                indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
-                symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
-                symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined,
-                symbolKind: typeof result.document.metadata.symbolKind === 'string' ? result.document.metadata.symbolKind : undefined,
-                ownerSymbolKey: typeof result.document.metadata.ownerSymbolKey === 'string' ? result.document.metadata.ownerSymbolKey : undefined,
-                ownerSymbolInstanceId: typeof result.document.metadata.ownerSymbolInstanceId === 'string' ? result.document.metadata.ownerSymbolInstanceId : undefined,
-                backendScore: result.score,
-                backendScoreKind: 'rrf_fusion'
-            }));
+            const results = searchResults.map((result) => toSemanticSearchResult(result, 'rrf_fusion'));
 
             console.log(`[Context] ✅ Found ${results.length} relevant hybrid results`);
             if (results.length > 0) {
@@ -2740,29 +2765,7 @@ export class Context {
             );
 
             // 3. Convert to semantic search result format
-            const results: SemanticSearchResult[] = searchResults.map(result => ({
-                content: result.document.content,
-                relativePath: result.document.relativePath,
-                startLine: result.document.startLine,
-                endLine: result.document.endLine,
-                startByte: typeof result.document.metadata.startByte === 'number'
-                    ? result.document.metadata.startByte
-                    : undefined,
-                endByte: typeof result.document.metadata.endByte === 'number'
-                    ? result.document.metadata.endByte
-                    : undefined,
-                language: result.document.metadata.language || 'unknown',
-                score: result.score,
-                breadcrumbs: normalizeBreadcrumbs(result.document.metadata.breadcrumbs),
-                indexedAt: typeof result.document.metadata.indexedAt === 'string' ? result.document.metadata.indexedAt : undefined,
-                symbolId: typeof result.document.metadata.symbolId === 'string' ? result.document.metadata.symbolId : undefined,
-                symbolLabel: typeof result.document.metadata.symbolLabel === 'string' ? result.document.metadata.symbolLabel : undefined,
-                symbolKind: typeof result.document.metadata.symbolKind === 'string' ? result.document.metadata.symbolKind : undefined,
-                ownerSymbolKey: typeof result.document.metadata.ownerSymbolKey === 'string' ? result.document.metadata.ownerSymbolKey : undefined,
-                ownerSymbolInstanceId: typeof result.document.metadata.ownerSymbolInstanceId === 'string' ? result.document.metadata.ownerSymbolInstanceId : undefined,
-                backendScore: result.score,
-                backendScoreKind: 'dense_similarity'
-            }));
+            const results = searchResults.map((result) => toSemanticSearchResult(result, 'dense_similarity'));
 
             console.log(`[Context] ✅ Found ${results.length} relevant results`);
             return results;

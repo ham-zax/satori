@@ -9,6 +9,7 @@ export {
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,
+    SparseSearchOptions,
     RerankStrategy,
     RetrievalMode,
     ScorePolicy,

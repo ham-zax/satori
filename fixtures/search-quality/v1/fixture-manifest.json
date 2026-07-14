@@ -1,0 +1,266 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "satori-search-quality-v1",
+  "files": [
+    { "path": "docs/search-pipeline.md", "sha256": "00aee1d4c812cb6d365cbbcd81f87182ba8f58b543e5ffd3a26041de0c793e7c" },
+    { "path": "fixtures/checkpoint.json", "sha256": "97102d36a90f52342b4e13bc1f46dca80edc5acd4f6ab836e58d728fc2e8a51c" },
+    { "path": "src/checkpoints/checkpoint-service.ts", "sha256": "b5d1dc6139fc7f4eafe3e9ad216d8e68465b807d0e7fd97a6daa1f3bc2e4494d" },
+    { "path": "src/checkpoints/checkpoint-store.ts", "sha256": "33626a2afcfd987d154a79fd67cf8cc393ba1b1a6f8de6b3869118979493908c" },
+    { "path": "src/config/search-config.ts", "sha256": "a27fbcb07710ad24198463e9bcc31e0529ddca4e7ead1e8c2aa3bfc529685220" },
+    { "path": "src/generated/checkpoint-client.generated.ts", "sha256": "bb67103ca0e77ed7c0c4c0cdbd8046ccd63d79a9536a842d36f7a35a889fb7ce" },
+    { "path": "src/public/search-api.ts", "sha256": "4dcc45ce40d23f25eaf9548c01389554759097a2e119dad3bedce5e98d745d2f" },
+    { "path": "src/search/execution.ts", "sha256": "1428e84a777e27861a2d7c97eafead98363bb8dd0c960e3396ae3c1cc3e4757f" },
+    { "path": "src/search/finalize.ts", "sha256": "6d249db24477fee2a259cfbe9c0786c9749b79ab7a03aeacb6f56c72f8b15b1a" },
+    { "path": "src/search/query-router.ts", "sha256": "414b0b4a3a76efdf8035bb1b6de3fc14cda5635f7d1734d5b50701f40023301d" },
+    { "path": "src/search/ranking.ts", "sha256": "9276a940f589ecb4dff0a7d087ab1755d6626dbf4fa4bca09c63a95673800651" },
+    { "path": "src/search/resilient-execution.ts", "sha256": "328bf50733fd0601f1409fbc91ceebc8b7485418f5a88f22423e2f1bdf40974e" },
+    { "path": "src/search/retrieval.ts", "sha256": "910abc5b60eb27cab9179fbdcda8f19f95bcedb78998163198b4f7b66ce835ef" },
+    { "path": "test/checkpoint-store.test.ts", "sha256": "91f0f3e44e1c03cc3d3c55d0ca456ca6a0af660078d3df18c216fe229d1ae1a0" }
+  ],
+  "candidates": [
+    { "id": "public.searchCodebase", "file": "src/public/search-api.ts", "startLine": 5, "endLine": 9, "symbol": "searchCodebase", "kind": "function", "role": "entrypoint", "family": "search-entry" },
+    { "id": "router.planQuery", "file": "src/search/query-router.ts", "startLine": 8, "endLine": 19, "symbol": "planQuery", "kind": "function", "role": "owner", "family": "query-routing" },
+    { "id": "execution.executeSearch", "file": "src/search/execution.ts", "startLine": 6, "endLine": 10, "symbol": "executeSearch", "kind": "function", "role": "orchestrator", "family": "search-execution" },
+    { "id": "retrieval.retrieveCandidates", "file": "src/search/retrieval.ts", "startLine": 3, "endLine": 5, "symbol": "retrieveCandidates", "kind": "function", "role": "retrieval", "family": "candidate-retrieval" },
+    { "id": "retrieval.expandSemanticCandidates", "file": "src/search/retrieval.ts", "startLine": 7, "endLine": 9, "symbol": "expandSemanticCandidates", "kind": "function", "role": "retrieval", "family": "candidate-retrieval" },
+    { "id": "ranking.normalizeSourceScores", "file": "src/search/ranking.ts", "startLine": 1, "endLine": 4, "symbol": "normalizeSourceScores", "kind": "function", "role": "ranking", "family": "candidate-ranking" },
+    { "id": "ranking.applyRoleBoosts", "file": "src/search/ranking.ts", "startLine": 6, "endLine": 8, "symbol": "applyRoleBoosts", "kind": "function", "role": "ranking", "family": "candidate-ranking" },
+    { "id": "ranking.rankCandidates", "file": "src/search/ranking.ts", "startLine": 10, "endLine": 15, "symbol": "rankCandidates", "kind": "function", "role": "owner", "family": "candidate-ranking" },
+    { "id": "resilient.executeResilientSearch", "file": "src/search/resilient-execution.ts", "startLine": 1, "endLine": 6, "symbol": "executeResilientSearch", "kind": "function", "role": "owner", "family": "resilient-search" },
+    { "id": "resilient.genericBodyChunk", "file": "src/search/resilient-execution.ts", "startLine": 7, "endLine": 12, "symbol": "executeResilientSearch generic body", "kind": "function", "role": "owner", "family": "resilient-search", "ownerCandidateId": "resilient.executeResilientSearch" },
+    { "id": "resilient.tailChunk", "file": "src/search/resilient-execution.ts", "startLine": 14, "endLine": 20, "symbol": "executeResilientSearch tail body", "kind": "function", "role": "owner", "family": "resilient-search", "ownerCandidateId": "resilient.executeResilientSearch" },
+    { "id": "finalize.selectEvidenceGroups", "file": "src/search/finalize.ts", "startLine": 1, "endLine": 3, "symbol": "selectEvidenceGroups", "kind": "function", "role": "selection", "family": "result-finalization" },
+    { "id": "finalize.finalizeResults", "file": "src/search/finalize.ts", "startLine": 5, "endLine": 7, "symbol": "finalizeResults", "kind": "function", "role": "finalization", "family": "result-finalization" },
+    { "id": "checkpoint.writeSourceCheckpoint", "file": "src/checkpoints/checkpoint-store.ts", "startLine": 5, "endLine": 10, "symbol": "writeSourceCheckpoint", "kind": "function", "role": "owner", "family": "checkpoint-write" },
+    { "id": "checkpoint.SOURCE_CHECKPOINT_MISSING", "file": "src/checkpoints/checkpoint-store.ts", "startLine": 3, "endLine": 3, "symbol": "SOURCE_CHECKPOINT_MISSING", "kind": "constant", "role": "configuration", "family": "checkpoint-write" },
+    { "id": "checkpoint.refreshCheckpoint", "file": "src/checkpoints/checkpoint-service.ts", "startLine": 3, "endLine": 5, "symbol": "refreshCheckpoint", "kind": "function", "role": "caller", "family": "checkpoint-write" },
+    { "id": "config.RERANK_TOP_K", "file": "src/config/search-config.ts", "startLine": 1, "endLine": 1, "symbol": "RERANK_TOP_K", "kind": "constant", "role": "configuration", "family": "search-configuration" },
+    { "id": "config.SearchPolicy", "file": "src/config/search-config.ts", "startLine": 3, "endLine": 6, "symbol": "SearchPolicy", "kind": "interface", "role": "configuration", "family": "search-configuration" },
+    { "id": "generated.generatedWriteCheckpoint", "file": "src/generated/checkpoint-client.generated.ts", "startLine": 5, "endLine": 7, "symbol": "generatedWriteCheckpoint", "kind": "function", "role": "generated", "family": "checkpoint-write" },
+    { "id": "test.verifiesCheckpointWriter", "file": "test/checkpoint-store.test.ts", "startLine": 7, "endLine": 10, "symbol": "verifiesCheckpointWriter", "kind": "function", "role": "test", "family": "checkpoint-write" },
+    { "id": "docs.searchPipeline", "file": "docs/search-pipeline.md", "startLine": 1, "endLine": 11, "symbol": "search pipeline documentation", "kind": "file", "role": "documentation", "family": "search-documentation" },
+    { "id": "fixture.checkpoint", "file": "fixtures/checkpoint.json", "startLine": 1, "endLine": 5, "symbol": "checkpoint fixture", "kind": "file", "role": "fixture", "family": "checkpoint-write" }
+  ],
+  "workloads": [
+    {
+      "id": "known_exact_identifier",
+      "query": "writeSourceCheckpoint",
+      "scope": "runtime",
+      "expectedOwners": ["checkpoint.writeSourceCheckpoint"],
+      "requiredRoles": ["owner"],
+      "providerRows": { "primary": ["generated.generatedWriteCheckpoint", "checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint"] },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 4096 }
+    },
+    {
+      "id": "known_file_owner",
+      "query": "path:src/search/ranking.ts rankCandidates",
+      "scope": "runtime",
+      "expectedOwners": ["ranking.rankCandidates"],
+      "requiredRoles": ["owner"],
+      "providerRows": { "primary": ["ranking.rankCandidates", "execution.executeSearch"] },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 4096 }
+    },
+    {
+      "id": "partial_identifier",
+      "query": "writeSourceCheck",
+      "scope": "runtime",
+      "expectedOwners": ["checkpoint.writeSourceCheckpoint"],
+      "requiredRoles": ["owner"],
+      "providerRows": { "primary": ["generated.generatedWriteCheckpoint", "checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint", "test.verifiesCheckpointWriter"] },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 6144 }
+    },
+    {
+      "id": "exact_literal",
+      "query": "\"SOURCE_CHECKPOINT_MISSING\"",
+      "scope": "runtime",
+      "expectedOwners": ["checkpoint.writeSourceCheckpoint", "checkpoint.SOURCE_CHECKPOINT_MISSING"],
+      "requiredRoles": ["owner"],
+      "providerRows": {
+        "primary": ["generated.generatedWriteCheckpoint", "test.verifiesCheckpointWriter", "docs.searchPipeline", "checkpoint.writeSourceCheckpoint", "checkpoint.SOURCE_CHECKPOINT_MISSING"],
+        "expanded": ["checkpoint.writeSourceCheckpoint", "checkpoint.refreshCheckpoint", "docs.searchPipeline"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 6144 }
+    },
+    {
+      "id": "configuration_lookup",
+      "query": "where is RERANK_TOP_K configured",
+      "scope": "runtime",
+      "expectedOwners": ["config.RERANK_TOP_K"],
+      "requiredRoles": ["configuration"],
+      "providerRows": {
+        "primary": ["docs.searchPipeline", "config.RERANK_TOP_K", "ranking.rankCandidates", "config.SearchPolicy"],
+        "expanded": ["config.RERANK_TOP_K", "config.SearchPolicy", "ranking.rankCandidates"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 6144 }
+    },
+    {
+      "id": "symbol_ownership",
+      "query": "who owns rankCandidates",
+      "scope": "runtime",
+      "expectedOwners": ["ranking.rankCandidates"],
+      "requiredRoles": ["owner"],
+      "providerRows": {
+        "primary": ["execution.executeSearch", "docs.searchPipeline", "ranking.rankCandidates"],
+        "expanded": ["ranking.rankCandidates", "execution.executeSearch"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 6144 }
+    },
+    {
+      "id": "caller_discovery",
+      "query": "who calls writeSourceCheckpoint",
+      "scope": "runtime",
+      "expectedOwners": ["checkpoint.refreshCheckpoint"],
+      "requiredRoles": ["caller", "owner"],
+      "providerRows": {
+        "primary": ["test.verifiesCheckpointWriter", "checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint", "generated.generatedWriteCheckpoint"],
+        "expanded": ["checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint", "test.verifiesCheckpointWriter"]
+      },
+      "budgets": { "maxToolCalls": 2, "maxResponseBytes": 8192 }
+    },
+    {
+      "id": "conceptual_behavior",
+      "query": "decide whether exact or semantic retrieval is needed",
+      "scope": "runtime",
+      "expectedOwners": ["router.planQuery"],
+      "requiredRoles": ["owner"],
+      "providerRows": {
+        "primary": ["execution.executeSearch", "router.planQuery", "docs.searchPipeline", "retrieval.retrieveCandidates"],
+        "expanded": ["router.planQuery", "execution.executeSearch", "retrieval.expandSemanticCandidates"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 8192 }
+    },
+    {
+      "id": "conceptual_where_is",
+      "query": "where is search quality enforced",
+      "scope": "runtime",
+      "expectedOwners": ["router.planQuery"],
+      "requiredRoles": ["owner"],
+      "providerRows": {
+        "primary": ["execution.executeSearch", "ranking.rankCandidates", "router.planQuery"],
+        "expanded": ["router.planQuery", "execution.executeSearch", "ranking.rankCandidates"],
+        "rerank": ["router.planQuery", "execution.executeSearch", "ranking.rankCandidates"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 8192 }
+    },
+    {
+      "id": "architecture_discovery",
+      "query": "trace public search through retrieval ranking and final selection",
+      "scope": "runtime",
+      "expectedOwners": ["execution.executeSearch"],
+      "requiredRoles": ["entrypoint", "orchestrator", "retrieval", "owner", "finalization"],
+      "providerRows": {
+        "primary": ["execution.executeSearch", "public.searchCodebase", "retrieval.retrieveCandidates", "ranking.rankCandidates", "finalize.finalizeResults"],
+        "expanded": ["router.planQuery", "execution.executeSearch", "docs.searchPipeline", "finalize.selectEvidenceGroups"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 12288 }
+    },
+    {
+      "id": "common_noisy_term",
+      "query": "checkpoint search state",
+      "scope": "runtime",
+      "expectedOwners": ["checkpoint.writeSourceCheckpoint"],
+      "requiredRoles": ["owner", "caller"],
+      "providerRows": {
+        "primary": ["generated.generatedWriteCheckpoint", "test.verifiesCheckpointWriter", "checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint", "docs.searchPipeline"],
+        "expanded": ["checkpoint.writeSourceCheckpoint", "checkpoint.refreshCheckpoint", "generated.generatedWriteCheckpoint"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 8192 }
+    },
+    {
+      "id": "generated_interference",
+      "query": "write checkpoint implementation",
+      "scope": "runtime",
+      "expectedOwners": ["checkpoint.writeSourceCheckpoint"],
+      "requiredRoles": ["owner"],
+      "providerRows": {
+        "primary": ["generated.generatedWriteCheckpoint", "checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint", "test.verifiesCheckpointWriter"],
+        "expanded": ["checkpoint.writeSourceCheckpoint", "checkpoint.refreshCheckpoint"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 6144 }
+    },
+    {
+      "id": "test_runtime_ambiguity",
+      "query": "implementation that writes source checkpoint",
+      "scope": "runtime",
+      "expectedOwners": ["checkpoint.writeSourceCheckpoint"],
+      "requiredRoles": ["owner", "test"],
+      "providerRows": {
+        "primary": ["test.verifiesCheckpointWriter", "checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint", "generated.generatedWriteCheckpoint"],
+        "expanded": ["checkpoint.writeSourceCheckpoint", "test.verifiesCheckpointWriter"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 6144 }
+    },
+    {
+      "id": "multiple_plausible_owners",
+      "query": "search pipeline",
+      "scope": "runtime",
+      "expectedOwners": ["execution.executeSearch", "router.planQuery"],
+      "requiredRoles": ["orchestrator", "retrieval", "owner", "finalization"],
+      "providerRows": {
+        "primary": ["docs.searchPipeline", "execution.executeSearch", "router.planQuery", "retrieval.retrieveCandidates", "ranking.rankCandidates", "finalize.finalizeResults", "public.searchCodebase"],
+        "expanded": ["execution.executeSearch", "retrieval.expandSemanticCandidates", "finalize.selectEvidenceGroups"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 10240 }
+    },
+    {
+      "id": "mixed_identifier_concept",
+      "query": "rankCandidates diversity policy",
+      "scope": "runtime",
+      "expectedOwners": ["ranking.rankCandidates"],
+      "requiredRoles": ["owner", "finalization"],
+      "providerRows": {
+        "primary": ["docs.searchPipeline", "ranking.rankCandidates", "finalize.selectEvidenceGroups", "execution.executeSearch"],
+        "expanded": ["ranking.rankCandidates", "finalize.finalizeResults"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 8192 }
+    },
+    {
+      "id": "rerank_helps",
+      "query": "checkpoint writer behavior",
+      "scope": "mixed",
+      "expectedOwners": ["checkpoint.writeSourceCheckpoint"],
+      "requiredRoles": ["owner", "caller"],
+      "providerRows": {
+        "primary": ["checkpoint.refreshCheckpoint", "docs.searchPipeline", "checkpoint.writeSourceCheckpoint"],
+        "expanded": ["docs.searchPipeline", "checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint"],
+        "rerank": ["checkpoint.writeSourceCheckpoint", "checkpoint.refreshCheckpoint", "docs.searchPipeline"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 8192 }
+    },
+    {
+      "id": "split_owner_relevant_body",
+      "query": "retry with expanded evidence after partial retrieval",
+      "scope": "runtime",
+      "expectedOwners": ["resilient.executeResilientSearch"],
+      "requiredRoles": ["owner"],
+      "providerRows": {
+        "primary": ["execution.executeSearch", "resilient.executeResilientSearch", "resilient.genericBodyChunk", "resilient.tailChunk", "router.planQuery"],
+        "expanded": ["resilient.tailChunk", "execution.executeSearch", "resilient.executeResilientSearch"],
+        "rerank": ["resilient.tailChunk", "execution.executeSearch", "resilient.executeResilientSearch", "router.planQuery", "resilient.genericBodyChunk"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 8192 }
+    },
+    {
+      "id": "rerank_should_skip",
+      "query": "rankCandidates",
+      "scope": "runtime",
+      "expectedOwners": ["ranking.rankCandidates"],
+      "requiredRoles": ["owner"],
+      "providerRows": { "primary": ["docs.searchPipeline", "execution.executeSearch", "ranking.rankCandidates"] },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 4096 }
+    },
+    {
+      "id": "lexical_semantic_disagreement",
+      "query": "\"SOURCE_CHECKPOINT_MISSING\" checkpoint behavior",
+      "scope": "runtime",
+      "expectedOwners": ["checkpoint.writeSourceCheckpoint", "checkpoint.SOURCE_CHECKPOINT_MISSING"],
+      "requiredRoles": ["owner"],
+      "providerRows": {
+        "primary": ["checkpoint.refreshCheckpoint", "checkpoint.writeSourceCheckpoint", "checkpoint.SOURCE_CHECKPOINT_MISSING"],
+        "expanded": ["checkpoint.refreshCheckpoint", "docs.searchPipeline"],
+        "sparse": ["checkpoint.SOURCE_CHECKPOINT_MISSING", "checkpoint.writeSourceCheckpoint", "test.verifiesCheckpointWriter"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 6144 }
+    }
+  ]
+}

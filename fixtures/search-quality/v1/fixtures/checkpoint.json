@@ -1,0 +1,5 @@
+{
+  "status": "SOURCE_CHECKPOINT_MISSING",
+  "writer": "writeSourceCheckpoint",
+  "rerankTopK": 24
+}

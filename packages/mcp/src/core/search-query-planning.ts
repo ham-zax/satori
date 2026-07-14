@@ -5,6 +5,10 @@ import type {
     SearchLexicalTermKind,
     SearchQueryIntent,
     SearchQueryPlan,
+    SearchReferenceDirection,
+    SearchRouteContract,
+    SearchRouteKind,
+    SearchRouteReason,
 } from "./search-lexical-scoring.js";
 
 const SEARCH_OPERATOR_KEYS = new Set(["lang", "path", "-path", "must", "exclude"]);
@@ -12,6 +16,10 @@ const SEARCH_QUERY_STOPWORDS = new Set([
     "a", "an", "and", "are", "as", "at", "be", "by", "find", "for", "from", "how",
     "in", "is", "it", "logic", "of", "or", "the", "to", "used", "uses", "using",
     "what", "where", "which", "who", "why",
+]);
+const SEARCH_STRUCTURAL_CUE_WORDS = new Set([
+    "call", "calls", "caller", "callers", "callee", "callees",
+    "own", "owns", "owner", "owners", "owning", "reference", "references",
 ]);
 
 export type ParsedSearchOperators = {
@@ -247,6 +255,43 @@ function isIdentifierLikeToken(token: string): boolean {
         || /\d/.test(trimmed);
 }
 
+function normalizeExactIdentifierTarget(token: string): string | null {
+    const normalized = token
+        .trim()
+        .replace(/^[('"`\[{]+/, "")
+        .replace(/[?'"`)\]},;]+$/, "");
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|#|\/|::)[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(normalized)) {
+        return null;
+    }
+    if (!/[A-Z_]/.test(normalized) && !/(?:\.|#|\/|::)/.test(normalized)) {
+        return null;
+    }
+    return normalized;
+}
+
+function extractExactIdentifierTarget(tokens: string[]): string | undefined {
+    const targets = [...new Set(tokens
+        .map((token) => normalizeExactIdentifierTarget(token))
+        .filter((target): target is string => target !== null)
+        .filter((target) => {
+            const normalized = target.toLowerCase();
+            return !SEARCH_QUERY_STOPWORDS.has(normalized)
+                && !SEARCH_STRUCTURAL_CUE_WORDS.has(normalized);
+        }))];
+    return targets.length === 1 ? targets[0] : undefined;
+}
+
+function resolveReferenceDirection(query: string): SearchReferenceDirection {
+    const normalized = query.toLowerCase();
+    if (/\b(?:callees?|what\s+(?:does|do)\b.*\bcall)\b/.test(normalized)) {
+        return "callees";
+    }
+    if (/\b(?:callers?|who\s+calls?|who\s+uses?|references?\s+(?:to|of))\b/.test(normalized)) {
+        return "callers";
+    }
+    return "both";
+}
+
 function extractQuotedLiteralPhrases(query: string): string[] {
     const phrases = new Set<string>();
     const pattern = /(["'`])([^"'`]+?)\1/g;
@@ -263,7 +308,140 @@ function extractQuotedLiteralPhrases(query: string): string[] {
     return Array.from(phrases.values()).slice(0, 4);
 }
 
-export function buildSearchQueryPlan(semanticQuery: string, hybridEnabled: boolean): SearchQueryPlan {
+function buildRouteContract(kind: SearchRouteKind, reason: SearchRouteReason): SearchRouteContract {
+    if (kind === "exact_identifier") {
+        return {
+            kind,
+            reason,
+            deterministicFirst: true,
+            navigation: "required",
+            allowedSources: ["registry", "tracked_lexical", "dense", "sparse"],
+            currentProviderBudget: { semanticPassesPerAttempt: 1, rerankCalls: 0 },
+        };
+    }
+    if (kind === "exact_path") {
+        return {
+            kind,
+            reason,
+            deterministicFirst: true,
+            navigation: "preferred",
+            allowedSources: ["registry", "live_path", "tracked_lexical", "dense", "sparse"],
+            currentProviderBudget: { semanticPassesPerAttempt: 1, rerankCalls: 0 },
+        };
+    }
+    if (kind === "literal") {
+        return {
+            kind,
+            reason,
+            deterministicFirst: true,
+            navigation: "not_required",
+            allowedSources: ["tracked_lexical", "sparse", "dense"],
+            currentProviderBudget: { semanticPassesPerAttempt: 1, rerankCalls: 0 },
+        };
+    }
+    if (kind === "references") {
+        return {
+            kind,
+            reason,
+            deterministicFirst: true,
+            navigation: "preferred",
+            allowedSources: ["registry", "relationships", "tracked_lexical", "dense", "sparse"],
+            currentProviderBudget: { semanticPassesPerAttempt: 2, rerankCalls: 1 },
+        };
+    }
+    if (kind === "ownership") {
+        return {
+            kind,
+            reason,
+            deterministicFirst: true,
+            navigation: "preferred",
+            allowedSources: ["registry", "tracked_lexical", "dense", "sparse"],
+            currentProviderBudget: { semanticPassesPerAttempt: 2, rerankCalls: 1 },
+        };
+    }
+    if (kind === "structural") {
+        return {
+            kind,
+            reason,
+            deterministicFirst: true,
+            navigation: "preferred",
+            allowedSources: ["registry", "relationships", "dense", "sparse"],
+            currentProviderBudget: { semanticPassesPerAttempt: 2, rerankCalls: 1 },
+        };
+    }
+    if (kind === "configuration") {
+        return {
+            kind,
+            reason,
+            deterministicFirst: true,
+            navigation: "not_required",
+            allowedSources: ["tracked_lexical", "registry", "sparse", "dense"],
+            currentProviderBudget: { semanticPassesPerAttempt: 1, rerankCalls: 0 },
+        };
+    }
+    return {
+        kind,
+        reason,
+        deterministicFirst: false,
+        navigation: "not_required",
+        allowedSources: ["dense", "sparse", "tracked_lexical"],
+        currentProviderBudget: { semanticPassesPerAttempt: 2, rerankCalls: 1 },
+    };
+}
+
+function classifySearchRoute(input: {
+    semanticQuery: string;
+    intent: SearchQueryIntent;
+    identifierTargetPresent: boolean;
+    quotedLiteralSeeking: boolean;
+    referenceSeeking: boolean;
+    parsedOperators?: ParsedSearchOperators;
+}): SearchRouteContract {
+    const normalizedQuery = input.semanticQuery.toLowerCase();
+    const pathOperatorPresent = (input.parsedOperators?.path.length ?? 0) > 0;
+    const pathShapedQuery = /(?:^|\s)(?:\.?\.?\/)?[\w@.-]+(?:\/[\w@.-]+)+\.[a-z0-9]+(?:$|\s)/i.test(input.semanticQuery)
+        || /\b[\w@.-]+\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|php|json|ya?ml|toml)\b/i.test(input.semanticQuery);
+    if (pathOperatorPresent) {
+        return buildRouteContract("exact_path", "exact_path_operator");
+    }
+    if (pathShapedQuery) {
+        return buildRouteContract("exact_path", "path_shaped_query");
+    }
+    if (input.quotedLiteralSeeking) {
+        return buildRouteContract("literal", "quoted_literal");
+    }
+    if (/\b(config|configuration|configured|setting|settings|constant|constants|environment|env|flag|flags)\b/.test(normalizedQuery)) {
+        return buildRouteContract("configuration", "configuration_cue");
+    }
+    if (input.referenceSeeking || /\b(calls?|callers?|callees?|references?|imports?|uses?)\b/.test(normalizedQuery)) {
+        return buildRouteContract("references", "reference_cue");
+    }
+    const explicitOwnershipCue = /\b(who\s+owns?|owner|owning)\b/.test(normalizedQuery);
+    const exactWhereIsCue = input.identifierTargetPresent
+        && /\bwhere\s+is\b/.test(normalizedQuery);
+    if (explicitOwnershipCue || exactWhereIsCue) {
+        return buildRouteContract("ownership", "ownership_cue");
+    }
+    if (/\b(architecture|architectural|trace|pipeline|flow|entrypoint|call\s+graph|structure|structural)\b/.test(normalizedQuery)) {
+        return buildRouteContract("structural", "structural_cue");
+    }
+    if (input.intent === "identifier") {
+        return buildRouteContract("exact_identifier", "identifier_intent");
+    }
+    if (input.intent === "mixed") {
+        return buildRouteContract("mixed", "mixed_intent");
+    }
+    if (input.intent === "semantic") {
+        return buildRouteContract("conceptual", "conceptual_intent");
+    }
+    return buildRouteContract("conceptual", "uncertain_fallback");
+}
+
+export function buildSearchQueryPlan(
+    semanticQuery: string,
+    hybridEnabled: boolean,
+    parsedOperators?: ParsedSearchOperators,
+): SearchQueryPlan {
     const tokens = semanticQuery
         .split(/\s+/)
         .map((token) => token.trim())
@@ -271,6 +449,7 @@ export function buildSearchQueryPlan(semanticQuery: string, hybridEnabled: boole
     const normalizedQuery = semanticQuery.toLowerCase();
     const normalizedTokens = tokens.map((token) => token.toLowerCase());
     const identifierTokens = tokens.filter((token) => isIdentifierLikeToken(token));
+    const exactIdentifierTarget = extractExactIdentifierTarget(tokens);
     const naturalLanguageTokens = tokens
         .filter((token) => (
             !isIdentifierLikeToken(token)
@@ -291,15 +470,15 @@ export function buildSearchQueryPlan(semanticQuery: string, hybridEnabled: boole
         .slice(0, 8);
     const explicitReferenceSeeking = /\b(used|uses|usage|reference|references|referenced|callers?|called|imports?|imported|instantiat(?:e|ed|ion))\b/.test(normalizedQuery)
         || /\bwho\s+uses\b/.test(normalizedQuery);
-    const referenceSeeking = explicitReferenceSeeking
-        || /\bwhere\s+is\b/.test(normalizedQuery)
-        || /\bwho\s+uses\b/.test(normalizedQuery);
+    const referenceSeeking = explicitReferenceSeeking;
     const testSeeking = /\b(test|tests|tested|testing|spec|specs|coverage|assert|asserts|assertion|assertions|fixture|fixtures|mock|mocks|mocked|stub|stubs)\b/.test(normalizedQuery)
         || /\.test\b/.test(normalizedQuery)
         || /\.spec\b/.test(normalizedQuery);
     const writerSeeking = /\b(writes?|writing|written|updates?|updated|updating|creates?|created|creating|generates?|generated|generating|emits?|emitted|emitting|persists?|persisted|persisting|configures?|configured|configuring|installs?|installed|installing)\b/.test(normalizedQuery);
     const implementationCue = /\b(implement|implements|implemented|implementation|owner|owning|built|build|builds|builder|construct|constructed|create|creates|created|install|installs|installed|emit|emits|emitted|producer|produces|normalize|normalizes|normalized|cap|caps|capped|script|scripts|check|checks|checked|wire|wired|assemble|assembles|assembled|decide|decides|decided|deciding|freshness|reconcile|reconciles|reconciled|reconciliation|control)\b/.test(normalizedQuery);
-    const ownerWhereSeeking = !explicitReferenceSeeking && /\bwhere\s+(?:does|is|are)\b/.test(normalizedQuery);
+    const ownerWhereSeeking = identifierTokens.length > 0
+        && !explicitReferenceSeeking
+        && /\bwhere\s+(?:does|is|are)\b/.test(normalizedQuery);
     const implementationSeeking = !testSeeking && (implementationCue || ownerWhereSeeking || writerSeeking);
 
     let intent: SearchQueryIntent = "uncertain";
@@ -340,9 +519,26 @@ export function buildSearchQueryPlan(semanticQuery: string, hybridEnabled: boole
     if (writerSeeking) {
         reasons.push("writer_seeking_query");
     }
+    const route = classifySearchRoute({
+        semanticQuery,
+        intent,
+        identifierTargetPresent: exactIdentifierTarget !== undefined,
+        quotedLiteralSeeking,
+        referenceSeeking,
+        parsedOperators,
+    });
+    const sparseOnlyRoute = route.kind === "exact_identifier"
+        || route.kind === "exact_path"
+        || route.kind === "literal"
+        || route.kind === "configuration";
 
     return {
         semanticQuery,
+        route,
+        ...(exactIdentifierTarget ? { exactIdentifierTarget } : {}),
+        ...(route.kind === "references" && exactIdentifierTarget
+            ? { referenceDirection: resolveReferenceDirection(semanticQuery) }
+            : {}),
         intent,
         confidence,
         reasons,
@@ -353,7 +549,7 @@ export function buildSearchQueryPlan(semanticQuery: string, hybridEnabled: boole
         writerSeeking,
         lexicalTerms,
         retrievalMode: hybridEnabled
-            ? (intent === "identifier" ? "lexical" : "hybrid")
+            ? (sparseOnlyRoute ? "lexical" : "hybrid")
             : "dense",
         scorePolicyKind: "topk_only",
         lexicalWeight: quotedLiteralSeeking
@@ -368,6 +564,6 @@ export function buildSearchQueryPlan(semanticQuery: string, hybridEnabled: boole
         exactMatchPinningEnabled: intent === "identifier"
             || quotedLiteralSeeking
             || (writerSeeking && exactPinEligible),
-        rerankAllowed: intent !== "identifier" && !quotedLiteralSeeking,
+        rerankAllowed: !sparseOnlyRoute && intent !== "identifier" && !quotedLiteralSeeking,
     };
 }

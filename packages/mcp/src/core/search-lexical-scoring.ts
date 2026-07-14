@@ -6,6 +6,48 @@ const SEARCH_SIBLING_STRUCTURAL_ANCHOR_PENALTY_PRE_WEIGHT_SEMANTIC = 0.55;
 export type SearchQueryIntent = "identifier" | "semantic" | "mixed" | "uncertain";
 export type SearchIntentConfidence = "high" | "medium" | "low";
 export type SearchLexicalTermKind = "whole" | "fragment";
+export type SearchReferenceDirection = "callers" | "callees" | "both";
+export type SearchRouteKind =
+    | "exact_identifier"
+    | "exact_path"
+    | "literal"
+    | "configuration"
+    | "ownership"
+    | "references"
+    | "structural"
+    | "conceptual"
+    | "mixed";
+export type SearchRouteReason =
+    | "exact_path_operator"
+    | "path_shaped_query"
+    | "quoted_literal"
+    | "configuration_cue"
+    | "reference_cue"
+    | "ownership_cue"
+    | "structural_cue"
+    | "identifier_intent"
+    | "mixed_intent"
+    | "conceptual_intent"
+    | "uncertain_fallback";
+export type SearchRetrievalSource =
+    | "registry"
+    | "tracked_lexical"
+    | "live_path"
+    | "relationships"
+    | "dense"
+    | "sparse";
+
+export type SearchRouteContract = {
+    kind: SearchRouteKind;
+    reason: SearchRouteReason;
+    deterministicFirst: boolean;
+    navigation: "required" | "preferred" | "not_required";
+    allowedSources: SearchRetrievalSource[];
+    currentProviderBudget: {
+        semanticPassesPerAttempt: 1 | 2;
+        rerankCalls: 0 | 1;
+    };
+};
 
 export type SearchLexicalTerm = {
     value: string;
@@ -14,6 +56,9 @@ export type SearchLexicalTerm = {
 
 export type SearchQueryPlan = {
     semanticQuery: string;
+    route: SearchRouteContract;
+    exactIdentifierTarget?: string;
+    referenceDirection?: SearchReferenceDirection;
     intent: SearchQueryIntent;
     confidence: SearchIntentConfidence;
     reasons: string[];

@@ -15,6 +15,10 @@ import {
     formatSearchVectorBackendError,
     isMissingProviderConfigIssue
 } from "./setup-errors.js";
+import {
+    buildSearchQueryPlan,
+    parseSearchOperators,
+} from "../core/search-query-planning.js";
 
 interface SearchDiagnostics {
     resultsBeforeFilter: number;
@@ -27,6 +31,20 @@ interface SearchDiagnostics {
     searchPassFailureCount?: number;
     rerankerAttempted?: boolean;
     rerankerUsed?: boolean;
+    routeKind?: string;
+    retrievalMode?: string;
+    semanticSearchAttempts?: number;
+    embeddingCallsByCurrentContract?: number;
+    denseQueriesByCurrentContract?: number;
+    sparseQueriesByCurrentContract?: number;
+    rerankerCalls?: number;
+    rerankerCandidates?: number;
+    rerankerInputBytes?: number;
+    candidatesWithSemanticEvidence?: number;
+    candidatesWithLexicalEvidence?: number;
+    candidatesWithCurrentSourceEvidence?: number;
+    semanticExpansionAttempted?: boolean;
+    semanticExpansionReason?: string;
 }
 
 type PublicSearchDebugMode = "none" | "summary" | "ranking" | "freshness" | "full";
@@ -63,6 +81,19 @@ function safeNumber(value: unknown, fallback = 0): number {
     return value;
 }
 
+function getReturnedResultCount(response: ToolResponse): number | null {
+    const text = response.content?.[0]?.text;
+    if (typeof text !== "string") return null;
+
+    try {
+        const parsed = JSON.parse(text);
+        if (!isRecord(parsed) || !Array.isArray(parsed.results)) return null;
+        return parsed.results.length;
+    } catch {
+        return null;
+    }
+}
+
 function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
     const fallback: SearchDiagnostics = {
         resultsBeforeFilter: 0,
@@ -81,13 +112,29 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
             resultsBeforeFilter: safeNumber(metaDiagnostics.resultsBeforeFilter, afterFilter),
             resultsAfterFilter: afterFilter,
             excludedByIgnore: safeNumber(metaDiagnostics.excludedByIgnore, 0),
-            resultsReturned: afterFilter,
+            resultsReturned: getReturnedResultCount(response) ?? afterFilter,
             freshnessMode: typeof metaDiagnostics.freshnessMode === "string" ? metaDiagnostics.freshnessMode : undefined,
             searchPassCount: safeNumber(metaDiagnostics.searchPassCount, 0),
             searchPassSuccessCount: safeNumber(metaDiagnostics.searchPassSuccessCount, 0),
             searchPassFailureCount: safeNumber(metaDiagnostics.searchPassFailureCount, 0),
             rerankerAttempted: metaDiagnostics.rerankerAttempted === true,
             rerankerUsed: metaDiagnostics.rerankerUsed === true,
+            routeKind: typeof metaDiagnostics.routeKind === "string" ? metaDiagnostics.routeKind : undefined,
+            retrievalMode: typeof metaDiagnostics.retrievalMode === "string" ? metaDiagnostics.retrievalMode : undefined,
+            semanticSearchAttempts: safeNumber(metaDiagnostics.semanticSearchAttempts, 0),
+            embeddingCallsByCurrentContract: safeNumber(metaDiagnostics.embeddingCallsByCurrentContract, 0),
+            denseQueriesByCurrentContract: safeNumber(metaDiagnostics.denseQueriesByCurrentContract, 0),
+            sparseQueriesByCurrentContract: safeNumber(metaDiagnostics.sparseQueriesByCurrentContract, 0),
+            rerankerCalls: safeNumber(metaDiagnostics.rerankerCalls, 0),
+            rerankerCandidates: safeNumber(metaDiagnostics.rerankerCandidates, 0),
+            rerankerInputBytes: safeNumber(metaDiagnostics.rerankerInputBytes, 0),
+            candidatesWithSemanticEvidence: safeNumber(metaDiagnostics.candidatesWithSemanticEvidence, 0),
+            candidatesWithLexicalEvidence: safeNumber(metaDiagnostics.candidatesWithLexicalEvidence, 0),
+            candidatesWithCurrentSourceEvidence: safeNumber(metaDiagnostics.candidatesWithCurrentSourceEvidence, 0),
+            semanticExpansionAttempted: metaDiagnostics.semanticExpansionAttempted === true,
+            semanticExpansionReason: typeof metaDiagnostics.semanticExpansionReason === "string"
+                ? metaDiagnostics.semanticExpansionReason
+                : undefined,
         };
     }
 
@@ -104,6 +151,10 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
         const hints = isRecord(parsedRecord?.hints) ? parsedRecord.hints : null;
         const debugSearch = isRecord(hints?.debugSearch) ? hints.debugSearch : null;
         const rerank = isRecord(debugSearch?.rerank) ? debugSearch.rerank : null;
+        const route = isRecord(debugSearch?.route) ? debugSearch.route : null;
+        const retrieval = isRecord(debugSearch?.retrieval) ? debugSearch.retrieval : null;
+        const providerWork = isRecord(debugSearch?.providerWork) ? debugSearch.providerWork : null;
+        const semanticExpansion = isRecord(debugSearch?.semanticExpansion) ? debugSearch.semanticExpansion : null;
         return {
             resultsBeforeFilter: safeNumber(parsedRecord?.resultsBeforeFilter, results),
             resultsAfterFilter: safeNumber(parsedRecord?.resultsAfterFilter, results),
@@ -115,6 +166,22 @@ function extractDiagnostics(response: ToolResponse): SearchDiagnostics {
             searchPassFailureCount: safeNumber(parsedRecord?.searchPassFailureCount, 0),
             rerankerAttempted: rerank?.attempted === true,
             rerankerUsed: rerank?.applied === true,
+            routeKind: typeof route?.kind === "string" ? route.kind : undefined,
+            retrievalMode: typeof retrieval?.mode === "string" ? retrieval.mode : undefined,
+            semanticSearchAttempts: safeNumber(providerWork?.semanticSearchAttempts, 0),
+            embeddingCallsByCurrentContract: safeNumber(providerWork?.embeddingCallsByCurrentContract, 0),
+            denseQueriesByCurrentContract: safeNumber(providerWork?.denseQueriesByCurrentContract, 0),
+            sparseQueriesByCurrentContract: safeNumber(providerWork?.sparseQueriesByCurrentContract, 0),
+            rerankerCalls: safeNumber(providerWork?.rerankerCalls, 0),
+            rerankerCandidates: safeNumber(providerWork?.rerankerCandidates, 0),
+            rerankerInputBytes: safeNumber(providerWork?.rerankerInputBytes, 0),
+            candidatesWithSemanticEvidence: safeNumber(providerWork?.candidatesWithSemanticEvidence, 0),
+            candidatesWithLexicalEvidence: safeNumber(providerWork?.candidatesWithLexicalEvidence, 0),
+            candidatesWithCurrentSourceEvidence: safeNumber(providerWork?.candidatesWithCurrentSourceEvidence, 0),
+            semanticExpansionAttempted: semanticExpansion?.attempted === true,
+            semanticExpansionReason: typeof semanticExpansion?.reason === "string"
+                ? semanticExpansion.reason
+                : undefined,
         };
     } catch {
         return fallback;
@@ -127,6 +194,8 @@ function emitSearchBackendErrorTelemetry(args: {
     limit: number;
     startedAt: number;
     code: string;
+    routeKind?: string;
+    retrievalMode?: string;
     responseBytes?: number;
 }): void {
     emitSearchTelemetry({
@@ -142,7 +211,8 @@ function emitSearchBackendErrorTelemetry(args: {
         reranker_used: false,
         reranker_attempted: false,
         latency_ms: Date.now() - args.startedAt,
-        parallel_fanout: true,
+        route: args.routeKind,
+        retrieval_mode: args.retrievalMode,
         ...(args.responseBytes !== undefined ? { response_bytes: args.responseBytes } : {}),
         error: args.code,
     });
@@ -212,10 +282,19 @@ export const searchCodebaseTool: McpTool = {
         const startedAt = Date.now();
         const limit = Math.max(1, Math.min(ctx.capabilities.getMaxSearchLimit(), input.limit ?? ctx.capabilities.getDefaultSearchLimit()));
         const profile = getProfile(ctx);
+        const parsedOperators = parseSearchOperators(input.query);
+        const queryPlan = buildSearchQueryPlan(
+            parsedOperators.semanticQuery,
+            ctx.runtimeFingerprint?.schemaVersion.startsWith("hybrid") === true,
+            parsedOperators,
+        );
+        const providerOperation = queryPlan.retrievalMode === "lexical"
+            ? "vector_only"
+            : "embedding_vector";
         let executionContext: ToolContext | MissingProviderConfigIssue;
         try {
             executionContext = ctx.providerRuntime
-                ? await ctx.providerRuntime.requireToolContext("embedding_vector")
+                ? await ctx.providerRuntime.requireToolContext(providerOperation)
                 : ctx;
         } catch (error) {
             const diagnostic = classifyVectorBackendError(error);
@@ -232,6 +311,8 @@ export const searchCodebaseTool: McpTool = {
                 limit,
                 startedAt,
                 code: diagnostic.code,
+                routeKind: queryPlan.route.kind,
+                retrievalMode: queryPlan.retrievalMode,
                 responseBytes: getResponseBytes(response),
             });
             return response;
@@ -254,7 +335,15 @@ export const searchCodebaseTool: McpTool = {
                 reranker_used: false,
                 reranker_attempted: false,
                 latency_ms: Date.now() - startedAt,
-                parallel_fanout: true,
+                route: queryPlan.route.kind,
+                retrieval_mode: queryPlan.retrievalMode,
+                semantic_search_attempts: 0,
+                embedding_calls_by_current_contract: 0,
+                dense_queries_by_current_contract: 0,
+                sparse_queries_by_current_contract: 0,
+                reranker_calls: 0,
+                reranker_candidates: 0,
+                reranker_input_bytes: 0,
                 response_bytes: getResponseBytes(response),
                 error: executionContext.code,
             });
@@ -282,6 +371,8 @@ export const searchCodebaseTool: McpTool = {
                 limit,
                 startedAt,
                 code: diagnostic.code,
+                routeKind: queryPlan.route.kind,
+                retrievalMode: queryPlan.retrievalMode,
                 responseBytes: getResponseBytes(response),
             });
             return response;
@@ -305,7 +396,20 @@ export const searchCodebaseTool: McpTool = {
             search_pass_count: diagnostics.searchPassCount,
             search_pass_success_count: diagnostics.searchPassSuccessCount,
             search_pass_failure_count: diagnostics.searchPassFailureCount,
-            parallel_fanout: true,
+            route: diagnostics.routeKind,
+            retrieval_mode: diagnostics.retrievalMode,
+            semantic_search_attempts: diagnostics.semanticSearchAttempts,
+            embedding_calls_by_current_contract: diagnostics.embeddingCallsByCurrentContract,
+            dense_queries_by_current_contract: diagnostics.denseQueriesByCurrentContract,
+            sparse_queries_by_current_contract: diagnostics.sparseQueriesByCurrentContract,
+            reranker_calls: diagnostics.rerankerCalls,
+            reranker_candidates: diagnostics.rerankerCandidates,
+            reranker_input_bytes: diagnostics.rerankerInputBytes,
+            candidates_with_semantic_evidence: diagnostics.candidatesWithSemanticEvidence,
+            candidates_with_lexical_evidence: diagnostics.candidatesWithLexicalEvidence,
+            candidates_with_current_source_evidence: diagnostics.candidatesWithCurrentSourceEvidence,
+            semantic_expansion_attempted: diagnostics.semanticExpansionAttempted,
+            semantic_expansion_reason: diagnostics.semanticExpansionReason,
             response_bytes: getResponseBytes(response),
             ...(response.isError ? { error: getErrorMessage(response) } : {})
         });

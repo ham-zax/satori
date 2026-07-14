@@ -2967,6 +2967,17 @@ export class ToolHandlers {
             searchPassFailureCount: 0,
             rerankerAttempted: false,
             rerankerUsed: false,
+            semanticSearchAttempts: 0,
+            embeddingCallsByCurrentContract: 0,
+            denseQueriesByCurrentContract: 0,
+            sparseQueriesByCurrentContract: 0,
+            rerankerCalls: 0,
+            rerankerCandidates: 0,
+            rerankerInputBytes: 0,
+            candidatesWithSemanticEvidence: 0,
+            candidatesWithLexicalEvidence: 0,
+            candidatesWithCurrentSourceEvidence: 0,
+            semanticExpansionAttempted: false,
         };
         const phaseTimings = this.createSearchPhaseTimings();
         const readinessDebug: SearchReadinessDebugHint = {
@@ -3182,7 +3193,9 @@ export class ToolHandlers {
 
             const parsedOperators = this.searchQuerySupport.parseSearchOperators(input.query);
             const semanticQuery = parsedOperators.semanticQuery;
-            const queryPlan = this.searchQuerySupport.buildSearchQueryPlan(semanticQuery);
+            const queryPlan = this.searchQuerySupport.buildSearchQueryPlan(semanticQuery, parsedOperators);
+            searchDiagnostics.routeKind = queryPlan.route.kind;
+            searchDiagnostics.retrievalMode = queryPlan.retrievalMode;
             const maxAttempts = parsedOperators.must.length > 0 ? 1 + SEARCH_MUST_RETRY_ROUNDS : 1;
             let candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
             const initialFilterSummary: SearchFilterSummary = {
@@ -3303,6 +3316,7 @@ export class ToolHandlers {
                     preparedRead: preparedReadState,
                     operations: readinessDebug.operations,
                 }),
+                buildRelationshipBackedCallGraph: (exactInput) => this.buildRelationshipBackedCallGraph(exactInput),
                 buildChangedCodeDebug: (codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(codebaseRoot, changedFilesState),
                 buildGeneratedArtifactsVerificationHint: (codebaseRoot, results) => this.buildGeneratedArtifactsVerificationHint(codebaseRoot, results),
                 getSearchNavigationHelpers: () => this.getSearchNavigationHelpers(),

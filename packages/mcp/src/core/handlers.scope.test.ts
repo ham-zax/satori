@@ -299,6 +299,9 @@ async function writeSearchSymbolRegistryForFiles(input: {
         }>;
         extractedSymbols?: Parameters<typeof buildSymbolRecordsForFile>[0]['extractedSymbols'];
     }>;
+    relationships?: (
+        symbols: SymbolRecord[],
+    ) => Parameters<typeof writeRelationshipSidecar>[0]['records'];
 }) {
     const allSymbols: SymbolRecord[] = [];
     const manifestFiles: SymbolRegistryManifest['files'] = [];
@@ -354,7 +357,7 @@ async function writeSearchSymbolRegistryForFiles(input: {
         relationshipVersion: manifest.relationshipVersion,
         builtAt: manifest.builtAt,
         files: manifest.files,
-        records: [],
+        records: input.relationships?.(allSymbols) ?? [],
         analysisByFile: new Map(manifest.files.map((file) => [file.path, {
             moduleBindings: [],
             callSites: [],
@@ -362,6 +365,74 @@ async function writeSearchSymbolRegistryForFiles(input: {
     });
 
     return allSymbols;
+}
+
+async function writeCallerSearchFixture(
+    repoPath: string,
+    options?: { includeRelationship?: boolean },
+) {
+    const targetPath = 'src/checkpoints/checkpoint-store.ts';
+    const callerPath = 'src/checkpoints/checkpoint-service.ts';
+    const targetContent = [
+        'export function writeSourceCheckpoint() {',
+        '  return "saved";',
+        '}',
+    ].join('\n');
+    const callerContent = [
+        'import { writeSourceCheckpoint } from "./checkpoint-store";',
+        '',
+        'export function refreshCheckpoint() {',
+        '  return writeSourceCheckpoint();',
+        '}',
+    ].join('\n');
+    fs.mkdirSync(path.join(repoPath, 'src/checkpoints'), { recursive: true });
+    fs.writeFileSync(path.join(repoPath, targetPath), targetContent, 'utf8');
+    fs.writeFileSync(path.join(repoPath, callerPath), callerContent, 'utf8');
+    const symbols = await writeSearchSymbolRegistryForFiles({
+        repoPath,
+        files: [{
+            relativePath: targetPath,
+            content: targetContent,
+            chunks: [{
+                content: targetContent,
+                startLine: 1,
+                endLine: 3,
+                symbolLabel: 'function writeSourceCheckpoint()',
+            }],
+        }, {
+            relativePath: callerPath,
+            content: callerContent,
+            chunks: [{
+                content: callerContent.split('\n').slice(2).join('\n'),
+                startLine: 3,
+                endLine: 5,
+                symbolLabel: 'function refreshCheckpoint()',
+            }],
+        }],
+        relationships: options?.includeRelationship === false
+            ? undefined
+            : (records) => {
+                const target = records.find((symbol) => symbol.name === 'writeSourceCheckpoint');
+                const caller = records.find((symbol) => symbol.name === 'refreshCheckpoint');
+                assert.ok(target);
+                assert.ok(caller);
+                return [{
+                    sourceKey: caller.symbolKey,
+                    sourceInstanceId: caller.symbolInstanceId,
+                    targetKey: target.symbolKey,
+                    targetInstanceId: target.symbolInstanceId,
+                    type: 'CALLS',
+                    file: caller.file,
+                    span: { startLine: 4, endLine: 4 },
+                    confidence: 'high',
+                }];
+            },
+    });
+    const target = symbols.find((symbol) => symbol.name === 'writeSourceCheckpoint');
+    const caller = symbols.find((symbol) => symbol.name === 'refreshCheckpoint');
+    assert.ok(target);
+    assert.ok(caller);
+    return { targetPath, callerPath, target, caller };
 }
 
 async function writeSearchRelationshipSidecar(input: {
@@ -545,7 +616,7 @@ function createHandlers(
     return handlers;
 }
 
-test('handleSearchCode does not use registry navigation when valid completion proof omits navigation evidence', async () => {
+test('handleSearchCode falls back from structural ownership when completion proof omits navigation evidence', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {
             const relativePath = 'src/legacy.ts';
@@ -578,7 +649,7 @@ test('handleSearchCode does not use registry navigation when valid completion pr
 
             const response = await handlers.handleSearchCode({
                 path: repoPath,
-                query: 'orphanedRegistryOwner',
+                query: 'who owns orphanedRegistryOwner',
                 scope: 'runtime',
                 resultMode: 'grouped',
                 groupBy: 'symbol',
@@ -1945,6 +2016,24 @@ test('handleSearchCode supplements quoted exact literal retrieval from tracked l
         assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), true);
         assert.equal(payload.results[0].debug?.provenance?.retrievalPasses?.includes('lexical_files'), true);
         assert.equal(payload.hints?.debugSearch?.queryIntent?.reasons?.includes('quoted_literal_query'), true);
+        assert.deepEqual(payload.hints?.debugSearch?.providerWork, {
+            semanticSearchAttempts: 1,
+            embeddingCallsByCurrentContract: 0,
+            denseQueriesByCurrentContract: 0,
+            sparseQueriesByCurrentContract: 1,
+            rerankerCalls: 0,
+            rerankerCandidates: 0,
+            rerankerInputBytes: 0,
+            candidatesWithSemanticEvidence: 0,
+            candidatesWithLexicalEvidence: 2,
+            candidatesWithCurrentSourceEvidence: 0,
+        });
+        assert.deepEqual(payload.hints?.debugSearch?.semanticExpansion, {
+            expand: false,
+            attempted: false,
+            reason: 'lexical_route',
+            primaryScopedCandidateCount: 1,
+        });
     });
 });
 
@@ -2025,6 +2114,18 @@ test('handleSearchCode exact registry fast path returns a grouped symbol despite
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), false);
             assert.equal(payload.hints?.debugSearch?.exactRegistry?.status, 'hit');
             assert.equal(payload.hints?.debugSearch?.exactRegistry?.matchedSymbolInstanceId, owner.symbolInstanceId);
+            assert.deepEqual(payload.hints?.debugSearch?.providerWork, {
+                semanticSearchAttempts: 0,
+                embeddingCallsByCurrentContract: 0,
+                denseQueriesByCurrentContract: 0,
+                sparseQueriesByCurrentContract: 0,
+                rerankerCalls: 0,
+                rerankerCandidates: 0,
+                rerankerInputBytes: 0,
+                candidatesWithSemanticEvidence: 0,
+                candidatesWithLexicalEvidence: 0,
+                candidatesWithCurrentSourceEvidence: 0,
+            });
             const phaseTimings = payload.hints?.debugSearch?.phaseTimingsMs || {};
             for (const phase of ['prepareRead', 'ensureFreshness', 'exactRegistry', 'semanticSearch', 'trackedLexical', 'rerank', 'registryLoad', 'grouping', 'navigationValidation']) {
                 assert.equal(typeof phaseTimings[phase], 'number');
@@ -2047,6 +2148,184 @@ test('handleSearchCode exact registry fast path returns a grouped symbol despite
                 assert.equal(modePayload.status, 'ok');
                 assert.equal(modePayload.results[0].target.symbolId, owner.symbolInstanceId);
                 assertClosedDebugProjection(modePayload, mode);
+            }
+        });
+    });
+});
+
+test('handleSearchCode resolves explicit ownership through the registry without provider work', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const relativePath = 'src/search/ranking.ts';
+            const content = 'export function rankCandidates() { return []; }\n';
+            fs.mkdirSync(path.join(repoPath, 'src/search'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, relativePath), content, 'utf8');
+            const symbols = await writeSearchSymbolRegistry({
+                repoPath,
+                relativePath,
+                content,
+                chunks: [{
+                    content: content.trim(),
+                    startLine: 1,
+                    endLine: 1,
+                    symbolLabel: 'function rankCandidates()',
+                }],
+            });
+            const owner = symbols.find((symbol) => symbol.name === 'rankCandidates');
+            assert.ok(owner);
+
+            const handlers = createHandlers(repoPath, []);
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
+                throw new Error('semanticSearch should not run for deterministic ownership hits');
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'who owns rankCandidates',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 2,
+                debugMode: 'full',
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.results[0].target.symbolId, owner.symbolInstanceId);
+            assert.equal(payload.hints?.debugSearch?.route?.kind, 'ownership');
+            assert.deepEqual(payload.hints?.debugSearch?.providerWork, {
+                semanticSearchAttempts: 0,
+                embeddingCallsByCurrentContract: 0,
+                denseQueriesByCurrentContract: 0,
+                sparseQueriesByCurrentContract: 0,
+                rerankerCalls: 0,
+                rerankerCandidates: 0,
+                rerankerInputBytes: 0,
+                candidatesWithSemanticEvidence: 0,
+                candidatesWithLexicalEvidence: 0,
+                candidatesWithCurrentSourceEvidence: 0,
+            });
+        });
+    });
+});
+
+test('handleSearchCode resolves exact caller relationships before provider-backed search', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const { target, caller } = await writeCallerSearchFixture(repoPath);
+
+            const handlers = createHandlers(repoPath, []);
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
+                throw new Error('semanticSearch should not run for deterministic caller hits');
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'who calls writeSourceCheckpoint',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 2,
+                debugMode: 'full',
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.deepEqual(
+                payload.results.map((result: { target: { symbolId?: string } }) => result.target.symbolId),
+                [caller.symbolInstanceId, target.symbolInstanceId],
+            );
+            assert.equal(payload.hints?.debugSearch?.route?.kind, 'references');
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('relationships'), true);
+            assert.deepEqual(payload.hints?.debugSearch?.providerWork, {
+                semanticSearchAttempts: 0,
+                embeddingCallsByCurrentContract: 0,
+                denseQueriesByCurrentContract: 0,
+                sparseQueriesByCurrentContract: 0,
+                rerankerCalls: 0,
+                rerankerCandidates: 0,
+                rerankerInputBytes: 0,
+                candidatesWithSemanticEvidence: 0,
+                candidatesWithLexicalEvidence: 0,
+                candidatesWithCurrentSourceEvidence: 0,
+            });
+
+            const boundedResponse = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'who calls writeSourceCheckpoint',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 1,
+            });
+            const boundedPayload = JSON.parse(boundedResponse.content[0]?.text || '{}');
+            assert.deepEqual(
+                boundedPayload.results.map((result: { target: { symbolId?: string } }) => result.target.symbolId),
+                [caller.symbolInstanceId],
+            );
+        });
+    });
+});
+
+test('handleSearchCode falls back when exact caller relationship evidence is empty', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            await writeCallerSearchFixture(repoPath, { includeRelationship: false });
+            let semanticSearchCalls = 0;
+            const handlers = createHandlers(repoPath, []);
+            (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
+                semanticSearchCalls += 1;
+                return [];
+            };
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'who calls writeSourceCheckpoint',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 2,
+                debugMode: 'full',
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(semanticSearchCalls > 0, true);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('relationships'), false);
+            assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('primary'), true);
+        });
+    });
+});
+
+test('handleSearchCode falls back when exact caller relationship participants are dirty', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const { targetPath, callerPath } = await writeCallerSearchFixture(repoPath);
+
+            for (const dirtyPath of [targetPath, callerPath]) {
+                let semanticSearchCalls = 0;
+                const handlers = createHandlers(repoPath, []);
+                (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+                    available: true,
+                    files: new Set([dirtyPath]),
+                });
+                (handlers as unknown as ToolHandlersTestOverrides).context.semanticSearch = async () => {
+                    semanticSearchCalls += 1;
+                    return [];
+                };
+
+                const response = await handlers.handleSearchCode({
+                    path: repoPath,
+                    query: 'who calls writeSourceCheckpoint',
+                    scope: 'runtime',
+                    resultMode: 'grouped',
+                    groupBy: 'symbol',
+                    limit: 2,
+                });
+
+                const payload = JSON.parse(response.content[0]?.text || '{}');
+                assert.equal(payload.status, 'ok');
+                assert.equal(semanticSearchCalls > 0, true, `expected fallback for dirty ${dirtyPath}`);
             }
         });
     });
@@ -2730,7 +3009,7 @@ test('handleSearchCode uses must-only exact identifier queries for exact registr
     });
 });
 
-test('handleSearchCode ambiguous exact registry lookup falls back to existing semantic search path', async () => {
+test('handleSearchCode ambiguous structural ownership falls back to existing semantic search path', async () => {
     await withTempStateRoot(async () => {
         await withTempRepo(async (repoPath) => {
             fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
@@ -2787,7 +3066,7 @@ test('handleSearchCode ambiguous exact registry lookup falls back to existing se
 
             const response = await handlers.handleSearchCode({
                 path: repoPath,
-                query: 'runTask',
+                query: 'who owns runTask',
                 scope: 'runtime',
                 resultMode: 'grouped',
                 groupBy: 'symbol',
@@ -5541,6 +5820,133 @@ test('handleSearchCode debug exposes missing reranker capability without warning
     });
 });
 
+test('handleSearchCode reranks family-diverse candidates and exposes the adaptive budget', async () => {
+    await withTempRepo(async (repoPath) => {
+        let rerankDocuments: string[] = [];
+        const reranker = {
+            rerank: async (_query: string, documents: string[]) => {
+                rerankDocuments = documents;
+                return documents.map((_document, index) => ({ index, relevanceScore: 1 - (index * 0.01) }));
+            }
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'primary runtime behavior',
+                relativePath: 'src/owner-a-primary.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'chunk_owner_a_primary',
+                symbolLabel: 'ownerA',
+                ownerSymbolKey: 'owner_a_key',
+                ownerSymbolInstanceId: 'owner_a_instance'
+            },
+            {
+                content: 'duplicate runtime behavior',
+                relativePath: 'src/owner-a-duplicate.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.98,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'chunk_owner_a_duplicate',
+                symbolLabel: 'ownerA',
+                ownerSymbolKey: 'owner_a_key',
+                ownerSymbolInstanceId: 'owner_a_instance'
+            },
+            {
+                content: 'secondary runtime behavior',
+                relativePath: 'src/owner-b.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.97,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'chunk_owner_b',
+                symbolLabel: 'ownerB',
+                ownerSymbolKey: 'owner_b_key',
+                ownerSymbolInstanceId: 'owner_b_instance'
+            },
+            {
+                content: 'tertiary runtime behavior',
+                relativePath: 'src/owner-c.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.96,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'chunk_owner_c',
+                symbolLabel: 'ownerC',
+                ownerSymbolKey: 'owner_c_key',
+                ownerSymbolInstanceId: 'owner_c_instance'
+            },
+            {
+                content: 'quaternary runtime behavior',
+                relativePath: 'src/owner-d.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.95,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'chunk_owner_d',
+                symbolLabel: 'ownerD',
+                ownerSymbolKey: 'owner_d_key',
+                ownerSymbolInstanceId: 'owner_d_instance'
+            }
+        ], reranker);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'runtime behavior',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debugMode: 'full'
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+
+        assert.equal(payload.status, 'ok');
+        assert.equal(rerankDocuments.length, 5);
+        assert.deepEqual(rerankDocuments.map((document) => document.split('\n', 1)[0]), [
+            'src/owner-a-primary.ts',
+            'src/owner-b.ts',
+            'src/owner-c.ts',
+            'src/owner-d.ts',
+            'src/owner-a-duplicate.ts',
+        ]);
+        assert.equal(payload.hints?.debugSearch?.rerank?.candidatesIn, 5);
+        assert.equal(payload.hints?.debugSearch?.rerank?.familyCount, 4);
+        assert.equal(payload.hints?.debugSearch?.rerank?.supplementalCandidates, 1);
+        assert.equal(payload.hints?.debugSearch?.rerank?.candidatePoolCount, 5);
+        assert.equal(payload.hints?.debugSearch?.rerank?.candidatesReranked, 5);
+        assert.equal(payload.hints?.debugSearch?.rerank?.budgetReason, 'complete_family_pool');
+        assert.deepEqual(payload.hints?.debugSearch?.providerWork, {
+            semanticSearchAttempts: 1,
+            embeddingCallsByCurrentContract: 1,
+            denseQueriesByCurrentContract: 1,
+            sparseQueriesByCurrentContract: 1,
+            rerankerCalls: 1,
+            rerankerCandidates: 5,
+            rerankerInputBytes: rerankDocuments.reduce(
+                (total, document) => total + Buffer.byteLength(document, 'utf8'),
+                0,
+            ),
+            candidatesWithSemanticEvidence: 5,
+            candidatesWithLexicalEvidence: 0,
+            candidatesWithCurrentSourceEvidence: 0,
+        });
+        assert.deepEqual(payload.hints?.debugSearch?.semanticExpansion, {
+            expand: false,
+            attempted: false,
+            reason: 'primary_candidate_pool_sufficient',
+            primaryScopedCandidateCount: 5,
+        });
+    });
+});
+
 test('handleSearchCode degrades gracefully when reranker fails', async () => {
     await withTempRepo(async (repoPath) => {
         const reranker = {
@@ -5584,6 +5990,10 @@ test('handleSearchCode degrades gracefully when reranker fails', async () => {
         });
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
+        assert.deepEqual(
+            payload.results.map((result: { target: { file: string } }) => result.target.file),
+            ['src/one.ts', 'src/two.ts'],
+        );
         assert.equal(Array.isArray(payload.warnings), true);
         assert.equal(warningCodes(payload).includes('RERANKER_FAILED'), true);
         assert.equal(payload.hints?.debugSearch?.rerank?.enabledByPolicy, true);
@@ -5888,7 +6298,57 @@ test('handleSearchCode ranks canonical owners above tool wrappers for implementa
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.results[0].target.file, 'packages/mcp/src/core/handlers.ts');
         assert.equal(payload.results[0].debug?.pathCategory, 'core');
+        assert.equal(payload.results[0].debug?.agentFitReason, 'implementation_symbol');
         assert.equal(payload.results[1].debug?.pathCategory, 'adapter');
+        assert.equal(payload.results[1].debug?.agentFitReason, 'adapter_not_canonical_owner');
+    });
+});
+
+test('handleSearchCode keeps a provider adapter eligible as the canonical implementation owner', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [
+            {
+                content: 'async function executeSparseSearch(query) { return vectorDatabase.sparseSearch(query); }',
+                relativePath: 'packages/core/src/search/execution.ts',
+                startLine: 20,
+                endLine: 24,
+                language: 'typescript',
+                score: 0.90,
+                backendScore: 0.90,
+                backendScoreKind: 'vector',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_execute_sparse_search',
+                symbolLabel: 'function executeSparseSearch(query)'
+            },
+            {
+                content: 'async method sparseSearch(query) { return this.client.search({ anns_field: "sparse_vector", query }); }',
+                relativePath: 'packages/core/src/vectordb/adapters/milvus-rest.ts',
+                startLine: 80,
+                endLine: 95,
+                language: 'typescript',
+                score: 0.95,
+                backendScore: 0.95,
+                backendScoreKind: 'vector',
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_milvus_rest_sparse_search',
+                symbolLabel: 'method sparseSearch(query)'
+            }
+        ]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'Milvus REST sparse request implementation',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 2,
+            debugMode: 'full'
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.results[0].target.file, 'packages/core/src/vectordb/adapters/milvus-rest.ts');
+        assert.equal(payload.results[0].debug?.pathCategory, 'adapter');
+        assert.equal(payload.results[0].debug?.agentFitReason, 'implementation_symbol');
     });
 });
 
@@ -8020,13 +8480,9 @@ test('handleSearchCode falls back to dense retrieval when hybrid mode is disable
     });
 });
 
-test('handleSearchCode runs semantic passes concurrently and emits warnings on partial failure', async () => {
+test('handleSearchCode runs evidence-triggered expansion after the primary pass and warns on partial failure', async () => {
     await withTempRepo(async (repoPath) => {
         const started: string[] = [];
-        let releaseSearchPasses: (() => void) | undefined;
-        const gate = new Promise<void>((resolve) => {
-            releaseSearchPasses = resolve;
-        });
 
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
@@ -8034,7 +8490,6 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
                 const { query } = parseSemanticSearchInvocation(args);
                 const passId = query.includes('implementation runtime source entrypoint') ? 'expanded' : 'primary';
                 started.push(passId);
-                await gate;
                 if (passId === 'expanded') {
                     throw new Error('expanded failed');
                 }
@@ -8069,20 +8524,17 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
-        const responsePromise = handlers.handleSearchCode({
+        const response = await handlers.handleSearchCode({
             path: repoPath,
             query: 'validate session',
             scope: 'runtime',
             resultMode: 'grouped',
             groupBy: 'symbol',
-            limit: 5
+            limit: 5,
+            debugMode: 'full'
         });
 
-        await new Promise((resolve) => setImmediate(resolve));
-        assert.deepEqual(new Set(started), new Set(['primary', 'expanded']));
-
-        releaseSearchPasses?.();
-        const response = await responsePromise;
+        assert.deepEqual(started, ['primary', 'expanded']);
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.results.length, 1);
@@ -8096,6 +8548,24 @@ test('handleSearchCode runs semantic passes concurrently and emits warnings on p
         );
         assert.equal(passWarning?.severity, 'degraded');
         assert.match(passWarning?.message ?? '', /expanded semantic search pass failed/);
+        assert.deepEqual(payload.hints?.debugSearch?.providerWork, {
+            semanticSearchAttempts: 2,
+            embeddingCallsByCurrentContract: 2,
+            denseQueriesByCurrentContract: 2,
+            sparseQueriesByCurrentContract: 2,
+            rerankerCalls: 0,
+            rerankerCandidates: 0,
+            rerankerInputBytes: 0,
+            candidatesWithSemanticEvidence: 1,
+            candidatesWithLexicalEvidence: 0,
+            candidatesWithCurrentSourceEvidence: 0,
+        });
+        assert.deepEqual(payload.hints?.debugSearch?.semanticExpansion, {
+            expand: true,
+            attempted: true,
+            reason: 'primary_candidate_pool_small',
+            primaryScopedCandidateCount: 1,
+        });
     });
 });
 

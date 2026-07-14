@@ -31,6 +31,10 @@ import type { FreshnessDecision } from "./sync.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import { buildSearchDebugSummary, buildSearchGroupPreview } from "./search-response-helpers.js";
 import { WARNING_CODES } from "./warnings.js";
+import type {
+    RelationshipBackedCallGraphInput,
+    RelationshipBackedCallGraphResult,
+} from "./relationship-backed-call-graph.js";
 import {
     findExactRegistryMatch,
     shouldAttemptExactRegistryLookup,
@@ -132,6 +136,9 @@ export type SearchExactFastPathHost = {
         registryManifestHash?: string;
         registryUnavailableReason?: CallGraphUnavailableReason;
     }) => Promise<NavigationState>;
+    buildRelationshipBackedCallGraph: (
+        input: RelationshipBackedCallGraphInput,
+    ) => Promise<RelationshipBackedCallGraphResult | null>;
     buildChangedCodeDebug: (
         codebaseRoot: string,
         changedFilesState: ChangedFilesState,
@@ -150,15 +157,20 @@ function isExactRegistryEligible(input: SearchExactFastPathInput, host: SearchEx
         return Boolean(normalized && host.searchQuerySupport.isExactSearchPathFilter(normalized));
     });
 
+    const deterministicStructuralTarget = (
+        input.queryPlan.route.kind === "ownership"
+        || input.queryPlan.route.kind === "references"
+    ) && input.queryPlan.exactIdentifierTarget !== undefined;
+
     return input.resultMode === "grouped"
         && input.groupBy === "symbol"
-        && shouldAttemptExactRegistryLookup({
+        && (deterministicStructuralTarget || shouldAttemptExactRegistryLookup({
             semanticQuery: input.semanticQuery,
             intent: input.queryPlan.intent,
             lexicalTerms: input.queryPlan.lexicalTerms.map((term) => term.value),
             quotedLiteralPhrases: input.queryPlan.quotedLiteralPhrases,
             hasExactPathFilter,
-        });
+        }));
 }
 
 export async function runExactRegistryFastPath(
@@ -198,19 +210,26 @@ export async function runExactRegistryFastPath(
         };
     }
 
+    const exactLookupQuery = (
+        input.queryPlan.route.kind === "ownership"
+        || input.queryPlan.route.kind === "references"
+    )
+        ? (input.queryPlan.exactIdentifierTarget ?? input.semanticQuery)
+        : input.semanticQuery;
+    const filterSymbol = host.searchQuerySupport.buildExactRegistrySymbolFilter({
+        scope: input.scope,
+        parsedOperators: input.parsedOperators,
+    });
     const exactRegistryMatch = await host.measureSearchPhase("exactRegistry", async () => findExactRegistryMatch({
         registry: registryState.registry,
-        semanticQuery: input.semanticQuery,
-        intent: input.queryPlan.intent,
+        semanticQuery: exactLookupQuery,
+        intent: exactLookupQuery === input.semanticQuery ? input.queryPlan.intent : "identifier",
         lexicalTerms: input.queryPlan.lexicalTerms.map((term) => term.value),
         quotedLiteralPhrases: input.queryPlan.quotedLiteralPhrases,
         operators: {
             path: [...input.parsedOperators.path],
         },
-        filterSymbol: host.searchQuerySupport.buildExactRegistrySymbolFilter({
-            scope: input.scope,
-            parsedOperators: input.parsedOperators,
-        }),
+        filterSymbol,
     }));
     const exactRegistryDebug = exactRegistryMatch.debug;
 
@@ -226,11 +245,10 @@ export async function runExactRegistryFastPath(
 
     let exactRegistrySymbol = exactRegistryMatch.symbol;
     const normalizedExactPath = exactRegistrySymbol.file.replace(/\\/g, "/").replace(/^\/+/, "");
+    const exactTargetWasDirty = input.dirtyFilesNotFreshened
+        && input.observedChangedFilesState.files.has(normalizedExactPath);
     let currentSourceEvidence;
-    if (
-        input.dirtyFilesNotFreshened
-        && input.observedChangedFilesState.files.has(normalizedExactPath)
-    ) {
+    if (exactTargetWasDirty) {
         const validationResult = await host.measureSearchPhase(
             "navigationValidation",
             () => validateCurrentSourceSymbolSpansWithEvidence({
@@ -261,24 +279,103 @@ export async function runExactRegistryFastPath(
         }),
     );
 
-    currentSourceEvidence ??= await readCurrentSourceEvidence(
-        input.effectiveRoot,
-        exactRegistrySymbol.file,
-    );
-    const exactSourceContent = currentSourceEvidence
-        ? sliceHashMatchedCurrentSourceSymbolContent(
-            currentSourceEvidence,
-            currentSourceEvidence.canonicalRoot,
-            exactRegistrySymbol,
-        )
-        : undefined;
-    const exactPreview = exactSourceContent === undefined
-        ? ""
-        : buildSearchGroupPreview(
-            exactRegistrySymbol.label,
-            exactSourceContent,
-            input.previewMaxBytes,
+    let resultSymbols = [exactRegistrySymbol];
+    let relationshipPassUsed = false;
+    if (input.queryPlan.route.kind === "references") {
+        const direction = input.queryPlan.referenceDirection;
+        if (!direction || !callGraphNavigationState.relationshipReady || exactTargetWasDirty) {
+            return {
+                kind: "continue",
+                exactRegistryDebug,
+                searchSymbolRegistry: registryState.registry,
+                searchSymbolRegistryManifestHash: registryState.manifestHash,
+                exactRegistryFallbackForTrackedLexical: true,
+            };
+        }
+        const relationshipGraph = await host.measureSearchPhase(
+            "navigationValidation",
+            () => host.buildRelationshipBackedCallGraph({
+                codebaseRoot: input.effectiveRoot,
+                registry: registryState.registry,
+                registryManifestHash: registryState.manifestHash,
+                resolvedSymbol: exactRegistrySymbol,
+                direction,
+                depth: 1,
+                limit: input.limit,
+            }),
         );
+        if (!relationshipGraph) {
+            return {
+                kind: "continue",
+                exactRegistryDebug,
+                searchSymbolRegistry: registryState.registry,
+                searchSymbolRegistryManifestHash: registryState.manifestHash,
+                exactRegistryFallbackForTrackedLexical: true,
+            };
+        }
+
+        const peerIds = new Set<string>();
+        for (const edge of relationshipGraph.edges) {
+            if (
+                (direction === "callers" || direction === "both")
+                && edge.dstSymbolId === exactRegistrySymbol.symbolInstanceId
+            ) {
+                peerIds.add(edge.srcSymbolId);
+            }
+            if (
+                (direction === "callees" || direction === "both")
+                && edge.srcSymbolId === exactRegistrySymbol.symbolInstanceId
+            ) {
+                peerIds.add(edge.dstSymbolId);
+            }
+        }
+        const peerSymbols = relationshipGraph.nodes.flatMap((node) => {
+            if (!peerIds.has(node.symbolId)) return [];
+            const symbol = registryState.registry.symbolsByInstanceId.get(node.symbolId);
+            return symbol && filterSymbol(symbol) ? [symbol] : [];
+        });
+        const relationshipTouchesDirtySource = input.dirtyFilesNotFreshened
+            && peerSymbols.some((symbol) => input.observedChangedFilesState.files.has(
+                symbol.file.replace(/\\/g, "/").replace(/^\/+/, ""),
+            ));
+        if (peerSymbols.length === 0 || relationshipTouchesDirtySource) {
+            return {
+                kind: "continue",
+                exactRegistryDebug,
+                searchSymbolRegistry: registryState.registry,
+                searchSymbolRegistryManifestHash: registryState.manifestHash,
+                exactRegistryFallbackForTrackedLexical: true,
+            };
+        }
+
+        resultSymbols = peerSymbols.slice(0, input.limit);
+        if (resultSymbols.length < input.limit) {
+            resultSymbols = [...resultSymbols, exactRegistrySymbol];
+        }
+        relationshipPassUsed = true;
+    }
+
+    const exactMatches = await Promise.all(resultSymbols.map(async (symbol) => {
+        const sourceEvidence = symbol.symbolInstanceId === exactRegistrySymbol.symbolInstanceId
+            ? (currentSourceEvidence ??= await readCurrentSourceEvidence(input.effectiveRoot, symbol.file))
+            : await readCurrentSourceEvidence(input.effectiveRoot, symbol.file);
+        const sourceContent = sourceEvidence
+            ? sliceHashMatchedCurrentSourceSymbolContent(
+                sourceEvidence,
+                sourceEvidence.canonicalRoot,
+                symbol,
+            )
+            : undefined;
+        return {
+            symbol,
+            preview: sourceContent === undefined
+                ? ""
+                : buildSearchGroupPreview(symbol.label, sourceContent, input.previewMaxBytes),
+        };
+    }));
+    const exactPassesUsed = relationshipPassUsed
+        ? ["exact_registry", "relationships"]
+        : ["exact_registry"];
     const debugRankingProvenance = input.debugMode !== "none"
         ? {
             ...input.rankingProvenance,
@@ -304,7 +401,7 @@ export async function runExactRegistryFastPath(
             applied: false,
             exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
             exactMatchPinningApplied: false,
-            candidatesIn: 1,
+            candidatesIn: resultSymbols.length,
             candidatesReranked: 0,
             topK: SEARCH_RERANK_TOP_K,
             rankK: SEARCH_RERANK_RRF_K,
@@ -318,6 +415,11 @@ export async function runExactRegistryFastPath(
         : undefined;
     const rankingDebug = input.debugMode === "ranking" || input.debugMode === "full"
         ? {
+            route: {
+                ...input.queryPlan.route,
+                allowedSources: [...input.queryPlan.route.allowedSources],
+                currentProviderBudget: { ...input.queryPlan.route.currentProviderBudget },
+            },
             queryIntent: {
                 classification: input.queryPlan.intent,
                 confidence: input.queryPlan.confidence,
@@ -330,16 +432,28 @@ export async function runExactRegistryFastPath(
                 scorePolicyKind: input.queryPlan.scorePolicyKind,
                 backendScoreKinds: [],
             },
+            providerWork: {
+                semanticSearchAttempts: 0,
+                embeddingCallsByCurrentContract: 0,
+                denseQueriesByCurrentContract: 0,
+                sparseQueriesByCurrentContract: 0,
+                rerankerCalls: 0,
+                rerankerCandidates: 0,
+                rerankerInputBytes: 0,
+                candidatesWithSemanticEvidence: 0,
+                candidatesWithLexicalEvidence: 0,
+                candidatesWithCurrentSourceEvidence: 0,
+            },
             rankingProvenance: debugRankingProvenance!,
             exactRegistry: exactRegistryDebug,
-            passesUsed: ["exact_registry"],
+            passesUsed: exactPassesUsed,
             candidateLimit: input.candidateLimit,
             mustRetry: {
                 attempts: 0,
                 maxAttempts: input.maxAttempts,
                 applied: input.parsedOperators.must.length > 0,
                 satisfied: true,
-                finalCount: 1,
+                finalCount: resultSymbols.length,
             },
             operatorSummary: input.operatorSummary,
             filterSummary: input.filterSummary,
@@ -358,7 +472,7 @@ export async function runExactRegistryFastPath(
         : undefined;
     const debugSummary = input.debugMode !== "none"
         ? buildSearchDebugSummary({
-            passesUsed: ["exact_registry"],
+            passesUsed: exactPassesUsed,
             rankingProvenance: debugRankingProvenance!,
             retrieval: {
                 mode: input.queryPlan.retrievalMode,
@@ -387,8 +501,7 @@ export async function runExactRegistryFastPath(
         freshnessDecision: input.freshnessDecision,
         freshnessSummary: input.freshnessSummary,
         proofDebugHint: input.proofDebugHint,
-        symbol: exactRegistrySymbol,
-        preview: exactPreview,
+        matches: exactMatches,
         indexedAt: registryState.registry.manifest.builtAt || null,
         navigationState: callGraphNavigationState,
         navigationWarning: callGraphNavigationState.warning,
@@ -424,6 +537,6 @@ export async function runExactRegistryFastPath(
         exactRegistryFallbackForTrackedLexical: true,
         envelope,
         resultsBeforeFilter: exactRegistryMatch.debug.inspectedSymbolCount,
-        resultsAfterFilter: 1,
+        resultsAfterFilter: resultSymbols.length,
     };
 }

@@ -160,6 +160,13 @@ export async function finalizeSearchResults(
         rerankerFailurePhase,
         rerankerCandidatesIn,
         rerankerCandidatesReranked,
+        rerankerFamilyCount,
+        rerankerSupplementalCandidates,
+        rerankerCandidatePoolCount,
+        rerankerCandidateBudget,
+        rerankerBudgetReason,
+        semanticExpansion,
+        providerWork,
     } = input.execution;
     let freshnessSummary = input.freshnessSummary;
 
@@ -173,6 +180,11 @@ export async function finalizeSearchResults(
     const mustSatisfied = !mustApplied || scored.length > 0;
 
     const buildRankingDebug = (diversitySummary?: SearchDebugHint["diversitySummary"]) => ({
+            route: {
+                ...input.queryPlan.route,
+                allowedSources: [...input.queryPlan.route.allowedSources],
+                currentProviderBudget: { ...input.queryPlan.route.currentProviderBudget },
+            },
             queryIntent: {
                 classification: input.queryPlan.intent,
                 confidence: input.queryPlan.confidence,
@@ -185,6 +197,19 @@ export async function finalizeSearchResults(
                 scorePolicyKind: input.queryPlan.scorePolicyKind,
                 backendScoreKinds: Array.from(backendScoreKinds).sort(),
             },
+            providerWork: {
+                semanticSearchAttempts: providerWork.semanticSearchAttempts,
+                embeddingCallsByCurrentContract: providerWork.embeddingCallsByCurrentContract,
+                denseQueriesByCurrentContract: providerWork.denseQueriesByCurrentContract,
+                sparseQueriesByCurrentContract: providerWork.sparseQueriesByCurrentContract,
+                rerankerCalls: providerWork.rerankerCalls,
+                rerankerCandidates: providerWork.rerankerCandidates,
+                rerankerInputBytes: providerWork.rerankerInputBytes,
+                candidatesWithSemanticEvidence: providerWork.candidatesWithSemanticEvidence,
+                candidatesWithLexicalEvidence: providerWork.candidatesWithLexicalEvidence,
+                candidatesWithCurrentSourceEvidence: providerWork.candidatesWithCurrentSourceEvidence,
+            },
+            semanticExpansion,
             rankingProvenance,
             ...(trackedLexicalDebug ? { trackedLexical: trackedLexicalDebug } : {}),
             ...(input.exactRegistryDebug ? { exactRegistry: input.exactRegistryDebug } : {}),
@@ -224,6 +249,11 @@ export async function finalizeSearchResults(
                 exactMatchPinningApplied: exactMatchPinningApplied,
                 candidatesIn: rerankerCandidatesIn,
                 candidatesReranked: rerankerCandidatesReranked,
+                familyCount: rerankerFamilyCount,
+                supplementalCandidates: rerankerSupplementalCandidates,
+                candidatePoolCount: rerankerCandidatePoolCount,
+                candidateBudget: rerankerCandidateBudget,
+                ...(rerankerBudgetReason ? { budgetReason: rerankerBudgetReason } : {}),
                 topK: SEARCH_RERANK_TOP_K,
                 rankK: SEARCH_RERANK_RRF_K,
                 weight: SEARCH_RERANK_WEIGHT,
@@ -265,6 +295,11 @@ export async function finalizeSearchResults(
                 exactMatchPinningApplied,
                 candidatesIn: rerankerCandidatesIn,
                 candidatesReranked: rerankerCandidatesReranked,
+                familyCount: rerankerFamilyCount,
+                supplementalCandidates: rerankerSupplementalCandidates,
+                candidatePoolCount: rerankerCandidatePoolCount,
+                candidateBudget: rerankerCandidateBudget,
+                ...(rerankerBudgetReason ? { budgetReason: rerankerBudgetReason } : {}),
                 topK: SEARCH_RERANK_TOP_K,
                 rankK: SEARCH_RERANK_RRF_K,
                 weight: SEARCH_RERANK_WEIGHT,

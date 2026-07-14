@@ -36,8 +36,10 @@ export type BuildExactRegistryHitEnvelopeInput = {
     freshnessDecision: FreshnessDecision;
     freshnessSummary: SearchFreshnessSummary;
     proofDebugHint?: CompletionProbeDebugHint;
-    symbol: SymbolRecord;
-    preview?: string;
+    matches: Array<{
+        symbol: SymbolRecord;
+        preview?: string;
+    }>;
     indexedAt: string | null;
     navigationState: SearchNavigationState;
     navigationWarning?: string;
@@ -82,38 +84,43 @@ function buildExactRegistryWarnings(input: {
 export function buildExactRegistryHitEnvelope(
     input: BuildExactRegistryHitEnvelopeInput,
 ): SearchResponseEnvelope | undefined {
-    const exactRegistrySymbolRepair = repairSourceBackedPythonSpan({
-        codebaseRoot: input.codebaseRoot,
-        symbol: input.symbol,
-    });
+    const repairedMatches = input.matches.map((match) => ({
+        ...match,
+        repair: repairSourceBackedPythonSpan({
+            codebaseRoot: input.codebaseRoot,
+            symbol: match.symbol,
+        }),
+    }));
     const finalizedSearchWarnings = buildExactRegistryWarnings({
         partialIndexSearchWarnings: input.partialIndexSearchWarnings,
         navigationWarning: input.navigationWarning,
         dirtyFilesNotFreshened: input.dirtyFilesNotFreshened,
         changedFilesBoostSkippedForLargeChangeSet: input.changedFilesBoostSkippedForLargeChangeSet,
-        spanWarningCodes: buildSearchSpanWarningCodes(exactRegistrySymbolRepair),
+        spanWarningCodes: repairedMatches.flatMap(({ repair }) => buildSearchSpanWarningCodes(repair)),
     });
 
-    const exactGroup = buildExactRegistryGroupResult({
-        symbol: exactRegistrySymbolRepair.symbol,
-        preview: input.preview,
-        spanRepair: exactRegistrySymbolRepair,
-        indexedAt: input.indexedAt,
-        navigationState: input.navigationState,
-        graphUnavailableReasonOverride: input.partialIndexSearchWarnings.includes(
-            "SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE",
-        )
-            ? "partial_index_navigation_unavailable"
-            : undefined,
-        debugMode: input.debugMode,
-        now: input.now,
-        previewMaxBytes: input.previewMaxBytes,
-        navigationHelpers: input.navigationHelpers,
+    const visibleGroupedResults = repairedMatches.flatMap(({ preview, repair }) => {
+        const group = buildExactRegistryGroupResult({
+            symbol: repair.symbol,
+            preview,
+            spanRepair: repair,
+            indexedAt: input.indexedAt,
+            navigationState: input.navigationState,
+            graphUnavailableReasonOverride: input.partialIndexSearchWarnings.includes(
+                "SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE",
+            )
+                ? "partial_index_navigation_unavailable"
+                : undefined,
+            debugMode: input.debugMode,
+            now: input.now,
+            previewMaxBytes: input.previewMaxBytes,
+            navigationHelpers: input.navigationHelpers,
+        });
+        return group ? [group] : [];
     });
-    if (!exactGroup) {
+    if (visibleGroupedResults.length === 0) {
         return undefined;
     }
-    const visibleGroupedResults = [exactGroup];
     const noiseMitigationHint = input.buildNoiseMitigationHint(
         visibleGroupedResults.map((result) => result.target.file),
     );

@@ -143,6 +143,12 @@ function isAdapterPath(normalizedPath: string): boolean {
         || hasPathSegment(normalizedPath, "cli");
 }
 
+function isPublicToolOrCliAdapterPath(relativePath: string): boolean {
+    const normalizedPath = normalizeSearchPath(relativePath);
+    return hasPathSegment(normalizedPath, "tools")
+        || hasPathSegment(normalizedPath, "cli");
+}
+
 function isEntrypointPath(normalizedPath: string): boolean {
     const entryNames = ["main.", "index.", "app.", "server.", "cli.", "entry."];
     const baseName = normalizedPath.split("/").pop() || "";
@@ -351,6 +357,14 @@ export function resolveAgentFitMultiplier(input: {
     }
     if (plan.implementationSeeking && role === "anonymous") {
         return { multiplier: SEARCH_AGENT_FIT_ANONYMOUS_DEMOTION, reason: "anonymous_not_owner" };
+    }
+    if (
+        plan.implementationSeeking
+        && role === "implementation"
+        && category === "adapter"
+        && isPublicToolOrCliAdapterPath(result.relativePath)
+    ) {
+        return { multiplier: SEARCH_AGENT_FIT_NEUTRAL, reason: "adapter_not_canonical_owner" };
     }
     if (plan.implementationSeeking && role === "implementation") {
         return { multiplier: SEARCH_AGENT_FIT_IMPLEMENTATION_SYMBOL_MULTIPLIER, reason: "implementation_symbol" };

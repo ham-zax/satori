@@ -143,6 +143,14 @@ function collectKeys(value: unknown, keys = new Set<string>()): Set<string> {
 
 test("debug modes are projected from explicit source-level whitelists", () => {
     const fullDebug = {
+        route: {
+            kind: "exact_identifier",
+            reason: "identifier_intent",
+            deterministicFirst: true,
+            navigation: "required",
+            allowedSources: ["registry", "tracked_lexical", "dense", "sparse"],
+            currentProviderBudget: { semanticPassesPerAttempt: 1, rerankCalls: 0 },
+        },
         queryIntent: { classification: "identifier", confidence: "high", reasons: [], lexicalTerms: ["owner"], semanticQuery: "owner" },
         retrieval: { mode: "hybrid", scorePolicyKind: "hybrid", backendScoreKinds: ["rrf"] },
         rankingProvenance: { semanticPassesUsed: ["primary"], lexicalPassesUsed: [], livePathSupplementUsed: false, lexicalFileScanUsed: false, rerankApplied: false, exactMatchPinningApplied: false, registryRepairGroupCount: 0 },

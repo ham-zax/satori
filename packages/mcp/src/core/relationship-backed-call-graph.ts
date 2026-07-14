@@ -30,7 +30,7 @@ type RelationshipBackedCallGraphHost = {
     getContextActiveIgnorePatterns(codebasePath: string): string[];
 };
 
-type RelationshipBackedCallGraphInput = {
+export type RelationshipBackedCallGraphInput = {
     codebaseRoot: string;
     registry: SymbolRegistry;
     registryManifestHash: string;
@@ -41,7 +41,7 @@ type RelationshipBackedCallGraphInput = {
     limit: number;
 };
 
-type RelationshipBackedCallGraphResult = {
+export type RelationshipBackedCallGraphResult = {
     supported: true;
     direction: CallGraphDirection;
     depth: number;

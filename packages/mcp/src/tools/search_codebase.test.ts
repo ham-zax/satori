@@ -126,6 +126,50 @@ test('search_codebase rejects explicit debug false with debugMode', async () => 
     assert.match(response.content[0]?.text || '', /debug.*false.*debugMode|debugMode.*debug.*false/i);
 });
 
+test('search_codebase acquires embedding context only for routes that require dense retrieval', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const requestedOperations: string[] = [];
+    const handler = {
+        handleSearchCode: async () => ({
+            content: [{
+                type: 'text',
+                text: JSON.stringify({ status: 'ok', results: [] }),
+            }],
+        }),
+    };
+    const providerContext = {
+        capabilities,
+        runtimeFingerprint: {
+            embeddingProvider: 'VoyageAI',
+            embeddingModel: 'voyage-4-large',
+            embeddingDimension: 1024,
+            vectorStoreProvider: 'Milvus',
+            schemaVersion: 'hybrid_v3',
+        },
+        toolHandlers: handler,
+    } as unknown as ToolContext;
+    const ctx = {
+        ...providerContext,
+        providerRuntime: {
+            requireToolContext: async (operation: string) => {
+                requestedOperations.push(operation);
+                return providerContext;
+            },
+        },
+    } as unknown as ToolContext;
+
+    await searchCodebaseTool.execute({
+        path: '/repo',
+        query: '"SOURCE_CHECKPOINT_MISSING"',
+    }, ctx);
+    await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'explain how checkpoint recovery preserves authority',
+    }, ctx);
+
+    assert.deepEqual(requestedOperations, ['vector_only', 'embedding_vector']);
+});
+
 test('search_codebase delegates debug projection to the handler without reparsing its response', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const ctx = {
@@ -187,10 +231,24 @@ test('search_codebase emits telemetry with diagnostics from handler meta', async
                 }],
                 meta: {
                     searchDiagnostics: {
-                        resultsBeforeFilter: 5,
-                        resultsAfterFilter: 1,
+                        resultsBeforeFilter: 9,
+                        resultsAfterFilter: 5,
                         excludedByIgnore: 4,
-                        freshnessMode: 'skipped_recent'
+                        freshnessMode: 'skipped_recent',
+                        routeKind: 'conceptual',
+                        retrievalMode: 'hybrid',
+                        semanticSearchAttempts: 2,
+                        embeddingCallsByCurrentContract: 2,
+                        denseQueriesByCurrentContract: 2,
+                        sparseQueriesByCurrentContract: 2,
+                        rerankerCalls: 1,
+                        rerankerCandidates: 6,
+                        rerankerInputBytes: 1536,
+                        candidatesWithSemanticEvidence: 5,
+                        candidatesWithLexicalEvidence: 1,
+                        candidatesWithCurrentSourceEvidence: 0,
+                        semanticExpansionAttempted: true,
+                        semanticExpansionReason: 'primary_candidate_pool_small',
                     }
                 }
             })
@@ -216,11 +274,27 @@ test('search_codebase emits telemetry with diagnostics from handler meta', async
     assert.equal(payload.event, 'search_executed');
     assert.equal(payload.reranker_attempted, false);
     assert.equal(payload.reranker_used, false);
-    assert.equal(payload.results_before_filter, 5);
-    assert.equal(payload.results_after_filter, 1);
+    assert.equal(payload.results_before_filter, 9);
+    assert.equal(payload.results_after_filter, 5);
     assert.equal(payload.results_returned, 1);
     assert.equal(payload.excluded_by_ignore, 4);
     assert.equal(payload.freshness_mode, 'skipped_recent');
+    assert.equal(payload.route, 'conceptual');
+    assert.equal(payload.retrieval_mode, 'hybrid');
+    assert.equal(payload.semantic_search_attempts, 2);
+    assert.equal(payload.embedding_calls_by_current_contract, 2);
+    assert.equal(payload.dense_queries_by_current_contract, 2);
+    assert.equal(payload.sparse_queries_by_current_contract, 2);
+    assert.equal(payload.reranker_calls, 1);
+    assert.equal(payload.reranker_candidates, 6);
+    assert.equal(payload.reranker_input_bytes, 1536);
+    assert.equal(payload.candidates_with_semantic_evidence, 5);
+    assert.equal(payload.candidates_with_lexical_evidence, 1);
+    assert.equal(payload.candidates_with_current_source_evidence, 0);
+    assert.equal(payload.semantic_expansion_attempted, true);
+    assert.equal(payload.semantic_expansion_reason, 'primary_candidate_pool_small');
+    assert.equal(Object.hasOwn(payload, 'parallel_fanout'), false);
+    assert.doesNotMatch(telemetry[0], /auth|src\/auth\.ts/);
     assert.equal(payload.response_bytes, Buffer.byteLength(responseText, 'utf8'));
 });
 

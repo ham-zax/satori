@@ -15,7 +15,20 @@ export interface SearchTelemetryEvent {
     search_pass_count?: number;
     search_pass_success_count?: number;
     search_pass_failure_count?: number;
-    parallel_fanout?: boolean;
+    route?: string;
+    retrieval_mode?: string;
+    semantic_search_attempts?: number;
+    embedding_calls_by_current_contract?: number;
+    dense_queries_by_current_contract?: number;
+    sparse_queries_by_current_contract?: number;
+    reranker_calls?: number;
+    reranker_candidates?: number;
+    reranker_input_bytes?: number;
+    candidates_with_semantic_evidence?: number;
+    candidates_with_lexical_evidence?: number;
+    candidates_with_current_source_evidence?: number;
+    semantic_expansion_attempted?: boolean;
+    semantic_expansion_reason?: string;
     response_bytes?: number;
     error?: string;
 }

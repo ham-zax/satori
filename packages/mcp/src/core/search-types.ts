@@ -5,6 +5,8 @@ import type {
 } from "./sync.js";
 import { SearchGroupBy, SearchNoiseCategory, SearchRankingMode, SearchResultMode, SearchScope } from "./search-constants.js";
 import { FingerprintSource, IndexFingerprint } from "../config.js";
+import type { SearchRouteContract } from "./search-lexical-scoring.js";
+import type { RerankBudgetReason } from "./search-rerank-policy.js";
 
 export type StalenessBucket = "fresh" | "aging" | "stale" | "unknown";
 
@@ -264,7 +266,21 @@ export interface SearchOperatorSummary {
     exclude: string[];
 }
 
+export interface SearchProviderWorkDebugHint {
+    semanticSearchAttempts: number;
+    embeddingCallsByCurrentContract: number;
+    denseQueriesByCurrentContract: number;
+    sparseQueriesByCurrentContract: number;
+    rerankerCalls: number;
+    rerankerCandidates: number;
+    rerankerInputBytes: number;
+    candidatesWithSemanticEvidence: number;
+    candidatesWithLexicalEvidence: number;
+    candidatesWithCurrentSourceEvidence: number;
+}
+
 export interface SearchDebugHint {
+    route: SearchRouteContract;
     queryIntent: {
         classification: "identifier" | "semantic" | "mixed" | "uncertain";
         confidence: "high" | "medium" | "low";
@@ -276,6 +292,22 @@ export interface SearchDebugHint {
         mode: "dense" | "lexical" | "hybrid";
         scorePolicyKind: "dense_similarity_min" | "topk_only";
         backendScoreKinds: Array<"dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown">;
+    };
+    providerWork: SearchProviderWorkDebugHint;
+    semanticExpansion?: {
+        attempted: boolean;
+        expand: boolean;
+        reason:
+            | "lexical_route"
+            | "exact_registry_fallback"
+            | "deterministic_route_primary"
+            | "mixed_route"
+            | "operator_constraint"
+            | "explicit_role_cue"
+            | "primary_candidate_pool_sufficient"
+            | "primary_candidate_pool_small"
+            | "primary_failed_fallback";
+        primaryScopedCandidateCount: number;
     };
     rankingProvenance: {
         semanticPassesUsed: string[];
@@ -402,6 +434,11 @@ export interface SearchDebugHint {
         exactMatchPinningApplied: boolean;
         candidatesIn: number;
         candidatesReranked: number;
+        familyCount?: number;
+        supplementalCandidates?: number;
+        candidatePoolCount?: number;
+        candidateBudget?: number;
+        budgetReason?: RerankBudgetReason;
         errorCode?: "RERANKER_FAILED";
         failurePhase?: "api_call" | "parse_results";
         topK: number;
@@ -413,8 +450,11 @@ export interface SearchDebugHint {
 }
 
 export type SearchRankingDebugHint = Pick<SearchDebugHint,
+    | "route"
     | "queryIntent"
     | "retrieval"
+    | "providerWork"
+    | "semanticExpansion"
     | "rankingProvenance"
     | "trackedLexical"
     | "exactRegistry"

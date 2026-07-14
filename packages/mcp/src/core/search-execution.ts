@@ -6,7 +6,6 @@ import {
     SEARCH_MUST_RETRY_MULTIPLIER,
     SEARCH_MUST_RETRY_ROUNDS,
     SEARCH_RERANK_RRF_K,
-    SEARCH_RERANK_TOP_K,
     SEARCH_RERANK_WEIGHT,
     SEARCH_RRF_K,
     SCOPE_PATH_MULTIPLIERS,
@@ -18,6 +17,7 @@ import type {
     SearchDebugMode,
     SearchFreshnessSummary,
     SearchOperatorSummary,
+    SearchProviderWorkDebugHint,
 } from "./search-types.js";
 import { WARNING_CODES } from "./warnings.js";
 import {
@@ -38,12 +38,41 @@ import type {
 import type { ParsedSearchOperators } from "./search-query-planning.js";
 import type { VectorBackendDiagnostic } from "./backend-diagnostics.js";
 import type { FreshnessDecision } from "./sync.js";
+import {
+    selectRerankCandidates,
+    type RerankBudgetReason,
+} from "./search-rerank-policy.js";
 
 type SearchPassId = "primary" | "expanded";
 type BackendScoreKind = "dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown";
 type ChangedFilesState = { available: boolean; files: Set<string> };
+const SEARCH_EXPANSION_MIN_PRIMARY_SCOPED_CANDIDATES = 5;
 
-export type SearchDiagnostics = {
+export type SearchExpansionReason =
+    | "lexical_route"
+    | "exact_registry_fallback"
+    | "deterministic_route_primary"
+    | "mixed_route"
+    | "operator_constraint"
+    | "explicit_role_cue"
+    | "primary_candidate_pool_sufficient"
+    | "primary_candidate_pool_small"
+    | "primary_failed_fallback";
+
+export type SearchExpansionDecision = {
+    expand: boolean;
+    reason: SearchExpansionReason;
+    primaryScopedCandidateCount: number;
+};
+
+export type SearchProviderWorkDiagnostics = SearchProviderWorkDebugHint & {
+    routeKind?: SearchQueryPlan["route"]["kind"];
+    retrievalMode?: SearchQueryPlan["retrievalMode"];
+    semanticExpansionAttempted: boolean;
+    semanticExpansionReason?: SearchExpansionReason;
+};
+
+export type SearchDiagnostics = SearchProviderWorkDiagnostics & {
     queryLength: number;
     limitRequested: number;
     resultsBeforeFilter: number;
@@ -110,6 +139,82 @@ export type SearchExecutionRankingProvenance = {
     registryRepairGroupCount: number;
 };
 
+export function resolveSearchExpansionDecision(input: {
+    retrievalMode: SearchQueryPlan["retrievalMode"];
+    routeKind: SearchQueryPlan["route"]["kind"];
+    exactRegistryFallback: boolean;
+    operatorConstraintPresent: boolean;
+    explicitRoleCuePresent: boolean;
+    primaryScopedCandidateCount: number;
+    primaryFailed: boolean;
+}): SearchExpansionDecision {
+    if (input.retrievalMode === "lexical") {
+        return {
+            expand: false,
+            reason: "lexical_route",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    if (input.primaryFailed) {
+        return {
+            expand: true,
+            reason: "primary_failed_fallback",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    if (input.exactRegistryFallback) {
+        return {
+            expand: false,
+            reason: "exact_registry_fallback",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    if (
+        input.routeKind === "ownership"
+        || input.routeKind === "references"
+        || input.routeKind === "structural"
+    ) {
+        return {
+            expand: false,
+            reason: "deterministic_route_primary",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    if (input.routeKind === "mixed") {
+        return {
+            expand: true,
+            reason: "mixed_route",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    if (input.operatorConstraintPresent) {
+        return {
+            expand: true,
+            reason: "operator_constraint",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    if (input.explicitRoleCuePresent) {
+        return {
+            expand: false,
+            reason: "explicit_role_cue",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    if (input.primaryScopedCandidateCount >= SEARCH_EXPANSION_MIN_PRIMARY_SCOPED_CANDIDATES) {
+        return {
+            expand: false,
+            reason: "primary_candidate_pool_sufficient",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    return {
+        expand: true,
+        reason: "primary_candidate_pool_small",
+        primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+    };
+}
+
 /**
  * Skip expensive Voyage rerank when the top candidate is already a deterministic exact pin.
  * Safe when exact lexical match owns rank-1 under pinning or must: filters.
@@ -167,6 +272,13 @@ export type SearchExecutionOutcome =
         rerankerFailurePhase?: "api_call" | "parse_results";
         rerankerCandidatesIn: number;
         rerankerCandidatesReranked: number;
+        rerankerFamilyCount: number;
+        rerankerSupplementalCandidates: number;
+        rerankerCandidatePoolCount: number;
+        rerankerCandidateBudget: number;
+        rerankerBudgetReason?: RerankBudgetReason;
+        semanticExpansion: SearchExpansionDecision & { attempted: boolean };
+        providerWork: SearchProviderWorkDiagnostics;
     }
     | {
         kind: "vector_backend_unavailable";
@@ -284,22 +396,34 @@ export async function runSearchExecution(
         exactMatchPinningApplied: false,
         registryRepairGroupCount: 0,
     };
+    let semanticExpansion: SearchExpansionDecision & { attempted: boolean } = {
+        expand: false,
+        attempted: false,
+        reason: input.queryPlan.retrievalMode === "lexical"
+            ? "lexical_route"
+            : "primary_candidate_pool_sufficient",
+        primaryScopedCandidateCount: 0,
+    };
+    searchDiagnostics.routeKind = input.queryPlan.route.kind;
+    searchDiagnostics.retrievalMode = input.queryPlan.retrievalMode;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         attemptsUsed = attempt + 1;
-        const passDescriptors: Array<{ id: SearchPassId; query: string }> = [
-            { id: "primary", query: input.semanticQuery },
-        ];
-        if (!input.exactRegistryEligible) {
-            passDescriptors.push({ id: "expanded", query: expandedQuery });
-        }
-        searchDiagnostics.searchPassCount += passDescriptors.length;
-
-        const passSettled = await host.measureSearchPhase(
-            "semanticSearch",
-            () => Promise.allSettled(passDescriptors.map(async (pass) => {
+        const runPasses = (passDescriptors: Array<{ id: SearchPassId; query: string }>) => {
+            searchDiagnostics.searchPassCount += passDescriptors.length;
+            return host.measureSearchPhase(
+                "semanticSearch",
+                () => Promise.allSettled(passDescriptors.map(async (pass) => {
                 if (host.shouldForceSearchPassFailure(pass.id)) {
                     throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${pass.id}`);
+                }
+                searchDiagnostics.semanticSearchAttempts += 1;
+                if (input.queryPlan.retrievalMode !== "lexical") {
+                    searchDiagnostics.embeddingCallsByCurrentContract += 1;
+                    searchDiagnostics.denseQueriesByCurrentContract += 1;
+                }
+                if (input.queryPlan.retrievalMode !== "dense") {
+                    searchDiagnostics.sparseQueriesByCurrentContract += 1;
                 }
                 const scorePolicy = input.queryPlan.scorePolicyKind === "topk_only"
                     ? { kind: "topk_only" as const }
@@ -311,8 +435,48 @@ export async function runSearchExecution(
                     retrievalMode: input.queryPlan.retrievalMode,
                     scorePolicy,
                 });
-            })),
-        );
+                })),
+            );
+        };
+        const primaryDescriptor = { id: "primary" as const, query: input.semanticQuery };
+        const primarySettled = await runPasses([primaryDescriptor]);
+        const primaryResult = primarySettled[0];
+        const primaryResults = primaryResult.status === "fulfilled" && Array.isArray(primaryResult.value)
+            ? primaryResult.value
+            : [];
+        const primaryScopedCandidateCount = new Set(primaryResults
+            .filter((result) => {
+                if (!result || typeof result.relativePath !== "string") return false;
+                const normalizedPath = result.relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+                if (dirtyFilesNotFreshened && normalizedObservedChangedFiles.has(normalizedPath)) return false;
+                return shouldIncludeCategoryInScope(input.scope, classifyPathCategory(normalizedPath));
+            })
+            .map((result) => `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || "unknown"}`))
+            .size;
+        const expansionDecision = resolveSearchExpansionDecision({
+            retrievalMode: input.queryPlan.retrievalMode,
+            routeKind: input.queryPlan.route.kind,
+            exactRegistryFallback: input.exactRegistryEligible,
+            operatorConstraintPresent: input.parsedOperators.must.length > 0,
+            explicitRoleCuePresent: input.queryPlan.implementationSeeking
+                || input.queryPlan.testSeeking
+                || input.queryPlan.writerSeeking,
+            primaryScopedCandidateCount,
+            primaryFailed: primaryResult.status === "rejected",
+        });
+        semanticExpansion = {
+            ...expansionDecision,
+            attempted: expansionDecision.expand,
+        };
+        searchDiagnostics.semanticExpansionAttempted ||= expansionDecision.expand;
+        searchDiagnostics.semanticExpansionReason = expansionDecision.reason;
+        const passDescriptors: Array<{ id: SearchPassId; query: string }> = [primaryDescriptor];
+        const passSettled = [...primarySettled];
+        if (expansionDecision.expand) {
+            const expandedDescriptor = { id: "expanded" as const, query: expandedQuery };
+            passDescriptors.push(expandedDescriptor);
+            passSettled.push(...await runPasses([expandedDescriptor]));
+        }
 
         const successfulPasses: Array<{ id: string; results: SearchResultLike[] }> = [];
         let vectorBackendDiagnostic: VectorBackendDiagnostic | null = null;
@@ -589,8 +753,13 @@ export async function runSearchExecution(
     let rerankerApplied = false;
     let rerankerAttempted = false;
     let rerankerFailurePhase: "api_call" | "parse_results" | undefined;
-    let rerankerCandidatesIn = scored.length;
+    const rerankerCandidatesIn = scored.length;
     let rerankerCandidatesReranked = 0;
+    let rerankerFamilyCount = 0;
+    let rerankerSupplementalCandidates = 0;
+    let rerankerCandidatePoolCount = 0;
+    let rerankerCandidateBudget = 0;
+    let rerankerBudgetReason: RerankBudgetReason | undefined;
     // Cost policy: only claim exact-pin skip when rerank would otherwise run (enabled + reranker present).
     // This skips reranking the entire candidate tail for latency; top exact pin is already owned.
     const skippedByExactPin = Boolean(
@@ -607,10 +776,27 @@ export async function runSearchExecution(
     if (rerankDecision.enabled && scored.length > 0 && host.reranker && !skippedByExactPin) {
         rerankerAttempted = true;
         try {
-            const rerankCount = Math.min(SEARCH_RERANK_TOP_K, scored.length);
+            const selection = selectRerankCandidates({
+                candidates: scored,
+                requestedLimit: input.limit,
+            });
+            const rerankCount = selection.selected.length;
             rerankerCandidatesReranked = rerankCount;
-            const rerankSlice = scored.slice(0, rerankCount);
-            const rerankDocuments = rerankSlice.map((candidate) => host.searchQuerySupport.buildRerankDocument(candidate.result));
+            rerankerFamilyCount = selection.familyCount;
+            rerankerSupplementalCandidates = selection.supplementalCandidateCount;
+            rerankerCandidatePoolCount = selection.candidatePoolCount;
+            rerankerCandidateBudget = selection.budget;
+            rerankerBudgetReason = selection.budgetReason;
+            const rerankSlice = selection.selected;
+            const rerankDocuments = rerankSlice.map((candidate) => (
+                host.searchQuerySupport.buildRerankDocument(candidate.result)
+            ));
+            searchDiagnostics.rerankerCalls += 1;
+            searchDiagnostics.rerankerCandidates += rerankDocuments.length;
+            searchDiagnostics.rerankerInputBytes += rerankDocuments.reduce(
+                (total, document) => total + Buffer.byteLength(document, "utf8"),
+                0,
+            );
             let rerankResults: Array<{ index: number }> = [];
             try {
                 rerankResults = await host.measureSearchPhase(
@@ -672,6 +858,19 @@ export async function runSearchExecution(
     searchDiagnostics.excludedByIgnore = Math.max(0, searchDiagnostics.resultsBeforeFilter - searchDiagnostics.resultsAfterFilter);
     searchDiagnostics.rerankerAttempted = rerankerAttempted;
     searchDiagnostics.rerankerUsed = rerankerApplied;
+    const remotePassIds = new Set(["primary", "expanded"]);
+    searchDiagnostics.candidatesWithSemanticEvidence = input.queryPlan.retrievalMode === "lexical"
+        ? 0
+        : scored.filter((candidate) => candidate.retrievalPasses.some((pass) => remotePassIds.has(pass))).length;
+    searchDiagnostics.candidatesWithLexicalEvidence = scored.filter((candidate) => (
+        candidate.retrievalPasses.includes("lexical_files")
+        || (input.queryPlan.retrievalMode === "lexical"
+            && candidate.retrievalPasses.some((pass) => remotePassIds.has(pass)))
+    )).length;
+    searchDiagnostics.candidatesWithCurrentSourceEvidence = scored.filter((candidate) => (
+        candidate.retrievalPasses.includes("dirty_overlay")
+        || candidate.retrievalPasses.includes("live_path")
+    )).length;
     rankingProvenance.semanticPassesUsed = Array.from(passesUsed).filter((passId) => passId === "primary" || passId === "expanded").sort();
     rankingProvenance.lexicalPassesUsed = Array.from(passesUsed).filter((passId) => passId === "lexical_files" || passId === "live_path" || passId === "dirty_overlay").sort();
     rankingProvenance.livePathSupplementUsed = passesUsed.has("live_path");
@@ -711,5 +910,27 @@ export async function runSearchExecution(
         rerankerFailurePhase,
         rerankerCandidatesIn,
         rerankerCandidatesReranked,
+        rerankerFamilyCount,
+        rerankerSupplementalCandidates,
+        rerankerCandidatePoolCount,
+        rerankerCandidateBudget,
+        rerankerBudgetReason,
+        semanticExpansion,
+        providerWork: {
+            routeKind: searchDiagnostics.routeKind,
+            retrievalMode: searchDiagnostics.retrievalMode,
+            semanticSearchAttempts: searchDiagnostics.semanticSearchAttempts,
+            embeddingCallsByCurrentContract: searchDiagnostics.embeddingCallsByCurrentContract,
+            denseQueriesByCurrentContract: searchDiagnostics.denseQueriesByCurrentContract,
+            sparseQueriesByCurrentContract: searchDiagnostics.sparseQueriesByCurrentContract,
+            rerankerCalls: searchDiagnostics.rerankerCalls,
+            rerankerCandidates: searchDiagnostics.rerankerCandidates,
+            rerankerInputBytes: searchDiagnostics.rerankerInputBytes,
+            candidatesWithSemanticEvidence: searchDiagnostics.candidatesWithSemanticEvidence,
+            candidatesWithLexicalEvidence: searchDiagnostics.candidatesWithLexicalEvidence,
+            candidatesWithCurrentSourceEvidence: searchDiagnostics.candidatesWithCurrentSourceEvidence,
+            semanticExpansionAttempted: searchDiagnostics.semanticExpansionAttempted,
+            semanticExpansionReason: searchDiagnostics.semanticExpansionReason,
+        },
     };
 }

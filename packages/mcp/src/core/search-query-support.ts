@@ -1115,10 +1115,14 @@ export class SearchQuerySupport {
     public parseSearchOperators(query: string): ParsedSearchOperators {
         return parseSearchOperatorsFromText(query);
     }
-    public buildSearchQueryPlan(semanticQuery: string): SearchQueryPlan {
+    public buildSearchQueryPlan(
+        semanticQuery: string,
+        parsedOperators?: ParsedSearchOperators,
+    ): SearchQueryPlan {
         return buildSearchQueryPlanFromText(
             semanticQuery,
-            this.runtimeFingerprint.schemaVersion.startsWith("hybrid")
+            this.runtimeFingerprint.schemaVersion.startsWith("hybrid"),
+            parsedOperators,
         );
     }
     public hasTokenBoundaryMatch(field: string, term: string): boolean {

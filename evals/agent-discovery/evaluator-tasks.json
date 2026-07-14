@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "protocolVersion": "satori-agent-discovery-v1",
+  "version": 2,
+  "protocolVersion": "satori-agent-discovery-v2",
   "name": "Satori paired autonomous code-discovery tasks",
   "modelVisible": false,
   "sourceScope": [
@@ -11,12 +11,21 @@
     {
       "id": "known-exact-target",
       "kind": "known_target",
+      "prompt": "Locate the production definition of `runExactRegistryFastPath`. Report its repository-relative file, exact symbol name, and complete 1-based inclusive source span. Identify one production caller that invokes it and one relevant callee used to resolve an exact registry match. Briefly explain the target's role in search execution. Verify every claim from source or relationship evidence.",
+      "satoriQuery": "runExactRegistryFastPath",
+      "taskFactsTemplate": {
+        "exactMatchResolver": null,
+        "checksEligibility": null,
+        "requiresNavigationAuthority": null,
+        "handledHitAvoidsSemanticRetrieval": null,
+        "handledHitAvoidsReranking": null
+      },
       "expected": {
         "ownerFile": "packages/mcp/src/core/search-exact-fast-path.ts",
         "ownerSymbol": "runExactRegistryFastPath",
         "ownerSpan": {
-          "startLine": 164,
-          "endLine": 429
+          "startLine": 176,
+          "endLine": 542
         },
         "requiredRelations": [
           {
@@ -42,6 +51,17 @@
     {
       "id": "unknown-freshness-reuse",
       "kind": "unknown_target",
+      "prompt": "Find the production code path that decides whether initial prepared-read evidence may be reused after source-freshness processing. Report the owning file, owning symbol, and its complete 1-based inclusive source span. Identify the exact predicate or evidence conditions that permit reuse and the branch that forces a second readiness proof. Identify one production caller and the relevant helper or relationship. Verify every claim from source or relationship evidence.",
+      "satoriQuery": "Find the production code path that decides whether initial prepared-read evidence may be reused after source-freshness processing. Identify the exact predicate or evidence conditions that permit reuse and the branch that forces a second readiness proof.",
+      "taskFactsTemplate": {
+        "acceptedFreshnessModes": [],
+        "requiresFirstAttempt": null,
+        "requiresReadyInitialState": null,
+        "requiresExistingObservation": null,
+        "requiresInitialObservationMatch": null,
+        "requiresStableObservation": null,
+        "secondProofSymbol": null
+      },
       "expected": {
         "ownerFile": "packages/mcp/src/core/search-frontdoor.ts",
         "ownerSymbol": "runSearchFrontDoor",

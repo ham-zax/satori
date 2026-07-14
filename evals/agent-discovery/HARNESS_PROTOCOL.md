@@ -1,10 +1,11 @@
 # Satori Agent-Discovery Harness Protocol
 
-Protocol version: `satori-agent-discovery-v1`
+Protocol version: `satori-agent-discovery-v2`
 
-This file defines collection and grading behavior for
-`AGENT_INSTRUCTIONS.md`. Do not include this file or
-`evaluator-tasks.json` in model context.
+This file defines collection and grading behavior for the executable OpenCode
+runner in `run-opencode.mjs`. Do not include this file or
+`evaluator-tasks.json` in model context. The runner embeds a compact task prompt;
+the model never reads evaluator instructions as a measured tool step.
 
 ## Isolation and fairness
 
@@ -12,19 +13,19 @@ This file defines collection and grading behavior for
    verify the production worktree is unchanged afterward.
 2. Prepare or synchronize Satori before measurement. Setup time and setup calls
    are excluded from both arms.
-3. Use a fresh model context for every task and arm. Do not expose the other
-   arm's transcript or result.
+3. Use a fresh OpenCode session and model context for every task and arm. The
+   long-lived headless server may preserve ordinary MCP process caches, but no
+   conversation, prompt, result, or session ID may cross arms.
 4. Do not expose evaluator-only expected answers to the model. Do not let the
    native arm search outside the allowed production roots.
 5. For the native arm, expose the harness's ordinary default local search,
    file-listing, and bounded range-read tools. Do not replace them with a
    benchmark-only shell recipe when the harness normally provides tools such as
    `Grep`, `Glob`, or `Read`.
-6. Supply `NATIVE_TOOL_PROFILE` as JSON. Name every available native tool, map
-   it to `text_search`, `file_list`, and/or `range_read`, and state any enforced
-   line or output bound. Enforce root, test-exclusion, read-size, and read-only
-   constraints in the harness rather than trusting the model's self-check.
-   Reject events outside that declared profile.
+6. Generate the native profile from the actual OpenCode tool definitions seen
+   by the model. Enforce root, test-exclusion, read-size, and read-only
+   constraints before or immediately after tool execution rather than trusting
+   model self-report. Reject events outside the restricted profile.
 7. Use the same model, model version, system instructions, temperature,
    reasoning setting, context limit, and task prompt for a paired run. Tool
    availability is the only intended arm difference.
@@ -42,16 +43,22 @@ This file defines collection and grading behavior for
 
 11. Do not pool results from different models, harnesses, or native tool
     profiles. Report each combination separately.
-12. Record the complete tool definitions supplied to the model, their SHA-256,
-    and their UTF-8 byte count. A difference in tool-schema input is part of the
-    measured arm overhead.
+12. Capture built-in tool definitions in OpenCode's `tool.definition` hook and
+    Satori definitions from its authoritative MCP `tools/list` response.
+    Canonicalize the allowed arm definitions and record their SHA-256 and UTF-8
+    byte count. A difference in tool-schema input is part of the measured arm
+    overhead.
 13. Report median and range for three samples. Do not report percentile claims
     from three samples.
 
 ## Tool-result normalization
 
-Record both the raw tool result and the exact model-visible result. Cap each
-model-visible tool result at 32,768 UTF-8 bytes:
+The OpenCode guard records raw and model-visible built-in tool results and caps
+them at 32,768 UTF-8 bytes before the next model request. OpenCode 1.17 does not
+expose MCP result bodies to `tool.execute.after`; use bounded Satori arguments,
+record the persisted model-visible MCP result, and reject any run whose MCP
+result exceeds 32,768 bytes. Do not claim a pre-OpenCode raw MCP byte count when
+that value was not observable.
 
 1. Serialize the result exactly as it will be shown to the model.
 2. If it exceeds the cap, retain the longest valid UTF-8 prefix that leaves room
@@ -128,7 +135,7 @@ portable result exchanged between harnesses:
 
 ```json
 {
-  "protocolVersion": "satori-agent-discovery-v1",
+  "protocolVersion": "satori-agent-discovery-v2",
   "runId": "harness-unique-id",
   "pairedRunId": "shared-id-for-native-and-satori",
   "repetition": 1,
@@ -164,7 +171,10 @@ portable result exchanged between harnesses:
     "reasoningSetting": "setting-or-null",
     "contextLimit": 0
   },
-  "agentResult": {},
+  "agentResult": {
+    "status": "success",
+    "answer": {}
+  },
   "measurements": {
     "taskWallTimeMs": 0,
     "timeToFirstCorrectTargetMs": 0,
@@ -208,7 +218,8 @@ A run passes only when:
 - every task-specific fact exactly matches `evaluator-tasks.json`;
 - the required caller and callee/helper relationships are supported;
 - every operation and argument obeys the selected arm;
-- the final step ledger matches the real tool sequence;
+- the real OpenCode tool sequence obeys the selected arm, root, read bound,
+  one-call-per-turn rule, and 12-call budget;
 - no answer key, test, documentation, Git history, or prior result was accessed.
 
 The primary paired comparison reports correctness first. Compare latency,

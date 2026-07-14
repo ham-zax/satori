@@ -111,12 +111,18 @@ described as completed:
 
 ### Immediate continuation order
 
-1. Run the two paired tasks in `evals/agent-discovery/` with one pinned smaller
-   model and harness version, once for the native arm and once for the Satori
-   arm. Record actual tool calls, steps, wall time, tokens, and context bytes.
-2. Add the paired-agent artifacts and model/harness identity to this journal.
-3. Recompute the final HEAD, staged/unstaged diff hashes and untracked manifest
-   after those artifacts are present, then issue the final program verdict.
+1. From a clean pinned revision, run `pnpm eval:agent-discovery`. The executable
+   now selects both fixed tasks, launches three alternating native/Satori pairs
+   in fresh OpenCode sessions, records authoritative OpenCode timing/token/tool
+   events, grades them, and writes the comparison under
+   `.satori/benchmarks/agent-discovery/`.
+2. Add the generated paired-agent summary and model/OpenCode/Satori identity to
+   this journal. Do not substitute the earlier shared-session manual attempt;
+   it leaked the Satori answer into the native arm and had no harness-owned
+   timing or token record.
+3. Recompute the final HEAD identity after the executable harness changes are
+   committed, then run the clean-tree evaluation and issue the final program
+   verdict.
 
 Do not reopen caches, indexing metadata, ranking weights, or expansion-family
 counting merely because the external evaluation is pending. Those changes need
@@ -806,5 +812,6 @@ change was made in response.
 | Full CLI package gate | `pnpm --filter @zokizuan/satori-cli test` | Green; 112/112. |
 | Full integration gate | `pnpm test:integration` | Green; 30/30. |
 | Repository static/build gate | `pnpm check` and `pnpm build` | Green; all-package lint/typecheck, version freshness, generated docs/manifest and full workspace build. |
-| External paired-agent evaluation | `evals/agent-discovery/` with one pinned smaller model and harness | Pending external harness execution; this is the only remaining completion-contract blocker. |
+| OpenCode paired-agent harness | `evals/agent-discovery/run-opencode.mjs`, restricted agents/guard, fixed v2 task key, and focused script tests | Implemented; task/arm/profile questions are removed, exact and conceptual tasks are automatic, sessions are isolated, arm order alternates, forbidden tools are rejected, OpenCode events own timing/tokens/steps, and the final report compares correct native/Satori runs. Current AST spans are validated before model calls. |
+| External paired-agent evaluation | `pnpm eval:agent-discovery` with pinned `opencode/deepseek-v4-flash-free` and OpenCode 1.17.20 | Pending the clean-tree 12-arm run. A read-only OpenCode smoke call proved restricted Satori tool exposure and caught guard-hook boundary errors before acceptance. The executable fails before measured calls when Satori readiness is not `ok`. |
 | Diff hygiene | `git diff --check` | Green. |

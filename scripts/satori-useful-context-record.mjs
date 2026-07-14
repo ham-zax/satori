@@ -146,7 +146,7 @@ export class JsonRpcStdioSession {
     async start() {
         const child = spawn(this.options.command, this.options.commandArgs, {
             cwd: this.options.cwd,
-            env: process.env,
+            env: this.options.env ?? process.env,
             stdio: ["pipe", "pipe", "pipe"],
             shell: false,
             windowsHide: true,
@@ -194,6 +194,7 @@ export class JsonRpcStdioSession {
         if (names.length !== EXPECTED_TOOLS.length || EXPECTED_TOOLS.some((name, index) => names[index] !== name)) {
             throw new Error(`MCP tool contract mismatch; expected this exact order: ${EXPECTED_TOOLS.join(", ")}.`);
         }
+        this.tools = structuredClone(list.tools);
     }
 
     onStdout(chunk) {

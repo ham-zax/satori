@@ -20,7 +20,7 @@
     "lint:fix": "pnpm -r run lint:fix",
     "typecheck": "pnpm -r run typecheck",
     "versions:check": "node scripts/check-version-freshness.mjs",
-    "test:scripts": "node --test scripts/*.test.mjs",
+    "test:scripts": "node --test scripts/*.test.mjs evals/agent-discovery/*.test.mjs",
     "release": "pnpm run release:all",
     "release:all": "pnpm run versions:check && pnpm run release:core && pnpm run release:mcp && pnpm run release:cli",
     "release:login": "npm login --auth-type=web",
@@ -34,6 +34,7 @@
     "eval:useful-context:record": "node scripts/satori-useful-context-record.mjs",
     "eval:useful-context:fixtures": "node scripts/satori-useful-context-fixture-record.mjs",
     "eval:search-quality": "pnpm --filter @zokizuan/satori-mcp exec tsx ../../evals/search-quality/run.ts",
+    "eval:agent-discovery": "node --no-warnings evals/agent-discovery/run-opencode.mjs",
     "benchmark": "node scripts/build-benchmark.js",
     "vs:code-intelligence": "node scripts/code-intelligence-vs.mjs"
   },

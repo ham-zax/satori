@@ -2,7 +2,7 @@
 
 Date: 2026-07-15
 
-Status: implementation and repository validation complete; external paired-agent evaluation pending
+Status: implementation and repository validation complete; external paired-agent evaluation blocked by remote vector-database publication
 
 This document is the durable implementation journal for the program defined by
 `2026-07-14-satori-search-quality-pipeline-investigation.md`. It records the
@@ -15,9 +15,11 @@ actually justify.
 
 This is the current handoff point for a later validation session. The justified
 implementation program, hermetic corpus, live provider measurements, controlled
-safety checks, and repository gates are complete. The pinned smaller-model
-native-versus-Satori paired-agent evaluation requires an external model harness
-and remains the only completion-contract blocker.
+safety checks, repository gates, and executable paired OpenCode harness are
+complete. The pinned smaller-model native-versus-Satori run is currently
+blocked because two independent attempts could not publish an authoritative
+Milvus generation. The harness correctly stops before model calls when that
+authority prerequisite is absent.
 
 ### Progress at this checkpoint
 
@@ -27,7 +29,7 @@ and remains the only completion-contract blocker.
   not justify a cache or indexing-contract change in this slice.
 - The repository-controlled completion work is complete. The hermetic corpus,
   focused safety controls, full 403-test Core suite, full 884-test MCP suite,
-  112-test CLI suite, 30-test integration suite, 60-test repository-script
+  112-test CLI suite, 30-test integration suite, 77-test repository-script
   suite, lint, typecheck, version checks, build, live benchmark, and native
   command comparison are green. The external paired-agent run remains.
 - The latest accepted hermetic artifact is
@@ -41,8 +43,9 @@ and remains the only completion-contract blocker.
   The matching comparison artifact is
   `.satori/benchmarks/live-latency/2026-07-14T19-02-50-049Z-comparison-search-quality-no-change.json`,
   SHA-256 `3c908c59abb1f09acc4230fff3daa9d1c182a2582115ace2b6a57864ed3b2ccb`.
-- The repository remains a mixed staged, unstaged, and untracked working tree.
-  Preserve it. Do not stage, commit, reset, stash, or discard work without
+- The executable harness was committed as `3c46a07` and its tree was clean for
+  dry-run and live readiness-gate execution. Preserve subsequent work. Do not
+  stage, commit, reset, stash, or discard work without
   explicit authorization.
 
 ### Accepted behavior currently in the tree
@@ -111,18 +114,53 @@ described as completed:
 
 ### Immediate continuation order
 
-1. From a clean pinned revision, run `pnpm eval:agent-discovery`. The executable
-   now selects both fixed tasks, launches three alternating native/Satori pairs
-   in fresh OpenCode sessions, records authoritative OpenCode timing/token/tool
-   events, grades them, and writes the comparison under
-   `.satori/benchmarks/agent-discovery/`.
-2. Add the generated paired-agent summary and model/OpenCode/Satori identity to
+1. After the remote Milvus publication path recovers, explicitly create the
+   index and require terminal `ok` authority for the clean pinned revision. Do
+   not bypass or weaken the harness readiness gate.
+2. Run `pnpm eval:agent-discovery`. The executable selects both fixed tasks,
+   launches three alternating native/Satori pairs in fresh OpenCode sessions,
+   records authoritative OpenCode timing/token/tool events, grades them, and
+   writes the comparison under `.satori/benchmarks/agent-discovery/`.
+3. Add the generated paired-agent summary and model/OpenCode/Satori identity to
    this journal. Do not substitute the earlier shared-session manual attempt;
    it leaked the Satori answer into the native arm and had no harness-owned
    timing or token record.
-3. Recompute the final HEAD identity after the executable harness changes are
-   committed, then run the clean-tree evaluation and issue the final program
-   verdict.
+4. Record the immutable tested identity and issue the final program verdict.
+
+### External execution attempt and blocker
+
+The clean-tree harness plan validated at
+`3c46a07e40377a7132369ef0b56b0032f9f3d0e4`. It resolved both pinned AST keys
+and expanded the expected 12 alternating arms. `pnpm run dev:install-local-mcp`
+rebuilt Core and the MCP runtime successfully before authority preparation.
+
+Authority preparation then failed twice outside the benchmark:
+
+1. Create operation `aab13177-c67b-454c-ba6b-6d1f5701a0f2`, generation 2788,
+   failed at 84% while persisting `search/exact-registry.ts`: Milvus gRPC
+   `14 UNAVAILABLE: Connection dropped` after three retries and 166,466 ms.
+2. A newly launched process using the freshly built MCP runtime started create
+   operation `7efb0197-c74c-4607-8743-c88ece028ab8`, generation 2789. It failed
+   at 14% while persisting `docs/INDEX_STATE_STABILITY_PLAN.md` with the same
+   gRPC status after three retries and 67,504 ms.
+
+A bounded transport diagnostic resolved the configured endpoint and completed
+an authorized TLS 1.2 handshake. This narrows the failure to the Milvus gRPC
+publication path rather than local DNS, TLS trust, a stale MCP process, or one
+bad source file. Final status records generation 2789 as `failed` and no valid
+completion marker exists.
+
+The exact measured command was then run:
+
+```bash
+pnpm eval:agent-discovery
+```
+
+It exited at `prepareSatori()` with `Satori is not benchmark-ready (error)`
+before launching an OpenCode server or making model calls. This is the intended
+fail-closed behavior; there are no paired latency or token measurements to
+report from this attempt. After remote publication recovers, run an explicit
+`manage_index create`, require terminal `ok`, then rerun the command unchanged.
 
 Do not reopen caches, indexing metadata, ranking weights, or expansion-family
 counting merely because the external evaluation is pending. Those changes need
@@ -812,6 +850,6 @@ change was made in response.
 | Full CLI package gate | `pnpm --filter @zokizuan/satori-cli test` | Green; 112/112. |
 | Full integration gate | `pnpm test:integration` | Green; 30/30. |
 | Repository static/build gate | `pnpm check` and `pnpm build` | Green; all-package lint/typecheck, version freshness, generated docs/manifest and full workspace build. |
-| OpenCode paired-agent harness | `evals/agent-discovery/run-opencode.mjs`, restricted agents/guard, fixed v2 task key, and focused script tests | Implemented; task/arm/profile questions are removed, exact and conceptual tasks are automatic, sessions are isolated, arm order alternates, forbidden tools are rejected, OpenCode events own timing/tokens/steps, and the final report compares correct native/Satori runs. Current AST spans are validated before model calls. |
-| External paired-agent evaluation | `pnpm eval:agent-discovery` with pinned `opencode/deepseek-v4-flash-free` and OpenCode 1.17.20 | Pending the clean-tree 12-arm run. A read-only OpenCode smoke call proved restricted Satori tool exposure and caught guard-hook boundary errors before acceptance. The executable fails before measured calls when Satori readiness is not `ok`. |
+| OpenCode paired-agent harness | `evals/agent-discovery/run-opencode.mjs`, restricted agents/guard, fixed v2 task key, and focused script tests | Implemented; 17/17 focused and 77/77 repository script tests pass. Task/arm/profile questions are removed, exact and conceptual tasks are automatic, sessions are isolated, duplicate sessions invalidate both arms, arm order alternates, forbidden tools are rejected, OpenCode events own timing/tokens/steps, and current AST spans and relationships are validated before model calls. |
+| External paired-agent evaluation | `pnpm eval:agent-discovery` with pinned `opencode/deepseek-v4-flash-free` and OpenCode 1.17.20 | Blocked before model calls. Two independent create operations using old and freshly built MCP processes failed Milvus hybrid-chunk persistence with gRPC `14 UNAVAILABLE: Connection dropped` after their internal retries. DNS and TLS 1.2 are healthy; generation 2789 is durably failed and no authoritative completion marker exists. |
 | Diff hygiene | `git diff --check` | Green. |

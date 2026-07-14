@@ -5,11 +5,13 @@ import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import {
+    assertNoChangeSyncPayload,
     buildCurrentVsLast,
     buildCurrentVsNative,
     describeRun,
     parseArgs,
     readPreviousArtifact,
+    summarizeSearch,
     writeArtifact,
 } from "./satori-live-latency-benchmark.mjs";
 
@@ -67,6 +69,95 @@ test("live latency benchmark rejects invalid modes and graph windows", () => {
     assert.throws(
         () => parseArgs(["--repo", "/repo", "--graph-body-range", "10-20"]),
         /start,end integer syntax/,
+    );
+});
+
+test("live latency benchmark records bounded search-quality diagnostics", () => {
+    const summary = summarizeSearch({
+        wallMs: 123,
+        responseBytes: 456,
+        payload: {
+            status: "ok",
+            freshnessDecision: { mode: "skipped_recent" },
+            warnings: [{ code: "SOURCE_FRESHNESS_UNVERIFIED" }],
+            searchPassCount: 2,
+            searchPassSuccessCount: 2,
+            searchPassFailureCount: 0,
+            hints: {
+                debugSearch: {
+                    route: { kind: "conceptual" },
+                    retrieval: { mode: "dense" },
+                    readiness: {
+                        proofMode: "warm",
+                        operations: { warmReceiptRevalidations: 1 },
+                    },
+                    providerWork: {
+                        semanticSearchAttempts: 2,
+                        embeddingCallsByCurrentContract: 2,
+                        denseQueriesByCurrentContract: 2,
+                        sparseQueriesByCurrentContract: 0,
+                        rerankerCalls: 1,
+                        rerankerCandidates: 8,
+                        rerankerInputBytes: 2048,
+                    },
+                    semanticExpansion: {
+                        attempted: true,
+                        expand: true,
+                        reason: "primary_candidate_pool_small",
+                        primaryScopedCandidateCount: 2,
+                    },
+                    rerank: {
+                        attempted: true,
+                        applied: true,
+                        candidatesIn: 12,
+                        candidatesReranked: 8,
+                        familyCount: 6,
+                        supplementalCandidates: 2,
+                        candidatePoolCount: 8,
+                        candidateBudget: 8,
+                        budgetReason: "multi_family",
+                    },
+                },
+            },
+        },
+    });
+
+    assert.equal(summary.provider.searchPassCount, 2);
+    assert.equal(summary.provider.searchPassFailureCount, 0);
+    assert.equal(summary.provider.providerWork.rerankerInputBytes, 2048);
+    assert.equal(
+        summary.provider.semanticExpansion.reason,
+        "primary_candidate_pool_small",
+    );
+    assert.deepEqual(summary.provider.rerank, {
+        attempted: true,
+        applied: true,
+        candidatesIn: 12,
+        candidatesReranked: 8,
+        familyCount: 6,
+        supplementalCandidates: 2,
+        candidatePoolCount: 8,
+        candidateBudget: 8,
+        budgetReason: "multi_family",
+    });
+    assert.equal(summary.readiness.operations.warmReceiptRevalidations, 1);
+});
+
+test("live latency benchmark requires a proven no-change sync", () => {
+    assert.doesNotThrow(() => assertNoChangeSyncPayload({
+        status: "ok",
+        syncStats: { added: 0, removed: 0, modified: 0 },
+    }));
+    assert.throws(
+        () => assertNoChangeSyncPayload({
+            status: "ok",
+            syncStats: { added: 0, removed: 0, modified: 1 },
+        }),
+        /changed the index before measurement/,
+    );
+    assert.throws(
+        () => assertNoChangeSyncPayload({ status: "ok" }),
+        /did not return complete non-negative syncStats/,
     );
 });
 

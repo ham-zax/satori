@@ -183,11 +183,15 @@ function summarize(sample) {
         wallMs: sample.wallMs,
         responseBytes: sample.responseBytes,
         status: sample.payload?.status,
+        syncStats: sample.payload?.syncStats,
     };
 }
 
-function summarizeSearch(sample) {
+export function summarizeSearch(sample) {
     const debug = sample.payload?.hints?.debugSearch;
+    const rerank = debug?.rerank;
+    const providerWork = debug?.providerWork;
+    const semanticExpansion = debug?.semanticExpansion;
     return {
         ...summarize(sample),
         freshnessMode: sample.payload?.freshnessDecision?.mode,
@@ -197,11 +201,27 @@ function summarizeSearch(sample) {
         readiness: debug?.readiness,
         watcher: debug?.watcher,
         phaseTimingsMs: debug?.phaseTimingsMs,
+        route: debug?.route,
+        retrieval: debug?.retrieval,
         provider: {
-            rerankerAttempted: debug?.rerankerAttempted,
-            rerankerUsed: debug?.rerankerUsed,
-            searchPassCount: debug?.searchPassCount,
-            searchPassSuccessCount: debug?.searchPassSuccessCount,
+            searchPassCount: sample.payload?.searchPassCount,
+            searchPassSuccessCount: sample.payload?.searchPassSuccessCount,
+            searchPassFailureCount: sample.payload?.searchPassFailureCount,
+            providerWork,
+            semanticExpansion,
+            rerank: rerank
+                ? {
+                    attempted: rerank.attempted,
+                    applied: rerank.applied,
+                    candidatesIn: rerank.candidatesIn,
+                    candidatesReranked: rerank.candidatesReranked,
+                    familyCount: rerank.familyCount,
+                    supplementalCandidates: rerank.supplementalCandidates,
+                    candidatePoolCount: rerank.candidatePoolCount,
+                    candidateBudget: rerank.candidateBudget,
+                    budgetReason: rerank.budgetReason,
+                }
+                : undefined,
         },
     };
 }
@@ -276,12 +296,26 @@ function workloadArgs(repoRoot) {
     };
 }
 
+export function assertNoChangeSyncPayload(payload) {
+    if (payload?.status !== "ok") {
+        throw new Error(`Live sync failed: ${JSON.stringify(payload)}`);
+    }
+    const stats = payload.syncStats;
+    const counts = [stats?.added, stats?.removed, stats?.modified];
+    if (!counts.every((count) => Number.isSafeInteger(count) && count >= 0)) {
+        throw new Error("Live sync did not return complete non-negative syncStats.");
+    }
+    if (counts.some((count) => count !== 0)) {
+        throw new Error(
+            `Live sync changed the index before measurement: ${JSON.stringify(stats)}`,
+        );
+    }
+}
+
 async function requireNoChangeSync(session, repoRoot, skipSync) {
     if (skipSync) return null;
     const sync = await timedTool(session, "manage_index", { action: "sync", path: repoRoot });
-    if (sync.payload?.status !== "ok") {
-        throw new Error(`Live sync failed: ${JSON.stringify(sync.payload)}`);
-    }
+    assertNoChangeSyncPayload(sync.payload);
     return sync;
 }
 

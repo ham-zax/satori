@@ -582,6 +582,133 @@ test('handleFileOutline returns registry-backed outline when call graph sidecar 
     }));
 });
 
+test('handleFileOutline reuses navigation evidence only within the same marker generation', async () => {
+    await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
+        const symbol = createTestSymbol({
+            file: 'src/runtime.ts',
+            label: 'function run()',
+            name: 'run',
+            qualifiedName: 'run',
+            startLine: 1,
+            endLine: 1,
+        });
+        const { result: registryResult } = await writeTestSymbolRegistry(repoPath, [symbol]);
+
+        const vectorReceipt = { collectionName: 'generation-1' } as never;
+        let markerRunId = 'run-1';
+        const createGenerationReceipt = () => ({
+            collectionName: 'generation-1',
+            marker: { runId: markerRunId },
+            policy: {
+                canonicalRoot: repoPath,
+                policyHash: 'policy-hash-1',
+            },
+            policyDocumentDigest: '1'.repeat(64),
+            exactPayloadCount: 1,
+            navigation: {
+                generationId: 'navigation-generation-1',
+                generationRoot: path.join(repoPath, '.satori-navigation-generation-1'),
+                symbolRegistryManifestHash: registryResult.manifestHash,
+                relationshipManifestHash: '2'.repeat(64),
+                navigationSealHash: '3'.repeat(64),
+            },
+            observations: {
+                profileFileToken: null,
+                policyFileToken: 'policy-token-1',
+                navigationToken: 'navigation-token-1',
+            },
+        }) as never;
+        let coldCompletionProofs = 0;
+        let warmReceiptRevalidations = 0;
+        let registryLoads = 0;
+        let navigationValidationRuns = 0;
+        const backingNavigationStore = new RuntimeNavigationStore();
+        const navigationStore = {
+            getSymbolsByFile: async (...args: Parameters<HandlerNavigationStore['getSymbolsByFile']>) => {
+                registryLoads += 1;
+                return backingNavigationStore.getSymbolsByFile(...args);
+            },
+            getCompatibilityState: async (...args: Parameters<HandlerNavigationStore['getCompatibilityState']>) => {
+                navigationValidationRuns += 1;
+                return backingNavigationStore.getCompatibilityState(...args);
+            },
+        } as unknown as HandlerNavigationStore;
+        const context = {
+            ...baseContext(),
+            getIndexAuthorityObservations: () => ({
+                vector: 'vector-authority-1',
+                navigation: 'navigation-authority-1',
+            }),
+            revalidatePreparedGeneration: async () => {
+                warmReceiptRevalidations += 1;
+                return {
+                    vectorReceipt,
+                    navigationProof: { status: 'valid' as const },
+                    generationReceipt: createGenerationReceipt(),
+                };
+            },
+        } as unknown as HandlerContext;
+        const syncManager = {
+            getPreparedReadObservation: () => ({
+                available: false as const,
+                reason: 'watcher_manager_not_started' as const,
+                freshnessEpoch: 1,
+            }),
+        } as unknown as HandlerSyncManager;
+        const mutationLeaseCoordinator = {
+            observe: () => ({ mutationActive: false, generation: 1 }),
+            getActiveLease: () => null,
+        };
+        const handlers = new ToolHandlers(
+            context,
+            baseSnapshotManager(repoPath) as unknown as HandlerSnapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            navigationStore,
+            null,
+            mutationLeaseCoordinator as never,
+        );
+        (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => {
+            coldCompletionProofs += 1;
+            return {
+                outcome: 'valid',
+                collectionName: 'generation-1',
+                navigationStatus: 'valid',
+                vectorReceipt,
+                generationReceipt: createGenerationReceipt(),
+            };
+        };
+
+        const firstResponse = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+        });
+        const secondResponse = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+        });
+
+        markerRunId = 'run-2';
+        const thirdResponse = await handlers.handleFileOutline({
+            path: repoPath,
+            file: 'src/runtime.ts',
+        });
+
+        assert.equal(JSON.parse(firstResponse.content[0]?.text || '{}').status, 'ok');
+        assert.equal(JSON.parse(secondResponse.content[0]?.text || '{}').status, 'ok');
+        assert.equal(JSON.parse(thirdResponse.content[0]?.text || '{}').status, 'ok');
+        assert.equal(coldCompletionProofs, 1);
+        assert.equal(warmReceiptRevalidations, 2);
+        assert.equal(registryLoads, 2);
+        assert.equal(navigationValidationRuns, 2);
+    }));
+});
+
 test('handleFileOutline repairs stale Python multiline-signature spans from source without reindex', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const source = [

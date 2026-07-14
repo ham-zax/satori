@@ -17,6 +17,8 @@ type SyncSnapshotManager = ConstructorParameters<typeof SyncManager>[1];
 type SyncManagerTestAccess = {
     watcherModeStarted: boolean;
     watchers: Map<string, { close: () => Promise<void> | void }>;
+    watchedCodebases: Set<string>;
+    watcherLifecycleStates: Map<string, 'starting' | 'ready' | 'failed' | 'stopped'>;
     debounceTimers: Map<string, NodeJS.Timeout>;
     watcherIgnoreMatchers: Map<string, unknown>;
     shouldIgnoreWatchPath(codebasePath: string, filePath: string): boolean;
@@ -26,6 +28,8 @@ type SyncManagerTestAccess = {
     lastSyncTimes: Map<string, number>;
     ignoreRulesVersions: Map<string, number>;
     freshnessEpochs: Map<string, number>;
+    sourceCheckpointObservations: Map<string, string>;
+    sourceCheckpointStatuses: Map<string, 'valid' | 'missing' | 'corrupt'>;
     handleWatcherError(codebasePath: string, error: unknown): Promise<void>;
 };
 
@@ -537,31 +541,84 @@ test('ensureFreshness disables incremental sync when a completed generation chec
     });
     const access = manager as unknown as SyncManagerTestAccess;
     access.watcherModeStarted = true;
+    access.watchedCodebases.add(codebasePath);
+    access.watcherLifecycleStates.set(codebasePath, 'ready');
     access.watchers.set(codebasePath, { close: async () => undefined });
 
     const initial = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
     assert.equal(initial.mode, 'synced');
     assert.equal(syncCalls, 1);
-    assert.ok(manager.getPreparedReadObservation(codebasePath));
+    assert.equal(manager.getPreparedReadObservation(codebasePath).available, true);
 
     const warm = await manager.ensureFreshness(codebasePath, 60_000, { skipIgnoreControlCheck: true });
     assert.equal(warm.mode, 'skipped_recent');
     assert.equal(syncCalls, 1);
 
     checkpointStatus = 'missing';
-    assert.equal(manager.getPreparedReadObservation(codebasePath), null);
+    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
+        available: false,
+        reason: 'checkpoint_observation_mismatch',
+        freshnessEpoch: 2,
+        watcherState: 'ready',
+    });
     const missing = await manager.ensureFreshness(codebasePath, 60_000, { skipIgnoreControlCheck: true });
     assert.equal(missing.mode, 'skipped_source_checkpoint_unavailable');
     assert.equal(missing.checkpointStatus, 'missing');
     assert.equal(syncCalls, 1);
+    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
+        available: false,
+        reason: 'checkpoint_missing',
+        freshnessEpoch: 3,
+        watcherState: 'ready',
+    });
 
     checkpointStatus = 'corrupt';
     const corrupt = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
     assert.equal(corrupt.mode, 'skipped_source_checkpoint_unavailable');
     assert.equal(corrupt.checkpointStatus, 'corrupt');
     assert.equal(syncCalls, 1);
+    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
+        available: false,
+        reason: 'checkpoint_corrupt',
+        freshnessEpoch: 4,
+        watcherState: 'ready',
+    });
 
     await manager.unwatchCodebase(codebasePath);
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness forwards a request-bound vector receipt to checkpoint inspection', async () => {
+    const codebasePath = createTempDir();
+    const preparedVectorReceipt = { collectionName: 'generation-bound' } as never;
+    let receivedReceipt: unknown;
+    const context = {
+        async inspectSourceFreshnessCheckpoint(
+            _path: string,
+            _checkpointIdentity?: string,
+            requestBoundReceipt?: unknown,
+        ) {
+            receivedReceipt = requestBoundReceipt;
+            return { status: 'missing' as const, message: 'checkpoint unavailable' };
+        },
+    };
+    const snapshot = {
+        getCodebaseStatus: () => 'indexed',
+        getCodebaseInfo: () => ({ indexStatus: 'completed' }),
+    };
+    const manager = new SyncManager(
+        context as unknown as SyncContext,
+        snapshot as unknown as SyncSnapshotManager,
+        { watchEnabled: false },
+    );
+
+    const decision = await manager.ensureFreshness(codebasePath, 60_000, {
+        skipIgnoreControlCheck: true,
+        preparedVectorReceipt,
+    });
+
+    assert.equal(decision.mode, 'skipped_source_checkpoint_unavailable');
+    assert.equal(receivedReceipt, preparedVectorReceipt);
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 
@@ -719,14 +776,19 @@ test('stopWatcherMode closes active watchers and clears timers', async () => {
     };
 
     const timer = setTimeout(() => { }, 2000);
-    (manager as unknown as SyncManagerTestAccess).watchers.set('/tmp/repo', fakeWatcher);
-    (manager as unknown as SyncManagerTestAccess).debounceTimers.set('/tmp/repo', timer);
+    const access = manager as unknown as SyncManagerTestAccess;
+    access.watchers.set('/tmp/repo', fakeWatcher);
+    access.debounceTimers.set('/tmp/repo', timer);
+    access.sourceCheckpointObservations.set('/tmp/repo', 'checkpoint-v1');
+    access.sourceCheckpointStatuses.set('/tmp/repo', 'valid');
 
     await manager.stopWatcherMode();
 
     assert.equal(closeCalls, 1);
-    assert.equal((manager as unknown as SyncManagerTestAccess).watchers.size, 0);
-    assert.equal((manager as unknown as SyncManagerTestAccess).debounceTimers.size, 0);
+    assert.equal(access.watchers.size, 0);
+    assert.equal(access.debounceTimers.size, 0);
+    assert.equal(access.sourceCheckpointObservations.size, 0);
+    assert.equal(access.sourceCheckpointStatuses.size, 0);
 });
 
 test('watch filter allowlists root ignore controls and hidden supported files', async () => {
@@ -1629,19 +1691,65 @@ test('prepared read observation fails closed on watcher activity and root evicti
 
     await manager.startWatcherMode();
     await manager.touchWatchedCodebase(codebasePath);
+    while (access.watcherLifecycleStates.get(codebasePath) !== 'ready') {
+        await wait(5);
+    }
     access.lastSyncTimes.set(codebasePath, 1);
     access.ignoreRulesVersions.set(codebasePath, 2);
 
     const before = manager.getPreparedReadObservation(codebasePath);
-    assert.deepEqual(before, { freshnessEpoch: 0, watcherHealthy: true });
+    assert.deepEqual(before, {
+        available: true,
+        observation: { freshnessEpoch: 0, watcherState: 'ready' },
+    });
 
     manager.scheduleWatcherSync(codebasePath);
-    assert.equal(manager.getPreparedReadObservation(codebasePath), null);
+    assert.equal(manager.getPreparedReadObservation(codebasePath).available, false);
 
     await manager.unwatchCodebase(codebasePath);
     assert.equal(access.lastSyncTimes.has(codebasePath), false);
     assert.equal(access.ignoreRulesVersions.has(codebasePath), false);
-    assert.equal(manager.getPreparedReadObservation(codebasePath), null);
+    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
+        available: false,
+        reason: 'root_not_registered',
+        freshnessEpoch: 0,
+    });
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('prepared read observation distinguishes watcher startup from readiness', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const manager = new SyncManager(
+        createContext() as unknown as SyncContext,
+        createSnapshot(statusByPath) as unknown as SyncSnapshotManager,
+        { watchEnabled: true },
+    );
+    const access = manager as unknown as SyncManagerTestAccess;
+    access.watcherModeStarted = true;
+    access.watchedCodebases.add(codebasePath);
+    access.watcherLifecycleStates.set(codebasePath, 'starting');
+    access.watchers.set(codebasePath, { close: async () => undefined });
+
+    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
+        available: false,
+        reason: 'watcher_starting',
+        freshnessEpoch: 0,
+        watcherState: 'starting',
+    });
+    assert.deepEqual(manager.getPreparedReadDiagnostics(codebasePath), {
+        configured: true,
+        managerStarted: true,
+        rootRegistered: true,
+        watcherActive: false,
+        lifecycleState: 'starting',
+        checkpointStatus: 'unverified',
+    });
+
+    access.watcherLifecycleStates.set(codebasePath, 'ready');
+    assert.equal(manager.getPreparedReadObservation(codebasePath).available, true);
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });
@@ -1660,17 +1768,67 @@ test('prepared read observation fails closed after a watcher error', async (t) =
 
     await manager.startWatcherMode();
     await manager.touchWatchedCodebase(codebasePath);
-    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
-        freshnessEpoch: 0,
-        watcherHealthy: true,
-    });
+    while (access.watcherLifecycleStates.get(codebasePath) !== 'ready') {
+        await wait(5);
+    }
+    assert.equal(manager.getPreparedReadObservation(codebasePath).available, true);
 
     await access.handleWatcherError(codebasePath, new Error('watcher failed'));
 
-    assert.equal(manager.getPreparedReadObservation(codebasePath), null);
+    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
+        available: false,
+        reason: 'watcher_failed',
+        freshnessEpoch: 1,
+        watcherState: 'failed',
+    });
     assert.equal(access.watchers.has(codebasePath), false);
     assert.equal(access.freshnessEpochs.get(codebasePath), 1);
+    assert.deepEqual(manager.getPreparedReadDiagnostics(codebasePath), {
+        configured: true,
+        managerStarted: true,
+        rootRegistered: true,
+        watcherActive: false,
+        lifecycleState: 'failed',
+        lastErrorCode: 'WATCHER_ERROR',
+        checkpointStatus: 'unverified',
+    });
 
     await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('watcher diagnostics retain ENOSPC after watcher mode shuts down', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const manager = new SyncManager(
+        createContext() as unknown as SyncContext,
+        createSnapshot(statusByPath) as unknown as SyncSnapshotManager,
+        { watchEnabled: true },
+    );
+    const access = manager as unknown as SyncManagerTestAccess;
+    access.watcherModeStarted = true;
+    access.watchedCodebases.add(codebasePath);
+    access.watcherLifecycleStates.set(codebasePath, 'ready');
+    access.watchers.set(codebasePath, { close: async () => undefined });
+
+    const watcherError = Object.assign(new Error('inotify watch limit reached'), {
+        code: 'ENOSPC',
+    });
+    await access.handleWatcherError(codebasePath, watcherError);
+
+    assert.deepEqual(manager.getPreparedReadDiagnostics(codebasePath), {
+        configured: true,
+        managerStarted: false,
+        rootRegistered: false,
+        watcherActive: false,
+        lastErrorCode: 'ENOSPC',
+        checkpointStatus: 'unverified',
+    });
+    assert.deepEqual(manager.getPreparedReadObservation(codebasePath), {
+        available: false,
+        reason: 'watcher_manager_not_started',
+        freshnessEpoch: 0,
+    });
+
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });

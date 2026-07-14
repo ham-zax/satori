@@ -763,7 +763,11 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
                 }>;
             };
             syncManager: HandlerSyncManager & {
-                getPreparedReadObservation: () => { freshnessEpoch: number };
+                getPreparedReadObservation: () => {
+                    available: false;
+                    reason: 'watcher_manager_not_started';
+                    freshnessEpoch: number;
+                };
             };
             mutationLeaseCoordinator: {
                 observe: () => { mutationActive: boolean; generation: number };
@@ -787,7 +791,11 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
             vectorReceipt,
             navigationProof: { status: 'not_bound' },
         });
-        internals.syncManager.getPreparedReadObservation = () => ({ freshnessEpoch: 1 });
+        internals.syncManager.getPreparedReadObservation = () => ({
+            available: false,
+            reason: 'watcher_manager_not_started',
+            freshnessEpoch: 1,
+        });
         internals.mutationLeaseCoordinator = {
             observe: () => ({ mutationActive: false, generation: 1 }),
             getActiveLease: () => null,
@@ -826,8 +834,11 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
                 preparedCacheLookups: 1,
                 preparedCacheHits: 1,
                 coldReadinessChecks: 0,
+                postFreshnessColdChecks: 0,
                 warmReceiptRevalidations: 1,
                 exactPayloadRecounts: 0,
+                registryLoads: 0,
+                navigationValidationRuns: 0,
             },
         });
 
@@ -840,8 +851,11 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
                 preparedCacheLookups: 1,
                 preparedCacheHits: 1,
                 coldReadinessChecks: 0,
+                postFreshnessColdChecks: 0,
                 warmReceiptRevalidations: 1,
                 exactPayloadRecounts: 0,
+                registryLoads: 0,
+                navigationValidationRuns: 0,
             },
         });
 
@@ -854,8 +868,11 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
                 preparedCacheLookups: 1,
                 preparedCacheHits: 1,
                 coldReadinessChecks: 0,
+                postFreshnessColdChecks: 0,
                 warmReceiptRevalidations: 1,
                 exactPayloadRecounts: 0,
+                registryLoads: 0,
+                navigationValidationRuns: 0,
             },
         });
 
@@ -863,14 +880,213 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
         assert.deepEqual(await search(), {
             proofMode: 'cold',
             invalidationReason: 'proof_expired',
+            auditClassification: 'proof_expiry_audit',
             operations: {
                 preparedCacheLookups: 1,
                 preparedCacheHits: 0,
                 coldReadinessChecks: 1,
+                postFreshnessColdChecks: 0,
                 warmReceiptRevalidations: 0,
                 exactPayloadRecounts: 1,
+                registryLoads: 0,
+                navigationValidationRuns: 0,
             },
         });
+    });
+});
+
+test('warm prepared-read revalidation returns the authority snapshot it actually validated', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, []);
+        const vectorReceipt = { collectionName: 'committed-v3' } as never;
+        const oldObservation = JSON.stringify({
+            vectorAuthority: 'vector-1',
+            navigationAuthority: 'navigation-1',
+            mutationGeneration: 1,
+        });
+        const newObservation = JSON.stringify({
+            vectorAuthority: 'vector-2',
+            navigationAuthority: 'navigation-2',
+            mutationGeneration: 2,
+        });
+        let authorityReads = 0;
+        const internals = handlers as unknown as {
+            context: HandlerContext & {
+                revalidatePreparedGeneration: () => Promise<{
+                    vectorReceipt: never;
+                    navigationProof: { status: 'not_bound' };
+                }>;
+            };
+            syncManager: HandlerSyncManager & {
+                getPreparedReadObservation: () => {
+                    available: false;
+                    reason: 'watcher_manager_not_started';
+                    freshnessEpoch: number;
+                };
+            };
+            preparedReadCache: {
+                seed: (root: string, state: unknown, observation: string, now: number) => void;
+            };
+            getPreparedAuthorityObservation: () => string;
+            getCachedPreparedRead: (
+                root: string,
+                operations: {
+                    preparedCacheLookups: number;
+                    preparedCacheHits: number;
+                    coldReadinessChecks: number;
+                    postFreshnessColdChecks: number;
+                    warmReceiptRevalidations: number;
+                    exactPayloadRecounts: number;
+                },
+            ) => Promise<{ status: 'hit'; state: { preparedObservation?: string } } | { status: 'miss' }>;
+        };
+        internals.getPreparedAuthorityObservation = () => {
+            authorityReads += 1;
+            return authorityReads <= 2 ? oldObservation : newObservation;
+        };
+        internals.context.revalidatePreparedGeneration = async () => ({
+            vectorReceipt,
+            navigationProof: { status: 'not_bound' },
+        });
+        internals.syncManager.getPreparedReadObservation = () => ({
+            available: false,
+            reason: 'watcher_manager_not_started',
+            freshnessEpoch: 1,
+        });
+        internals.preparedReadCache.seed(repoPath, {
+            state: 'ready',
+            root: { path: repoPath, info: { status: 'indexed' } },
+            vectorReceipt,
+            navigationStatus: 'not_bound',
+            preparedObservation: oldObservation,
+        }, oldObservation, Date.now());
+
+        const result = await internals.getCachedPreparedRead(repoPath, {
+            preparedCacheLookups: 0,
+            preparedCacheHits: 0,
+            coldReadinessChecks: 0,
+            postFreshnessColdChecks: 0,
+            warmReceiptRevalidations: 0,
+            exactPayloadRecounts: 0,
+        });
+
+        assert.equal(result.status, 'hit');
+        if (result.status === 'hit') {
+            assert.equal(result.state.preparedObservation, oldObservation);
+        }
+        assert.equal(authorityReads, 2);
+    });
+});
+
+test('prepared-read seeding uses one authority snapshot and source observation failures stay diagnostic', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, []);
+        const oldObservation = JSON.stringify({
+            vectorAuthority: 'vector-1',
+            navigationAuthority: 'navigation-1',
+            mutationGeneration: 1,
+        });
+        const newObservation = JSON.stringify({
+            vectorAuthority: 'vector-2',
+            navigationAuthority: 'navigation-2',
+            mutationGeneration: 2,
+        });
+        let authorityReads = 0;
+        let seededObservation: string | undefined;
+        const internals = handlers as unknown as {
+            syncManager: HandlerSyncManager & {
+                getPreparedReadObservation: () => never;
+            };
+            preparedReadCache: {
+                seed: (_root: string, _state: unknown, observation: string) => void;
+                evict: (_root: string) => void;
+            };
+            getPreparedAuthorityObservation: () => string;
+            getPreparedReadCacheObservation: (root: string) => {
+                observation: string | null;
+                unavailableReason?: string;
+            };
+            seedPreparedRead: (state: unknown, preserveProofAge: boolean) => void;
+        };
+        internals.getPreparedAuthorityObservation = () => {
+            authorityReads += 1;
+            return authorityReads === 1 ? oldObservation : newObservation;
+        };
+        internals.syncManager.getPreparedReadObservation = () => {
+            throw new Error('source observation failed');
+        };
+        internals.preparedReadCache.seed = (_root, _state, observation) => {
+            seededObservation = observation;
+        };
+
+        internals.seedPreparedRead({
+            state: 'ready',
+            root: { path: repoPath, info: { status: 'indexed' } },
+            vectorReceipt: { collectionName: 'committed-v3' },
+            preparedObservation: oldObservation,
+        }, false);
+
+        assert.equal(authorityReads, 1);
+        assert.equal(seededObservation, oldObservation);
+
+        const failedObservation = internals.getPreparedReadCacheObservation(repoPath);
+        assert.equal(failedObservation.observation, newObservation);
+        assert.equal(failedObservation.unavailableReason, 'source_observation_failed');
+    });
+});
+
+test('source observation failure preserves vector results with an unverified-freshness warning', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'export function owner() { return true; }',
+            relativePath: 'src/owner.ts',
+            startLine: 1,
+            endLine: 1,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+        }]);
+        const internals = handlers as unknown as {
+            context: HandlerContext & {
+                getIndexAuthorityObservations: () => { vector: string; navigation: string };
+            };
+            syncManager: HandlerSyncManager & {
+                getPreparedReadObservation: () => never;
+            };
+            mutationLeaseCoordinator: {
+                observe: () => { mutationActive: boolean; generation: number };
+                getActiveLease: () => null;
+            };
+        };
+        internals.context.getIndexAuthorityObservations = () => ({
+            vector: 'vector-1',
+            navigation: 'navigation-1',
+        });
+        internals.syncManager.getPreparedReadObservation = () => {
+            throw new Error('source observation failed');
+        };
+        internals.mutationLeaseCoordinator = {
+            observe: () => ({ mutationActive: false, generation: 1 }),
+            getActiveLease: () => null,
+        };
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is owner behavior handled',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debugMode: 'full',
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+
+        assert.equal(payload.status, 'ok');
+        assert.ok(warningCodes(payload).includes('SOURCE_FRESHNESS_UNVERIFIED'));
+        assert.equal(
+            payload.hints?.debugSearch?.readiness?.observationUnavailableReason,
+            'source_observation_failed',
+        );
     });
 });
 
@@ -890,6 +1106,18 @@ test('handleSearchCode reports the exact recount used by fallback collection pro
             context: HandlerContext & {
                 getActiveIndexedCollectionName: () => Promise<string>;
                 getVectorStore: () => { hasCollection: () => Promise<boolean> };
+                getIndexAuthorityObservations: () => { vector: string; navigation: string };
+            };
+            syncManager: HandlerSyncManager & {
+                getPreparedReadObservation: () => {
+                    available: false;
+                    reason: 'watcher_disabled';
+                    freshnessEpoch: number;
+                };
+            };
+            mutationLeaseCoordinator: {
+                observe: () => { mutationActive: boolean; generation: number };
+                getActiveLease: () => null;
             };
             validateCompletionProof: () => Promise<{ outcome: 'probe_failed' }>;
         };
@@ -899,6 +1127,19 @@ test('handleSearchCode reports the exact recount used by fallback collection pro
             return 'committed-v3';
         };
         internals.context.getVectorStore = () => ({ hasCollection: async () => true });
+        internals.context.getIndexAuthorityObservations = () => ({
+            vector: 'vector-stable',
+            navigation: 'navigation-stable',
+        });
+        internals.syncManager.getPreparedReadObservation = () => ({
+            available: false,
+            reason: 'watcher_disabled',
+            freshnessEpoch: 0,
+        });
+        internals.mutationLeaseCoordinator = {
+            observe: () => ({ mutationActive: false, generation: 1 }),
+            getActiveLease: () => null,
+        };
 
         const response = await handlers.handleSearchCode({
             path: repoPath,
@@ -911,16 +1152,19 @@ test('handleSearchCode reports the exact recount used by fallback collection pro
         });
         const readiness = JSON.parse(response.content[0]?.text || '{}').hints.debugSearch.readiness;
 
-        assert.equal(fallbackProofs, 2);
+        assert.equal(fallbackProofs, 1);
         assert.deepEqual(readiness, {
             proofMode: 'cold',
-            invalidationReason: 'observation_unavailable',
+            invalidationReason: 'cache_miss',
             operations: {
                 preparedCacheLookups: 1,
                 preparedCacheHits: 0,
-                coldReadinessChecks: 2,
+                coldReadinessChecks: 1,
+                postFreshnessColdChecks: 0,
                 warmReceiptRevalidations: 0,
-                exactPayloadRecounts: 2,
+                exactPayloadRecounts: 1,
+                registryLoads: 0,
+                navigationValidationRuns: 0,
             },
         });
     });

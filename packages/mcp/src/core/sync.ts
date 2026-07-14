@@ -3,7 +3,10 @@ import * as path from "path";
 import { createHash } from "crypto";
 import chokidar, { FSWatcher } from "chokidar";
 import ignore from "ignore";
-import { Context } from "@zokizuan/satori-core";
+import {
+    Context,
+    type ProvenVectorGenerationReceipt,
+} from "@zokizuan/satori-core";
 import { SnapshotManager } from "./snapshot.js";
 import {
     DEFAULT_WATCH_DEBOUNCE_MS,
@@ -62,9 +65,55 @@ export interface FreshnessDecision {
     checkpointStatus?: 'missing' | 'corrupt';
 }
 
+export type WatcherLifecycleState = 'starting' | 'ready' | 'failed' | 'stopped';
+
+export type PreparedReadObservationUnavailableReason =
+    | 'watcher_disabled'
+    | 'watcher_manager_not_started'
+    | 'root_not_registered'
+    | 'watcher_starting'
+    | 'root_watcher_not_active'
+    | 'watcher_failed'
+    | 'debounce_active'
+    | 'sync_active'
+    | 'ignore_reconcile_active'
+    | 'source_observation_failed'
+    | 'checkpoint_unverified'
+    | 'checkpoint_missing'
+    | 'checkpoint_corrupt'
+    | 'checkpoint_observation_mismatch';
+
 export type PreparedReadObservation = {
     freshnessEpoch: number;
-    watcherHealthy: true;
+    watcherState: 'ready';
+    checkpointObservation?: string;
+};
+
+export type PreparedReadObservationResult =
+    | {
+        available: true;
+        observation: PreparedReadObservation;
+    }
+    | {
+        available: false;
+        reason: PreparedReadObservationUnavailableReason;
+        freshnessEpoch: number;
+        watcherState?: WatcherLifecycleState;
+    };
+
+export type PreparedReadWatcherDiagnostics = {
+    configured: boolean;
+    managerStarted: boolean;
+    rootRegistered: boolean;
+    watcherActive: boolean;
+    lifecycleState?: WatcherLifecycleState;
+    lastErrorCode?: string;
+    checkpointStatus:
+        | 'valid'
+        | 'missing'
+        | 'corrupt'
+        | 'observation_mismatch'
+        | 'unverified';
 };
 
 interface SyncExecutionOutcome {
@@ -93,6 +142,7 @@ interface EnsureFreshnessOptions {
     coalescedEdits?: number;
     skipIgnoreControlCheck?: boolean;
     mutationLease?: RootMutationLease;
+    preparedVectorReceipt?: ProvenVectorGenerationReceipt;
 }
 
 interface IgnoreReloadResult {
@@ -150,6 +200,8 @@ export class SyncManager {
     private watchDebounceMs: number;
     private watchedCodebases: Set<string> = new Set();
     private watchers: Map<string, FSWatcher> = new Map();
+    private watcherLifecycleStates: Map<string, WatcherLifecycleState> = new Map();
+    private watcherErrorCodes: Map<string, string> = new Map();
     private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
     private watcherIgnoreMatchers: Map<string, ReturnType<typeof ignore>> = new Map();
     private ignoreRulesVersions: Map<string, number> = new Map();
@@ -157,6 +209,7 @@ export class SyncManager {
     private activeIgnoreReconciles: Map<string, Promise<FreshnessDecision>> = new Map();
     private freshnessEpochs: Map<string, number> = new Map();
     private sourceCheckpointObservations: Map<string, string> = new Map();
+    private sourceCheckpointStatuses: Map<string, 'valid' | 'missing' | 'corrupt'> = new Map();
     private readonly now: () => number;
     private readonly onSyncCompleted?: SyncManagerOptions['onSyncCompleted'];
     private readonly mutationLeaseCoordinator?: MutationLeaseCoordinator;
@@ -175,47 +228,117 @@ export class SyncManager {
         this.freshnessEpochs.set(codebasePath, (this.freshnessEpochs.get(codebasePath) ?? 0) + 1);
     }
 
-    public getPreparedReadObservation(codebasePath: string): PreparedReadObservation | null {
+    public getPreparedReadObservation(codebasePath: string): PreparedReadObservationResult {
+        const freshnessEpoch = this.freshnessEpochs.get(codebasePath) ?? 0;
+        const unavailable = (
+            reason: PreparedReadObservationUnavailableReason,
+        ): PreparedReadObservationResult => ({
+            available: false,
+            reason,
+            freshnessEpoch,
+            ...(this.watcherLifecycleStates.get(codebasePath)
+                ? { watcherState: this.watcherLifecycleStates.get(codebasePath) }
+                : {}),
+        });
+        if (!this.watchEnabled) return unavailable('watcher_disabled');
+        if (!this.watcherModeStarted) return unavailable('watcher_manager_not_started');
+        if (!this.watchedCodebases.has(codebasePath)) return unavailable('root_not_registered');
+        if (this.watcherErrorCodes.has(codebasePath)) return unavailable('watcher_failed');
+        const watcherState = this.watcherLifecycleStates.get(codebasePath);
+        if (watcherState === 'starting') return unavailable('watcher_starting');
+        if (watcherState !== 'ready' || !this.watchers.has(codebasePath)) {
+            return unavailable('root_watcher_not_active');
+        }
+        if (this.debounceTimers.has(codebasePath)) return unavailable('debounce_active');
+        if (this.activeSyncs.has(codebasePath)) return unavailable('sync_active');
+        if (this.activeIgnoreReconciles.has(codebasePath)) return unavailable('ignore_reconcile_active');
+
         const checkpointInspectionSupported = typeof this.context.inspectSourceFreshnessCheckpoint === 'function';
         const checkpointObservation = this.sourceCheckpointObservations.get(codebasePath);
         const currentCheckpointObservation = this.context.getRegisteredSourceFreshnessCheckpointObservation?.(codebasePath);
-        if (
-            !this.watchEnabled
-            || !this.watcherModeStarted
-            || !this.watchers.has(codebasePath)
-            || this.debounceTimers.has(codebasePath)
-            || this.activeSyncs.has(codebasePath)
-            || this.activeIgnoreReconciles.has(codebasePath)
-            || (checkpointInspectionSupported && (
-                !checkpointObservation
-                || currentCheckpointObservation !== checkpointObservation
-            ))
-        ) {
-            return null;
+        const checkpointStatus = this.sourceCheckpointStatuses.get(codebasePath);
+        if (checkpointInspectionSupported && checkpointStatus === 'missing') {
+            return unavailable('checkpoint_missing');
+        }
+        if (checkpointInspectionSupported && checkpointStatus === 'corrupt') {
+            return unavailable('checkpoint_corrupt');
+        }
+        if (checkpointInspectionSupported && checkpointStatus !== 'valid') {
+            return unavailable('checkpoint_unverified');
+        }
+        if (checkpointInspectionSupported && (!checkpointObservation || !currentCheckpointObservation)) {
+            return unavailable('checkpoint_observation_mismatch');
+        }
+        if (checkpointInspectionSupported && currentCheckpointObservation !== checkpointObservation) {
+            return unavailable('checkpoint_observation_mismatch');
         }
         return {
-            freshnessEpoch: this.freshnessEpochs.get(codebasePath) ?? 0,
-            watcherHealthy: true,
+            available: true,
+            observation: {
+                freshnessEpoch,
+                watcherState: 'ready',
+                ...(checkpointObservation ? { checkpointObservation } : {}),
+            },
         };
     }
 
-    private async inspectSourceFreshnessCheckpoint(codebasePath: string) {
+    public getPreparedReadDiagnostics(codebasePath: string): PreparedReadWatcherDiagnostics {
+        const checkpointState = this.sourceCheckpointStatuses.get(codebasePath) ?? 'unverified';
+        const checkpointObservation = this.sourceCheckpointObservations.get(codebasePath);
+        const registeredCheckpointObservation =
+            this.context.getRegisteredSourceFreshnessCheckpointObservation?.(codebasePath);
+        const checkpointStatus = checkpointState === 'valid'
+            && (!checkpointObservation || registeredCheckpointObservation !== checkpointObservation)
+            ? 'observation_mismatch'
+            : checkpointState;
+        const lifecycleState = this.watcherLifecycleStates.get(codebasePath);
+        const lastErrorCode = this.watcherErrorCodes.get(codebasePath);
+        return {
+            configured: this.watchEnabled,
+            managerStarted: this.watcherModeStarted,
+            rootRegistered: this.watchedCodebases.has(codebasePath),
+            watcherActive: lifecycleState === 'ready' && this.watchers.has(codebasePath),
+            ...(lifecycleState ? { lifecycleState } : {}),
+            ...(lastErrorCode ? { lastErrorCode } : {}),
+            checkpointStatus,
+        };
+    }
+
+    private async inspectSourceFreshnessCheckpoint(
+        codebasePath: string,
+        preparedVectorReceipt?: ProvenVectorGenerationReceipt,
+    ) {
         const status = this.snapshotManager.getCodebaseStatus(codebasePath);
         if (status !== 'indexed' && status !== 'sync_completed') return null;
         const info = this.snapshotManager.getCodebaseInfo?.(codebasePath) as { indexStatus?: unknown } | undefined;
         if (info?.indexStatus === 'limit_reached') return null;
-        const inspect = this.context.inspectSourceFreshnessCheckpoint;
+        const inspect = this.context.inspectSourceFreshnessCheckpoint as (
+            this: Context,
+            codebasePath: string,
+            checkpointIdentity?: string,
+            requestBoundReceipt?: ProvenVectorGenerationReceipt,
+        ) => ReturnType<Context['inspectSourceFreshnessCheckpoint']>;
         if (typeof inspect !== 'function') return null;
-        return inspect.call(this.context, codebasePath);
+        return inspect.call(
+            this.context,
+            codebasePath,
+            undefined,
+            preparedVectorReceipt,
+        );
     }
 
     private async validateSourceFreshnessCheckpoint(
         codebasePath: string,
         checkedAt: string,
         thresholdMs: number,
+        preparedVectorReceipt?: ProvenVectorGenerationReceipt,
     ): Promise<FreshnessDecision | null> {
-        const checkpointEvidence = await this.inspectSourceFreshnessCheckpoint(codebasePath);
+        const checkpointEvidence = await this.inspectSourceFreshnessCheckpoint(
+            codebasePath,
+            preparedVectorReceipt,
+        );
         if (checkpointEvidence?.status === 'valid') {
+            this.sourceCheckpointStatuses.set(codebasePath, 'valid');
             const previousObservation = this.sourceCheckpointObservations.get(codebasePath);
             this.sourceCheckpointObservations.set(codebasePath, checkpointEvidence.observationToken);
             if (previousObservation && previousObservation !== checkpointEvidence.observationToken) {
@@ -225,6 +348,7 @@ export class SyncManager {
         }
         if (!checkpointEvidence) return null;
 
+        this.sourceCheckpointStatuses.set(codebasePath, checkpointEvidence.status);
         this.sourceCheckpointObservations.delete(codebasePath);
         this.lastSyncTimes.delete(codebasePath);
         this.bumpFreshnessEpoch(codebasePath);
@@ -361,6 +485,7 @@ export class SyncManager {
                 codebasePath,
                 checkedAt,
                 thresholdMs,
+                options.preparedVectorReceipt,
             );
             if (checkpointFailure) return checkpointFailure;
             return this.runIgnoreReconcile(codebasePath, options.coalescedEdits, undefined, options.mutationLease);
@@ -395,6 +520,7 @@ export class SyncManager {
             codebasePath,
             checkedAt,
             thresholdMs,
+            options.preparedVectorReceipt,
         );
         if (checkpointFailure) return checkpointFailure;
 
@@ -465,8 +591,12 @@ export class SyncManager {
         const outcome = await syncPromise;
         const committedCheckpoint = await this.inspectSourceFreshnessCheckpoint(codebasePath);
         if (committedCheckpoint?.status === 'valid') {
+            this.sourceCheckpointStatuses.set(codebasePath, 'valid');
             this.sourceCheckpointObservations.set(codebasePath, committedCheckpoint.observationToken);
         } else {
+            if (committedCheckpoint?.status === 'missing' || committedCheckpoint?.status === 'corrupt') {
+                this.sourceCheckpointStatuses.set(codebasePath, committedCheckpoint.status);
+            }
             this.sourceCheckpointObservations.delete(codebasePath);
         }
         const lastSyncedAt = this.lastSyncTimes.get(codebasePath);
@@ -1166,6 +1296,8 @@ export class SyncManager {
     private async handleWatcherError(codebasePath: string, error: unknown): Promise<void> {
         const message = errorMessage(error, "");
         const code = errorCode(error);
+        this.watcherLifecycleStates.set(codebasePath, 'failed');
+        this.watcherErrorCodes.set(codebasePath, code || 'WATCHER_ERROR');
         if (code === 'ENOSPC' || message.includes('ENOSPC')) {
             console.error(`[SYNC-WATCH] ENOSPC detected while watching '${codebasePath}'. Disabling watcher mode and relying on periodic/manual sync.`);
             await this.stopWatcherMode();
@@ -1192,7 +1324,10 @@ export class SyncManager {
         this.ignoreRulesVersions.delete(codebasePath);
         this.freshnessEpochs.delete(codebasePath);
         this.sourceCheckpointObservations.delete(codebasePath);
+        this.sourceCheckpointStatuses.delete(codebasePath);
         this.activeIgnoreReconciles.delete(codebasePath);
+        this.watcherLifecycleStates.delete(codebasePath);
+        this.watcherErrorCodes.delete(codebasePath);
     }
 
     public async registerCodebaseWatcher(codebasePath: string): Promise<void> {
@@ -1245,8 +1380,15 @@ export class SyncManager {
             this.scheduleWatcherSync(codebasePath, reason);
         };
 
+        this.watcherErrorCodes.delete(codebasePath);
+        this.watcherLifecycleStates.set(codebasePath, 'starting');
         this.watchers.set(codebasePath, watcher);
         watcher
+            .on('ready', () => {
+                if (this.watchers.get(codebasePath) === watcher) {
+                    this.watcherLifecycleStates.set(codebasePath, 'ready');
+                }
+            })
             .on('add', onPathChange)
             .on('change', onPathChange)
             .on('unlink', onPathChange)
@@ -1274,6 +1416,9 @@ export class SyncManager {
             return;
         }
 
+        if (this.watcherLifecycleStates.get(codebasePath) !== 'failed') {
+            this.watcherLifecycleStates.set(codebasePath, 'stopped');
+        }
         this.watchers.delete(codebasePath);
         try {
             await watcher.close();
@@ -1319,6 +1464,11 @@ export class SyncManager {
     public async stopWatcherMode(): Promise<void> {
         this.watcherModeStarted = false;
 
+        for (const codebasePath of this.watchers.keys()) {
+            this.watcherLifecycleStates.set(codebasePath, 'stopped');
+            this.bumpFreshnessEpoch(codebasePath);
+        }
+
         for (const timer of this.debounceTimers.values()) {
             clearTimeout(timer);
         }
@@ -1329,6 +1479,8 @@ export class SyncManager {
         this.lastSyncTimes.clear();
         this.ignoreRulesVersions.clear();
         this.freshnessEpochs.clear();
+        this.sourceCheckpointObservations.clear();
+        this.sourceCheckpointStatuses.clear();
         this.watchedCodebases.clear();
 
         const watchers = Array.from(this.watchers.values());
@@ -1341,5 +1493,6 @@ export class SyncManager {
                 console.error('[SYNC-WATCH] Failed to close watcher:', error);
             }
         }));
+        this.watcherLifecycleStates.clear();
     }
 }

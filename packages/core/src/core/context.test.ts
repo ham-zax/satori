@@ -5837,6 +5837,37 @@ test('Context.reindexByChange replaces a root-global synchronizer before authori
         assert.ok(registered);
         assert.equal(registered.ownsCheckpointIdentity(activeCollection), true);
 
+        const requestBoundReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(requestBoundReceipt);
+        const originalProveVectorGeneration = context.proveVectorGeneration.bind(context);
+        let repeatedProofCalls = 0;
+        context.proveVectorGeneration = async (...args) => {
+            repeatedProofCalls += 1;
+            return originalProveVectorGeneration(...args);
+        };
+        const boundCheckpoint = await context.inspectSourceFreshnessCheckpoint(
+            codebasePath,
+            undefined,
+            requestBoundReceipt,
+        );
+        assert.equal(boundCheckpoint.status, 'valid');
+        assert.equal(repeatedProofCalls, 0);
+
+        const wrongRootReceipt = {
+            ...requestBoundReceipt,
+            policy: {
+                ...requestBoundReceipt.policy,
+                canonicalRoot: path.join(tempRoot, 'other-repo'),
+            },
+        };
+        const fallbackCheckpoint = await context.inspectSourceFreshnessCheckpoint(
+            codebasePath,
+            undefined,
+            wrongRootReceipt,
+        );
+        assert.equal(fallbackCheckpoint.status, 'valid');
+        assert.equal(repeatedProofCalls, 1);
+
         fs.writeFileSync(activeCheckpointPath, previousCheckpointBytes, 'utf8');
         const replayedCheckpoint = await context.inspectSourceFreshnessCheckpoint(codebasePath);
         assert.equal(replayedCheckpoint.status, 'corrupt');

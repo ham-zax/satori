@@ -60,6 +60,14 @@ test("source checkpoint warning preserves vector usability but requires reindex"
     assert.match(warning?.action ?? "", /incremental sync remains disabled/i);
 });
 
+test("unverified source freshness warning preserves proven vector usability", () => {
+    const [warning] = buildSearchWarningDetails(["SOURCE_FRESHNESS_UNVERIFIED"]);
+    assert.equal(warning?.blocksUse, false);
+    assert.equal(warning?.severity, "degraded");
+    assert.match(warning?.message ?? "", /current-source freshness is unverified/i);
+    assert.match(warning?.action ?? "", /manage_index sync/i);
+});
+
 function baseGroup(partial: Partial<SearchGroupResult> = {}): SearchGroupResult {
     return {
         target: {

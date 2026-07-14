@@ -20,6 +20,34 @@ import { MissingProviderConfigIssue, ProviderBackedOperation, ToolContext } from
 type VectorSearchResults = Awaited<ReturnType<VectorDatabase["search"]>>;
 type HybridVectorSearchResults = Awaited<ReturnType<VectorDatabase["hybridSearch"]>>;
 type VectorQueryRows = Awaited<ReturnType<VectorDatabase["query"]>>;
+type ProviderSyncLifecycle = Pick<
+    SyncManager,
+    "startBackgroundSync" | "stopBackgroundSync" | "startWatcherMode" | "stopWatcherMode"
+>;
+
+export async function startProviderSyncLifecycle(
+    syncManager: ProviderSyncLifecycle,
+    options: {
+        enabled: boolean;
+        embeddingCapable: boolean;
+        watcherEnabled: boolean;
+    },
+): Promise<void> {
+    // Incremental synchronization may embed changed files, so the
+    // metadata-only vector runtime must never own periodic or watcher work.
+    if (!options.enabled || !options.embeddingCapable) return;
+
+    syncManager.startBackgroundSync();
+    try {
+        if (options.watcherEnabled) {
+            await syncManager.startWatcherMode();
+        }
+    } catch (error) {
+        syncManager.stopBackgroundSync();
+        await syncManager.stopWatcherMode().catch(() => undefined);
+        throw error;
+    }
+}
 
 class MetadataOnlyEmbedding extends Embedding {
     protected maxTokens = 1;
@@ -150,6 +178,7 @@ export class ProviderRuntime {
     private readonly readFileMaxLines: number;
     private readonly watchSyncEnabled: boolean;
     private readonly watchDebounceMs: number;
+    private readonly startSyncLifecycle: boolean;
     private readonly callGraphManager: CallGraphSidecarManager;
     private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null;
     private readonly mutationLeaseCoordinator: MutationLeaseCoordinator;
@@ -166,6 +195,7 @@ export class ProviderRuntime {
         readFileMaxLines: number;
         watchSyncEnabled: boolean;
         watchDebounceMs: number;
+        startSyncLifecycle?: boolean;
         callGraphManager: CallGraphSidecarManager;
         runtimeOwnerGate?: RuntimeOwnerMutationGate | null;
         mutationLeaseCoordinator?: MutationLeaseCoordinator;
@@ -178,6 +208,7 @@ export class ProviderRuntime {
         this.readFileMaxLines = args.readFileMaxLines;
         this.watchSyncEnabled = args.watchSyncEnabled;
         this.watchDebounceMs = args.watchDebounceMs;
+        this.startSyncLifecycle = args.startSyncLifecycle === true;
         this.callGraphManager = args.callGraphManager;
         this.runtimeOwnerGate = args.runtimeOwnerGate || null;
         this.mutationLeaseCoordinator = args.mutationLeaseCoordinator || new MutationLeaseCoordinator();
@@ -315,6 +346,12 @@ export class ProviderRuntime {
             this.runtimeOwnerGate,
             this.mutationLeaseCoordinator,
         );
+
+        await startProviderSyncLifecycle(syncManager, {
+            enabled: this.startSyncLifecycle,
+            embeddingCapable: requireEmbedding,
+            watcherEnabled: this.watchSyncEnabled,
+        });
 
         const toolContext = {
             context,

@@ -8,6 +8,7 @@ import {
     createLocalOnlyContext,
     ProviderRuntime,
     resolveConfiguredEmbeddingDimension,
+    startProviderSyncLifecycle,
 } from "./provider-runtime.js";
 import {
     LANGUAGE_PARSER_VERSION,
@@ -96,4 +97,76 @@ test("clear only requires vector address, not embedding provider credentials", (
     })).validate("vector_only");
 
     assert.equal(issue, null);
+});
+
+function createSyncLifecycle(options: { watcherStartError?: Error } = {}) {
+    const calls: string[] = [];
+    return {
+        calls,
+        syncManager: {
+            startBackgroundSync: () => { calls.push("start_background"); },
+            stopBackgroundSync: () => { calls.push("stop_background"); },
+            startWatcherMode: async () => {
+                calls.push("start_watcher");
+                if (options.watcherStartError) throw options.watcherStartError;
+            },
+            stopWatcherMode: async () => { calls.push("stop_watcher"); },
+        },
+    };
+}
+
+test("provider-owned embedding runtime starts background sync and watcher mode", async () => {
+    const lifecycle = createSyncLifecycle();
+
+    await startProviderSyncLifecycle(lifecycle.syncManager, {
+        enabled: true,
+        embeddingCapable: true,
+        watcherEnabled: true,
+    });
+
+    assert.deepEqual(lifecycle.calls, ["start_background", "start_watcher"]);
+});
+
+test("provider-owned vector-only runtime does not start an embedding-dependent sync lifecycle", async () => {
+    const lifecycle = createSyncLifecycle();
+
+    await startProviderSyncLifecycle(lifecycle.syncManager, {
+        enabled: true,
+        embeddingCapable: false,
+        watcherEnabled: true,
+    });
+
+    assert.deepEqual(lifecycle.calls, []);
+});
+
+test("provider-owned CLI runtime does not start background sync or watchers", async () => {
+    const lifecycle = createSyncLifecycle();
+
+    await startProviderSyncLifecycle(lifecycle.syncManager, {
+        enabled: false,
+        embeddingCapable: true,
+        watcherEnabled: true,
+    });
+
+    assert.deepEqual(lifecycle.calls, []);
+});
+
+test("provider lifecycle rolls back background sync when watcher startup fails", async () => {
+    const watcherStartError = new Error("watcher startup failed");
+    const lifecycle = createSyncLifecycle({ watcherStartError });
+
+    await assert.rejects(
+        startProviderSyncLifecycle(lifecycle.syncManager, {
+            enabled: true,
+            embeddingCapable: true,
+            watcherEnabled: true,
+        }),
+        watcherStartError,
+    );
+    assert.deepEqual(lifecycle.calls, [
+        "start_background",
+        "start_watcher",
+        "stop_background",
+        "stop_watcher",
+    ]);
 });

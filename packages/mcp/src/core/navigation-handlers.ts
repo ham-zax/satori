@@ -17,6 +17,7 @@ import {
 import type {
     CompletionProbeDebugHint,
     TrackedRootReadiness,
+    TrackedRootReadinessState,
 } from "./tracked-root-readiness.js";
 import type {
     CallGraphDirection,
@@ -48,7 +49,6 @@ const OUTLINE_SUPPORTED_EXTENSIONS = getSupportedExtensionsForCapability("fileOu
 const PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_DETAIL = "Partial index/search data may exist, but navigation sidecars were not published because indexing stopped before completion.";
 
 type NavigationHandlersHost = {
-    navigationStore: Pick<NavigationStore, "getSymbolsByFile" | "getCompatibilityState">;
     trackedRootReadiness: Pick<
         TrackedRootReadiness,
         | "prepareTrackedRootForRead"
@@ -57,6 +57,15 @@ type NavigationHandlersHost = {
         | "buildIndexFailedCallGraphPayload"
         | "buildMissingLocalCollectionCallGraphPayload"
     >;
+    prepareNavigationRead(absolutePath: string): Promise<TrackedRootReadinessState>;
+    loadPreparedNavigationSymbolsByFile(
+        preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
+        file: string,
+    ): ReturnType<NavigationStore["getSymbolsByFile"]>;
+    loadPreparedNavigationCompatibility(
+        preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
+        expectedSymbolRegistryManifestHash: string,
+    ): ReturnType<NavigationStore["getCompatibilityState"]>;
     stringifyToolJson(value: unknown): string;
     normalizeRelativeFilePath(relativeFilePath: string): string;
     buildInvalidFileOutlineRequestPayload(root: string, file: string, message: string, status?: string, reason?: string): unknown;
@@ -74,6 +83,7 @@ type NavigationHandlersHost = {
         codebaseRoot: string;
         registryManifestHash?: string;
         registryUnavailableReason?: CallGraphUnavailableReason;
+        preparedRead?: Extract<TrackedRootReadinessState, { state: "ready" }>;
     }): Promise<{
         relationshipReady: boolean;
         relationshipBuiltAt?: string;
@@ -307,7 +317,7 @@ export class NavigationHandlers {
 
             trackCodebasePath(absoluteRoot);
 
-            const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absoluteRoot, "navigation");
+            const trackedRootState = await this.host.prepareNavigationRead(absoluteRoot);
             if (trackedRootState.state === "requires_reindex") {
                 const payload = this.host.buildRequiresReindexFileOutlinePayload(trackedRootState.codebasePath, {
                     ...args,
@@ -434,10 +444,10 @@ export class NavigationHandlers {
                 ? Math.max(requestedEndLine, requestedStartLine)
                 : requestedEndLine;
 
-            const registryState = await this.host.navigationStore.getSymbolsByFile({
-                normalizedRootPath: effectiveRoot,
-                file: normalizedFile,
-            });
+            const registryState = await this.host.loadPreparedNavigationSymbolsByFile(
+                trackedRootState,
+                normalizedFile,
+            );
             if (registryState.status === "ok") {
                 const registrySymbols = registryState.symbols;
                 if (registrySymbols.length > 0) {
@@ -467,6 +477,7 @@ export class NavigationHandlers {
                     const relationshipGraph = await this.host.loadRegistryValidatedCallGraphSidecar({
                         codebaseRoot: effectiveRoot,
                         registryManifestHash: registryState.manifestHash,
+                        preparedRead: trackedRootState,
                     });
                     const outlineWarnings: string[] = [];
                     if (relationshipGraph.warning) {
@@ -679,7 +690,7 @@ export class NavigationHandlers {
 
             trackCodebasePath(absolutePath);
 
-            const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absolutePath, "navigation");
+            const trackedRootState = await this.host.prepareNavigationRead(absolutePath);
             if (trackedRootState.state === "requires_reindex") {
                 const payload = this.host.buildRequiresReindexCallGraphPayload(
                     trackedRootState.codebasePath,
@@ -795,10 +806,10 @@ export class NavigationHandlers {
             }
 
             const normalizedSymbolFile = this.host.normalizeRelativeFilePath(symbolRef.file);
-            const registryState = await this.host.navigationStore.getSymbolsByFile({
-                normalizedRootPath: effectiveRoot,
-                file: normalizedSymbolFile,
-            });
+            const registryState = await this.host.loadPreparedNavigationSymbolsByFile(
+                trackedRootState,
+                normalizedSymbolFile,
+            );
             if (registryState.status !== "ok") {
                 const reason = registryState.status === "missing"
                     ? "missing_symbol_registry"
@@ -950,10 +961,10 @@ export class NavigationHandlers {
                 };
             }
 
-            const compatibility = await this.host.navigationStore.getCompatibilityState({
-                normalizedRootPath: effectiveRoot,
-                expectedSymbolRegistryManifestHash: registryState.manifestHash,
-            });
+            const compatibility = await this.host.loadPreparedNavigationCompatibility(
+                trackedRootState,
+                registryState.manifestHash,
+            );
             if (compatibility.relationships.status !== "ok") {
                 const reason = compatibility.relationships.status === "missing"
                     ? "missing_relationship_sidecar"

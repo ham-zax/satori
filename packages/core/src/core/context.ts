@@ -736,8 +736,13 @@ export class Context {
     async inspectSourceFreshnessCheckpoint(
         codebasePath: string,
         checkpointIdentity?: string,
+        requestBoundReceipt?: ProvenVectorGenerationReceipt,
     ): Promise<SourceFreshnessCheckpointEvidence> {
-        const receipt = await this.proveVectorGeneration(codebasePath);
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const receipt = requestBoundReceipt
+            && this.isPreparedVectorReceiptBoundToCurrentAuthority(canonicalRoot, requestBoundReceipt)
+            ? requestBoundReceipt
+            : await this.proveVectorGeneration(canonicalRoot);
         const requestedIdentity = checkpointIdentity?.trim();
         if (!receipt || (requestedIdentity && requestedIdentity !== receipt.collectionName)) {
             return {
@@ -759,6 +764,30 @@ export class Context {
             },
         );
         return inspector.inspectOwnedSnapshot();
+    }
+
+    private isPreparedVectorReceiptBoundToCurrentAuthority(
+        canonicalRoot: string,
+        receipt: ProvenVectorGenerationReceipt,
+    ): boolean {
+        const policy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
+        const binding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
+        const policyDocumentDigest = this.policyDocumentDigestsByCodebase.get(canonicalRoot);
+        if (!policy || !binding || !policyDocumentDigest) return false;
+
+        return receipt.policy.canonicalRoot === canonicalRoot
+            && receipt.marker.codebasePath === canonicalRoot
+            && receipt.collectionName === binding.collectionName
+            && receipt.policy.policyHash === policy.policyHash
+            && receipt.policyDocumentDigest === policyDocumentDigest
+            && receipt.marker.indexPolicyHash === policy.policyHash
+            && receipt.exactPayloadCount === receipt.marker.totalChunks
+            && receipt.observations.profileFileToken
+                === this.resolveRepoConfigObservationToken(canonicalRoot)
+            && receipt.observations.policyFileToken
+                === this.resolveCustomIndexPolicyFileToken(canonicalRoot)
+            && this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot) === true
+            && this.markerMatchesSealedAuthority(receipt.marker, policy, binding);
     }
 
     getRegisteredSourceFreshnessCheckpointObservation(codebasePath: string): string | null {

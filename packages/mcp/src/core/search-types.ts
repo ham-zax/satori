@@ -1,4 +1,8 @@
-import { FreshnessDecision } from "./sync.js";
+import type {
+    FreshnessDecision,
+    PreparedReadObservationUnavailableReason,
+    PreparedReadWatcherDiagnostics,
+} from "./sync.js";
 import { SearchGroupBy, SearchNoiseCategory, SearchRankingMode, SearchResultMode, SearchScope } from "./search-constants.js";
 import { FingerprintSource, IndexFingerprint } from "../config.js";
 
@@ -236,12 +240,18 @@ export type SearchReadinessInvalidationReason =
 export interface SearchReadinessDebugHint {
     proofMode: "cold" | "warm";
     invalidationReason: SearchReadinessInvalidationReason;
+    auditClassification?: "proof_expiry_audit";
+    observationUnavailableReason?: PreparedReadObservationUnavailableReason;
+    watcher?: PreparedReadWatcherDiagnostics;
     operations: {
         preparedCacheLookups: number;
         preparedCacheHits: number;
         coldReadinessChecks: number;
+        postFreshnessColdChecks: number;
         warmReceiptRevalidations: number;
         exactPayloadRecounts: number;
+        registryLoads: number;
+        navigationValidationRuns: number;
     };
 }
 

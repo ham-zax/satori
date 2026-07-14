@@ -99,6 +99,15 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
             action: "Run manage_index reindex to restore the checkpoint; incremental sync remains disabled until then.",
         };
     }
+    if (code === WARNING_CODES.SOURCE_FRESHNESS_UNVERIFIED) {
+        return {
+            code,
+            severity: "degraded",
+            blocksUse: false,
+            message: "Vector search is using the proven generation, but watcher-backed source continuity is unavailable, so current-source freshness is unverified.",
+            action: "Use the returned vector results with source verification, or run manage_index sync before relying on current-worktree freshness.",
+        };
+    }
     if (code === WARNING_CODES.FILTER_MUST_UNSATISFIED) {
         return {
             code,

@@ -20,7 +20,11 @@ import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
 import { AccessGateReason, SnapshotManager } from "./snapshot.js";
 import { absolutePathOrRaw } from "../utils.js";
-import { SyncManager, type FreshnessDecision } from "./sync.js";
+import {
+    SyncManager,
+    type FreshnessDecision,
+    type PreparedReadObservationUnavailableReason,
+} from "./sync.js";
 import {
     DEFAULT_MANAGE_RETRY_AFTER_MS,
     DEFAULT_WATCH_DEBOUNCE_MS,
@@ -124,6 +128,7 @@ import { VectorBackendMaintenance } from "./vector-backend-maintenance.js";
 import { RelationshipBackedCallGraph } from "./relationship-backed-call-graph.js";
 import { ToolResponseBuilders } from "./tool-response-builders.js";
 import { PreparedReadCache } from "./prepared-read-cache.js";
+import { WARNING_CODES } from "./warnings.js";
 import {
     evaluateReindexPreflight as evaluateReindexPreflightHelper,
     getChangedFilesForCodebase as getChangedFilesForCodebaseHelper,
@@ -174,6 +179,9 @@ const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = 'SEARCH_PARTIAL_INDE
 const SEARCH_DEBUG_CHANGED_CODE_MAX_FILES = 10;
 const SEARCH_DEBUG_CHANGED_CODE_MAX_SYMBOLS = 20;
 const SEARCH_DEBUG_CHANGED_CODE_MAX_DIRECT_CALLERS = 20;
+const PREPARED_NAVIGATION_CACHE_MAX_ROOTS = 32;
+const PREPARED_NAVIGATION_CACHE_MAX_FILES_PER_ROOT = 64;
+const PREPARED_NAVIGATION_CACHE_MAX_COMPATIBILITY_RESULTS_PER_ROOT = 8;
 type CallGraphUnavailableReason = Extract<CallGraphHint, { supported: false }>['reason'];
 // Recovery probe threshold for "likely interrupted" indexing states.
 // Keep this shorter than snapshot merge stale semantics for better operator UX.
@@ -298,8 +306,12 @@ type ContextLifecycleCapabilities = IndexCompletionMarkerContext & {
 type PreparedReadObservationSnapshot = {
     vectorAuthority: string;
     navigationAuthority: string;
-    freshnessEpoch: number;
     mutationGeneration: number;
+};
+
+type PreparedReadCacheObservationResult = {
+    observation: string | null;
+    unavailableReason?: PreparedReadObservationUnavailableReason;
 };
 
 type CachedPreparedReadResult =
@@ -310,14 +322,42 @@ type CachedPreparedReadResult =
     | {
         status: "miss";
         reason: SearchReadinessInvalidationReason;
+        observationUnavailableReason?: PreparedReadObservationUnavailableReason;
     };
+
+type NavigationManifestState = Awaited<ReturnType<NavigationStore['getManifest']>>;
+type NavigationManifestOk = Extract<NavigationManifestState, { status: 'ok' }>;
+type NavigationSymbolsByFileState = Awaited<ReturnType<NavigationStore['getSymbolsByFile']>>;
+type NavigationSymbolsByFileOk = Extract<NavigationSymbolsByFileState, { status: 'ok' }>;
+type NavigationCompatibilityState = Awaited<ReturnType<NavigationStore['getCompatibilityState']>>;
+
+type PreparedNavigationCacheEntry = {
+    identity: string;
+    manifest?: NavigationManifestOk;
+    symbolsByFile: Map<string, NavigationSymbolsByFileOk>;
+    compatibilityByManifestHash: Map<string, NavigationCompatibilityState>;
+};
+
+function setBoundedCacheEntry<K, V>(
+    cache: Map<K, V>,
+    key: K,
+    value: V,
+    maxEntries: number,
+): void {
+    cache.delete(key);
+    cache.set(key, value);
+    while (cache.size > maxEntries) {
+        const oldestKey = cache.keys().next().value as K | undefined;
+        if (oldestKey === undefined) return;
+        cache.delete(oldestKey);
+    }
+}
 
 function parsePreparedReadObservation(value: string): PreparedReadObservationSnapshot | null {
     try {
         const parsed = JSON.parse(value) as Partial<PreparedReadObservationSnapshot>;
         return typeof parsed.vectorAuthority === 'string'
             && typeof parsed.navigationAuthority === 'string'
-            && typeof parsed.freshnessEpoch === 'number'
             && typeof parsed.mutationGeneration === 'number'
             ? parsed as PreparedReadObservationSnapshot
             : null;
@@ -471,6 +511,7 @@ export class ToolHandlers {
     private readonly changedFilesCache = new Map<string, ChangedFilesCacheEntry>();
     private readonly rootGitignoreMatcherCache = new Map<string, GitignoreMatcherCacheEntry>();
     private readonly preparedReadCache = new PreparedReadCache<Extract<TrackedRootReadinessState, { state: 'ready' }>>();
+    private readonly preparedNavigationCache = new Map<string, PreparedNavigationCacheEntry>();
     private readonly gitignoreForceReloadEveryN: number;
     private readonly searchQuerySupport: SearchQuerySupport;
     private readonly trackedRootReadiness: TrackedRootReadiness;
@@ -610,8 +651,10 @@ export class ToolHandlers {
         this.relationshipBackedCallGraph = new RelationshipBackedCallGraph(relationshipBackedCallGraphHost);
 
         const navigationHandlersHost: ConstructorParameters<typeof NavigationHandlers>[0] = {
-            navigationStore: this.navigationStore,
             trackedRootReadiness: this.trackedRootReadiness,
+            prepareNavigationRead: this.prepareNavigationRead.bind(this),
+            loadPreparedNavigationSymbolsByFile: this.loadPreparedNavigationSymbolsByFile.bind(this),
+            loadPreparedNavigationCompatibility: this.loadPreparedNavigationCompatibility.bind(this),
             stringifyToolJson: this.stringifyToolJson.bind(this),
             normalizeRelativeFilePath: this.normalizeRelativeFilePath.bind(this),
             buildInvalidFileOutlineRequestPayload: this.buildInvalidFileOutlineRequestPayload.bind(this),
@@ -926,7 +969,7 @@ export class ToolHandlers {
     }
 
     private async unwatchCodebase(codebasePath: string): Promise<void> {
-        this.preparedReadCache.evict(codebasePath);
+        this.evictPreparedRead(codebasePath);
         const syncManager = this.syncManager as unknown as {
             unwatchCodebase?: (path: string) => Promise<void> | void;
             unregisterCodebaseWatcher?: (path: string) => Promise<void> | void;
@@ -940,18 +983,16 @@ export class ToolHandlers {
         }
     }
 
-    private getPreparedReadObservation(codebasePath: string): string | null {
+    private getPreparedAuthorityObservation(codebasePath: string): string | null {
         try {
-            const syncObservation = this.syncManager.getPreparedReadObservation(codebasePath);
             const mutationObservation = this.mutationLeaseCoordinator?.observe(codebasePath);
             const authorityObservation = this.contextLifecycle().getIndexAuthorityObservations?.(codebasePath);
-            if (!syncObservation || !mutationObservation || mutationObservation.mutationActive || !authorityObservation) {
+            if (!mutationObservation || mutationObservation.mutationActive || !authorityObservation) {
                 return null;
             }
             return JSON.stringify({
                 vectorAuthority: authorityObservation.vector,
                 navigationAuthority: authorityObservation.navigation,
-                freshnessEpoch: syncObservation.freshnessEpoch,
                 mutationGeneration: mutationObservation.generation,
             });
         } catch {
@@ -959,9 +1000,226 @@ export class ToolHandlers {
         }
     }
 
+    private getPreparedReadCacheObservation(codebasePath: string): PreparedReadCacheObservationResult {
+        const authorityObservation = this.getPreparedAuthorityObservation(codebasePath);
+        if (!authorityObservation) return { observation: null };
+
+        try {
+            const sourceObservation = this.syncManager.getPreparedReadObservation(codebasePath);
+            if (!sourceObservation.available) {
+                return {
+                    observation: authorityObservation,
+                    unavailableReason: sourceObservation.reason,
+                };
+            }
+            return { observation: authorityObservation };
+        } catch {
+            return {
+                observation: authorityObservation,
+                unavailableReason: 'source_observation_failed',
+            };
+        }
+    }
+
+    private evictPreparedRead(codebasePath: string): void {
+        this.preparedReadCache.evict(codebasePath);
+        this.preparedNavigationCache.delete(codebasePath);
+    }
+
+    private getPreparedNavigationIdentity(
+        preparedRead: Extract<TrackedRootReadinessState, { state: 'ready' }>,
+    ): string | null {
+        try {
+            const receipt = preparedRead.generationReceipt;
+            const preparedObservation = preparedRead.preparedObservation;
+            const root = preparedRead.root.path;
+            if (
+                preparedRead.navigationStatus !== 'valid'
+                || !receipt
+                || !preparedObservation
+                || receipt.policy.canonicalRoot !== root
+                || this.getPreparedAuthorityObservation(root) !== preparedObservation
+            ) {
+                return null;
+            }
+            const identityParts = [
+                receipt.collectionName,
+                receipt.marker.runId,
+                receipt.policyDocumentDigest,
+                receipt.policy.policyHash,
+                receipt.navigation.generationId,
+                receipt.navigation.symbolRegistryManifestHash,
+                receipt.navigation.relationshipManifestHash,
+                receipt.navigation.navigationSealHash,
+                receipt.observations.navigationToken,
+            ];
+            if (identityParts.some((value) => typeof value !== 'string' || value.length === 0)) {
+                return null;
+            }
+            const observation = parsePreparedReadObservation(preparedObservation);
+            if (!observation) return null;
+
+            return JSON.stringify({
+                canonicalRoot: root,
+                collectionName: receipt.collectionName,
+                markerRunId: receipt.marker.runId,
+                policyDocumentDigest: receipt.policyDocumentDigest,
+                policyHash: receipt.policy.policyHash,
+                navigationGenerationId: receipt.navigation.generationId,
+                symbolRegistryManifestHash: receipt.navigation.symbolRegistryManifestHash,
+                relationshipManifestHash: receipt.navigation.relationshipManifestHash,
+                navigationSealHash: receipt.navigation.navigationSealHash,
+                navigationObservationToken: receipt.observations.navigationToken,
+                mutationGeneration: observation.mutationGeneration,
+            });
+        } catch {
+            return null;
+        }
+    }
+
+    private getPreparedNavigationCacheEntry(
+        root: string,
+        identity: string,
+    ): PreparedNavigationCacheEntry | undefined {
+        const entry = this.preparedNavigationCache.get(root);
+        if (!entry || entry.identity !== identity) return undefined;
+        setBoundedCacheEntry(
+            this.preparedNavigationCache,
+            root,
+            entry,
+            PREPARED_NAVIGATION_CACHE_MAX_ROOTS,
+        );
+        return entry;
+    }
+
+    private storePreparedNavigationCacheEntry(
+        root: string,
+        identity: string,
+        update: (entry: PreparedNavigationCacheEntry) => void,
+    ): void {
+        const existing = this.preparedNavigationCache.get(root);
+        const entry = existing?.identity === identity
+            ? existing
+            : {
+                identity,
+                symbolsByFile: new Map<string, NavigationSymbolsByFileOk>(),
+                compatibilityByManifestHash: new Map<string, NavigationCompatibilityState>(),
+            };
+        update(entry);
+        setBoundedCacheEntry(
+            this.preparedNavigationCache,
+            root,
+            entry,
+            PREPARED_NAVIGATION_CACHE_MAX_ROOTS,
+        );
+    }
+
+    private async loadPreparedNavigationManifest(
+        preparedRead: Extract<TrackedRootReadinessState, { state: 'ready' }>,
+        operations?: SearchReadinessDebugHint['operations'],
+    ): Promise<NavigationManifestState> {
+        const root = preparedRead.root.path;
+        const identityBefore = this.getPreparedNavigationIdentity(preparedRead);
+        const cached = identityBefore
+            ? this.getPreparedNavigationCacheEntry(root, identityBefore)?.manifest
+            : undefined;
+        if (
+            cached
+            && this.getPreparedNavigationIdentity(preparedRead) === identityBefore
+        ) return cached;
+
+        if (operations) operations.registryLoads += 1;
+        const result = await this.navigationStore.getManifest({ normalizedRootPath: root });
+        if (
+            result.status === 'ok'
+            && identityBefore
+            && this.getPreparedNavigationIdentity(preparedRead) === identityBefore
+        ) {
+            this.storePreparedNavigationCacheEntry(root, identityBefore, (entry) => {
+                entry.manifest = result;
+            });
+        }
+        return result;
+    }
+
+    private async loadPreparedNavigationSymbolsByFile(
+        preparedRead: Extract<TrackedRootReadinessState, { state: 'ready' }>,
+        file: string,
+    ): Promise<NavigationSymbolsByFileState> {
+        const root = preparedRead.root.path;
+        const identityBefore = this.getPreparedNavigationIdentity(preparedRead);
+        const cached = identityBefore
+            ? this.getPreparedNavigationCacheEntry(root, identityBefore)?.symbolsByFile.get(file)
+            : undefined;
+        if (
+            cached
+            && this.getPreparedNavigationIdentity(preparedRead) === identityBefore
+        ) return cached;
+
+        const result = await this.navigationStore.getSymbolsByFile({
+            normalizedRootPath: root,
+            file,
+        });
+        if (
+            result.status === 'ok'
+            && identityBefore
+            && this.getPreparedNavigationIdentity(preparedRead) === identityBefore
+        ) {
+            this.storePreparedNavigationCacheEntry(root, identityBefore, (entry) => {
+                setBoundedCacheEntry(
+                    entry.symbolsByFile,
+                    file,
+                    result,
+                    PREPARED_NAVIGATION_CACHE_MAX_FILES_PER_ROOT,
+                );
+            });
+        }
+        return result;
+    }
+
+    private async loadPreparedNavigationCompatibility(
+        preparedRead: Extract<TrackedRootReadinessState, { state: 'ready' }>,
+        expectedSymbolRegistryManifestHash: string,
+        operations?: SearchReadinessDebugHint['operations'],
+    ): Promise<NavigationCompatibilityState> {
+        const root = preparedRead.root.path;
+        const identityBefore = this.getPreparedNavigationIdentity(preparedRead);
+        const cached = identityBefore
+            ? this.getPreparedNavigationCacheEntry(root, identityBefore)
+                ?.compatibilityByManifestHash.get(expectedSymbolRegistryManifestHash)
+            : undefined;
+        if (
+            cached
+            && this.getPreparedNavigationIdentity(preparedRead) === identityBefore
+        ) return cached;
+
+        if (operations) operations.navigationValidationRuns += 1;
+        const result = await this.navigationStore.getCompatibilityState({
+            normalizedRootPath: root,
+            expectedSymbolRegistryManifestHash,
+        });
+        if (
+            result.registry?.status === 'ok'
+            && result.relationships.status === 'ok'
+            && identityBefore
+            && this.getPreparedNavigationIdentity(preparedRead) === identityBefore
+        ) {
+            this.storePreparedNavigationCacheEntry(root, identityBefore, (entry) => {
+                setBoundedCacheEntry(
+                    entry.compatibilityByManifestHash,
+                    expectedSymbolRegistryManifestHash,
+                    result,
+                    PREPARED_NAVIGATION_CACHE_MAX_COMPATIBILITY_RESULTS_PER_ROOT,
+                );
+            });
+        }
+        return result;
+    }
+
     private async getCachedPreparedRead(
         absolutePath: string,
         operations: SearchReadinessDebugHint["operations"],
+        requireNavigation = false,
     ): Promise<CachedPreparedReadResult> {
         operations.preparedCacheLookups += 1;
         const lookup = this.preparedReadCache.lookupCandidate(
@@ -974,15 +1232,22 @@ export class ToolHandlers {
         }
         const cached = lookup.state;
         if (!cached.vectorReceipt) {
-            this.preparedReadCache.evict(lookup.root);
+            this.evictPreparedRead(lookup.root);
             return { status: "miss", reason: "cache_miss" };
         }
         const root = cached.root.path;
-        const observationBefore = this.getPreparedReadObservation(root);
+        const observationBeforeResult = this.getPreparedReadCacheObservation(root);
+        const observationBefore = observationBeforeResult.observation;
         const revalidate = this.contextLifecycle().revalidatePreparedGeneration;
         if (!observationBefore || typeof revalidate !== 'function') {
-            this.preparedReadCache.evict(root);
-            return { status: "miss", reason: "observation_unavailable" };
+            this.evictPreparedRead(root);
+            return {
+                status: "miss",
+                reason: "observation_unavailable",
+                ...(observationBeforeResult.unavailableReason
+                    ? { observationUnavailableReason: observationBeforeResult.unavailableReason }
+                    : {}),
+            };
         }
         const cachedObservation = parsePreparedReadObservation(lookup.observation);
         const currentObservation = observationBefore ? parsePreparedReadObservation(observationBefore) : null;
@@ -990,10 +1255,9 @@ export class ToolHandlers {
             !cachedObservation
             || !currentObservation
             || cachedObservation.vectorAuthority !== currentObservation.vectorAuthority
-            || cachedObservation.freshnessEpoch !== currentObservation.freshnessEpoch
             || cachedObservation.mutationGeneration !== currentObservation.mutationGeneration
         ) {
-            this.preparedReadCache.evict(root);
+            this.evictPreparedRead(root);
             return { status: "miss", reason: "observation_changed" };
         }
         const navigationObservationChanged =
@@ -1003,14 +1267,15 @@ export class ToolHandlers {
             ...(cached.generationReceipt ? { priorGenerationReceipt: cached.generationReceipt } : {}),
             navigationObservationChanged,
         }).catch(() => null);
-        const observationAfter = this.getPreparedReadObservation(root);
+        const observationAfter = this.getPreparedReadCacheObservation(root).observation;
         if (
             !proof
             || proof.navigationProof.status === 'requires_reindex'
             || proof.navigationProof.status === 'unsupported'
+            || (requireNavigation && proof.navigationProof.status !== 'valid')
             || observationAfter !== observationBefore
         ) {
-            this.preparedReadCache.evict(root);
+            this.evictPreparedRead(root);
             return {
                 status: "miss",
                 reason: observationAfter !== observationBefore
@@ -1037,18 +1302,23 @@ export class ToolHandlers {
     ): void {
         const root = state.root.path;
         if (!state.vectorReceipt || !state.preparedObservation) {
-            this.preparedReadCache.evict(root);
+            this.evictPreparedRead(root);
             return;
         }
-        const observation = this.getPreparedReadObservation(root);
-        if (observation !== state.preparedObservation) {
-            this.preparedReadCache.evict(root);
+        const observationResult = this.getPreparedReadCacheObservation(root);
+        const observation = observationResult.observation;
+        if (!observation || observation !== state.preparedObservation) {
+            this.evictPreparedRead(root);
             return;
+        }
+        const navigationIdentity = this.getPreparedNavigationIdentity(state);
+        if (this.preparedNavigationCache.get(root)?.identity !== navigationIdentity) {
+            this.preparedNavigationCache.delete(root);
         }
         this.preparedReadCache.seed(
             root,
             state,
-            state.preparedObservation,
+            observation,
             this.now(),
             preserveProofAge,
         );
@@ -1057,19 +1327,45 @@ export class ToolHandlers {
     private async prepareTrackedRootReadWithObservation(
         absolutePath: string,
         onPhase: (phase: ReadinessPhase, durationMs: number) => void,
+        accessMode: 'semantic' | 'navigation' = 'semantic',
     ): Promise<TrackedRootReadinessState> {
         const state = await this.trackedRootReadiness.prepareTrackedRootForRead(
             absolutePath,
-            'semantic',
+            accessMode,
             onPhase,
-            { observePreparedRead: (root) => this.getPreparedReadObservation(root) },
+            { observePreparedRead: (root) => this.getPreparedAuthorityObservation(root) },
         );
         if (
             state.state === 'ready'
             && this.mutationLeaseCoordinator?.getActiveLease(state.root.path)
         ) {
-            this.preparedReadCache.evict(state.root.path);
+            this.evictPreparedRead(state.root.path);
             return { state: 'indexing', codebasePath: state.root.path };
+        }
+        return state;
+    }
+
+    private async prepareNavigationRead(absolutePath: string): Promise<TrackedRootReadinessState> {
+        const operations: SearchReadinessDebugHint['operations'] = {
+            preparedCacheLookups: 0,
+            preparedCacheHits: 0,
+            coldReadinessChecks: 0,
+            postFreshnessColdChecks: 0,
+            warmReceiptRevalidations: 0,
+            exactPayloadRecounts: 0,
+            registryLoads: 0,
+            navigationValidationRuns: 0,
+        };
+        const cached = await this.getCachedPreparedRead(absolutePath, operations, true);
+        if (cached.status === 'hit') return cached.state;
+
+        const state = await this.prepareTrackedRootReadWithObservation(
+            absolutePath,
+            () => undefined,
+            'navigation',
+        );
+        if (state.state === 'ready') {
+            this.seedPreparedRead(state, false);
         }
         return state;
     }
@@ -2277,6 +2573,8 @@ export class ToolHandlers {
         codebaseRoot: string;
         registryManifestHash?: string;
         registryUnavailableReason?: CallGraphUnavailableReason;
+        preparedRead?: Extract<TrackedRootReadinessState, { state: 'ready' }>;
+        operations?: SearchReadinessDebugHint['operations'];
     }): Promise<{
         relationshipReady: boolean;
         relationshipBuiltAt?: string;
@@ -2290,10 +2588,16 @@ export class ToolHandlers {
             };
         }
 
-        const compatibility = await this.navigationStore.getCompatibilityState({
-            normalizedRootPath: input.codebaseRoot,
-            expectedSymbolRegistryManifestHash: input.registryManifestHash,
-        });
+        const compatibility = input.preparedRead
+            ? await this.loadPreparedNavigationCompatibility(
+                input.preparedRead,
+                input.registryManifestHash,
+                input.operations,
+            )
+            : await this.navigationStore.getCompatibilityState({
+                normalizedRootPath: input.codebaseRoot,
+                expectedSymbolRegistryManifestHash: input.registryManifestHash,
+            });
         if (compatibility.relationships.status !== 'ok') {
             const relationshipUnavailableReason = compatibility.relationships.status === 'missing'
                 ? 'missing_relationship_sidecar'
@@ -2672,8 +2976,11 @@ export class ToolHandlers {
                 preparedCacheLookups: 0,
                 preparedCacheHits: 0,
                 coldReadinessChecks: 0,
+                postFreshnessColdChecks: 0,
                 warmReceiptRevalidations: 0,
                 exactPayloadRecounts: 0,
+                registryLoads: 0,
+                navigationValidationRuns: 0,
             },
         };
         let preservePreparedProofAge = false;
@@ -2707,6 +3014,12 @@ export class ToolHandlers {
                     preservePreparedProofAge = false;
                     readinessDebug.proofMode = "cold";
                     readinessDebug.invalidationReason = cached.reason;
+                    if (cached.reason === "proof_expired") {
+                        readinessDebug.auditClassification = "proof_expiry_audit";
+                    }
+                    if (debugMode === 'full' && cached.observationUnavailableReason) {
+                        readinessDebug.observationUnavailableReason = cached.observationUnavailableReason;
+                    }
                     readinessDebug.operations.coldReadinessChecks += 1;
                     const prepareReadStartedAtMs = this.searchPhaseNowMs();
                     const trackedRootState = await this.prepareTrackedRootReadWithObservation(
@@ -2717,6 +3030,12 @@ export class ToolHandlers {
                     );
                     if (trackedRootState.state === "ready") {
                         readinessDebug.operations.exactPayloadRecounts += trackedRootState.exactPayloadRecounts ?? 0;
+                        if (debugMode === 'full') {
+                            const sourceObservation = this.getPreparedReadCacheObservation(trackedRootState.root.path);
+                            if (sourceObservation.unavailableReason) {
+                                readinessDebug.observationUnavailableReason = sourceObservation.unavailableReason;
+                            }
+                        }
                     }
                     this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
                     return trackedRootState;
@@ -2726,6 +3045,7 @@ export class ToolHandlers {
                     readinessDebug.proofMode = "cold";
                     readinessDebug.invalidationReason = invalidationReason;
                     readinessDebug.operations.coldReadinessChecks += 1;
+                    readinessDebug.operations.postFreshnessColdChecks += 1;
                     return this.measureSearchPhase(
                         phaseTimings,
                         'prepareRead',
@@ -2743,11 +3063,17 @@ export class ToolHandlers {
                         },
                     );
                 },
-                getPreparedReadObservation: (canonicalRoot) => this.getPreparedReadObservation(canonicalRoot),
-                ensureSearchFreshness: (effectiveRoot) => this.measureSearchPhase(
+                getPreparedReadObservation: (canonicalRoot) => this.getPreparedAuthorityObservation(canonicalRoot),
+                ensureSearchFreshness: (effectiveRoot, preparedRead) => this.measureSearchPhase(
                     phaseTimings,
                     'ensureFreshness',
-                    () => this.syncManager.ensureFreshness(effectiveRoot, 3 * 60 * 1000)
+                    () => this.syncManager.ensureFreshness(
+                        effectiveRoot,
+                        3 * 60 * 1000,
+                        preparedRead?.vectorReceipt
+                            ? { preparedVectorReceipt: preparedRead.vectorReceipt }
+                            : {},
+                    ),
                 ),
                 noteFreshnessMode: (mode) => {
                     searchDiagnostics.freshnessMode = mode;
@@ -2808,13 +3134,40 @@ export class ToolHandlers {
                 searchableRoot,
                 effectiveRoot,
                 proofDebugHint,
-                partialIndexSearchWarnings,
+                partialIndexSearchWarnings: frontDoorWarnings,
                 freshnessDecision,
                 vectorReceipt,
                 generationReceipt,
                 navigationStatus,
                 preparedObservation,
             } = frontDoor;
+            const finalSourceObservation = this.getPreparedReadCacheObservation(effectiveRoot);
+            if (debugMode === 'full' && finalSourceObservation.unavailableReason) {
+                readinessDebug.observationUnavailableReason = finalSourceObservation.unavailableReason;
+            }
+            if (debugMode === 'full') {
+                const getPreparedReadDiagnostics = (
+                    this.syncManager as SyncManager & {
+                        getPreparedReadDiagnostics?: SyncManager['getPreparedReadDiagnostics'];
+                    }
+                ).getPreparedReadDiagnostics;
+                if (typeof getPreparedReadDiagnostics === 'function') {
+                    readinessDebug.watcher = getPreparedReadDiagnostics.call(
+                        this.syncManager,
+                        effectiveRoot,
+                    );
+                }
+            }
+            const sourceFreshnessWasEstablished = freshnessDecision.mode === 'synced'
+                || freshnessDecision.mode === 'reconciled_ignore_change';
+            const checkpointWarningAlreadyPresent = frontDoorWarnings.includes(
+                WARNING_CODES.SOURCE_FRESHNESS_CHECKPOINT_UNAVAILABLE,
+            );
+            const partialIndexSearchWarnings = !sourceFreshnessWasEstablished
+                && !checkpointWarningAlreadyPresent
+                && finalSourceObservation.unavailableReason
+                ? [...frontDoorWarnings, WARNING_CODES.SOURCE_FRESHNESS_UNVERIFIED]
+                : frontDoorWarnings;
 
             if (searchableRoot.path !== absolutePath) {
                 console.log(`[SEARCH] Auto-resolved subdirectory '${absolutePath}' to indexed root '${searchableRoot.path}'`);
@@ -2879,11 +3232,20 @@ export class ToolHandlers {
                 && generationReceipt.navigation.navigationSealHash
                 ? 'valid' as const
                 : 'unavailable' as const;
+            const preparedReadState: Extract<TrackedRootReadinessState, { state: 'ready' }> = {
+                state: 'ready',
+                root: searchableRoot,
+                proofDebugHint,
+                vectorReceipt,
+                generationReceipt,
+                navigationStatus,
+                preparedObservation,
+            };
             if (
                 preparedObservation
-                && this.getPreparedReadObservation(effectiveRoot) !== preparedObservation
+                && this.getPreparedAuthorityObservation(effectiveRoot) !== preparedObservation
             ) {
-                this.preparedReadCache.evict(effectiveRoot);
+                this.evictPreparedRead(effectiveRoot);
                 const payload = this.buildNotReadySearchPayload(effectiveRoot, {
                     path: absolutePath,
                     query: input.query,
@@ -2932,8 +3294,15 @@ export class ToolHandlers {
             }, {
                 searchQuerySupport: this.searchQuerySupport,
                 measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
-                loadRegistryManifest: (normalizedRootPath) => this.navigationStore.getManifest({ normalizedRootPath }),
-                loadRegistryValidatedCallGraphSidecar: (exactInput) => this.loadRegistryValidatedCallGraphSidecar(exactInput),
+                loadRegistryManifest: () => this.loadPreparedNavigationManifest(
+                    preparedReadState,
+                    readinessDebug.operations,
+                ),
+                loadRegistryValidatedCallGraphSidecar: (exactInput) => this.loadRegistryValidatedCallGraphSidecar({
+                    ...exactInput,
+                    preparedRead: preparedReadState,
+                    operations: readinessDebug.operations,
+                }),
                 buildChangedCodeDebug: (codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(codebaseRoot, changedFilesState),
                 buildGeneratedArtifactsVerificationHint: (codebaseRoot, results) => this.buildGeneratedArtifactsVerificationHint(codebaseRoot, results),
                 getSearchNavigationHelpers: () => this.getSearchNavigationHelpers(),
@@ -2946,15 +3315,7 @@ export class ToolHandlers {
 
             if (exactFastPath.kind === 'handled') {
                 await this.touchWatchedCodebaseBestEffort(effectiveRoot);
-                this.seedPreparedRead({
-                    state: 'ready',
-                    root: searchableRoot,
-                    proofDebugHint,
-                    vectorReceipt,
-                    generationReceipt,
-                    navigationStatus,
-                    preparedObservation,
-                }, preservePreparedProofAge);
+                this.seedPreparedRead(preparedReadState, preservePreparedProofAge);
                 return {
                     content: [{ type: "text", text: this.stringifyToolJson(exactFastPath.envelope) }],
                     meta: {
@@ -2972,9 +3333,9 @@ export class ToolHandlers {
 
             if (
                 preparedObservation
-                && this.getPreparedReadObservation(effectiveRoot) !== preparedObservation
+                && this.getPreparedAuthorityObservation(effectiveRoot) !== preparedObservation
             ) {
-                this.preparedReadCache.evict(effectiveRoot);
+                this.evictPreparedRead(effectiveRoot);
                 const payload = this.buildNotReadySearchPayload(effectiveRoot, {
                     path: absolutePath,
                     query: input.query,
@@ -3084,8 +3445,15 @@ export class ToolHandlers {
             }, {
                 searchQuerySupport: this.searchQuerySupport,
                 measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
-                loadRegistryManifest: (normalizedRootPath) => this.navigationStore.getManifest({ normalizedRootPath }),
-                loadRegistryValidatedCallGraphSidecar: (finalizationInput) => this.loadRegistryValidatedCallGraphSidecar(finalizationInput),
+                loadRegistryManifest: () => this.loadPreparedNavigationManifest(
+                    preparedReadState,
+                    readinessDebug.operations,
+                ),
+                loadRegistryValidatedCallGraphSidecar: (finalizationInput) => this.loadRegistryValidatedCallGraphSidecar({
+                    ...finalizationInput,
+                    preparedRead: preparedReadState,
+                    operations: readinessDebug.operations,
+                }),
                 buildRequiresReindexPayload: (codebasePath, detail, searchContext) => this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope,
                 buildChangedCodeDebug: (codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(codebaseRoot, changedFilesState),
                 buildGeneratedArtifactsVerificationHint: (codebaseRoot, results) => this.buildGeneratedArtifactsVerificationHint(codebaseRoot, results),
@@ -3096,15 +3464,7 @@ export class ToolHandlers {
             });
 
             await this.touchWatchedCodebaseBestEffort(effectiveRoot);
-            this.seedPreparedRead({
-                state: 'ready',
-                root: searchableRoot,
-                proofDebugHint,
-                vectorReceipt,
-                generationReceipt,
-                navigationStatus,
-                preparedObservation,
-            }, preservePreparedProofAge);
+            this.seedPreparedRead(preparedReadState, preservePreparedProofAge);
             return {
                 content: [{ type: "text", text: this.stringifyToolJson(envelope) }],
                 meta: { searchDiagnostics }

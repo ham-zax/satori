@@ -62,7 +62,10 @@ export type SearchFrontDoorHost = {
         >,
     ) => Promise<TrackedRootReadinessState>;
     getPreparedReadObservation?: (canonicalRoot: string) => string | null;
-    ensureSearchFreshness: (effectiveRoot: string) => Promise<FreshnessDecision>;
+    ensureSearchFreshness: (
+        effectiveRoot: string,
+        preparedRead?: Extract<TrackedRootReadinessState, { state: 'ready' }>,
+    ) => Promise<FreshnessDecision>;
     noteFreshnessMode: (mode: FreshnessDecision["mode"]) => void;
     buildInvalidSearchRequestPayload: (
         searchContext: SearchFrontDoorSearchContext,
@@ -127,6 +130,11 @@ function buildReadinessWarnings(
             ? ["NAVIGATION_REPAIR_REQUIRED"]
             : []),
     ];
+}
+
+function freshnessDecisionPreservesAuthority(decision: FreshnessDecision): boolean {
+    return decision.mode === 'skipped_recent'
+        || decision.mode === 'skipped_source_checkpoint_unavailable';
 }
 
 function buildBlockedReadinessPayload(
@@ -299,13 +307,16 @@ export async function runSearchFrontDoor(
     for (let freshnessAttempt = 0; freshnessAttempt < 2; freshnessAttempt += 1) {
         const freshnessRoot = effectiveRoot;
         const observationBeforeFreshness = host.getPreparedReadObservation?.(freshnessRoot) ?? null;
-        const freshnessDecision = await host.ensureSearchFreshness(freshnessRoot);
+        const freshnessDecision = await host.ensureSearchFreshness(
+            freshnessRoot,
+            trackedRootState.state === 'ready' ? trackedRootState : undefined,
+        );
         host.noteFreshnessMode(freshnessDecision.mode);
 
         const observationAfterFreshness = host.getPreparedReadObservation?.(freshnessRoot) ?? null;
         const canReuseInitialReadiness = freshnessAttempt === 0
             && trackedRootState.state === "ready"
-            && freshnessDecision.mode === "skipped_recent"
+            && freshnessDecisionPreservesAuthority(freshnessDecision)
             && observationBeforeFreshness !== null
             && trackedRootState.preparedObservation === observationBeforeFreshness
             && observationBeforeFreshness === observationAfterFreshness;
@@ -313,11 +324,11 @@ export async function runSearchFrontDoor(
             ? trackedRootState
             : await host.preparePostFreshnessTrackedRootRead(
                 absolutePath,
-                freshnessDecision.mode !== "skipped_recent"
-                    ? "freshness_changed"
-                    : observationBeforeFreshness === null
-                        ? "observation_unavailable"
-                        : "observation_changed",
+                observationBeforeFreshness === null
+                    ? "observation_unavailable"
+                    : observationBeforeFreshness !== observationAfterFreshness
+                        ? "observation_changed"
+                        : "freshness_changed",
             );
         const readinessBlockedPayload = buildBlockedReadinessPayload(postFreshnessRootState, searchContext, host);
         if (readinessBlockedPayload) {

@@ -190,6 +190,7 @@ class ContextMcpServer {
             readFileMaxLines: this.readFileMaxLines,
             watchSyncEnabled: this.watchSyncEnabled,
             watchDebounceMs: this.watchDebounceMs,
+            startSyncLifecycle: this.runMode === "mcp",
             callGraphManager: this.callGraphManager,
             runtimeOwnerGate: this.runtimeOwnerRegistry,
             mutationLeaseCoordinator: this.mutationLeaseCoordinator,

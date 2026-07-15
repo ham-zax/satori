@@ -1,12 +1,14 @@
 # Satori indexing-throughput investigation
 
-Status: provider batching and the sequential row-and-byte-bounded Milvus write
-path are accepted operationally. Generation `2822` proved the selected
-117-row/4-MiB policy with zero retries and complete authority; generation
-`2823` proved that 126 rows removes requests without improving wall time. The
-write-limit search is complete. Repository validation for the final default is
-in progress. The live discovery checks remain authority and transport smoke
-evidence rather than a semantic answer-quality benchmark.
+Status: provider batching, the sequential row-and-byte-bounded Milvus write
+path, and single-owner staged-collection preparation are accepted
+operationally. Generation `2822` proved the selected 117-row/4-MiB policy;
+generation `2823` proved that 126 rows removes requests without improving wall
+time; generation `2824` removed the redundant staged create/drop/create cycle
+with zero retries and complete authority. The write-limit search is complete.
+The remaining synchronous collection-limit probe and Voyage packing are the
+next measured opportunities. Live discovery checks remain authority and
+transport smoke evidence rather than a semantic answer-quality benchmark.
 
 ## Scope and invariants
 
@@ -561,25 +563,75 @@ provider-write time is 85.2% lower. That comparison is operational rather than
 a same-tree causal A/B because the corpus and instrumentation evolved. The
 117-versus-126 comparison above is the controlled same-corpus decision.
 
+### Single-owner collection-preparation result
+
+Generation `2824` tested removal of the background worker's redundant staged
+collection preparation. `Context.indexCodebase()` remains the sole mandatory
+full-rebuild preparation owner; the synchronous collection-limit probe remains
+unchanged. This preserves immediate limit diagnostics while removing only the
+fresh collection that the full-index owner immediately deleted and recreated.
+
+| Metric | Generation 2822 | Generation 2824 | Delta |
+| --- | ---: | ---: | ---: |
+| Context cold-rebuild wall time | 227.933s | 186.065s | -41.868s (-18.37%) |
+| Prepare collection | 41.550s | 0.401s | -41.149s (-99.03%) |
+| Payload pipeline | 177.185s | 176.210s | -0.975s |
+| Voyage provider time | 99.852s | 100.227s | +0.375s |
+| Vector provider time | 72.705s | 70.992s | -1.713s |
+| Finalize collection | 7.766s | 7.828s | +0.062s |
+| Provider writes | 89 | 88 | -1 |
+| Voyage retries | 0 | 0 | 0 |
+| Zilliz retries | 0 | 0 | 0 |
+
+Direct run identity and evidence:
+
+- operation `0945b7f6-1cdf-417e-9136-ce6016807327`, generation `2824`;
+- 400 files, 8,834 chunks, 1,806,461 provider tokens;
+- no log event dropped the newly selected staged collection before indexing;
+- final status `ok`, runtime and indexed fingerprints matched, registry evidence
+  was compatible, relationship evidence was compatible, and symbol quality was
+  `symbol_rich`;
+- no-change sync operation `d4ad8dab-ab5f-46a7-9a37-ad595d5c8452`, generation
+  `2825`, reported `added=0`, `removed=0`, and `modified=0`;
+- deterministic search-quality evaluation remained at owner@1 `0.947368`,
+  owner@3 `0.989474`, MRR `0.968421`, and role coverage `0.929474` with zero
+  harness failures. Its repository identity was HEAD
+  `08bbbd462d37a525a525760edb0bc5c102cca5d1`, tree
+  `8016225616179e57c8ddfe6b5e71cade8a60de4c`, diff SHA-256
+  `593582158c6c3ef20bfcfbed145116189ff254d79a1ba5aa488f6681f943084c`,
+  and working-tree content SHA-256
+  `c501fa24d4cfdc9905699468ed4ae80f6204810c86579f49115da75b817b175f`.
+
+Generation `2824` contains the required implementation edits and therefore has
+three more chunks than generation `2822`; it is not a byte-identical-corpus
+A/B. The phase attribution is nevertheless strong: preparation fell by
+41.149s while the complete run fell by 41.868s, and every other measured phase
+moved by less than two seconds. The frozen acceptance gates of at least 20
+seconds lower preparation time, at least 10% lower Context wall time, zero
+retries, and complete final authority all passed.
+
 ## Next measured opportunities
 
-### 1. Remove duplicate collection preparation if the runtime path proves it
+### 1. Replace the dummy collection-limit probe only with the actual staged collection
 
-Both successful final runs spent approximately 41.5 seconds in
-`prepareCollection`. Their logs show the staged collection being created,
-followed by the indexing owner dropping and recreating the same collection for
-force reindex. This is direct evidence of duplicated remote work, but not yet
-proof that the first create is non-gating: it may own the capability check or a
-failure-cleanup invariant.
+The accepted run still spent 43.415 seconds between the operation's accepted
+and scanning receipts. The log attributes most of that interval to
+`checkCollectionLimit()`, which creates and synchronously deletes a dummy
+collection before the background worker creates the real staged collection.
+The dummy cannot simply be removed: existing behavior promises an immediate,
+deterministic collection-limit error before background indexing is reported as
+started.
 
-Trace the create caller, the background-index handoff, the force-reindex
-branch, and the focused lifecycle tests. Accept a change only if one collection
-creation remains, unsupported-creation failures are still detected before
-publication, failed staging cleanup remains deterministic, and all mutation,
-authority, and navigation contracts stay green. Freeze the live performance
-gate before testing: at least 20 seconds lower preparation time and at least
-10% lower total cold-rebuild time on the same corpus, with zero retries and no
-finalization regression above 10 seconds.
+The smallest justified experiment is to prepare the real staged collection
+synchronously, return a one-shot generation-bound receipt, and require
+`Context.indexCodebase()` to validate and consume that receipt before skipping
+its own preparation. A forged, stale, mismatched, missing, or already-consumed
+receipt must fail closed. Failure before background handoff must clean the
+unproven staged collection without changing prior authority. Freeze the live
+gate before testing: at least 30 seconds lower accepted-to-scanning latency and
+at least 15% lower accepted-to-completed operator wall time, with zero retries,
+no Context phase regression above 10 seconds, and all mutation, cleanup,
+checkpoint, marker, navigation, and publication contracts green.
 
 ### 2. Re-evaluate Voyage packing with explicit token headroom
 
@@ -630,7 +682,8 @@ must remain green before any evidence is removed.
 | 135 rows / 4 MiB | Rejected for safety | A 135-row, 2,104,562-byte request exhausted all attempts. |
 | 117 rows / 4 MiB | Implemented and accepted operationally | Generation 2822 completed in 227.933s with 89 writes, zero retries, complete authority, and unchanged source checkpoint. Final repository validation is pending. |
 | 126 rows / 4 MiB | Rejected economically | It completed safely but was 61ms slower end to end and only 309ms faster in provider writes, while sitting closer to the 135-row failure cliff. |
-| Remove duplicate collection preparation | Next measured implementation candidate | Successful runs spent about 41.5s preparing and visibly created, dropped, and recreated the same staged collection. Runtime ownership must be proven before editing. |
+| Remove duplicate collection preparation | Implemented and accepted | Generation 2824 reduced preparation from 41.550s to 0.401s and Context wall time from 227.933s to 186.065s with zero retries, complete authority, and a zero-change sync. |
+| Replace dummy limit probe with the actual staged collection | Next measured implementation candidate | The accepted operation still spent 43.415s before scanning. Any replacement must preserve immediate collection-limit failure through a one-shot generation-bound prepared receipt. |
 | Increase Voyage target above 100k estimated tokens | Deferred measurement | Voyage is now the largest provider phase, but token headroom must be frozen before a live candidate. |
 | Coalesce writes across embedding boundaries | Rejected as an isolated optimization | Removing 12 writes at 126 rows produced no material time gain. |
 | Add concurrency or caches | Deferred | Sequential duplicate preparation and provider-token tuning remain smaller independent experiments. |

@@ -22,6 +22,10 @@ These are my preferences so we can stay aligned while we work.
 - Prefer the standard library and existing code. Ask before adding a dependency.
 - Comments should explain intent, invariants, or surprising constraints, not
   narrate obvious code.
+- When a defect or rejected design exposes a non-obvious operational trap,
+  leave a concise comment at the decision boundary explaining the invariant
+  and why the tempting alternative is unsafe or wasteful. Keep measurements
+  and experiment history in documentation rather than code comments.
 - Delete code made obsolete by the change rather than preserving speculative
   compatibility. Version control is the archive.
 - Avoid inventing tools, parameters, schemas, aliases, output shapes, or

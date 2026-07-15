@@ -1482,6 +1482,8 @@ export class ToolHandlers {
             'resolveCollectionName',
             'resolveStagedCollectionName',
             'setWriteCollectionOverride',
+            'prepareIndexCollection',
+            'discardPreparedIndexCollection',
             'getActiveIndexedCollectionName',
             'clearIndexCompletionMarker',
             'pruneIndexedCollectionFamily',

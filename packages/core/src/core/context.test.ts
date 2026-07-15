@@ -654,6 +654,170 @@ test('Context active collection resolution rejects runtime fingerprint mismatche
     }
 });
 
+async function withPreparedCollectionContext(
+    label: string,
+    work: (fixture: {
+        codebasePath: string;
+        context: Context;
+        vectorDatabase: InMemoryVectorDatabase;
+        stagedCollectionName: string;
+    }) => Promise<void>,
+): Promise<void> {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `satori-context-prepared-${label}-`));
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'owner.ts'), 'export const owner = true;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: path.join(tempRoot, 'state'),
+        });
+        const stagedCollectionName = context.resolveStagedCollectionName(codebasePath, `run_${label}`);
+        context.setWriteCollectionOverride(codebasePath, stagedCollectionName);
+        await work({ codebasePath, context, vectorDatabase, stagedCollectionName });
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+}
+
+test('Context prepared collection receipt avoids a second create/drop cycle and runs mutation guards', async () => {
+    await withPreparedCollectionContext('single-create', async ({
+        codebasePath,
+        context,
+        vectorDatabase,
+        stagedCollectionName,
+    }) => {
+        const events: string[] = [];
+        const createHybridCollection = vectorDatabase.createHybridCollection.bind(vectorDatabase);
+        vectorDatabase.createHybridCollection = async (collectionName) => {
+            events.push(`create:${collectionName}`);
+            await createHybridCollection(collectionName);
+        };
+        const hasCollection = vectorDatabase.hasCollection.bind(vectorDatabase);
+        vectorDatabase.hasCollection = async (collectionName) => {
+            events.push(`has:${collectionName}`);
+            return hasCollection(collectionName);
+        };
+        const dropCollection = vectorDatabase.dropCollection.bind(vectorDatabase);
+        vectorDatabase.dropCollection = async (collectionName) => {
+            events.push(`drop:${collectionName}`);
+            await dropCollection(collectionName);
+        };
+
+        const receipt = await context.prepareIndexCollection(
+            codebasePath,
+            { generation: 1, operationId: 'operation-single-create' },
+            () => events.push('guard'),
+        );
+        assert.deepEqual(events.slice(0, 5), [
+            'guard',
+            `has:${stagedCollectionName}`,
+            'guard',
+            `create:${stagedCollectionName}`,
+            'guard',
+        ]);
+
+        events.length = 0;
+        await context.indexCodebase(codebasePath, undefined, false, {
+            preparedCollectionReceipt: receipt,
+            preparedCollectionBinding: { generation: 1, operationId: 'operation-single-create' },
+            assertMutationCurrent: () => events.push('guard'),
+        });
+
+        assert.deepEqual(events.slice(0, 3), [
+            'guard',
+            `has:${stagedCollectionName}`,
+            'guard',
+        ]);
+        assert.equal(events.some((event) => event.startsWith('create:')), false);
+        assert.equal(events.some((event) => event.startsWith('drop:')), false);
+    });
+});
+
+test('Context prepared collection receipt is one-shot', async () => {
+    await withPreparedCollectionContext('one-shot', async ({ codebasePath, context }) => {
+        const receipt = await context.prepareIndexCollection(
+            codebasePath,
+            { generation: 1, operationId: 'operation-one-shot' },
+        );
+        await context.indexCodebase(codebasePath, undefined, false, {
+            preparedCollectionReceipt: receipt,
+            preparedCollectionBinding: { generation: 1, operationId: 'operation-one-shot' },
+        });
+
+        await assert.rejects(
+            () => context.indexCodebase(codebasePath, undefined, false, {
+                preparedCollectionReceipt: receipt,
+                preparedCollectionBinding: { generation: 1, operationId: 'operation-one-shot' },
+            }),
+            /receipt is unknown or already consumed/,
+        );
+    });
+});
+
+test('Context prepared collection receipt rejects a different staged collection', async () => {
+    await withPreparedCollectionContext('mismatch', async ({ codebasePath, context }) => {
+        const receipt = await context.prepareIndexCollection(
+            codebasePath,
+            { generation: 1, operationId: 'operation-mismatch' },
+        );
+        context.setWriteCollectionOverride(
+            codebasePath,
+            context.resolveStagedCollectionName(codebasePath, 'run_replacement'),
+        );
+
+        await assert.rejects(
+            () => context.indexCodebase(codebasePath, undefined, false, {
+                preparedCollectionReceipt: receipt,
+                preparedCollectionBinding: { generation: 1, operationId: 'operation-mismatch' },
+            }),
+            /does not match the current mutation and staged collection/,
+        );
+    });
+});
+
+test('Context prepared collection receipt rejects a stale mutation binding', async () => {
+    await withPreparedCollectionContext('stale', async ({ codebasePath, context }) => {
+        const receipt = await context.prepareIndexCollection(
+            codebasePath,
+            { generation: 1, operationId: 'operation-stale' },
+        );
+
+        await assert.rejects(
+            () => context.indexCodebase(codebasePath, undefined, false, {
+                preparedCollectionReceipt: receipt,
+                preparedCollectionBinding: { generation: 2, operationId: 'operation-replacement' },
+            }),
+            /does not match the current mutation and staged collection/,
+        );
+    });
+});
+
+test('Context prepared collection receipt rejects a deleted staged collection', async () => {
+    await withPreparedCollectionContext('deleted', async ({
+        codebasePath,
+        context,
+        vectorDatabase,
+        stagedCollectionName,
+    }) => {
+        const receipt = await context.prepareIndexCollection(
+            codebasePath,
+            { generation: 1, operationId: 'operation-deleted' },
+        );
+        await vectorDatabase.dropCollection(stagedCollectionName);
+
+        await assert.rejects(
+            () => context.indexCodebase(codebasePath, undefined, false, {
+                preparedCollectionReceipt: receipt,
+                preparedCollectionBinding: { generation: 1, operationId: 'operation-deleted' },
+            }),
+            /prepared staged collection .* no longer exists/i,
+        );
+    });
+});
+
 test('Context.indexCodebase replaces stale payload for deleted and zero-file repositories', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-full-reconcile-'));
     const stateRoot = path.join(tempRoot, 'state');

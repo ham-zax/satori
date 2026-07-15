@@ -77,6 +77,36 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     });
 }
 
+function preparedCollectionCapabilities() {
+    let writeCollectionOverride: string | null = null;
+    let preparedReceipt: object | null = null;
+    return {
+        setWriteCollectionOverride: (_codebasePath: string, collectionName: string | null) => {
+            writeCollectionOverride = collectionName;
+        },
+        prepareIndexCollection: async (
+            codebasePath: string,
+            binding: { generation: number; operationId: string },
+            assertMutationCurrent?: () => void,
+        ) => {
+            assertMutationCurrent?.();
+            assert.ok(writeCollectionOverride, 'Expected a staged write collection before preparation.');
+            preparedReceipt = Object.freeze({
+                canonicalRoot: path.resolve(codebasePath),
+                collectionName: writeCollectionOverride,
+                generation: binding.generation,
+                operationId: binding.operationId,
+            });
+            return preparedReceipt;
+        },
+        discardPreparedIndexCollection: (receipt: object) => {
+            if (receipt === preparedReceipt) {
+                preparedReceipt = null;
+            }
+        },
+    };
+}
+
 function withTempHome<T>(fn: (homeDir: string) => Promise<T> | T): Promise<T> | T {
     const prevHome = process.env.HOME;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-index-state-home-'));
@@ -1170,13 +1200,13 @@ test('handleIndexCodebase create proceeds when snapshot is indexed but completio
     await withTempRepo(async (repoPath) => {
         let startedBackgroundIndexing = false;
         const context = {
+            ...preparedCollectionCapabilities(),
             getVectorStore: () => ({
                 checkCollectionLimit: async () => true
             }),
             getIndexCompletionMarker: async () => null,
             resolveCollectionName: () => 'base_collection',
             resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
-            setWriteCollectionOverride: () => undefined,
             getActiveIndexedCollectionName: async () => null,
             clearIndexCompletionMarker: async () => undefined,
             pruneIndexedCollectionFamily: async () => [],
@@ -1227,9 +1257,9 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
         let saveCalls = 0;
 
         const context = {
+            ...preparedCollectionCapabilities(),
             resolveCollectionName: () => 'proven_collection',
             resolveStagedCollectionName: (_codebasePath: string, generationId: string) => `proven_collection__gen_${generationId}`,
-            setWriteCollectionOverride: () => undefined,
             pruneIndexedCollectionFamily: async () => [],
             pruneUnprovenStagedCollectionFamily: async () => [],
             getVectorStore: () => ({

@@ -30,6 +30,9 @@ type ToolHandlersWithManageIndexingHost = {
         };
     };
 };
+type ToolHandlersTestOverrides = {
+    startBackgroundIndexing: (codebasePath: string, forceReindex: boolean, writeCollectionName?: string) => void;
+};
 type IndexingInfo = { status: 'indexing'; indexingPercentage: number; lastUpdated: string };
 type IndexFailedInfo = { status: 'indexfailed'; errorMessage: string; lastAttemptedPercentage?: number; lastUpdated: string };
 type IndexedInfo = {
@@ -90,10 +93,34 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
 }
 
 function requiredContextMutationCapabilities() {
+    let writeCollectionOverride: string | null = null;
+    let preparedReceipt: object | null = null;
     return {
         resolveCollectionName: () => 'test_collection',
         resolveStagedCollectionName: (_codebasePath: string, generationId: string) => `test_collection__gen_${generationId}`,
-        setWriteCollectionOverride: () => undefined,
+        setWriteCollectionOverride: (_codebasePath: string, collectionName: string | null) => {
+            writeCollectionOverride = collectionName;
+        },
+        prepareIndexCollection: async (
+            codebasePath: string,
+            binding: { generation: number; operationId: string },
+            assertMutationCurrent?: () => void,
+        ) => {
+            assertMutationCurrent?.();
+            assert.ok(writeCollectionOverride, 'Expected a staged write collection before preparation.');
+            preparedReceipt = Object.freeze({
+                canonicalRoot: path.resolve(codebasePath),
+                collectionName: writeCollectionOverride,
+                generation: binding.generation,
+                operationId: binding.operationId,
+            });
+            return preparedReceipt;
+        },
+        discardPreparedIndexCollection: (receipt: object) => {
+            if (receipt === preparedReceipt) {
+                preparedReceipt = null;
+            }
+        },
         getActiveIndexedCollectionName: async () => null,
         clearIndexCompletionMarker: async () => undefined,
         pruneIndexedCollectionFamily: async () => [],
@@ -1103,9 +1130,10 @@ test('exclusive create lease supersedes recent abandoned indexing without waitin
             null,
             coordinator,
         );
+        (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = () => undefined;
 
         // After exclusive acquisition, recovery must run immediately (not wait 2 minutes).
-        // Kickoff may still fail later for other reasons; prove recovery side effects here.
+        // Stub the detached worker so this assertion measures recovery only.
         await handlers.handleIndexCodebase({ path: repoPath });
         assert.ok(markerCalls >= 1);
         assert.equal(failedCalls, 1);

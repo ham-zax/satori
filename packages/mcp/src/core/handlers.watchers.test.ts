@@ -65,6 +65,43 @@ function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     });
 }
 
+function createIndexMutationContext(): HandlerContext {
+    let writeCollectionOverride: string | null = null;
+    let preparedReceipt: object | null = null;
+    return {
+        getVectorStore: () => ({ checkCollectionLimit: async () => true }),
+        resolveCollectionName: () => 'base_collection',
+        resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
+        setWriteCollectionOverride: (_codebasePath: string, collectionName: string | null) => {
+            writeCollectionOverride = collectionName;
+        },
+        prepareIndexCollection: async (
+            codebasePath: string,
+            binding: { generation: number; operationId: string },
+            assertMutationCurrent?: () => void,
+        ) => {
+            assertMutationCurrent?.();
+            assert.ok(writeCollectionOverride, 'Expected a staged write collection before preparation.');
+            preparedReceipt = Object.freeze({
+                canonicalRoot: path.resolve(codebasePath),
+                collectionName: writeCollectionOverride,
+                generation: binding.generation,
+                operationId: binding.operationId,
+            });
+            return preparedReceipt;
+        },
+        discardPreparedIndexCollection: (receipt: object) => {
+            if (receipt === preparedReceipt) {
+                preparedReceipt = null;
+            }
+        },
+        getActiveIndexedCollectionName: async () => null,
+        clearIndexCompletionMarker: async () => undefined,
+        pruneIndexedCollectionFamily: async () => [],
+        pruneUnprovenStagedCollectionFamily: async () => [],
+    } as unknown as HandlerContext;
+}
+
 async function withTempStateRoot<T>(fn: (stateRoot: string) => Promise<T>): Promise<T> {
     const previousStateRoot = process.env.SATORI_STATE_ROOT;
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-watchers-state-'));
@@ -253,16 +290,7 @@ test('handleIndexCodebase touches the watch list when create starts successfully
     await withTempRepo(async (repoPath) => {
         const snapshot = createMutableSnapshot(repoPath, 'not_found');
         const watch = createWatchRecorder();
-        const context = {
-            getVectorStore: () => ({ checkCollectionLimit: async () => true }),
-            resolveCollectionName: () => 'base_collection',
-            resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
-            setWriteCollectionOverride: () => undefined,
-            getActiveIndexedCollectionName: async () => null,
-            clearIndexCompletionMarker: async () => undefined,
-            pruneIndexedCollectionFamily: async () => [],
-            pruneUnprovenStagedCollectionFamily: async () => [],
-        } as unknown as HandlerContext;
+        const context = createIndexMutationContext();
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         (handlers as unknown as ToolHandlersTestOverrides).startBackgroundIndexing = () => undefined;
@@ -280,16 +308,7 @@ test('handleReindexCodebase touches the watch list when reindex starts successfu
     await withTempRepo(async (repoPath) => {
         const snapshot = createMutableSnapshot(repoPath, 'indexed');
         const watch = createWatchRecorder();
-        const context = {
-            getVectorStore: () => ({ checkCollectionLimit: async () => true }),
-            resolveCollectionName: () => 'base_collection',
-            resolveStagedCollectionName: (_path: string, generation: string) => `base_collection__gen_${generation}`,
-            setWriteCollectionOverride: () => undefined,
-            getActiveIndexedCollectionName: async () => null,
-            clearIndexCompletionMarker: async () => undefined,
-            pruneIndexedCollectionFamily: async () => [],
-            pruneUnprovenStagedCollectionFamily: async () => [],
-        } as unknown as HandlerContext;
+        const context = createIndexMutationContext();
 
         const handlers = new ToolHandlers(context, snapshot, watch.syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
         const overrides = handlers as unknown as ToolHandlersTestOverrides;

@@ -10,6 +10,7 @@ import {
 } from "@zokizuan/satori-core";
 import type {
     CustomIndexPolicyUpdate,
+    PreparedIndexCollectionReceipt,
     RepairProof,
     RepairSnapshotEvidence,
     ResolvedIndexPolicy,
@@ -116,6 +117,7 @@ type ManageIndexingHandlersHost = {
         mutationLease?: RootMutationLease,
         previousIndexedInfo?: Record<string, unknown>,
         policyUpdate?: CustomIndexPolicyUpdate,
+        preparedCollectionReceipt?: PreparedIndexCollectionReceipt,
     ) => Promise<void> | void;
     manageResponse(
         action: ManageIndexAction | "reindex",
@@ -376,6 +378,8 @@ export class ManageIndexingHandlers {
         let lastDurableOperation: IndexOperationReceipt | undefined;
         let canonicalRoot = preparedCanonicalRoot;
         let existingInfo: Record<string, unknown> | undefined;
+        let stagedCollectionName: string | undefined;
+        let preparedCollectionReceipt: PreparedIndexCollectionReceipt | undefined;
         const transitionOperation = (phase: IndexOperationPhase, mutateSnapshot?: () => void) => {
             if (!mutationLease || typeof this.host.snapshotManager.transitionOperation !== "function") {
                 mutateSnapshot?.();
@@ -691,7 +695,7 @@ export class ManageIndexingHandlers {
                     : `\nDropped Zilliz collection '${requestedDropCollection}'.`;
             }
 
-            const stagedCollectionName = this.host.resolveStagedCollectionName(absolutePath, `run_${crypto.randomUUID()}`);
+            stagedCollectionName = this.host.resolveStagedCollectionName(absolutePath, `run_${crypto.randomUUID()}`);
 
             try {
                 const prunedStagedCollections = await this.host.pruneUnprovenStagedCollectionFamily(
@@ -705,17 +709,48 @@ export class ManageIndexingHandlers {
                 }
 
                 console.log("[INDEX-VALIDATION] 🔍 Validating collection creation capability");
-                const canCreateCollection = await this.host.context.getVectorStore().checkCollectionLimit();
-
-                if (!canCreateCollection) {
-                    console.error(`[INDEX-VALIDATION] ❌ Collection limit validation failed: ${absolutePath}`);
-                    const guidanceMessage = await this.host.buildCollectionLimitMessage(absolutePath);
-                    return this.host.manageResponse(manageAction, absolutePath, "error", guidanceMessage, operationOptions("failed", preflightOptions));
+                if (mutationLease) {
+                    // Use the real staged collection as the capability probe. A
+                    // dummy create/delete adds remote deletion latency and still
+                    // leaves the actual schema creation unproven. Context issues
+                    // a one-shot generation-bound receipt for the background
+                    // owner to consume before it may skip preparation.
+                    this.host.setWriteCollectionOverride(absolutePath, stagedCollectionName);
+                    preparedCollectionReceipt = await this.host.context.prepareIndexCollection(
+                        absolutePath,
+                        {
+                            generation: mutationLease.generation,
+                            operationId: mutationLease.operationId,
+                        },
+                        () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!),
+                    );
+                } else {
+                    // Compatibility path for hosts that do not provide mutation
+                    // leases. They cannot safely transfer a generation-bound
+                    // prepared receipt, so retain the existing immediate probe.
+                    const canCreateCollection = await this.host.context.getVectorStore().checkCollectionLimit();
+                    if (!canCreateCollection) {
+                        console.error(`[INDEX-VALIDATION] ❌ Collection limit validation failed: ${absolutePath}`);
+                        const guidanceMessage = await this.host.buildCollectionLimitMessage(absolutePath);
+                        return this.host.manageResponse(manageAction, absolutePath, "error", guidanceMessage, operationOptions("failed", preflightOptions));
+                    }
                 }
 
                 console.log("[INDEX-VALIDATION] ✅  Collection creation validation completed");
             } catch (validationError: unknown) {
                 console.error("[INDEX-VALIDATION] ❌ Collection creation validation failed:", validationError);
+                if (preparedCollectionReceipt) {
+                    this.host.context.discardPreparedIndexCollection(preparedCollectionReceipt);
+                    preparedCollectionReceipt = undefined;
+                }
+                if (mutationLease && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease)) {
+                    await this.cleanupFailedStagedCollection(
+                        absolutePath,
+                        stagedCollectionName,
+                        () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!),
+                    );
+                }
+                this.host.setWriteCollectionOverride(absolutePath, null);
                 if (isCollectionLimitError(validationError)) {
                     const guidanceMessage = await this.host.buildCollectionLimitMessage(absolutePath);
                     return this.host.manageResponse(manageAction, absolutePath, "error", guidanceMessage, operationOptions("failed", preflightOptions));
@@ -800,6 +835,7 @@ export class ManageIndexingHandlers {
                 mutationLease,
                 existingInfo,
                 policyUpdate,
+                preparedCollectionReceipt,
             );
             leaseTransferred = mutationLease !== undefined;
             const launchedLease = mutationLease;
@@ -849,6 +885,24 @@ export class ManageIndexingHandlers {
         } catch (error: unknown) {
             console.error("Error in handleIndexCodebase:", error);
             const failurePath = canonicalRoot ?? absolutePathOrRaw(codebasePath);
+            if (preparedCollectionReceipt) {
+                this.host.context.discardPreparedIndexCollection(preparedCollectionReceipt);
+                preparedCollectionReceipt = undefined;
+            }
+            if (
+                mutationLease
+                && !leaseTransferred
+                && this.host.mutationLeaseCoordinator?.isCurrent(mutationLease)
+            ) {
+                await this.cleanupFailedStagedCollection(
+                    failurePath,
+                    stagedCollectionName,
+                    () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!),
+                );
+                if (this.host.mutationLeaseCoordinator?.isCurrent(mutationLease)) {
+                    this.host.setWriteCollectionOverride(failurePath, null);
+                }
+            }
             const previousFingerprint = parseIndexFingerprint(existingInfo?.indexFingerprint);
             const previousCollectionName = typeof existingInfo?.collectionName === "string"
                 ? existingInfo.collectionName.trim()
@@ -1322,6 +1376,7 @@ export class ManageIndexingHandlers {
         mutationLease?: RootMutationLease,
         previousIndexedInfo?: Record<string, unknown>,
         policyUpdate: CustomIndexPolicyUpdate = {},
+        preparedCollectionReceipt?: PreparedIndexCollectionReceipt,
     ): Promise<void> {
         const absolutePath = codebasePath;
         let lastSaveTime = 0;
@@ -1507,6 +1562,9 @@ export class ManageIndexingHandlers {
             // owner delete the fresh collection before recreating the same
             // schema, adding remote deletion latency without strengthening the
             // mutation fence or staged-publication contract.
+            if (preparedCollectionReceipt && !mutationLease) {
+                throw new Error('Prepared index collection receipt requires its mutation lease.');
+            }
             const stats = await this.host.context.indexCodebase(absolutePath, (progress) => {
                 if (mutationLease) {
                     this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);
@@ -1531,6 +1589,13 @@ export class ManageIndexingHandlers {
                 publishMutation,
                 deferFullIndexPublication: true,
                 indexPolicy: candidatePolicy,
+                ...(preparedCollectionReceipt && mutationLease ? {
+                    preparedCollectionReceipt,
+                    preparedCollectionBinding: {
+                        generation: mutationLease.generation,
+                        operationId: mutationLease.operationId,
+                    },
+                } : {}),
             });
             navigationCandidate = stats.navigationCandidate;
             publishedIndexStats = {
@@ -1861,6 +1926,9 @@ export class ManageIndexingHandlers {
                         `[BACKGROUND-INDEX] Failed to remove unreferenced candidate checkpoint for '${absolutePath}': ${formatUnknownError(checkpointCleanupError)}`,
                     );
                 }
+            }
+            if (preparedCollectionReceipt) {
+                this.host.context.discardPreparedIndexCollection(preparedCollectionReceipt);
             }
             try {
                 await this.cleanupFailedStagedCollection(absolutePath, targetCollectionName, assertMutationCurrent);

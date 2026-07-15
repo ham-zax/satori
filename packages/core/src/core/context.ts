@@ -548,7 +548,19 @@ type MutationGuardOptions = {
     publishMutation?: (publish: () => void) => void;
     deferFullIndexPublication?: boolean;
     indexPolicy?: ResolvedIndexPolicy;
+    preparedCollectionReceipt?: PreparedIndexCollectionReceipt;
+    preparedCollectionBinding?: PreparedIndexCollectionBinding;
 };
+
+export type PreparedIndexCollectionBinding = Readonly<{
+    generation: number;
+    operationId: string;
+}>;
+
+export type PreparedIndexCollectionReceipt = Readonly<PreparedIndexCollectionBinding & {
+    canonicalRoot: string;
+    collectionName: string;
+}>;
 
 export type IndexCodebaseResult = {
     indexedFiles: number;
@@ -617,6 +629,7 @@ export class Context {
     private synchronizerMutationTargets = new Map<string, string>();
     private reindexByChangeQueues = new Map<string, Promise<void>>();
     private writeCollectionOverrides = new Map<string, string>();
+    private preparedIndexCollectionReceipts = new WeakSet<PreparedIndexCollectionReceipt>();
     private symbolRegistryStateRoot?: string;
 
     constructor(config: ContextConfig = {}) {
@@ -1357,6 +1370,49 @@ export class Context {
         this.writeCollectionOverrides.set(canonicalRoot, collectionName.trim());
     }
 
+    /**
+     * Prepare the real staged collection before a background full rebuild is
+     * reported as started. The returned object is process-local, one-shot, and
+     * bound to the mutation generation so a stale or forged receipt cannot
+     * suppress mandatory collection preparation in indexCodebase().
+     */
+    public async prepareIndexCollection(
+        codebasePath: string,
+        binding: PreparedIndexCollectionBinding,
+        assertMutationCurrent?: () => void,
+    ): Promise<PreparedIndexCollectionReceipt> {
+        if (!Number.isSafeInteger(binding.generation) || binding.generation < 1) {
+            throw new Error('Prepared index collection generation must be a positive safe integer.');
+        }
+        if (typeof binding.operationId !== 'string' || binding.operationId.trim().length === 0) {
+            throw new Error('Prepared index collection operationId must be a non-empty string.');
+        }
+
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const collectionName = this.getWriteCollectionName(canonicalRoot);
+        const stagedPrefix = `${this.resolveCollectionName(canonicalRoot)}__gen_`;
+        if (!collectionName.startsWith(stagedPrefix)) {
+            throw new Error(`Prepared index collection '${collectionName}' is not a staged generation for '${canonicalRoot}'.`);
+        }
+
+        assertMutationCurrent?.();
+        await this.prepareCollection(canonicalRoot, true, assertMutationCurrent);
+        assertMutationCurrent?.();
+
+        const receipt = Object.freeze({
+            canonicalRoot,
+            collectionName,
+            generation: binding.generation,
+            operationId: binding.operationId.trim(),
+        });
+        this.preparedIndexCollectionReceipts.add(receipt);
+        return receipt;
+    }
+
+    public discardPreparedIndexCollection(receipt: PreparedIndexCollectionReceipt): void {
+        this.preparedIndexCollectionReceipts.delete(receipt);
+    }
+
     public async getActiveIndexedCollectionName(codebasePath: string): Promise<string | null> {
         const proven = await this.proveIndexedGeneration(codebasePath);
         return proven?.collectionName ?? null;
@@ -2005,7 +2061,21 @@ export class Context {
         // an old completion marker. Do not query it to clear one: hybrid rebuilds keep
         // this collection deliberately indexless until all payload writes are complete.
         const prepareStartedAt = Date.now();
-        await this.prepareCollection(codebasePath, true, options.assertMutationCurrent);
+        if (options.preparedCollectionReceipt) {
+            if (!options.preparedCollectionBinding) {
+                throw new Error('Prepared index collection binding is required with its receipt.');
+            }
+            await this.consumePreparedIndexCollection(
+                codebasePath,
+                options.preparedCollectionReceipt,
+                options.preparedCollectionBinding,
+                options.assertMutationCurrent,
+            );
+        } else if (options.preparedCollectionBinding) {
+            throw new Error('Prepared index collection receipt is required with its binding.');
+        } else {
+            await this.prepareCollection(codebasePath, true, options.assertMutationCurrent);
+        }
         prepareCollectionMs = Date.now() - prepareStartedAt;
 
         // 3. Recursively traverse codebase to get all supported files
@@ -4175,6 +4245,37 @@ export class Context {
         }
 
         console.log(`[Context] ✅ Collection ${collectionName} created successfully (dimension: ${dimension})`);
+    }
+
+    private async consumePreparedIndexCollection(
+        codebasePath: string,
+        receipt: PreparedIndexCollectionReceipt,
+        expectedBinding: PreparedIndexCollectionBinding,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
+        // WeakSet membership is the capability boundary. Matching strings are
+        // insufficient because a caller could otherwise forge a receipt and
+        // skip schema creation for a stale or unrelated collection.
+        if (!this.preparedIndexCollectionReceipts.delete(receipt)) {
+            throw new Error('Prepared index collection receipt is unknown or already consumed.');
+        }
+
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const expectedCollectionName = this.getWriteCollectionName(canonicalRoot);
+        if (
+            receipt.canonicalRoot !== canonicalRoot
+            || receipt.collectionName !== expectedCollectionName
+            || receipt.generation !== expectedBinding.generation
+            || receipt.operationId !== expectedBinding.operationId
+        ) {
+            throw new Error('Prepared index collection receipt does not match the current mutation and staged collection.');
+        }
+
+        assertMutationCurrent?.();
+        if (!await this.vectorDatabase.hasCollection(receipt.collectionName)) {
+            throw new Error(`Prepared staged collection '${receipt.collectionName}' no longer exists.`);
+        }
+        assertMutationCurrent?.();
     }
 
     private async finalizePreparedCollection(

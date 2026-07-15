@@ -59,6 +59,8 @@ function createHandlers(
     }
 ): ToolHandlers {
     const status = options?.status || 'indexed';
+    let writeCollectionOverride: string | null = null;
+    let preparedReceipt: object | null = null;
     const vectorStore = {
         checkCollectionLimit: async () => true,
         listCollections: async () => [],
@@ -76,7 +78,29 @@ function createHandlers(
         },
         resolveStagedCollectionName: (codebasePath: string, generation: string) =>
             `${Buffer.from(path.resolve(codebasePath)).toString('hex').slice(0, 8)}__gen_${generation}`,
-        setWriteCollectionOverride: () => undefined,
+        setWriteCollectionOverride: (_codebasePath: string, collectionName: string | null) => {
+            writeCollectionOverride = collectionName;
+        },
+        prepareIndexCollection: async (
+            codebasePath: string,
+            binding: { generation: number; operationId: string },
+            assertMutationCurrent?: () => void,
+        ) => {
+            assertMutationCurrent?.();
+            assert.ok(writeCollectionOverride, 'Expected a staged write collection before preparation.');
+            preparedReceipt = Object.freeze({
+                canonicalRoot: path.resolve(codebasePath),
+                collectionName: writeCollectionOverride,
+                generation: binding.generation,
+                operationId: binding.operationId,
+            });
+            return preparedReceipt;
+        },
+        discardPreparedIndexCollection: (receipt: object) => {
+            if (receipt === preparedReceipt) {
+                preparedReceipt = null;
+            }
+        },
         getActiveIndexedCollectionName: async () => null,
         clearIndexCompletionMarker: async () => undefined,
         pruneIndexedCollectionFamily: async () => [],

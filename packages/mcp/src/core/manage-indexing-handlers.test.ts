@@ -712,13 +712,43 @@ function createIndexLaunchHarness(
     let failedCalls = 0;
     let saveCalls = 0;
     let canonicalizeCalls = 0;
+    let writeCollectionOverride: string | null = null;
+    let preparedReceipt: object | null = null;
     const launchedRoots: string[] = [];
     const failedRoots: string[] = [];
     const ownerCheckedRoots: string[] = [];
     const preflightRoots: string[] = [];
     const handler = new ManageIndexingHandlers({
         context: {
-            getVectorStore: () => ({ checkCollectionLimit: async () => true }),
+            getVectorStore: () => ({
+                checkCollectionLimit: async () => true,
+                hasCollection: async () => writeCollectionOverride !== null,
+                dropCollection: async () => {
+                    writeCollectionOverride = null;
+                },
+            }),
+            prepareIndexCollection: async (
+                codebasePath: string,
+                binding: { generation: number; operationId: string },
+                assertMutationCurrent?: () => void,
+            ) => {
+                assertMutationCurrent?.();
+                if (!writeCollectionOverride) {
+                    throw new Error('Test harness has no staged write collection.');
+                }
+                preparedReceipt = Object.freeze({
+                    canonicalRoot: path.resolve(codebasePath),
+                    collectionName: writeCollectionOverride,
+                    generation: binding.generation,
+                    operationId: binding.operationId,
+                });
+                return preparedReceipt;
+            },
+            discardPreparedIndexCollection: (receipt: object) => {
+                if (receipt === preparedReceipt) {
+                    preparedReceipt = null;
+                }
+            },
             resolveProvenGeneration: async () => options.initialIndexed ? {
                 collectionName: resolveCollectionName(repoPath),
                 marker: buildMarker(repoPath, {
@@ -801,7 +831,9 @@ function createIndexLaunchHarness(
             saveCalls += 1;
         },
         touchWatchedCodebase: options.touchWatchedCodebase ?? (async () => undefined),
-        setWriteCollectionOverride: () => undefined,
+        setWriteCollectionOverride: (_codebasePath: string, collectionName: string | null) => {
+            writeCollectionOverride = collectionName;
+        },
         loadIndexProfileForCodebase: () => ({ profile: "default" }),
         getContextActiveIgnorePatterns: () => [],
         getContextIndexedExtensions: () => [".ts"],
@@ -840,8 +872,14 @@ function createIndexLaunchHarness(
         },
         ownerCheckedRoots,
         preflightRoots,
+        get preparedReceipt() {
+            return preparedReceipt;
+        },
         get saveCalls() {
             return saveCalls;
+        },
+        get writeCollectionOverride() {
+            return writeCollectionOverride;
         },
     };
 }
@@ -989,6 +1027,8 @@ test("handleIndexCodebase foreground failure after indexing publication becomes 
         assert.equal(harness.failedCalls, 1);
         assert.equal(harness.saveCalls, 2);
         assert.equal(harness.launchedRoots.length, 0);
+        assert.equal(harness.preparedReceipt, null);
+        assert.equal(harness.writeCollectionOverride, null);
         assert.equal(harness.coordinator.getActiveLease(repoPath), undefined);
     });
 });

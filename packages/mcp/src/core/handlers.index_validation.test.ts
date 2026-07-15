@@ -51,6 +51,7 @@ interface ValidationHarnessOptions {
     dropCollectionImpl?: (collectionName: string) => Promise<void>;
     resolveCollectionNameImpl?: (codebasePath: string) => string;
     omitStagedCollectionResolver?: boolean;
+    omitPreparedCollectionCapability?: 'prepareIndexCollection' | 'discardPreparedIndexCollection';
     mutationLeaseCoordinator?: MutationLeaseCoordinator;
     operationReceipts?: boolean;
 }
@@ -81,8 +82,11 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
     const snapshotEvents = { removed: [] as string[], indexing: [] as string[], phases: [] as string[], saved: 0 };
     const backendProvider = options.backendProvider || 'milvus';
     const collectionDetails = options.collectionDetails || [];
+    const liveCollections = new Set(collectionDetails.map((detail) => detail.name));
     const metadataByCollection = options.metadataByCollection || {};
     const snapshotCodebases = options.snapshotCodebases || [];
+    let writeCollectionOverride: string | null = null;
+    let preparedReceipt: object | null = null;
 
     const vectorStore = {
         checkCollectionLimit: options.checkCollectionLimitImpl,
@@ -102,10 +106,11 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
             if (options.hasCollectionImpl) {
                 return options.hasCollectionImpl(collectionName);
             }
-            return collectionDetails.some((detail) => detail.name === collectionName);
+            return liveCollections.has(collectionName);
         },
         dropCollection: async (collectionName: string) => {
             droppedCollections.push(collectionName);
+            liveCollections.delete(collectionName);
             if (options.dropCollectionImpl) {
                 await options.dropCollectionImpl(collectionName);
             }
@@ -123,7 +128,36 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         resolveCollectionName: options.resolveCollectionNameImpl || resolveCollectionName,
         pruneUnprovenStagedCollectionFamily: options.pruneUnprovenStagedCollectionFamilyImpl || (async () => []),
         pruneIndexedCollectionFamily: async () => [],
-        setWriteCollectionOverride: () => undefined,
+        setWriteCollectionOverride: (_codebasePath: string, collectionName: string | null) => {
+            writeCollectionOverride = collectionName;
+        },
+        ...(options.omitPreparedCollectionCapability !== 'prepareIndexCollection' ? { prepareIndexCollection: async (
+            codebasePath: string,
+            binding: { generation: number; operationId: string },
+            assertMutationCurrent?: () => void,
+        ) => {
+            assertMutationCurrent?.();
+            if (!await options.checkCollectionLimitImpl()) {
+                throw new Error(COLLECTION_LIMIT_MESSAGE);
+            }
+            assertMutationCurrent?.();
+            if (!writeCollectionOverride) {
+                throw new Error('Test harness has no staged write collection.');
+            }
+            liveCollections.add(writeCollectionOverride);
+            preparedReceipt = Object.freeze({
+                canonicalRoot: path.resolve(codebasePath),
+                collectionName: writeCollectionOverride,
+                generation: binding.generation,
+                operationId: binding.operationId,
+            });
+            return preparedReceipt;
+        } } : {}),
+        ...(options.omitPreparedCollectionCapability !== 'discardPreparedIndexCollection' ? { discardPreparedIndexCollection: (receipt: object) => {
+            if (receipt === preparedReceipt) {
+                preparedReceipt = null;
+            }
+        } } : {}),
         getActiveIndexedCollectionName: async () => null,
         clearIndexCompletionMarker: async () => undefined,
         ...(!options.omitStagedCollectionResolver ? {
@@ -740,6 +774,28 @@ test('handleIndexCodebase fails closed when the staged collection resolver is ab
         assert.match(envelope.humanText, /missing required mutation capability: Context\.resolveStagedCollectionName/i);
         assert.equal(startedArgs, null);
     });
+});
+
+test('handleIndexCodebase fails closed when prepared-collection capabilities are absent', async (t) => {
+    for (const capability of ['prepareIndexCollection', 'discardPreparedIndexCollection'] as const) {
+        await t.test(capability, async () => {
+            await withTempRepo(async (repoPath) => {
+                const { handlers } = createHandlersForValidation({
+                    backendProvider: 'zilliz',
+                    checkCollectionLimitImpl: async () => true,
+                    omitPreparedCollectionCapability: capability,
+                });
+
+                const response = await handlers.handleIndexCodebase({ path: repoPath, force: true });
+                const envelope = parseManageEnvelope(response);
+                assert.equal(envelope.status, 'error');
+                assert.match(
+                    envelope.humanText,
+                    new RegExp(`missing required mutation capability: Context\\.${capability}`, 'i'),
+                );
+            });
+        });
+    }
 });
 
 test('handleIndexCodebase force reindex does not attempt remote cleanup before staged kickoff', async () => {

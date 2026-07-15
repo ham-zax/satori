@@ -17,15 +17,7 @@
         "resolveJsonModule": true,
         "allowSyntheticDefaultImports": true,
         "incremental": true,
-        "tsBuildInfoFile": ".tsbuildinfo",
-        "paths": {
-            "@zokizuan/satori-core": [
-                "./packages/core/src"
-            ],
-            "@zokizuan/satori-core/*": [
-                "./packages/core/src/*"
-            ]
-        }
+        "tsBuildInfoFile": ".tsbuildinfo"
     },
     "references": [
         {

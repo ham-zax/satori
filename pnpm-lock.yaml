@@ -46,6 +46,9 @@ importers:
       stream-http:
         specifier: ^3.2.0
         version: 3.2.0
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

@@ -105,7 +105,7 @@ export type CollectionCreateOptions = {
     deferIndexBuild?: boolean;
 };
 
-export type VectorWriteFlushReason = 'row_limit' | 'logical_write_end' | 'retry';
+export type VectorWriteFlushReason = 'row_limit' | 'byte_limit' | 'logical_write_end' | 'retry';
 
 export type VectorWriteAttemptSample = {
     sequence: number;
@@ -121,6 +121,7 @@ export type VectorWriteMetricsSnapshot = {
     submittedBytes: number;
     durationMs: number;
     rowLimit: number;
+    byteLimit: number | null;
     recentAttempts: readonly VectorWriteAttemptSample[];
 };
 

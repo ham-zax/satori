@@ -116,6 +116,8 @@ test('Milvus gRPC bounds database writes without replaying completed sub-batches
     };
     const target = {
         writeClient: null as typeof client | null,
+        writeBatchMaxRows: 100,
+        writeBatchMaxBytes: null,
         ensureInitialized: async () => undefined,
         createWriteClient: () => client,
         discardWriteClient: async () => {
@@ -145,6 +147,7 @@ test('Milvus gRPC bounds database writes without replaying completed sub-batches
     assert.equal(metrics.submittedBytes, [rows.slice(0, 100), rows.slice(100, 200), rows.slice(200)]
         .reduce((total, batch) => total + Buffer.byteLength(JSON.stringify(batch), 'utf8'), 0));
     assert.equal(metrics.rowLimit, 100);
+    assert.equal(metrics.byteLimit, null);
     assert.deepEqual(metrics.recentAttempts.map((attempt) => ({
         sequence: attempt.sequence,
         rows: attempt.rows,
@@ -160,6 +163,57 @@ test('Milvus gRPC bounds database writes without replaying completed sub-batches
         Buffer.byteLength(JSON.stringify(rows.slice(200)), 'utf8'),
     ]);
     assert.ok(metrics.durationMs >= 0);
+});
+
+test('Milvus gRPC deterministically bounds writes by serialized bytes before the row ceiling', async () => {
+    const writtenBatches: Array<Array<{ id: string; content: string }>> = [];
+    const client = {
+        upsert: async (request: { data: Array<{ id: string; content: string }> }) => {
+            writtenBatches.push(request.data);
+        },
+        closeConnection: async () => undefined,
+    };
+    const rows = Array.from({ length: 5 }, (_, index) => ({
+        id: `chunk-${index}`,
+        content: `${index}`.repeat(20),
+    }));
+    const maxBytes = Buffer.byteLength(JSON.stringify(rows.slice(0, 2)), 'utf8');
+    const target = {
+        writeClient: null as typeof client | null,
+        writeBatchMaxRows: 1_000,
+        writeBatchMaxBytes: maxBytes,
+        ensureInitialized: async () => undefined,
+        createWriteClient: () => client,
+        discardWriteClient: async () => {
+            throw new Error('healthy client must not be discarded');
+        },
+    };
+    const upsertDocuments = (
+        MilvusVectorDatabase.prototype as unknown as {
+            upsertDocuments(
+                collectionName: string,
+                data: Array<{ id: string; content: string }>,
+            ): Promise<void>;
+        }
+    ).upsertDocuments;
+
+    await upsertDocuments.call(target, 'collection-v1', rows);
+
+    assert.deepEqual(writtenBatches.map((batch) => batch.length), [2, 2, 1]);
+    assert.deepEqual(writtenBatches.flat(), rows);
+    assert.ok(writtenBatches.every((batch) => (
+        Buffer.byteLength(JSON.stringify(batch), 'utf8') <= maxBytes
+    )));
+    const metrics = MilvusVectorDatabase.prototype.getWriteMetricsSnapshot.call(
+        target as unknown as MilvusVectorDatabase,
+    );
+    assert.equal(metrics.rowLimit, 1_000);
+    assert.equal(metrics.byteLimit, maxBytes);
+    assert.deepEqual(metrics.recentAttempts.map((attempt) => attempt.flushReason), [
+        'byte_limit',
+        'byte_limit',
+        'logical_write_end',
+    ]);
 });
 
 test('Milvus gRPC does not retain a failed client after retry exhaustion', async () => {

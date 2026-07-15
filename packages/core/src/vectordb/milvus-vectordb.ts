@@ -30,6 +30,7 @@ import {
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
 import { buildMilvusIdInFilter } from './filters';
+import { envManager } from '../utils/env-manager';
 
 type MilvusResultRow = {
     id?: unknown;
@@ -57,7 +58,16 @@ const REMOTE_COLLECTION_DELETE_TIMEOUT_MS = 120_000;
 // Bound the database mutation independently from embedding batches so a large
 // provider-efficient embedding request does not become one oversized gRPC
 // write. This ceiling is intentionally measured and tuned at the write owner.
-const MILVUS_WRITE_BATCH_SIZE = 100;
+// Same-corpus live runs completed without retries at 117 and 126 rows, while
+// 135 rows exhausted fresh-client recovery. The 126-row run saved no wall time,
+// so retain the wider reliability margin instead of defaulting near the cliff.
+// Higher environment overrides are for controlled experiments, not a claim of
+// provider-safe operation.
+const DEFAULT_MILVUS_WRITE_MAX_ROWS = 117;
+const HARD_MILVUS_WRITE_MAX_ROWS = 1_000;
+const MIN_MILVUS_WRITE_MAX_BYTES = 64 * 1024;
+const DEFAULT_MILVUS_WRITE_MAX_BYTES = 4 * 1024 * 1024;
+const HARD_MILVUS_WRITE_MAX_BYTES = 32 * 1024 * 1024;
 const MILVUS_WRITE_MAX_ATTEMPTS = 3;
 const MILVUS_WRITE_RETRY_DELAY_MS = 250;
 // Retain enough scalar-only attempt samples to derive exact request-size
@@ -65,6 +75,97 @@ const MILVUS_WRITE_RETRY_DELAY_MS = 250;
 // an unbounded telemetry buffer. A summary reports when this window is too
 // small for an operation, so truncated evidence cannot be mistaken for exact.
 const MILVUS_WRITE_ATTEMPT_SAMPLE_LIMIT = 4_096;
+
+type MilvusWriteBatch = {
+    data: RowData[];
+    serializedBytes: number;
+    flushReason: Exclude<VectorWriteFlushReason, 'retry'>;
+};
+
+function resolveBoundedInteger(
+    name: string,
+    rawValue: string | undefined,
+    fallback: number,
+    minimum: number,
+    maximum: number,
+): number {
+    if (!rawValue) return fallback;
+    const parsed = Number(rawValue);
+    if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+        console.warn(`[MilvusDB] Ignoring invalid ${name}; expected an integer from ${minimum} to ${maximum}.`);
+        return fallback;
+    }
+    return parsed;
+}
+
+function resolveWriteBatchPolicy(): { maxRows: number; maxBytes: number | null } {
+    const maxRows = resolveBoundedInteger(
+        'MILVUS_WRITE_MAX_ROWS',
+        envManager.get('MILVUS_WRITE_MAX_ROWS'),
+        DEFAULT_MILVUS_WRITE_MAX_ROWS,
+        1,
+        HARD_MILVUS_WRITE_MAX_ROWS,
+    );
+    const rawMaxBytes = envManager.get('MILVUS_WRITE_MAX_BYTES');
+    let maxBytes: number | null = DEFAULT_MILVUS_WRITE_MAX_BYTES;
+    if (rawMaxBytes) {
+        const parsed = Number(rawMaxBytes);
+        if (
+            Number.isSafeInteger(parsed)
+            && parsed >= MIN_MILVUS_WRITE_MAX_BYTES
+            && parsed <= HARD_MILVUS_WRITE_MAX_BYTES
+        ) {
+            maxBytes = parsed;
+        } else {
+            console.warn(
+                `[MilvusDB] Ignoring invalid MILVUS_WRITE_MAX_BYTES; expected an integer from ${MIN_MILVUS_WRITE_MAX_BYTES} to ${HARD_MILVUS_WRITE_MAX_BYTES}.`,
+            );
+        }
+    }
+    return { maxRows, maxBytes };
+}
+
+function splitMilvusWriteBatches(
+    data: RowData[],
+    maxRows: number,
+    maxBytes: number | null,
+): MilvusWriteBatch[] {
+    const batches: MilvusWriteBatch[] = [];
+    let batch: RowData[] = [];
+    let batchBytes = 2; // JSON array brackets.
+
+    const flush = (flushReason: MilvusWriteBatch['flushReason']): void => {
+        if (batch.length === 0) return;
+        const serializedBytes = Buffer.byteLength(JSON.stringify(batch), 'utf8');
+        batches.push({ data: batch, serializedBytes, flushReason });
+        batch = [];
+        batchBytes = 2;
+    };
+
+    for (const row of data) {
+        const serializedRow = JSON.stringify(row);
+        if (serializedRow === undefined) {
+            throw new Error('Milvus write row is not JSON serializable.');
+        }
+        const rowBytes = Buffer.byteLength(serializedRow, 'utf8');
+        if (maxBytes !== null && rowBytes + 2 > maxBytes) {
+            throw new Error(`Milvus write row requires ${rowBytes + 2} serialized bytes, exceeding the ${maxBytes}-byte request ceiling.`);
+        }
+        const separatorBytes = batch.length > 0 ? 1 : 0;
+        const exceedsRows = batch.length >= maxRows;
+        const exceedsBytes = maxBytes !== null
+            && batch.length > 0
+            && batchBytes + separatorBytes + rowBytes > maxBytes;
+        if (exceedsRows || exceedsBytes) {
+            flush(exceedsRows ? 'row_limit' : 'byte_limit');
+        }
+        batch.push(row);
+        batchBytes += (batch.length > 1 ? 1 : 0) + rowBytes;
+    }
+
+    flush('logical_write_end');
+    return batches;
+}
 
 type MilvusHybridSearchSingleRequest = {
     data: number[] | string;
@@ -315,18 +416,25 @@ export class MilvusVectorDatabase implements VectorDatabase {
     protected initializationPromise: Promise<void>;
     private resolvedAddress: string | null = null;
     private resolvedFromToken: boolean = false;
-    private writeMetrics: VectorWriteMetricsSnapshot = {
-        providerRequestCount: 0,
-        retryCount: 0,
-        submittedRows: 0,
-        submittedBytes: 0,
-        durationMs: 0,
-        rowLimit: MILVUS_WRITE_BATCH_SIZE,
-        recentAttempts: [],
-    };
+    private readonly writeBatchMaxRows: number;
+    private readonly writeBatchMaxBytes: number | null;
+    private writeMetrics: VectorWriteMetricsSnapshot;
 
     constructor(config: MilvusConfig) {
         this.config = config;
+        const writeBatchPolicy = resolveWriteBatchPolicy();
+        this.writeBatchMaxRows = writeBatchPolicy.maxRows;
+        this.writeBatchMaxBytes = writeBatchPolicy.maxBytes;
+        this.writeMetrics = {
+            providerRequestCount: 0,
+            retryCount: 0,
+            submittedRows: 0,
+            submittedBytes: 0,
+            durationMs: 0,
+            rowLimit: this.writeBatchMaxRows,
+            byteLimit: this.writeBatchMaxBytes,
+            recentAttempts: [],
+        };
 
         // Start initialization asynchronously without waiting
         this.initializationPromise = this.initialize();
@@ -385,10 +493,13 @@ export class MilvusVectorDatabase implements VectorDatabase {
         data: RowData[],
     ): Promise<void> {
         await this.ensureInitialized();
+        const maxRows = this.writeBatchMaxRows ?? DEFAULT_MILVUS_WRITE_MAX_ROWS;
+        const maxBytes = this.writeBatchMaxBytes ?? null;
+        const writeBatches = splitMilvusWriteBatches(data, maxRows, maxBytes);
 
-        for (let offset = 0; offset < data.length; offset += MILVUS_WRITE_BATCH_SIZE) {
-            const batch = data.slice(offset, offset + MILVUS_WRITE_BATCH_SIZE);
-            const submittedBytes = Buffer.byteLength(JSON.stringify(batch), 'utf8');
+        for (const writeBatch of writeBatches) {
+            const batch = writeBatch.data;
+            const submittedBytes = writeBatch.serializedBytes;
 
             for (let attempt = 1; attempt <= MILVUS_WRITE_MAX_ATTEMPTS; attempt += 1) {
                 const client = this.writeClient ?? this.createWriteClient();
@@ -400,15 +511,14 @@ export class MilvusVectorDatabase implements VectorDatabase {
                     submittedRows: 0,
                     submittedBytes: 0,
                     durationMs: 0,
-                    rowLimit: MILVUS_WRITE_BATCH_SIZE,
+                    rowLimit: maxRows,
+                    byteLimit: maxBytes,
                     recentAttempts: [],
                 };
                 const sequence = previousMetrics.providerRequestCount + 1;
                 const flushReason: VectorWriteFlushReason = attempt > 1
                     ? 'retry'
-                    : offset + batch.length < data.length
-                        ? 'row_limit'
-                        : 'logical_write_end';
+                    : writeBatch.flushReason;
                 this.writeMetrics = {
                     ...previousMetrics,
                     providerRequestCount: sequence,
@@ -434,10 +544,13 @@ export class MilvusVectorDatabase implements VectorDatabase {
                         await this.discardWriteClient(client);
                     }
                     if (!retryable || attempt === MILVUS_WRITE_MAX_ATTEMPTS) {
+                        console.error(
+                            `[MilvusDB] Write failed: rows=${batch.length}, bytes=${submittedBytes}, attempt=${attempt}/${MILVUS_WRITE_MAX_ATTEMPTS}.`,
+                        );
                         throw error;
                     }
                     console.warn(
-                        `[MilvusDB] Retrying idempotent write on a fresh connection (${attempt}/${MILVUS_WRITE_MAX_ATTEMPTS - 1}).`,
+                        `[MilvusDB] Retrying idempotent write on a fresh connection (${attempt}/${MILVUS_WRITE_MAX_ATTEMPTS - 1}); rows=${batch.length}, bytes=${submittedBytes}.`,
                     );
                     await delay(MILVUS_WRITE_RETRY_DELAY_MS * attempt);
                 } finally {

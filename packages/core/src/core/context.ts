@@ -240,6 +240,7 @@ function subtractVectorWriteMetrics(
         submittedBytes: after.submittedBytes - before.submittedBytes,
         durationMs: after.durationMs - before.durationMs,
         rowLimit: after.rowLimit,
+        byteLimit: after.byteLimit,
         recentAttempts,
     };
 }
@@ -264,6 +265,7 @@ function summarizeVectorWriteMetrics(
         [attempt.flushReason]: counts[attempt.flushReason] + 1,
     }), {
         row_limit: 0,
+        byte_limit: 0,
         logical_write_end: 0,
         retry: 0,
     });
@@ -279,6 +281,7 @@ function summarizeVectorWriteMetrics(
         submittedBytes: metrics.submittedBytes,
         durationMs: metrics.durationMs,
         rowLimit: metrics.rowLimit,
+        byteLimit: metrics.byteLimit,
         samples: {
             complete: samplesComplete,
             captured: metrics.recentAttempts.length,

@@ -782,14 +782,6 @@ export class Context {
     }
 
     /**
-     * Public wrapper for prepareCollection private method
-     */
-    async ensureCollectionPrepared(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
-        assertDescriptorBoundIndexingSupported();
-        return this.prepareCollection(codebasePath, false, assertMutationCurrent);
-    }
-
-    /**
      * Recreate synchronizer for a codebase using currently active ignore patterns.
      * This is used when ignore rules change and we need deterministic reconciliation.
      */

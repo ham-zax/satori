@@ -463,11 +463,6 @@ function createFailedIndexingHarness(
         restoreNavigationGeneration: async () => {
             publicationEvents.push('navigation:restore');
         },
-        ensureCollectionPrepared: async () => {
-            if (writeCollectionOverride) {
-                existingCollections.add(writeCollectionOverride);
-            }
-        },
         registerSynchronizer: () => {
             registeredSynchronizers += 1;
         },
@@ -476,6 +471,12 @@ function createFailedIndexingHarness(
             getDimension: () => 1024,
         }),
         indexCodebase: async (...args: Parameters<NonNullable<typeof options.indexCodebase>>) => {
+            // The production Context full-rebuild owner creates the staged
+            // collection. Keep failure-cleanup fixtures faithful without
+            // reintroducing the removed background-worker pre-create.
+            if (writeCollectionOverride) {
+                existingCollections.add(writeCollectionOverride);
+            }
             const result = options.indexCodebase
                 ? await options.indexCodebase(...args)
                 : await Promise.reject(new Error("boom after staged collection create"));

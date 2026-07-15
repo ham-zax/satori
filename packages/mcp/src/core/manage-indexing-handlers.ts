@@ -1496,19 +1496,17 @@ export class ManageIndexingHandlers {
                 { deferSnapshotPublication: true },
             );
 
-            await this.host.context.ensureCollectionPrepared(
-                absolutePath,
-                mutationLease
-                    ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
-                    : undefined,
-            );
-
             console.log(`[BACKGROUND-INDEX] Starting indexing for: ${absolutePath}`);
 
             const encoderEngine = this.host.context.getEmbeddingEngine();
             console.log(`[BACKGROUND-INDEX] 🧠 Using embedding provider: ${encoderEngine.getProvider()} with dimension: ${encoderEngine.getDimension()}`);
 
             console.log("[BACKGROUND-INDEX] 🚀 Beginning codebase indexing process...");
+            // Context.indexCodebase owns the first and only staged-collection
+            // preparation for a full rebuild. Pre-creating it here makes that
+            // owner delete the fresh collection before recreating the same
+            // schema, adding remote deletion latency without strengthening the
+            // mutation fence or staged-publication contract.
             const stats = await this.host.context.indexCodebase(absolutePath, (progress) => {
                 if (mutationLease) {
                     this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease);

@@ -50,6 +50,12 @@ the model never reads evaluator instructions as a measured tool step.
     overhead.
 13. Report median and range for three samples. Do not report percentile claims
     from three samples.
+14. Enforce a 24-tool runaway safety ceiling in the guard and configure OpenCode
+    for 26 model steps. OpenCode turns the configured terminal step into a
+    max-steps response, so the two-step reserve provides one ordinary post-tool
+    JSON turn plus the terminal fallback without permitting a twenty-fifth tool
+    call. The ceiling is not an efficiency gate: report actual tool calls,
+    tokens, and wall time for every correct run.
 
 ## Tool-result normalization
 
@@ -289,9 +295,12 @@ A run passes only when:
 - the owner file, symbol, and complete inclusive span match;
 - every task-specific fact exactly matches `evaluator-tasks.json`;
 - the required caller and callee/helper relationships are supported;
-- every operation and argument obeys the selected arm;
+- symbol fields contain exact bare identifiers or dot-qualified identifiers whose
+  final segment is the exact identifier; prose and declaration prefixes fail;
+- every operation and argument obeys the selected arm; parallel calls are
+  allowed and every call remains independently measured;
 - the real OpenCode tool sequence obeys the selected arm, root, read bound,
-  one-call-per-turn rule, and 12-call budget;
+  and 24-call runaway safety ceiling;
 - no answer key, test, documentation, Git history, or prior result was accessed.
 
 The primary paired comparison reports correctness first. Compare latency,

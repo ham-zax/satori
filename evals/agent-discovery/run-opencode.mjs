@@ -12,7 +12,11 @@ import {
     JsonRpcStdioSession,
     decodeToolResponse,
 } from "../../scripts/satori-useful-context-record.mjs";
-import { NATIVE_TOOLS, SATORI_TOOLS } from "./opencode-guard.mjs";
+import {
+    MAX_AGENT_DISCOVERY_TOOL_CALLS,
+    NATIVE_TOOLS,
+    SATORI_TOOLS,
+} from "./opencode-guard.mjs";
 import {
     readSourceLedgerSlice,
     sourceLedgerFileSize,
@@ -26,6 +30,12 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_CALL_TIMEOUT_MS = 300_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
+// This is a runaway safety bound, not an efficiency gate. Actual tool calls,
+// tokens, and wall time remain measured outcomes of each otherwise-correct arm.
+const MAX_TOOL_CALLS = MAX_AGENT_DISCOVERY_TOOL_CALLS;
+// OpenCode turns the configured terminal step into a max-steps summary. Leave one
+// ordinary post-tool turn for JSON while the guard still rejects a 25th tool call.
+const MAX_MODEL_STEPS = MAX_TOOL_CALLS + 2;
 const MODES = new Set(["natural", "coverage"]);
 const PREPARE_MODES = new Set(["sync", "status"]);
 const ARM_ORDER = Object.freeze([
@@ -45,6 +55,7 @@ function usage() {
         "No repository path, task, arm, or native tool profile is requested interactively.",
         "",
         "Options:",
+        "  --repo <directory>            Clean production worktree to measure; records its exact revision",
         `  --model <provider/model>       Default: ${DEFAULT_MODEL}`,
         "  --task <id>                    Repeat to select tasks; default: all tasks",
         `  --repetitions <count>           Default: ${DEFAULT_REPETITIONS}`,
@@ -204,7 +215,9 @@ function findNamedDeclaration(sourceFile, symbolName) {
         if (!match && declarationName(node, sourceFile) === symbolName
             && (ts.isFunctionDeclaration(node)
                 || ts.isMethodDeclaration(node)
-                || ts.isVariableDeclaration(node))) {
+                || ts.isVariableDeclaration(node)
+                || ts.isPropertySignature(node)
+                || ts.isPropertyAssignment(node))) {
             match = node;
             return;
         }
@@ -273,10 +286,8 @@ export function validateTaskKey(repoRoot, task) {
         );
     }
     for (const relation of expected.requiredRelations ?? []) {
-        const related = relation.relation === "caller" || relation.span
-            ? inspectNamedSymbol(repoRoot, relation.file, relation.symbol)
-            : null;
-        if (relation.span && related && stableJson(related.span) !== stableJson(relation.span)) {
+        const related = inspectNamedSymbol(repoRoot, relation.file, relation.symbol);
+        if (relation.span && stableJson(related.span) !== stableJson(relation.span)) {
             throw new Error(
                 `Stale task key '${task.id}': expected ${relation.symbol} `
                 + `${relation.span.startLine}-${relation.span.endLine}, `
@@ -284,7 +295,6 @@ export function validateTaskKey(repoRoot, task) {
             );
         }
         if (relation.relation === "caller") {
-            if (!related) throw new Error(`Missing caller key for ${relation.symbol}.`);
             if (!declarationCalls(related.sourceFile, related.declaration, expected.ownerSymbol)) {
                 throw new Error(
                     `Stale task key '${task.id}': ${relation.symbol} no longer calls ${expected.ownerSymbol}.`,
@@ -352,9 +362,11 @@ function commonPromptRules(repoRoot, task, arm, mode) {
         "- Treat the repository as read-only.",
         "- Inspect production TypeScript only under packages/core/src and packages/mcp/src.",
         "- Never inspect *.test.ts, docs, evaluator files, Git history, or prior results.",
-        "- Make at most 12 tool calls and exactly one tool call per model turn.",
+        `- Make at most ${MAX_TOOL_CALLS} tool calls; parallel calls are allowed and each call is measured.`,
         "- Follow visible evidence from one result to the next; do not use a remembered path.",
         "- Stop as soon as the owner source, complete span, required relationships, and facts are proven.",
+        "- Use exact bare identifiers for ownerSymbol, relatedSymbols[].symbol, and symbol-valued task facts; never add prose or function/method prefixes.",
+        "- Quoted labels in the output shape describe value types; replace them with actual values.",
         "- Do not estimate or report timing, tokens, bytes, or tool counts; the harness owns them.",
     ];
 }
@@ -400,10 +412,10 @@ export function buildAgentPrompt({ repoRoot, task, arm, mode }) {
         status: "success|not_found|tool_error|budget_exhausted|protocol_violation",
         answer: {
             ownerFile: "repository-relative path or null",
-            ownerSymbol: "symbol or null",
+            ownerSymbol: "exact bare identifier or null; no dots, spaces, or prefixes",
             ownerSpan: { startLine: "integer", endLine: "integer" },
             relatedSymbols: [{
-                symbol: "symbol",
+                symbol: "exact bare identifier; no dots, spaces, or prefixes",
                 relation: "caller|callee|helper|second_readiness_proof",
                 file: "repository-relative path",
             }],
@@ -453,7 +465,7 @@ function agentConfiguration(arm) {
         description: `Read-only ${arm} arm for the Satori agent-discovery evaluation`,
         mode: "primary",
         temperature: 0,
-        steps: 12,
+        steps: MAX_MODEL_STEPS,
         tools: Object.fromEntries([
             ["*", false],
             ...allowedTools.map((tool) => [tool, true]),
@@ -1089,23 +1101,81 @@ export function aggregateSessionData({
     };
 }
 
+function isAgentResult(value) {
+    return isRecord(value)
+        && typeof value.status === "string"
+        && isRecord(value.answer);
+}
+
+function balancedJsonObjectCandidates(text) {
+    const candidates = [];
+    for (let start = 0; start < text.length; start += 1) {
+        if (text[start] !== "{") continue;
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        for (let end = start; end < text.length; end += 1) {
+            const character = text[end];
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (character === "\\") {
+                    escaped = true;
+                } else if (character === '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (character === '"') {
+                inString = true;
+            } else if (character === "{") {
+                depth += 1;
+            } else if (character === "}") {
+                depth -= 1;
+                if (depth === 0) {
+                    candidates.push(text.slice(start, end + 1));
+                    break;
+                }
+            }
+        }
+    }
+    return candidates;
+}
+
 export function extractAgentResult(text) {
     const trimmed = text.trim();
-    const withoutFence = trimmed.startsWith("```")
-        ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
-        : trimmed;
-    try {
-        return JSON.parse(withoutFence);
-    } catch {
-        const start = withoutFence.indexOf("{");
-        const end = withoutFence.lastIndexOf("}");
-        if (start >= 0 && end > start) return JSON.parse(withoutFence.slice(start, end + 1));
-        throw new Error("Agent final response did not contain a JSON object.");
+    const fenced = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)]
+        .map((match) => match[1].trim());
+    const candidates = [
+        ...fenced,
+        trimmed,
+        ...balancedJsonObjectCandidates(trimmed),
+    ];
+    const seen = new Set();
+    for (const candidate of candidates) {
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        try {
+            const parsed = JSON.parse(candidate);
+            if (isAgentResult(parsed)) return parsed;
+        } catch {
+            // A later fenced or balanced candidate may be the actual result object.
+        }
     }
+    throw new Error("Agent final response did not contain a result-shaped JSON object.");
 }
 
 function deepEqual(left, right) {
     return stableJson(left) === stableJson(right);
+}
+
+function canonicalReportedSymbol(value) {
+    if (typeof value !== "string") return null;
+    const segments = value.split(".");
+    if (!segments.every((segment) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment))) {
+        return null;
+    }
+    return segments.at(-1);
 }
 
 function validateNativeToolSequence(tools, repoRoot) {
@@ -1178,27 +1248,23 @@ export function gradeRun({ agentResult, task, arm, mode, repoRoot, tools }) {
     if (!isRecord(answer)) {
         failures.push("missing_answer");
     } else {
-        for (const key of ["ownerFile", "ownerSymbol", "ownerSpan", "taskFacts"]) {
+        for (const key of ["ownerFile", "ownerSpan", "taskFacts"]) {
             if (!deepEqual(answer[key], task.expected[key])) failures.push(`incorrect_${key}`);
+        }
+        if (canonicalReportedSymbol(answer.ownerSymbol) !== task.expected.ownerSymbol) {
+            failures.push("incorrect_ownerSymbol");
         }
         for (const relation of task.expected.requiredRelations ?? []) {
             const match = Array.isArray(answer.relatedSymbols)
                 && answer.relatedSymbols.some((candidate) => (
-                    candidate?.symbol === relation.symbol
+                    canonicalReportedSymbol(candidate?.symbol) === relation.symbol
                     && candidate?.relation === relation.relation
                     && candidate?.file === relation.file
                 ));
             if (!match) failures.push(`missing_relation:${relation.relation}:${relation.symbol}`);
         }
     }
-    if (tools.length > 12) failures.push("tool_budget_exceeded");
-    const callsPerMessage = new Map();
-    for (const tool of tools) {
-        callsPerMessage.set(tool.messageId, (callsPerMessage.get(tool.messageId) ?? 0) + 1);
-    }
-    if ([...callsPerMessage.values()].some((count) => count > 1)) {
-        failures.push("multiple_tools_in_one_model_turn");
-    }
+    if (tools.length > MAX_TOOL_CALLS) failures.push("tool_budget_exceeded");
     if (tools.some((tool) => tool.visibleBytes > 32_768)) {
         failures.push("model_visible_tool_result_exceeded_32768_bytes");
     }
@@ -1248,6 +1314,11 @@ async function waitForPersistedSession(databaseFile, title, timeoutMs = 10_000) 
 
 function safeFileName(value) {
     return value.replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+export function formatArmCompletion({ taskId, repetition, arm, passed, wallTimeMs }) {
+    const outcome = passed ? "PASS" : "FAIL";
+    return `Completed ${taskId} repetition ${repetition}: ${arm} ${outcome} in ${(wallTimeMs / 1_000).toFixed(1)}s`;
 }
 
 async function runOpenCodeArm({
@@ -1434,6 +1505,7 @@ const REPORT_METRICS = Object.freeze([
     "cachedInputTokens",
     "visibleToolResultBytes",
     "toolCalls",
+    "modelTurns",
     "stepsToVerifiedAnswer",
 ]);
 
@@ -1449,6 +1521,9 @@ export function summarizeRuns(runs) {
                 total: armRuns.length,
                 metrics: Object.fromEntries(
                     REPORT_METRICS.map((metric) => [metric, observationalStats(passedRuns, metric)]),
+                ),
+                allMetrics: Object.fromEntries(
+                    REPORT_METRICS.map((metric) => [metric, observationalStats(armRuns, metric)]),
                 ),
             }];
         })),
@@ -1516,7 +1591,55 @@ export function formatMarkdownReport(summary, metadata) {
     }
     lines.push(
         "",
-        "Only correct runs contribute to latency, token, byte, and step comparisons. Failed runs remain in the raw JSON.",
+        "Only correct runs contribute to the comparison above.",
+        "",
+        "## Raw cost of all attempts",
+        "",
+        "This diagnostic includes failed attempts. It shows consumed resources, not equivalent successful-task performance.",
+        "",
+        "| Task | Arm | Correct | Wall ms | Input tokens | Output tokens | Reasoning tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    );
+    for (const [taskId, task] of Object.entries(summary)) {
+        for (const arm of ["native", "satori"]) {
+            const entry = task[arm];
+            lines.push([
+                `| ${taskId}`,
+                arm,
+                `${entry.passed}/${entry.total}`,
+                displayMetric(entry.allMetrics.taskWallTimeMs),
+                displayMetric(entry.allMetrics.apiInputTokens),
+                displayMetric(entry.allMetrics.apiOutputTokens),
+                displayMetric(entry.allMetrics.reasoningTokens),
+                displayMetric(entry.allMetrics.cachedInputTokens),
+                displayMetric(entry.allMetrics.toolCalls),
+                displayMetric(entry.allMetrics.modelTurns),
+                `${displayMetric(entry.allMetrics.visibleToolResultBytes)} |`,
+            ].join(" | "));
+        }
+    }
+    lines.push(
+        "",
+        "## Raw Satori minus native median",
+        "",
+        "| Task | Wall ms | Input tokens | Output tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+    );
+    for (const [taskId, task] of Object.entries(summary)) {
+        lines.push([
+            `| ${taskId}`,
+            signedDelta(task.satori.allMetrics.taskWallTimeMs, task.native.allMetrics.taskWallTimeMs),
+            signedDelta(task.satori.allMetrics.apiInputTokens, task.native.allMetrics.apiInputTokens),
+            signedDelta(task.satori.allMetrics.apiOutputTokens, task.native.allMetrics.apiOutputTokens),
+            signedDelta(task.satori.allMetrics.cachedInputTokens, task.native.allMetrics.cachedInputTokens),
+            signedDelta(task.satori.allMetrics.toolCalls, task.native.allMetrics.toolCalls),
+            signedDelta(task.satori.allMetrics.modelTurns, task.native.allMetrics.modelTurns),
+            `${signedDelta(task.satori.allMetrics.visibleToolResultBytes, task.native.allMetrics.visibleToolResultBytes)} |`,
+        ].join(" | "));
+    }
+    lines.push(
+        "",
+        "Raw deltas are diagnostic when correctness differs. Failed runs remain in the raw JSON.",
         "",
     );
     return lines.join("\n");
@@ -1661,11 +1784,13 @@ export async function main(argv = process.argv.slice(2)) {
         for (const entry of schedule) {
             const task = tasks.find((candidate) => candidate.id === entry.taskId);
             const pairedRunId = `${suiteId}-${task.id}-r${entry.repetition}`;
+            const armStartedAtMs = Date.now();
             process.stdout.write(
                 `Running ${task.id} repetition ${entry.repetition}: ${entry.arm}\n`,
             );
+            let result;
             try {
-                const result = await runOpenCodeArm({
+                result = await runOpenCodeArm({
                     options,
                     task,
                     scheduleEntry: entry,
@@ -1681,12 +1806,8 @@ export async function main(argv = process.argv.slice(2)) {
                     immutableEnvironment,
                     satoriPriorToolCalls,
                 });
-                runs.push(result);
-                if (entry.arm === "satori") {
-                    satoriPriorToolCalls += result.measurements.toolCalls ?? 0;
-                }
             } catch (error) {
-                runs.push({
+                result = {
                     protocolVersion: PROTOCOL_VERSION,
                     runId: `${suiteId}-${task.id}-r${entry.repetition}-${entry.arm}`,
                     pairedRunId,
@@ -1700,8 +1821,19 @@ export async function main(argv = process.argv.slice(2)) {
                     measurements: {},
                     events: [],
                     grade: { passed: false, failureReasons: [`harness_error:${error.message}`] },
-                });
+                };
             }
+            runs.push(result);
+            if (entry.arm === "satori") {
+                satoriPriorToolCalls += result.measurements.toolCalls ?? 0;
+            }
+            process.stdout.write(`${formatArmCompletion({
+                taskId: task.id,
+                repetition: entry.repetition,
+                arm: entry.arm,
+                passed: result.grade.passed,
+                wallTimeMs: Date.now() - armStartedAtMs,
+            })}\n`);
         }
     } finally {
         await stopOpenCodeServer(server);

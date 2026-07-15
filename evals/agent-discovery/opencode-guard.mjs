@@ -4,7 +4,8 @@ import { createRequire } from "node:module";
 
 const MAX_TOOL_RESULT_BYTES = 32_768;
 const TRUNCATION_MARKER = "\n[TRUNCATED AT 32768 UTF-8 BYTES]\n";
-const MAX_TOOL_CALLS = 12;
+// Safety-only ceiling shared with the runner; efficiency is measured, not gated.
+export const MAX_AGENT_DISCOVERY_TOOL_CALLS = 24;
 
 export const NATIVE_TOOLS = Object.freeze(["grep", "glob", "read"]);
 export const SATORI_TOOLS = Object.freeze([
@@ -186,7 +187,7 @@ export function createAgentDiscoveryGuard(environment = process.env) {
         "tool.execute.before": async (input, output) => {
             const count = (callCounts.get(input.sessionID) ?? 0) + 1;
             callCounts.set(input.sessionID, count);
-            if (count > MAX_TOOL_CALLS) {
+            if (count > MAX_AGENT_DISCOVERY_TOOL_CALLS) {
                 throw new Error("agent_discovery_tool_budget_exhausted");
             }
             validateToolCall(input.tool, output.args, repoRoot);

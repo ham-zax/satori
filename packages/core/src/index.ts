@@ -6,6 +6,7 @@ export * from './context';
 export * from './core/persisted-index-authority';
 export * from './sync/synchronizer';
 export * from './sync/root-bound-fs';
+export * from './measurement/source-ledger';
 export * from './utils';
 export * from './reranker';
 export * from './language';

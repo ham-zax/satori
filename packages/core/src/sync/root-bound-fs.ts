@@ -1,6 +1,11 @@
 import * as fsp from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
+import {
+    finishSourceMeasurementObservation,
+    recordSourceIo,
+    type SourceMeasurementObservation,
+} from '../measurement/source-ledger';
 
 /**
  * True when `realPath` (already realpath-resolved) is `rootDir` or a descendant.
@@ -233,29 +238,49 @@ export async function verifyStableFileObservation(
 export async function readFileHandleExactly(
     handle: fsp.FileHandle,
     expectedSize: number,
+    measurementObservation?: SourceMeasurementObservation,
 ): Promise<Buffer> {
-    if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
-        throw new Error(`Observed file size is invalid: ${expectedSize}`);
-    }
     const chunks: Buffer[] = [];
     let totalBytes = 0;
-    const stream = handle.createReadStream({
-        autoClose: false,
-        start: 0,
-        end: expectedSize,
-    });
-    for await (const chunk of stream) {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        totalBytes += buffer.length;
-        if (totalBytes > expectedSize) {
-            throw new Error('File grew beyond the observed size while being read.');
+    try {
+        if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
+            throw new Error(`Observed file size is invalid: ${expectedSize}`);
         }
-        chunks.push(buffer);
+        const stream = handle.createReadStream({
+            autoClose: false,
+            start: 0,
+            end: expectedSize,
+        });
+        for await (const chunk of stream) {
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            const startByte = totalBytes;
+            totalBytes += buffer.length;
+            recordSourceIo({
+                observation: measurementObservation,
+                startByte,
+                endByte: totalBytes,
+                basis: 'stream_chunk',
+            });
+            if (totalBytes > expectedSize) {
+                throw new Error('File grew beyond the observed size while being read.');
+            }
+            chunks.push(buffer);
+        }
+        if (totalBytes !== expectedSize) {
+            throw new Error(`File byte length ${totalBytes} does not match the observed size ${expectedSize}.`);
+        }
+        finishSourceMeasurementObservation({
+            observation: measurementObservation,
+            status: 'completed',
+        });
+        return Buffer.concat(chunks, totalBytes);
+    } catch (error) {
+        finishSourceMeasurementObservation({
+            observation: measurementObservation,
+            status: totalBytes > 0 ? 'partial' : 'failed',
+        });
+        throw error;
     }
-    if (totalBytes !== expectedSize) {
-        throw new Error(`File byte length ${totalBytes} does not match the observed size ${expectedSize}.`);
-    }
-    return Buffer.concat(chunks, totalBytes);
 }
 
 export interface OpenedDirectoryInsideRoot {

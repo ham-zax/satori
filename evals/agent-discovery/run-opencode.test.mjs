@@ -7,11 +7,13 @@ import test from "node:test";
 import {
     aggregateSessionData,
     buildAgentPrompt,
+    buildIsolatedOpenCodeConfig,
     buildOpenCodeRunArguments,
     buildRunSchedule,
     extractAgentResult,
     formatMarkdownReport,
     getRepositoryIdentity,
+    getSatoriRuntimeIdentity,
     gradeRun,
     inspectNamedSymbol,
     loadTaskManifest,
@@ -113,6 +115,54 @@ test("OpenCode command creates a new session instead of continuing another arm",
     assert.ok(!args.includes("--session"));
     assert.ok(!args.includes("--continue"));
     assert.ok(!args.includes("--fork"));
+});
+
+test("isolated OpenCode config binds Satori to the measured worktree runtime", () => {
+    const config = buildIsolatedOpenCodeConfig({
+        mcp: {
+            satori: {
+                type: "local",
+                command: ["node", "/other/checkout/packages/mcp/dist/index.js"],
+                environment: { SATORI_STATE_ROOT: "/state" },
+            },
+        },
+    }, "opencode/model", "/measured/repo");
+
+    assert.deepEqual(config.mcp.satori.command, [
+        process.execPath,
+        "/measured/repo/packages/mcp/dist/index.js",
+    ]);
+    assert.deepEqual(config.mcp.satori.environment, { SATORI_STATE_ROOT: "/state" });
+});
+
+test("Satori runtime identity covers deterministic Core and MCP build outputs", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-agent-runtime-"));
+    const coreDist = path.join(repoRoot, "packages/core/dist");
+    const mcpDist = path.join(repoRoot, "packages/mcp/dist");
+    fs.mkdirSync(path.join(coreDist, "nested"), { recursive: true });
+    fs.mkdirSync(mcpDist, { recursive: true });
+    fs.writeFileSync(path.join(coreDist, "index.js"), "export * from './nested/helper.js';\n");
+    fs.writeFileSync(path.join(coreDist, "nested/helper.js"), "export const value = 1;\n");
+    fs.writeFileSync(path.join(mcpDist, "index.js"), "import '@zokizuan/satori-core';\n");
+
+    try {
+        const initial = getSatoriRuntimeIdentity(repoRoot);
+        const repeated = getSatoriRuntimeIdentity(repoRoot);
+        assert.deepEqual(repeated, initial);
+        assert.equal(initial.nodeVersion, process.version);
+        assert.deepEqual(initial.roots.map(({ relativeRoot, fileCount }) => ({
+            relativeRoot,
+            fileCount,
+        })), [
+            { relativeRoot: "packages/core/dist", fileCount: 2 },
+            { relativeRoot: "packages/mcp/dist", fileCount: 1 },
+        ]);
+
+        fs.writeFileSync(path.join(coreDist, "nested/helper.js"), "export const value = 2;\n");
+        assert.notEqual(getSatoriRuntimeIdentity(repoRoot).sha256, initial.sha256);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
 });
 
 test("task-key validation aborts when a versioned source span is stale", () => {

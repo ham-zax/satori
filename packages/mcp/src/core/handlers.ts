@@ -15,6 +15,11 @@ import {
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForFilename,
     isLanguageCapabilitySupportedForLanguage,
+    beginSourceMeasurementObservation,
+    finishSourceMeasurementObservation,
+    recordSourceIo,
+    recordSourceProcessing,
+    sourceIoOwnerForCurrentOperation,
 } from "@zokizuan/satori-core";
 import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
@@ -2748,10 +2753,42 @@ export class ToolHandlers {
         }
 
         const registryHash = hashes[0];
-        const currentHash = crypto
-            .createHash('sha256')
-            .update(fs.readFileSync(input.absoluteFile, 'utf8'), 'utf8')
-            .digest('hex');
+        const sourceBytes = fs.readFileSync(input.absoluteFile);
+        const sourceObservation = beginSourceMeasurementObservation({
+            owner: sourceIoOwnerForCurrentOperation('outline'),
+            filePath: input.absoluteFile,
+            logicalBytesRequested: sourceBytes.length,
+            scanKind: 'complete',
+        });
+        recordSourceIo({
+            observation: sourceObservation,
+            startByte: 0,
+            endByte: sourceBytes.length,
+            basis: 'path_read',
+        });
+        finishSourceMeasurementObservation({
+            observation: sourceObservation,
+            status: 'completed',
+        });
+        const hashingStartedAt = performance.now();
+        let hashingOutcome: 'success' | 'failed' = 'failed';
+        let currentHash: string;
+        try {
+            currentHash = crypto
+                .createHash('sha256')
+                .update(sourceBytes.toString('utf8'), 'utf8')
+                .digest('hex');
+            hashingOutcome = 'success';
+        } finally {
+            recordSourceProcessing({
+                observation: sourceObservation,
+                owner: 'hashing',
+                inputBytesProcessed: sourceBytes.length,
+                basis: 'shared_buffer',
+                outcome: hashingOutcome,
+                durationMs: performance.now() - hashingStartedAt,
+            });
+        }
         return currentHash === registryHash
             ? { status: 'fresh', registryHash, currentHash }
             : { status: 'stale', registryHash, currentHash };

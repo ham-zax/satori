@@ -1,6 +1,6 @@
 # Satori Agent-Discovery Harness Protocol
 
-Protocol version: `satori-agent-discovery-v2`
+Protocol version: `satori-agent-discovery-v3`
 
 This file defines collection and grading behavior for the executable OpenCode
 runner in `run-opencode.mjs`. Do not include this file or
@@ -97,6 +97,29 @@ Capture these values from actual events; model claims are not authoritative:
   mandatory evidence.
 - `finalResponseBytes`: UTF-8 bytes in the final model response.
 
+Source acquisition and downstream processing use a separate JSONL ledger. A
+Satori tool operation owns each source observation, and every actual acquisition
+event has one `(observationId, readId)` identity. Identical duplicate emissions
+of that composite identity count once; conflicting reuse invalidates the run;
+genuine rereads use new read IDs and count again. The portable gate uses
+`sourceIo.portableBytesObtained`. Observation-scoped `uniqueBytesCovered` is a
+diagnostic and never erases reread cost. `sourceProcessing.inputBytesProcessed`
+is reported separately and never contributes to portable acquisition bytes.
+Every observation has one `completed`, `partial`, or `failed` outcome; complete
+scans require a completed outcome and full requested-byte coverage. Processing
+events carry `success`, `failed`, or `rejected`. Path convenience reads use the
+honest `path_read` basis rather than claiming descriptor-bound authority;
+`sourceIo.byBasis` reports those acquisition classes separately and
+`sourceProcessing.byOutcome` reports attempted work by result. `filesOpened`
+counts observations whose acquisition completed or obtained partial source; a
+failed observation with no acquired source does not increment it.
+
+OpenCode 1.17 does not expose the native `read` tool's source-acquisition
+boundary. Native runs therefore report source acquisition as unavailable rather
+than relabeling model-visible output bytes as descriptor I/O. The adaptive
+Satori baseline and later composed candidate must use the same internal source
+ledger implementation.
+
 Use provider token usage exactly as reported. Never retokenize one provider's
 transcript with another tokenizer and present it as authoritative token usage.
 UTF-8 byte counts are the cross-provider comparison metric.
@@ -135,7 +158,7 @@ portable result exchanged between harnesses:
 
 ```json
 {
-  "protocolVersion": "satori-agent-discovery-v2",
+  "protocolVersion": "satori-agent-discovery-v3",
   "runId": "harness-unique-id",
   "pairedRunId": "shared-id-for-native-and-satori",
   "repetition": 1,
@@ -155,6 +178,26 @@ portable result exchanged between harnesses:
     "harnessVersion": "version",
     "platform": "platform",
     "architecture": "architecture",
+    "satoriRuntime": {
+      "command": ["node-executable", "absolute-mcp-entry"],
+      "schemaVersion": 1,
+      "nodeVersion": "version",
+      "roots": [
+        {
+          "relativeRoot": "packages/core/dist",
+          "fileCount": 0,
+          "totalBytes": 0,
+          "sha256": "hex"
+        },
+        {
+          "relativeRoot": "packages/mcp/dist",
+          "fileCount": 0,
+          "totalBytes": 0,
+          "sha256": "hex"
+        }
+      ],
+      "sha256": "hex"
+    },
     "agentPromptBytes": 0,
     "toolProfile": {
       "profileId": "harness-and-arm-specific-id",
@@ -195,15 +238,33 @@ portable result exchanged between harnesses:
     "stepsToFirstCorrectTarget": 0,
     "stepsToFirstOwnerSource": 0,
     "stepsToVerifiedAnswer": 0,
-    "finalResponseBytes": 0
+    "finalResponseBytes": 0,
+    "sourceIo": null,
+    "sourceWorkload": null,
+    "sourceProcessing": null
   },
   "events": [],
   "grade": {
     "passed": false,
     "failureReasons": []
+  },
+  "harness": {
+    "sourceMeasurement": {
+      "status": "unavailable",
+      "reason": "native_tool_source_acquisition_boundary_not_exposed",
+      "ledgerStartByte": 0,
+      "ledgerEndByte": 0,
+      "records": []
+    }
   }
 }
 ```
+
+Source measurement is a strict union. `status: "measured"` requires non-null
+`sourceIo`, `sourceWorkload`, and `sourceProcessing` summaries and omits
+`reason`. `status: "unavailable"` requires all three summaries to be `null` and
+includes a bounded reason; the native arm uses
+`native_tool_source_acquisition_boundary_not_exposed`.
 
 Use `null`, not zero, for a measurement that could not be observed. For a
 Satori arm, record the proven setup operation identity, generation, and runtime
@@ -213,6 +274,10 @@ not count as measured calls.
 The runner compares revision, tree, staged-diff hash, and unstaged-diff hash
 again after all arms finish. A clean checkout that changes to another commit
 during measurement is rejected; worktree cleanliness alone is not sufficient.
+It also hashes every generated file under Core and MCP `dist`, records the Node
+version and exact command, and rejects a run if either runtime output changes
+during measurement. This prevents a clean source tree from concealing stale or
+changing ignored build artifacts.
 
 ## Grading
 

@@ -1,6 +1,15 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+import {
+    beginSourceMeasurementObservation,
+    finishSourceMeasurementObservation,
+    recordSourceIo,
+    recordSourceProcessing,
+    sourceIoOwnerForCurrentOperation,
+    type RelationshipRecord,
+    type SymbolRecord,
+    type SymbolRegistry,
+} from "@zokizuan/satori-core";
 import type { CallGraphEdge, CallGraphNote } from "./call-graph.js";
 
 const PYTHON_DIRECT_CALL_CONTROL_KEYWORDS = new Set(["if", "for", "while", "return", "class", "def"]);
@@ -32,6 +41,43 @@ export type SourceBackedPythonCallFallback = {
 type ReadSafeCodebaseFileLines = (codebaseRoot: string, relativeFilePath: string) => string[] | undefined;
 type SortCallGraphEdges = (edges: CallGraphEdge[]) => CallGraphEdge[];
 type SortCallGraphNotes = (notes: CallGraphNote[]) => CallGraphNote[];
+
+function readMeasuredSourceLines(absoluteFile: string): string[] {
+    const sourceBytes = fs.readFileSync(absoluteFile);
+    const observation = beginSourceMeasurementObservation({
+        owner: sourceIoOwnerForCurrentOperation("validation"),
+        filePath: absoluteFile,
+        logicalBytesRequested: sourceBytes.length,
+        scanKind: "complete",
+    });
+    recordSourceIo({
+        observation,
+        startByte: 0,
+        endByte: sourceBytes.length,
+        basis: "path_read",
+    });
+    finishSourceMeasurementObservation({
+        observation,
+        status: "completed",
+    });
+    const selectorStartedAt = performance.now();
+    let selectorOutcome: "success" | "failed" = "failed";
+    let lines: string[];
+    try {
+        lines = sourceBytes.toString("utf8").split(/\r?\n/);
+        selectorOutcome = "success";
+    } finally {
+        recordSourceProcessing({
+            observation,
+            owner: "selector",
+            inputBytesProcessed: sourceBytes.length,
+            basis: "shared_buffer",
+            outcome: selectorOutcome,
+            durationMs: performance.now() - selectorStartedAt,
+        });
+    }
+    return lines;
+}
 
 function extractDirectCallNamesFromLine(line: string, options: {
     includeAttributeCalls?: boolean;
@@ -96,7 +142,7 @@ const readSafeCodebaseFileLines: ReadSafeCodebaseFileLines = (codebaseRoot, rela
     if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot) || !fs.existsSync(absoluteFile)) {
         return undefined;
     }
-    return fs.readFileSync(absoluteFile, "utf8").split(/\r?\n/);
+    return readMeasuredSourceLines(absoluteFile);
 };
 
 function countPythonIndent(line: string): number {
@@ -217,7 +263,7 @@ export function repairSourceBackedPythonSpan(input: {
             endTruncated: false,
         };
     }
-    const lines = input.sourceLines || fs.readFileSync(absoluteFile, "utf8").split(/\r?\n/);
+    const lines = input.sourceLines || readMeasuredSourceLines(absoluteFile);
     const definitionIndex = findPythonDefinitionIndexNearSpan(lines, symbol);
     if (definitionIndex === undefined) {
         return {

@@ -1,6 +1,6 @@
 # Satori OpenCode agent-discovery evaluation
 
-Protocol version: `satori-agent-discovery-v2`
+Protocol version: `satori-agent-discovery-v3`
 
 ## Instruction for the OpenCode agent reading this file
 

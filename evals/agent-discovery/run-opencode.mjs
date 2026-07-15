@@ -13,8 +13,13 @@ import {
     decodeToolResponse,
 } from "../../scripts/satori-useful-context-record.mjs";
 import { NATIVE_TOOLS, SATORI_TOOLS } from "./opencode-guard.mjs";
+import {
+    readSourceLedgerSlice,
+    sourceLedgerFileSize,
+    summarizeSourceLedger,
+} from "./source-ledger.mjs";
 
-const PROTOCOL_VERSION = "satori-agent-discovery-v2";
+const PROTOCOL_VERSION = "satori-agent-discovery-v3";
 const DEFAULT_MODEL = "opencode/deepseek-v4-flash-free";
 const DEFAULT_REPETITIONS = 3;
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -460,16 +465,22 @@ function agentConfiguration(arm) {
     };
 }
 
-export function buildIsolatedOpenCodeConfig(resolvedConfig, model) {
+export function buildIsolatedOpenCodeConfig(resolvedConfig, model, repoRoot) {
     const satoriMcp = resolvedConfig?.mcp?.satori;
     if (!isRecord(satoriMcp) || satoriMcp.type !== "local"
         || !Array.isArray(satoriMcp.command) || satoriMcp.command.length === 0) {
         throw new Error("The resolved OpenCode config does not contain a local Satori MCP server.");
     }
+    const runtimeEntry = path.join(repoRoot, "packages", "mcp", "dist", "index.js");
     const config = {
         model,
         plugin: [pathToFileURL(GUARD_PLUGIN_FILE).href],
-        mcp: { satori: satoriMcp },
+        mcp: {
+            satori: {
+                ...satoriMcp,
+                command: [process.execPath, runtimeEntry],
+            },
+        },
         agent: {
             "satori-eval-native": agentConfiguration("native"),
             "satori-eval-satori": agentConfiguration("satori"),
@@ -549,6 +560,66 @@ export async function getRepositoryIdentity(repoRoot) {
     };
 }
 
+function collectRuntimeFiles(repoRoot, relativeRoot) {
+    const absoluteRoot = path.join(repoRoot, relativeRoot);
+    if (!fs.statSync(absoluteRoot, { throwIfNoEntry: false })?.isDirectory()) {
+        throw new Error(
+            `Instrumented Satori runtime is missing at '${absoluteRoot}'. Build the Core and MCP runtime before measurement.`,
+        );
+    }
+
+    const pending = [absoluteRoot];
+    const files = [];
+    while (pending.length > 0) {
+        const directory = pending.pop();
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+            const absolutePath = path.join(directory, entry.name);
+            if (entry.isDirectory()) {
+                pending.push(absolutePath);
+            } else if (entry.isFile()) {
+                const bytes = fs.readFileSync(absolutePath);
+                files.push({
+                    relativeFile: path.relative(absoluteRoot, absolutePath).replace(/\\/g, "/"),
+                    bytes: bytes.length,
+                    sha256: sha256(bytes),
+                });
+            } else {
+                throw new Error(`Unsupported entry in Satori runtime output: '${absolutePath}'.`);
+            }
+        }
+    }
+    files.sort((left, right) => (
+        left.relativeFile < right.relativeFile ? -1 : left.relativeFile > right.relativeFile ? 1 : 0
+    ));
+    return files;
+}
+
+export function getSatoriRuntimeIdentity(repoRoot) {
+    const roots = ["packages/core/dist", "packages/mcp/dist"].map((relativeRoot) => {
+        const files = collectRuntimeFiles(repoRoot, relativeRoot);
+        if (!files.some((file) => file.relativeFile === "index.js")) {
+            throw new Error(
+                `Instrumented Satori runtime has no index.js under '${path.join(repoRoot, relativeRoot)}'. Build the Core and MCP runtime before measurement.`,
+            );
+        }
+        return {
+            relativeRoot,
+            fileCount: files.length,
+            totalBytes: files.reduce((total, file) => total + file.bytes, 0),
+            sha256: sha256(stableJson(files)),
+        };
+    });
+    const identity = {
+        schemaVersion: 1,
+        nodeVersion: process.version,
+        roots,
+    };
+    return {
+        ...identity,
+        sha256: sha256(stableJson(identity)),
+    };
+}
+
 async function requireCleanWorktree(repoRoot) {
     const status = await gitOutput(repoRoot, ["status", "--porcelain", "--untracked-files=all"]);
     if (status.trim()) {
@@ -585,6 +656,7 @@ function isolatedEnvironment({
     configDir,
     databaseFile,
     repoRoot,
+    sourceLedgerFile,
     suiteId,
     toolLedgerFile,
     toolDefinitionsFile,
@@ -607,6 +679,8 @@ function isolatedEnvironment({
         SATORI_AGENT_DISCOVERY_REPO_ROOT: repoRoot,
         SATORI_AGENT_DISCOVERY_TOOL_LEDGER: toolLedgerFile,
         SATORI_AGENT_DISCOVERY_TOOL_DEFINITIONS: toolDefinitionsFile,
+        SATORI_SOURCE_MEASUREMENT_LEDGER: sourceLedgerFile,
+        SATORI_SOURCE_MEASUREMENT_ROOT: repoRoot,
     };
 }
 
@@ -1185,6 +1259,7 @@ async function runOpenCodeArm({
     serverUrl,
     environment,
     databaseFile,
+    sourceLedgerFile,
     toolLedgerFile,
     toolDefinitionsFile,
     outputDir,
@@ -1210,6 +1285,7 @@ async function runOpenCodeArm({
         variant: options.variant,
     });
     const dispatchStartedAtMs = Date.now();
+    const sourceLedgerStartByte = sourceLedgerFileSize(sourceLedgerFile);
     const processResult = await spawnCapture(options.opencodeCommand, args, {
         cwd: options.repoRoot,
         env: environment,
@@ -1237,6 +1313,19 @@ async function runOpenCodeArm({
         dispatchStartedAtMs,
         responseReceivedAtMs,
     });
+    const sourceLedgerSlice = readSourceLedgerSlice(sourceLedgerFile, sourceLedgerStartByte);
+    if (arm === "native" && sourceLedgerSlice.records.length > 0) {
+        throw new Error("Native arm unexpectedly emitted Satori source-measurement records.");
+    }
+    const sourceMeasurement = arm === "satori"
+        ? summarizeSourceLedger(sourceLedgerSlice.records)
+        : {
+            status: "unavailable",
+            reason: "native_tool_source_acquisition_boundary_not_exposed",
+            io: null,
+            workload: null,
+            processing: null,
+        };
     let agentResult;
     let parseFailure = null;
     try {
@@ -1285,7 +1374,12 @@ async function runOpenCodeArm({
         },
         model: aggregated.model,
         agentResult,
-        measurements: aggregated.measurements,
+        measurements: {
+            ...aggregated.measurements,
+            sourceIo: sourceMeasurement.io,
+            sourceWorkload: sourceMeasurement.workload,
+            sourceProcessing: sourceMeasurement.processing,
+        },
         events: aggregated.events,
         grade,
         harness: {
@@ -1293,6 +1387,13 @@ async function runOpenCodeArm({
             processExitCode: processResult.code,
             processSignal: processResult.signal,
             resultFile: `${prefix}.result.json`,
+            sourceMeasurement: {
+                status: sourceMeasurement.status,
+                ...(sourceMeasurement.reason ? { reason: sourceMeasurement.reason } : {}),
+                ledgerStartByte: sourceLedgerStartByte,
+                ledgerEndByte: sourceLedgerSlice.endByte,
+                records: sourceLedgerSlice.records,
+            },
             toolCalls: aggregated.tools.map((tool) => ({
                 operation: tool.tool,
                 status: tool.status,
@@ -1487,7 +1588,12 @@ export async function main(argv = process.argv.slice(2)) {
 
     const openCodeVersion = await commandVersion(options.opencodeCommand);
     const resolvedConfig = await resolveOpenCodeConfig(options.opencodeCommand, options.repoRoot);
-    const isolatedConfig = buildIsolatedOpenCodeConfig(resolvedConfig, options.model);
+    const isolatedConfig = buildIsolatedOpenCodeConfig(
+        resolvedConfig,
+        options.model,
+        options.repoRoot,
+    );
+    const runtimeIdentity = getSatoriRuntimeIdentity(options.repoRoot);
     const suiteId = `opencode-${timestampSlug()}-${crypto.randomBytes(4).toString("hex")}`;
     const outputDir = path.join(options.outputDir, suiteId);
     const configDir = path.join(outputDir, "opencode-config");
@@ -1495,16 +1601,18 @@ export async function main(argv = process.argv.slice(2)) {
     const databaseFile = path.join(outputDir, "opencode.db");
     const toolLedgerFile = path.join(outputDir, "tool-ledger.jsonl");
     const toolDefinitionsFile = path.join(outputDir, "tool-definitions.jsonl");
+    const sourceLedgerFile = path.join(outputDir, "source-ledger.jsonl");
     const environment = isolatedEnvironment({
         config: isolatedConfig,
         configDir,
         databaseFile,
         repoRoot: options.repoRoot,
+        sourceLedgerFile,
         suiteId,
         toolLedgerFile,
         toolDefinitionsFile,
     });
-    const setup = await prepareSatori(resolvedConfig, options.repoRoot, options.prepare);
+    const setup = await prepareSatori(isolatedConfig, options.repoRoot, options.prepare);
     recordMcpToolDefinitions(
         toolDefinitionsFile,
         suiteId,
@@ -1521,6 +1629,10 @@ export async function main(argv = process.argv.slice(2)) {
         harnessVersion: openCodeVersion,
         platform: os.platform(),
         architecture: os.arch(),
+        satoriRuntime: {
+            command: isolatedConfig.mcp.satori.command,
+            ...runtimeIdentity,
+        },
         ...setupIdentity(setup),
     };
     const runManifest = {
@@ -1562,6 +1674,7 @@ export async function main(argv = process.argv.slice(2)) {
                     serverUrl: server.url,
                     environment,
                     databaseFile,
+                    sourceLedgerFile,
                     toolLedgerFile,
                     toolDefinitionsFile,
                     outputDir,
@@ -1601,6 +1714,12 @@ export async function main(argv = process.argv.slice(2)) {
     if (stableJson(finalRepositoryIdentity) !== stableJson(repositoryIdentity)) {
         throw new Error(
             "Repository revision, tree, or diff identity changed during measurement; discard this run.",
+        );
+    }
+    const finalRuntimeIdentity = getSatoriRuntimeIdentity(options.repoRoot);
+    if (stableJson(finalRuntimeIdentity) !== stableJson(runtimeIdentity)) {
+        throw new Error(
+            "Core or MCP runtime output changed during measurement; discard this run.",
         );
     }
     for (const run of runs) {

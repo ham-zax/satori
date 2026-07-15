@@ -7,6 +7,7 @@ import path from "node:path";
 import {
     buildSymbolRecordsForFile,
     createLanguageAnalysisService,
+    withSourceMeasurementOperation,
     type LanguageAnalysisPort,
     type SymbolRecord,
 } from "@zokizuan/satori-core";
@@ -52,6 +53,7 @@ test("current-source validation fails closed when parsing throws", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-parser-"));
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "src", "runtime.ts"), "function currentOwner() { return true; }\n");
+    const ledgerFile = path.join(root, "source-ledger.jsonl");
     const delegate = createLanguageAnalysisService();
     const languageAnalyzer: LanguageAnalysisPort = {
         ...delegate,
@@ -60,13 +62,25 @@ test("current-source validation fails closed when parsing throws", async () => {
         },
     };
     try {
-        const [result] = await validateCurrentSourceSymbolSpans({
+        const [result] = await withSourceMeasurementOperation({
+            operation: "file_outline",
+            ledgerFile,
+            rootDir: root,
+        }, () => validateCurrentSourceSymbolSpans({
             codebaseRoot: root,
             symbols: [testSymbol()],
             languageAnalyzer,
-        });
+        }));
         assert.equal(result.match, "unavailable");
         assert.equal(result.validated, false);
+        const records = fs.readFileSync(ledgerFile, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+        const parser = records.find((record) => (
+            record.kind === "source_processing" && record.owner === "parser"
+        ));
+        assert.equal(parser?.outcome, "failed");
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -234,6 +248,42 @@ test("descriptor-bound source evidence can be reused without reopening the file"
             fileHash: evidence.observedHash,
             span: { startLine: 1, endLine: 3 },
         }), undefined);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("current-source selector records a rejected outcome after consuming an invalid range", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-selector-"));
+    const relativeFile = "src/runtime.ts";
+    const source = "export function currentOwner() { return true; }\n";
+    const ledgerFile = path.join(root, "source-ledger.jsonl");
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), source);
+
+    try {
+        await withSourceMeasurementOperation({
+            operation: "read_file",
+            ledgerFile,
+            rootDir: root,
+        }, async () => {
+            const evidence = await readCurrentSourceEvidence(root, relativeFile);
+            assert.ok(evidence);
+            assert.equal(sliceHashMatchedCurrentSourceSymbolContent(evidence, root, {
+                ...testSymbol(relativeFile),
+                fileHash: evidence.observedHash,
+                span: { startLine: 1, endLine: 3 },
+            }), undefined);
+        });
+
+        const records = fs.readFileSync(ledgerFile, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+        const selector = records.find((record) => (
+            record.kind === "source_processing" && record.owner === "selector"
+        ));
+        assert.equal(selector?.outcome, "rejected");
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

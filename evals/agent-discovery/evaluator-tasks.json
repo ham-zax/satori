@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "protocolVersion": "satori-agent-discovery-v2",
+  "protocolVersion": "satori-agent-discovery-v3",
   "name": "Satori paired autonomous code-discovery tasks",
   "modelVisible": false,
   "sourceScope": [

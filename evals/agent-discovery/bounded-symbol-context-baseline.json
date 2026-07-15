@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "satori-bounded-symbol-context-baseline-v1",
+  "phase0Contract": {
+    "fixtureId": "satori-bounded-symbol-context-phase-0-v1",
+    "sha256": "7b5d84142dddc034d8596b498f4761d890587a3e7d59ef60f34ac7d96508057a",
+    "historicalExactOpenPointer": "bounded-symbol-context-phase-0.json#historicalExactOpen"
+  },
+  "historicalProductBaseline": {
+    "status": "recorded",
+    "gitRevision": "e0a0cecc0cbe9b25c283464cfa04a6c7c3a4740f",
+    "gitTree": "be7ff2ec650ce4eb148122e5c034109e073c0677",
+    "gitDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gitCachedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "eligibleForLatencyAndSourceCostComparison": false
+  },
+  "instrumentedMeasurementBaseline": {
+    "status": "pending_clean_instrumented_revision",
+    "eligibleForLatencyAndSourceCostComparison": false,
+    "intendedComparisonBaseline": true,
+    "blocker": "The measurement tree must be committed or otherwise represented by a clean immutable revision before live baseline recording."
+  }
+}

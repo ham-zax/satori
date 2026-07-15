@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { isLanguageCapabilitySupportedForExtension } from "@zokizuan/satori-core";
+import {
+    beginSourceMeasurementObservation,
+    finishSourceMeasurementObservation,
+    isLanguageCapabilitySupportedForExtension,
+    recordSourceIo,
+    recordSourceProcessing,
+} from "@zokizuan/satori-core";
 import {
     McpTool,
     ToolContext,
@@ -427,8 +433,50 @@ export const readFileTool: McpTool = {
 
             await touchResolvedCodebaseRoot(absolutePath, ctx);
 
-            const content = fs.readFileSync(absolutePath, "utf-8");
-            const lines = splitIntoLines(content);
+            const sourceObservation = beginSourceMeasurementObservation({
+                owner: "validation",
+                filePath: absolutePath,
+                logicalBytesRequested: stat.size,
+                scanKind: "complete",
+            });
+            let sourceBytes: Buffer;
+            try {
+                sourceBytes = fs.readFileSync(absolutePath);
+                recordSourceIo({
+                    observation: sourceObservation,
+                    startByte: 0,
+                    endByte: sourceBytes.length,
+                    basis: "path_read",
+                });
+                finishSourceMeasurementObservation({
+                    observation: sourceObservation,
+                    status: sourceBytes.length === stat.size ? "completed" : "partial",
+                });
+            } catch (error) {
+                finishSourceMeasurementObservation({
+                    observation: sourceObservation,
+                    status: "failed",
+                });
+                throw error;
+            }
+            const selectorStartedAt = performance.now();
+            let selectorOutcome: "success" | "failed" = "failed";
+            let content: string;
+            let lines: string[];
+            try {
+                content = sourceBytes.toString("utf8");
+                lines = splitIntoLines(content);
+                selectorOutcome = "success";
+            } finally {
+                recordSourceProcessing({
+                    observation: sourceObservation,
+                    owner: "selector",
+                    inputBytesProcessed: sourceBytes.length,
+                    basis: "shared_buffer",
+                    outcome: selectorOutcome,
+                    durationMs: performance.now() - selectorStartedAt,
+                });
+            }
             const totalLines = lines.length;
 
             const maxLines = Math.max(1, ctx.readFileMaxLines);

@@ -5,6 +5,11 @@ import * as fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+    beginSourceMeasurementObservation,
+    withSourceMeasurementOperation,
+    type SourceMeasurementLedgerRecord,
+} from '../measurement/source-ledger';
+import {
     assertDescriptorBoundIndexingSupported,
     descriptorPathInsideRoot,
     isRealPathInsideRoot,
@@ -250,6 +255,58 @@ test('readFileHandleExactly rejects a short descriptor read', async () => {
         );
     } finally {
         await handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('readFileHandleExactly records failed and partial complete-scan attempts honestly', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-read-outcomes-'));
+    const ledgerFile = path.join(root, 'source-ledger.jsonl');
+    const cases = [
+        { name: 'empty.ts', content: '', expectedSize: 1, expectedStatus: 'failed' },
+        { name: 'short.ts', content: 'abc', expectedSize: 4, expectedStatus: 'partial' },
+        { name: 'grown.ts', content: 'abcdef', expectedSize: 3, expectedStatus: 'partial' },
+    ] as const;
+
+    try {
+        await withSourceMeasurementOperation({
+            operation: 'read_file',
+            ledgerFile,
+            rootDir: root,
+        }, async () => {
+            for (const row of cases) {
+                const filePath = path.join(root, row.name);
+                fs.writeFileSync(filePath, row.content, 'utf8');
+                const handle = await fsp.open(filePath, fs.constants.O_RDONLY);
+                try {
+                    const observation = beginSourceMeasurementObservation({
+                        owner: 'validation',
+                        filePath,
+                        logicalBytesRequested: row.expectedSize,
+                        scanKind: 'complete',
+                    });
+                    await assert.rejects(() => readFileHandleExactly(
+                        handle,
+                        row.expectedSize,
+                        observation,
+                    ));
+                } finally {
+                    await handle.close();
+                }
+            }
+        });
+
+        const records = fs.readFileSync(ledgerFile, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line) as SourceMeasurementLedgerRecord);
+        const outcomes = records.filter(
+            (record): record is Extract<SourceMeasurementLedgerRecord, { kind: 'source_observation_outcome' }> => (
+                record.kind === 'source_observation_outcome'
+            ),
+        );
+        assert.deepEqual(outcomes.map((record) => record.status), cases.map((row) => row.expectedStatus));
+    } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
 });

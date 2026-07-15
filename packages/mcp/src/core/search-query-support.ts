@@ -2,11 +2,17 @@ import * as fs from "fs";
 import * as path from "path";
 import ignore from "ignore";
 import {
+    beginSourceMeasurementObservation,
     compareContractStrings,
     createLanguageAnalysisService,
     getLanguageIdFromFilename,
     isLanguageCapabilitySupportedForFilename,
     openRegularFileInsideRoot,
+    finishSourceMeasurementObservation,
+    recordSourceIo,
+    recordSourceProcessing,
+    sourceIoOwnerForCurrentOperation,
+    type SourceMeasurementObservation,
     type SymbolRecord,
     type VoyageAIReranker,
 } from "@zokizuan/satori-core";
@@ -79,6 +85,59 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isPathInsideRoot(candidate: string, root: string): boolean {
     const relative = path.relative(root, candidate);
     return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+async function readMeasuredSearchSource(
+    handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>>,
+    stat: fs.Stats,
+    absolutePath: string,
+): Promise<{ content: string; observation?: SourceMeasurementObservation }> {
+    const observation = beginSourceMeasurementObservation({
+        owner: sourceIoOwnerForCurrentOperation("search_evidence"),
+        filePath: absolutePath,
+        logicalBytesRequested: stat.size,
+        scanKind: "complete",
+    });
+    let sourceBytes: Buffer;
+    try {
+        sourceBytes = await handle.readFile();
+        recordSourceIo({
+            observation,
+            startByte: 0,
+            endByte: sourceBytes.length,
+            basis: "descriptor_read",
+        });
+        finishSourceMeasurementObservation({
+            observation,
+            status: sourceBytes.length === stat.size ? "completed" : "partial",
+        });
+    } catch (error) {
+        finishSourceMeasurementObservation({
+            observation,
+            status: "failed",
+        });
+        throw error;
+    }
+    const processingStartedAt = performance.now();
+    let processingOutcome: "success" | "failed" = "failed";
+    let content: string;
+    try {
+        content = sourceBytes.toString("utf8");
+        processingOutcome = "success";
+    } finally {
+        recordSourceProcessing({
+            observation,
+            owner: "search_evidence",
+            inputBytesProcessed: sourceBytes.length,
+            basis: "shared_buffer",
+            outcome: processingOutcome,
+            durationMs: performance.now() - processingStartedAt,
+        });
+    }
+    return {
+        content,
+        ...(observation ? { observation } : {}),
+    };
 }
 
 function selectBoundedContractPaths(
@@ -317,7 +376,7 @@ export class SearchQuerySupport {
                 if (!stat.isFile() || stat.size > SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES) {
                     continue;
                 }
-                content = await handle.readFile('utf8');
+                ({ content } = await readMeasuredSearchSource(handle, stat, absolutePath));
             } catch {
                 continue;
             } finally {
@@ -408,13 +467,18 @@ export class SearchQuerySupport {
             let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
             let stat: fs.Stats;
             let content: string;
+            let sourceObservation: SourceMeasurementObservation | undefined;
             try {
                 handle = await openRegularFileInsideRoot(logicalPath, canonicalRoot);
                 stat = await handle.stat();
                 if (!stat.isFile() || stat.size > SEARCH_DIRTY_OVERLAY_MAX_BYTES || bytesRead + stat.size > SEARCH_DIRTY_OVERLAY_TOTAL_BYTES) {
                     continue;
                 }
-                content = await handle.readFile("utf8");
+                ({ content, observation: sourceObservation } = await readMeasuredSearchSource(
+                    handle,
+                    stat,
+                    logicalPath,
+                ));
             } catch {
                 continue;
             } finally {
@@ -423,10 +487,22 @@ export class SearchQuerySupport {
             bytesRead += stat.size;
             const language = getLanguageIdFromFilename(relativePath, "text");
             let chunks: Awaited<ReturnType<typeof analyzer.analyze>>["chunks"] = [];
+            const parserStartedAt = performance.now();
+            let parserOutcome: "success" | "failed" = "failed";
             try {
                 chunks = (await analyzer.analyze({ content, language, relativePath })).chunks;
+                parserOutcome = "success";
             } catch {
                 chunks = [];
+            } finally {
+                recordSourceProcessing({
+                    observation: sourceObservation,
+                    owner: "parser",
+                    inputBytesProcessed: Buffer.byteLength(content, "utf8"),
+                    basis: "parser_input",
+                    outcome: parserOutcome,
+                    durationMs: performance.now() - parserStartedAt,
+                });
             }
 
             for (const chunk of chunks) {
@@ -754,7 +830,7 @@ export class SearchQuerySupport {
                     }
                     continue;
                 }
-                content = await handle.readFile('utf8');
+                ({ content } = await readMeasuredSearchSource(handle, stat, absolutePath));
             } catch {
                 continue;
             } finally {

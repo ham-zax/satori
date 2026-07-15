@@ -531,7 +531,122 @@ test("session aggregation uses provider and tool events for authoritative measur
     assert.equal(aggregated.measurements.cachedInputTokens, 50);
     assert.equal(aggregated.measurements.toolCalls, 1);
     assert.equal(aggregated.measurements.stepsToVerifiedAnswer, 1);
+    assert.equal(aggregated.measurements.investigationTailToolCalls, 0);
     assert.equal(aggregated.events.length, 3);
+});
+
+test("session aggregation separates retrieval, evidence completion, and investigation tail", () => {
+    const persisted = syntheticPersistedSession();
+    persisted.parts = [
+        {
+            id: "tool-target",
+            message_id: "assistant-1",
+            time_created: 1_010,
+            time_updated: 1_020,
+            data: {
+                type: "tool",
+                tool: "grep",
+                callID: "call-target",
+                state: {
+                    status: "completed",
+                    input: { path: "/repo/packages/mcp/src", pattern: "targetOwner" },
+                    output: "packages/mcp/src/owner.ts targetOwner",
+                    time: { start: 1_010, end: 1_020 },
+                },
+            },
+        },
+        {
+            id: "tool-source",
+            message_id: "assistant-1",
+            time_created: 1_030,
+            time_updated: 1_040,
+            data: {
+                type: "tool",
+                tool: "read",
+                callID: "call-source",
+                state: {
+                    status: "completed",
+                    input: { filePath: "/repo/packages/mcp/src/owner.ts" },
+                    output: "targetOwner implementation",
+                    time: { start: 1_030, end: 1_040 },
+                },
+            },
+        },
+        {
+            id: "tool-relation",
+            message_id: "assistant-1",
+            time_created: 1_050,
+            time_updated: 1_060,
+            data: {
+                type: "tool",
+                tool: "grep",
+                callID: "call-relation",
+                state: {
+                    status: "completed",
+                    input: { path: "/repo/packages/mcp/src", pattern: "resolver" },
+                    output: "packages/mcp/src/resolver.ts resolver",
+                    time: { start: 1_050, end: 1_060 },
+                },
+            },
+        },
+        {
+            id: "tool-tail",
+            message_id: "assistant-1",
+            time_created: 1_070,
+            time_updated: 1_080,
+            data: {
+                type: "tool",
+                tool: "grep",
+                callID: "call-tail",
+                state: {
+                    status: "completed",
+                    input: { path: "/repo/packages/mcp/src", pattern: "unneeded" },
+                    output: "unneeded follow-up",
+                    time: { start: 1_070, end: 1_080 },
+                },
+            },
+        },
+        persisted.parts.at(-1),
+    ];
+
+    const expected = {
+        ownerFile: "packages/mcp/src/owner.ts",
+        ownerSymbol: "targetOwner",
+        requiredRelations: [{
+            relation: "callee",
+            symbol: "resolver",
+            file: "packages/mcp/src/resolver.ts",
+        }],
+    };
+    const aggregated = aggregateSessionData({
+        persisted,
+        expected,
+        toolLedger: [],
+        dispatchStartedAtMs: 1_000,
+        responseReceivedAtMs: 1_300,
+    });
+
+    assert.equal(aggregated.measurements.stepsToFirstCorrectTarget, 1);
+    assert.equal(aggregated.measurements.stepsToFirstOwnerSource, 2);
+    assert.equal(aggregated.measurements.stepsToVerifiedAnswer, 3);
+    assert.equal(aggregated.measurements.investigationTailToolCalls, 1);
+
+    const incomplete = aggregateSessionData({
+        persisted,
+        expected: {
+            ...expected,
+            requiredRelations: [{
+                relation: "caller",
+                symbol: "missingCaller",
+                file: "packages/mcp/src/missing.ts",
+            }],
+        },
+        toolLedger: [],
+        dispatchStartedAtMs: 1_000,
+        responseReceivedAtMs: 1_300,
+    });
+    assert.equal(incomplete.measurements.stepsToVerifiedAnswer, null);
+    assert.equal(incomplete.measurements.investigationTailToolCalls, null);
 });
 
 test("grading checks hidden facts and relationships while allowing parallel tool calls", () => {
@@ -609,13 +724,19 @@ test("grading accepts qualified identifiers but rejects prose symbol labels", ()
     }).failureReasons.join(","), /missing_relation:caller:caller/);
 });
 
-test("reporting uses medians and ranges from correct runs only", () => {
-    const run = (arm, passed, wall) => ({
+test("reporting separates retrieval, evidence route, and final agent cost", () => {
+    const run = (arm, passed, wall, milestones = {}) => ({
         taskId: "task",
         arm,
         grade: { passed },
         measurements: {
             taskWallTimeMs: wall,
+            timeToFirstCorrectTargetMs: milestones.targetMs === undefined
+                ? wall / 2
+                : milestones.targetMs,
+            timeToFirstOwnerSourceMs: milestones.sourceMs === undefined
+                ? wall / 2 + 10
+                : milestones.sourceMs,
             toolLatencyMs: wall / 2,
             apiInputTokens: wall,
             apiOutputTokens: 10,
@@ -624,12 +745,30 @@ test("reporting uses medians and ranges from correct runs only", () => {
             visibleToolResultBytes: 100,
             toolCalls: arm === "native" ? 4 : 3,
             modelTurns: arm === "native" ? 5 : 4,
-            stepsToVerifiedAnswer: arm === "native" ? 4 : 3,
+            stepsToFirstCorrectTarget: milestones.targetStep === undefined
+                ? 1
+                : milestones.targetStep,
+            stepsToFirstOwnerSource: milestones.sourceStep === undefined
+                ? 2
+                : milestones.sourceStep,
+            stepsToVerifiedAnswer: milestones.verifiedStep === undefined
+                ? (arm === "native" ? 4 : 3)
+                : milestones.verifiedStep,
+            investigationTailToolCalls: milestones.tail === undefined
+                ? 0
+                : milestones.tail,
         },
     });
     const runs = [
         run("native", true, 100),
-        run("native", false, 1),
+        run("native", false, 1, {
+            targetMs: 1,
+            sourceMs: 2,
+            targetStep: 1,
+            sourceStep: 2,
+            verifiedStep: null,
+            tail: null,
+        }),
         run("native", true, 300),
         run("satori", true, 80),
         run("satori", true, 120),
@@ -652,7 +791,14 @@ test("reporting uses medians and ranges from correct runs only", () => {
     });
     assert.equal(summary.task.native.metrics.taskWallTimeMs.median, 300);
     assert.equal(summary.task.native.allMetrics.taskWallTimeMs.median, 100);
-    assert.match(report, /Only correct runs contribute/);
+    assert.equal(summary.task.native.allMetrics.stepsToFirstCorrectTarget.samples, 3);
+    assert.equal(summary.task.native.allMetrics.stepsToVerifiedAnswer.samples, 2);
+    assert.match(report, /## 1\. Retrieval quality - all attempts/);
+    assert.match(report, /## 2\. Evidence route - all attempts/);
+    assert.match(report, /## 3\. Full autonomous-agent cost - correct runs only/);
+    assert.match(report, /Final session totals include any investigation tail/);
+    assert.match(report, /3\/3/);
+    assert.match(report, /2\/3/);
     assert.match(report, /300 \[100-300\]/);
     assert.match(report, /Raw cost of all attempts/);
     assert.match(report, /100 \[1-300\]/);

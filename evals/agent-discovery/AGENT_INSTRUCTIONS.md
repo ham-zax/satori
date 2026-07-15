@@ -213,6 +213,11 @@ OpenCode's SQLite event records and the guard plugin provide:
 The runner grades the compact answer and real tool events against the frozen
 key. Only correct runs contribute to comparative medians and ranges.
 
+The final report separates retrieval milestones, evidence completion and its
+investigation tail, and full autonomous-agent cost. Retrieval and evidence
+coverage include failed final answers; paired latency and token comparisons use
+correct runs, while a separate all-attempt diagnostic retains failed-run cost.
+
 Artifacts are written under:
 
 ```text

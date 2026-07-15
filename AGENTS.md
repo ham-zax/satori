@@ -56,6 +56,30 @@ These are my preferences so we can stay aligned while we work.
   scripts, and generated adapters. Use the graph for indexed code and a
   bounded repository-wide search for consumers the graph does not cover.
 
+## Repetitive, generated, or high-risk changes
+
+Keep an ordinary one-owner fix small. Use this workflow only when a change
+repeats, is substantially generated, or crosses a high-risk boundary.
+
+1. Freeze a compact execution contract in the task plan or an existing design
+   document: authoritative prior behavior, invariant mappings, allowed
+   exceptions, explicit unknowns, affected owners, and the acceptance evidence.
+   Create no new artifact unless later work will reuse it.
+2. Separate equivalence from improvement. Preserve behavior and structure first;
+   perform cleanup, redesign, and optimization only in a later, separately
+   justified pass.
+3. Pilot the normal case, one boundary case, and the hardest known case. Compare
+   old and new behavior side by side before expanding the change.
+4. Implement one ownership-bounded batch. Review its complete diff against the
+   contract, test the strongest realistic failure path, and run only the proofs
+   invalidated by that batch.
+5. If a defect pattern repeats, repair the mapping, instructions, plan, or
+   harness that generated it, add the nearest deterministic regression test,
+   and rerun the affected pilot. Do not hand-patch the same faulty output across
+   many files.
+6. Scale only while each batch remains understandable, reviewable, and green.
+   Throughput that outruns validation is negative progress.
+
 ## Safety
 
 - Never clear indexes, remove data, reset repository state, or discard work
@@ -64,16 +88,20 @@ These are my preferences so we can stay aligned while we work.
   explicitly ask.
 - Inspect repository status before editing and preserve existing staged,
   unstaged, and untracked work.
+- In a dirty or shared worktree, bound work around files already owned by the
+  task. Avoid broad formatting, fixing, generation, or cleanup commands that can
+  rewrite unrelated work.
 - When input is malformed, state is ambiguous, or an invariant cannot be
   established, prefer an explicit failure or blocker over invented behavior.
 
-## Agents and context
+## Agent and context
 
-- Default to one agent. Do not spawn subagents unless I ask.
-- When subagents are requested, use them for bounded, independent work with
-  concise evidence summaries. Avoid overlapping scopes and edits.
-- The main agent owns synthesis, architecture decisions, and final repository
-  edits unless I explicitly delegate a bounded implementation slice.
+- Work as one agent. Do not spawn subagents or delegate work unless I explicitly
+  ask for a specific parallel task.
+- When a task is broad, sequence it into bounded, reviewable batches instead of
+  creating parallel work by default.
+- Own the synthesis, architecture decisions, implementation, verification, and
+  final repository diff end to end.
 - Read targeted files, symbols, and line ranges.
 - Keep context bounded: avoid dumping whole directories, large files, logs,
   generated artifacts, or build output; do not reread unchanged files or repeat
@@ -90,9 +118,15 @@ These are my preferences so we can stay aligned while we work.
 
 ## Evidence and testing
 
-- Treat memory, generated reports, indexes, summaries, and agent handoffs as
+- Treat memory, generated reports, indexes, summaries, and handoffs as
   retrieval aids rather than authority.
 - Distinguish observations, hypotheses, assumptions, and verified findings.
+- Before a measurement or comparison, freeze the task, expected truth, relevant
+  revision, runtime and data identities, instructions, and repetition rule.
+  Keep exploratory results separate from acceptance evidence, and never improve
+  the answer key after seeing the outcome.
+- Establish correctness and required evidence before comparing cost, speed, or
+  volume. A faster wrong result is still a failure.
 - A defect claim should connect expected behavior, observed behavior, a
   reachable runtime path, a demonstrated mismatch, and meaningful impact.
 - Prefer one focused falsification test over a pile of broad smoke tests.
@@ -111,7 +145,6 @@ These are my preferences so we can stay aligned while we work.
   integration coverage.
 - Before finishing, compare the requested outcome with the actual diff and
   report what was tested, what was not tested, and any remaining risk.
-
 
 ## Communication
 

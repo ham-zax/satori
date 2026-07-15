@@ -1,4 +1,9 @@
 import type {
+    RepositoryOntologyTag,
+    SymbolKind,
+    SymbolSpan,
+} from "@zokizuan/satori-core";
+import type {
     FreshnessDecision,
     PreparedReadObservationUnavailableReason,
     PreparedReadWatcherDiagnostics,
@@ -581,10 +586,27 @@ export interface FileOutlineInput {
 
 export type FileOutlineStatus = "ok" | "not_found" | "requires_reindex" | "not_indexed" | "not_ready" | "unsupported" | "ambiguous";
 
-export interface FileOutlineSymbolResult {
+export type SymbolParentResolution = "resolved" | "ambiguous" | "missing" | "not_applicable";
+
+export interface CanonicalSymbolIdentity {
     symbolId: string;
+    symbolKey: string;
+    name: string;
+    qualifiedName: string;
     symbolLabel: string;
-    span: SearchSpan;
+    kind: SymbolKind;
+    language: string;
+    file: string;
+    span: SymbolSpan;
+    parentQualifiedNamePath: string[];
+    parentResolution: SymbolParentResolution;
+    parentKey?: string;
+    parentSymbolId?: string;
+    exported?: boolean;
+    ontologyTags?: RepositoryOntologyTag[];
+}
+
+export interface FileOutlineSymbolResult extends CanonicalSymbolIdentity {
     callGraphHint: CallGraphHint;
 }
 

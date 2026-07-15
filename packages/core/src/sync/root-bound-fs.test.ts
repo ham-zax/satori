@@ -11,14 +11,19 @@ import {
 } from '../measurement/source-ledger';
 import {
     assertDescriptorBoundIndexingSupported,
+    canPublishRootBoundFileIdentity,
     descriptorPathInsideRoot,
     isRealPathInsideRoot,
     openDirectoryInsideRoot,
     openRegularFileInsideRoot,
     openRegularFileInsideRootNoFollow,
+    openRegularFileWithIdentityInsideRoot,
     readFileHandleExactly,
     resolveInsideRoot,
+    sameRootBoundFileIdentity,
     verifyStableFileObservation,
+    verifyStableFileDescriptorObservation,
+    type RootBoundFileIdentity,
 } from './root-bound-fs';
 
 function createDirectorySymlinkOrSkip(t: TestContext, target: string, linkPath: string): boolean {
@@ -203,6 +208,70 @@ test('verifyStableFileObservation rejects pathname replacement after descriptor 
         );
     } finally {
         await handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('root-bound identity publishes only supported final-target identities', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-root-identity-'));
+    const filePath = path.join(root, 'source.ts');
+    fs.writeFileSync(filePath, 'export const value = true;\n', 'utf8');
+    const opened = await openRegularFileWithIdentityInsideRoot(filePath, root);
+    try {
+        assert.equal(opened.identity.canonicalRelativePath, 'source.ts');
+        if (process.platform === 'linux' && opened.identity.strength !== 'unsupported') {
+            assert.equal(opened.identity.strength, 'target_only');
+            assert.equal(canPublishRootBoundFileIdentity(opened.identity), true);
+            assert.match(opened.identity.stableIdentity, /^[a-f0-9]{64}$/);
+        } else {
+            assert.equal(opened.identity.strength, 'unsupported');
+            assert.equal(canPublishRootBoundFileIdentity(opened.identity), false);
+        }
+    } finally {
+        await opened.handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('root-bound identity policy distinguishes strong, target-only, and unsupported evidence', () => {
+    const identity = (strength: RootBoundFileIdentity['strength']): RootBoundFileIdentity => ({
+        platform: 'test',
+        stableIdentity: 'same-file',
+        canonicalRelativePath: 'src/source.ts',
+        strength,
+    });
+
+    assert.equal(canPublishRootBoundFileIdentity(identity('strong')), true);
+    assert.equal(canPublishRootBoundFileIdentity(identity('target_only')), true);
+    assert.equal(canPublishRootBoundFileIdentity(identity('unsupported')), false);
+    assert.equal(sameRootBoundFileIdentity(identity('strong'), identity('target_only')), true);
+    assert.equal(sameRootBoundFileIdentity(identity('target_only'), {
+        ...identity('target_only'),
+        canonicalRelativePath: 'src/replaced.ts',
+    }), false);
+});
+
+test('root-bound identity rejects an atomic path replacement while the old descriptor stays stable', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-root-identity-replaced-'));
+    const filePath = path.join(root, 'source.ts');
+    const replacementPath = path.join(root, 'replacement.ts');
+    fs.writeFileSync(filePath, 'export const source = "old";\n', 'utf8');
+    fs.writeFileSync(replacementPath, 'export const source = "new";\n', 'utf8');
+    const opened = await openRegularFileWithIdentityInsideRoot(filePath, root);
+    let current: Awaited<ReturnType<typeof openRegularFileWithIdentityInsideRoot>> | undefined;
+    try {
+        await readFileHandleExactly(opened.handle, opened.observedStat.size);
+        await verifyStableFileDescriptorObservation(
+            opened.handle,
+            filePath,
+            opened.observedStat,
+        );
+        fs.renameSync(replacementPath, filePath);
+        current = await openRegularFileWithIdentityInsideRoot(filePath, root);
+        assert.equal(sameRootBoundFileIdentity(opened.identity, current.identity), false);
+    } finally {
+        await current?.handle.close();
+        await opened.handle.close();
         fs.rmSync(root, { recursive: true, force: true });
     }
 });

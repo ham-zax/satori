@@ -580,8 +580,16 @@ test('golden MCP file_outline ok shape', async () => {
             outline: {
                 symbols: [{
                     symbolId: '<symbol:function:run>',
+                    symbolKey: '<symbol-key:function:run>',
+                    name: 'run',
+                    qualifiedName: 'run',
                     symbolLabel: 'function run()',
+                    kind: 'function',
+                    language: 'typescript',
+                    file: 'src/runtime.ts',
                     span: { startLine: 1, endLine: 3 },
+                    parentQualifiedNamePath: [],
+                    parentResolution: 'not_applicable',
                     callGraphHint: {
                         supported: true,
                         validated: true,

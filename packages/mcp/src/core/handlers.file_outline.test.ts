@@ -782,7 +782,10 @@ test('handleFileOutline repairs stale Python multiline-signature spans from sour
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.outline.symbols.length, 1);
-        assert.deepEqual(payload.outline.symbols[0].span, { startLine: 4, endLine: 15 });
+        assert.deepEqual({
+            startLine: payload.outline.symbols[0].span.startLine,
+            endLine: payload.outline.symbols[0].span.endLine,
+        }, { startLine: 4, endLine: 15 });
         assert.deepEqual(payload.outline.symbols[0].callGraphHint.symbolRef.span, { startLine: 4, endLine: 15 });
         assert.equal(payload.outline.symbols[0].callGraphHint.symbolRef.symbolId, attach.symbolInstanceId);
         assert.ok(payload.warnings.includes('OUTLINE_SPAN_START_BEFORE_DEF'));
@@ -830,7 +833,10 @@ test('handleFileOutline exact mode repairs stale TypeScript spans from current s
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.outline.symbols[0].symbolId, owner.symbolInstanceId);
-        assert.deepEqual(payload.outline.symbols[0].span, { startLine: 3, endLine: 6 });
+        assert.deepEqual({
+            startLine: payload.outline.symbols[0].span.startLine,
+            endLine: payload.outline.symbols[0].span.endLine,
+        }, { startLine: 3, endLine: 6 });
         assert.deepEqual(payload.outline.symbols[0].callGraphHint.symbolRef.span, { startLine: 3, endLine: 6 });
     }));
 });
@@ -875,7 +881,10 @@ test('handleFileOutline exact mode repairs stale JavaScript spans from current s
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.outline.symbols[0].symbolId, owner.symbolInstanceId);
-        assert.deepEqual(payload.outline.symbols[0].span, { startLine: 3, endLine: 5 });
+        assert.deepEqual({
+            startLine: payload.outline.symbols[0].span.startLine,
+            endLine: payload.outline.symbols[0].span.endLine,
+        }, { startLine: 3, endLine: 5 });
     }));
 });
 
@@ -1002,7 +1011,10 @@ test('handleFileOutline exact symbol id validates its full duplicate-key cohort 
         const payload = JSON.parse(response.content[0]?.text || '{}');
         assert.equal(payload.status, 'ok');
         assert.equal(payload.outline.symbols[0].symbolId, second.symbolInstanceId);
-        assert.deepEqual(payload.outline.symbols[0].span, { startLine: 3, endLine: 3 });
+        assert.deepEqual({
+            startLine: payload.outline.symbols[0].span.startLine,
+            endLine: payload.outline.symbols[0].span.endLine,
+        }, { startLine: 3, endLine: 3 });
     }));
 });
 
@@ -1350,7 +1362,10 @@ test('handleFileOutline exactly resolves Java, C#, C++, and Scala symbols withou
                 assert.equal(payload.status, 'ok', fixture.language);
                 assert.equal(payload.outline.symbols.length, 1, fixture.language);
                 assert.equal(payload.outline.symbols[0].symbolId, symbol.symbolInstanceId, fixture.language);
-                assert.deepEqual(payload.outline.symbols[0].span, {
+                assert.deepEqual({
+                    startLine: payload.outline.symbols[0].span.startLine,
+                    endLine: payload.outline.symbols[0].span.endLine,
+                }, {
                     startLine: fixture.startLine,
                     endLine: fixture.endLine,
                 }, fixture.language);
@@ -1784,7 +1799,15 @@ test('handleFileOutline registry exact mode resolves a unique symbolInstanceId',
         assert.equal(payload.status, 'ok');
         assert.equal(payload.outline.symbols.length, 1);
         assert.equal(payload.outline.symbols[0].symbolId, beta.symbolInstanceId);
+        assert.equal(payload.outline.symbols[0].symbolKey, beta.symbolKey);
+        assert.equal(payload.outline.symbols[0].name, 'beta');
+        assert.equal(payload.outline.symbols[0].qualifiedName, 'beta');
         assert.equal(payload.outline.symbols[0].symbolLabel, 'function beta()');
+        assert.equal(payload.outline.symbols[0].kind, 'function');
+        assert.equal(payload.outline.symbols[0].language, 'typescript');
+        assert.equal(payload.outline.symbols[0].file, 'src/runtime.ts');
+        assert.deepEqual(payload.outline.symbols[0].parentQualifiedNamePath, []);
+        assert.equal(payload.outline.symbols[0].parentResolution, 'not_applicable');
     }));
 });
 

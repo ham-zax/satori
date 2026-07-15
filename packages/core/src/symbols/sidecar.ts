@@ -188,6 +188,7 @@ export type ReadRelationshipSidecarResult =
     | {
         status: 'ok';
         rootPath: string;
+        manifestHash: string;
         manifest: RelationshipManifest;
         records: RelationshipRecord[];
         analysisByFile: Map<string, RelationshipAnalysisEvidence>;
@@ -198,6 +199,7 @@ export type ReadRelationshipSidecarResult =
         status: 'missing' | 'incompatible' | 'corrupt';
         rootPath: string;
         reason: string;
+        manifestHash?: undefined;
         manifest?: undefined;
         records?: undefined;
         analysisByFile?: undefined;
@@ -244,6 +246,10 @@ function serializeJson(value: unknown): string {
 
 function hashSerializedJson(value: unknown): string {
     return crypto.createHash('sha256').update(serializeJson(value), 'utf8').digest('hex');
+}
+
+export function computeRelationshipManifestHash(manifest: RelationshipManifest): string {
+    return hashSerializedJson(manifest);
 }
 
 export function computeNavigationGenerationSealHash(seal: NavigationGenerationSeal): string {
@@ -1340,12 +1346,14 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
     }
 
     let manifest: RelationshipManifest;
+    let manifestHash: string;
     try {
         const serializedManifest = await fs.promises.readFile(manifestPath, 'utf8');
         const rawManifest = JSON.parse(serializedManifest) as unknown;
+        manifestHash = crypto.createHash('sha256').update(serializedManifest, 'utf8').digest('hex');
         if (
             generation
-            && crypto.createHash('sha256').update(serializedManifest, 'utf8').digest('hex') !== generation.relationshipManifestHash
+            && manifestHash !== generation.relationshipManifestHash
         ) {
             return {
                 status: 'incompatible',
@@ -1498,6 +1506,7 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
     return {
         status: 'ok',
         rootPath,
+        manifestHash,
         manifest,
         records: records.sort(compareRelationshipRecords),
         analysisByFile,

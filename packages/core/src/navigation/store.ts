@@ -31,6 +31,7 @@ type NavigationStoreRegistryOk = {
 type NavigationStoreRelationshipsOk = {
     status: 'ok';
     rootPath: string;
+    manifestHash: string;
     manifest: RelationshipManifest;
     records: RelationshipRecord[];
     warnings: string[];
@@ -238,6 +239,7 @@ async function readRelationshipState(input: NavigationRelationshipsQueryInput): 
     return {
         status: 'ok',
         rootPath: result.rootPath,
+        manifestHash: result.manifestHash,
         manifest: result.manifest,
         records: [...records].sort(compareRelationshipRecords),
         warnings: result.warnings,

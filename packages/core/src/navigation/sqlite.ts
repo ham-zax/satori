@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {
     buildSymbolRegistry,
+    computeRelationshipManifestHash,
     computeSymbolRegistryManifestHash,
     isRelationshipManifest,
     isRelationshipRecord,
@@ -659,6 +660,13 @@ function readRelationshipStateFromSqlite(input: NavigationRelationshipsQueryInpu
         if (parsedRelationshipManifest.symbolRegistryManifestHash !== expectedManifestHash) {
             return buildFailure(rootPath, 'relationship manifest hash does not match symbol registry manifest hash', 'incompatible');
         }
+        const relationshipManifestHash = ensureManifestValue(manifest, 'relationship_manifest_hash', rootPath);
+        if (typeof relationshipManifestHash !== 'string') {
+            return relationshipManifestHash;
+        }
+        if (computeRelationshipManifestHash(parsedRelationshipManifest) !== relationshipManifestHash) {
+            return buildFailure(rootPath, 'relationship manifest content does not match its stored identity', 'incompatible');
+        }
 
         const rawWarnings = manifest.get('relationship_warnings_json') || '[]';
         const parsedWarnings = parseJsonValue<string[]>(rawWarnings, rootPath, 'relationship_warnings_json');
@@ -744,6 +752,7 @@ function readRelationshipStateFromSqlite(input: NavigationRelationshipsQueryInpu
         return {
             status: 'ok',
             rootPath,
+            manifestHash: relationshipManifestHash,
             manifest: parsedRelationshipManifest,
             records,
             warnings: [...new Set(parsedWarnings)].sort(compareStrings),
@@ -817,6 +826,9 @@ export async function importNavigationToSqlite(input: ImportNavigationToSqliteIn
         stateRoot: input.stateRoot,
         expectedSymbolRegistryManifestHash: registryState.manifestHash,
     });
+    const relationshipManifestHash = compatibility.relationships.status === 'ok'
+        ? compatibility.relationships.manifestHash
+        : activeGeneration?.relationshipManifestHash ?? 'unavailable';
 
     const temporarySqlitePath = `${sqlitePath}.tmp-${process.pid}-${Date.now()}`;
     await fs.promises.mkdir(path.dirname(sqlitePath), { recursive: true });
@@ -832,7 +844,7 @@ export async function importNavigationToSqlite(input: ImportNavigationToSqliteIn
         insertManifestValue(database, 'normalized_root_path', registryState.registry.manifest.normalizedRootPath);
         insertManifestValue(database, 'registry_manifest_hash', registryState.manifestHash);
         insertManifestValue(database, 'navigation_generation_id', activeGeneration?.generationId ?? 'standalone');
-        insertManifestValue(database, 'relationship_manifest_hash', activeGeneration?.relationshipManifestHash ?? 'standalone');
+        insertManifestValue(database, 'relationship_manifest_hash', relationshipManifestHash);
         insertManifestValue(database, 'registry_manifest_json', JSON.stringify(registryState.registry.manifest));
         insertManifestValue(database, 'symbol_content_hash', symbolContentDigest(registryState.registry.symbols));
         insertManifestValue(database, 'imported_at', new Date().toISOString());

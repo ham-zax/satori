@@ -127,6 +127,15 @@ import {
     type TrackedRootReadinessState,
 } from "./tracked-root-readiness.js";
 import { NavigationHandlers } from "./navigation-handlers.js";
+import {
+    composeSymbolContext as composePreparedSymbolContext,
+    type ComposeSymbolContextInput,
+    type ComposeSymbolContextResult,
+    type PreparedRelationshipSnapshot,
+    type PrepareSymbolContextSnapshotResult,
+} from "./symbol-context-composer.js";
+import { prepareRelationshipTraversals } from "./prepared-relationship-traversal.js";
+import { findExactRegistrySymbols } from "./registry-file-outline.js";
 import { ManageMaintenanceHandlers } from "./manage-maintenance-handlers.js";
 import { ManageIndexingHandlers } from "./manage-indexing-handlers.js";
 import { VectorBackendMaintenance } from "./vector-backend-maintenance.js";
@@ -1373,6 +1382,113 @@ export class ToolHandlers {
             this.seedPreparedRead(state, false);
         }
         return state;
+    }
+
+    private async prepareSymbolContextSnapshot(input: {
+        codebaseRoot: string;
+        relativeFile: string;
+        symbolId?: string;
+        symbolLabel?: string;
+    }): Promise<PrepareSymbolContextSnapshotResult> {
+        const preparedRead = await this.prepareNavigationRead(
+            path.resolve(input.codebaseRoot, input.relativeFile),
+        );
+        if (preparedRead.state !== 'ready') {
+            return {
+                status: 'unavailable',
+                reason: `prepared_navigation_${preparedRead.state}`,
+            };
+        }
+
+        const initialNavigationIdentity = this.getPreparedNavigationIdentity(preparedRead);
+        if (!initialNavigationIdentity) {
+            return { status: 'unavailable', reason: 'prepared_navigation_identity_unavailable' };
+        }
+        const registryState = await this.loadPreparedNavigationSymbolsByFile(
+            preparedRead,
+            input.relativeFile,
+        );
+        if (registryState.status !== 'ok') {
+            return {
+                status: 'unavailable',
+                reason: `symbol_registry_${registryState.status}`,
+            };
+        }
+        const navigationBinding = preparedRead.generationReceipt?.navigation;
+        if (
+            !navigationBinding
+            || registryState.manifestHash !== navigationBinding.symbolRegistryManifestHash
+        ) {
+            return {
+                status: 'unavailable',
+                reason: 'prepared_navigation_registry_manifest_changed',
+            };
+        }
+
+        const compatibility = await this.loadPreparedNavigationCompatibility(
+            preparedRead,
+            registryState.manifestHash,
+        );
+        const relationshipState = compatibility.relationships;
+        const relationshipManifestMatchesBinding = relationshipState.status === 'ok'
+            && relationshipState.manifestHash === navigationBinding.relationshipManifestHash;
+        const exactTargets = findExactRegistrySymbols({
+            symbols: registryState.registry.symbolsByFile.get(input.relativeFile) || [],
+            ...(input.symbolId ? { symbolIdExact: input.symbolId } : {}),
+            ...(input.symbolLabel ? { symbolLabelExact: input.symbolLabel } : {}),
+        });
+        const preparedTraversals = relationshipState.status === 'ok'
+            && relationshipManifestMatchesBinding
+            && exactTargets.length === 1
+            ? await prepareRelationshipTraversals({
+                rootPath: preparedRead.root.path,
+                registryManifestIdentity: registryState.manifestHash,
+                relationshipManifestIdentity: relationshipState.manifestHash,
+                registry: registryState.registry,
+                target: exactTargets[0],
+                relationshipManifest: relationshipState.manifest,
+                relationshipRecords: relationshipState.records,
+                relationshipWarnings: relationshipState.warnings || [],
+            })
+            : undefined;
+        const relationships: PreparedRelationshipSnapshot = relationshipManifestMatchesBinding
+            && preparedTraversals
+            ? {
+                status: 'available',
+                // getPreparedNavigationIdentity gates this adapter on navigationStatus=valid
+                // plus a proven generation receipt; local-only readiness cannot reach here.
+                authority: 'remote_generation_proven',
+                manifestIdentity: navigationBinding.relationshipManifestHash,
+                callers: preparedTraversals.callers,
+                callees: preparedTraversals.callees,
+            }
+            : {
+                status: 'unavailable',
+                authority: 'unavailable',
+                reason: relationshipState.status === 'ok'
+                    ? relationshipManifestMatchesBinding
+                        ? 'relationship_traversal_unavailable'
+                        : 'relationship_manifest_identity_changed'
+                    : `relationship_sidecar_${relationshipState.status}`,
+            };
+        if (this.getPreparedNavigationIdentity(preparedRead) !== initialNavigationIdentity) {
+            return { status: 'unavailable', reason: 'prepared_navigation_changed' };
+        }
+
+        return {
+            status: 'ready',
+            snapshot: {
+                canonicalRoot: preparedRead.root.path,
+                registryManifestIdentity: navigationBinding.symbolRegistryManifestHash,
+                registry: registryState.registry,
+                // The same proven-generation gate above owns this classification.
+                navigationAuthority: 'remote_generation_proven',
+                relationships,
+                validateAuthority: async () => (
+                    this.getPreparedNavigationIdentity(preparedRead) === initialNavigationIdentity
+                ),
+            },
+        };
     }
 
     private getSyncWatchDebounceMs(): number {
@@ -3585,6 +3701,19 @@ export class ToolHandlers {
                 isError: true
             };
         }
+    }
+
+    /** Internal Phase 4 entry point. MCP schema/transport wiring belongs to Phase 5. */
+    public async composeSymbolContext(
+        input: ComposeSymbolContextInput,
+    ): Promise<ComposeSymbolContextResult> {
+        const normalizedInput: ComposeSymbolContextInput = {
+            ...input,
+            relativeFile: this.normalizeRelativeFilePath(input.relativeFile),
+        };
+        return composePreparedSymbolContext(normalizedInput, {
+            prepareSnapshot: (request) => this.prepareSymbolContextSnapshot(request),
+        });
     }
 
     public async handleFileOutline(args: FileOutlineInput) {

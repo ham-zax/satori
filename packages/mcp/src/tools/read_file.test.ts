@@ -104,7 +104,7 @@ function buildContext(readFileMaxLines: number, overrides: Partial<ToolContext> 
         snapshotManager: {
             getAllCodebases: () => []
         },
-        syncManager: {},
+        syncManager: {} as unknown as SyncManagerLike,
         toolHandlers: {
             handleFileOutline: async () => ({
                 content: [{
@@ -886,7 +886,7 @@ test('read_file open_symbol opens source-repaired Python multiline function span
             },
         }, 1000, {
             snapshotManager,
-            syncManager: {},
+            syncManager: {} as unknown as SyncManagerLike,
             toolHandlers: handlers,
         });
 
@@ -1320,8 +1320,16 @@ test('read_file open_symbol annotated outline drops overlapping sibling symbols'
                                     outline: {
                                         symbols: [{
                                             symbolId: 'sym_decide_recovery',
+                                            symbolKey: 'symkey_decide_recovery',
+                                            name: 'decideInterruptedIndexingRecovery',
+                                            qualifiedName: 'decideInterruptedIndexingRecovery',
                                             symbolLabel: 'function decideInterruptedIndexingRecovery()',
+                                            kind: 'function',
+                                            language: 'typescript',
+                                            file: 'src/recovery.ts',
                                             span: { startLine: 4, endLine: 6 },
+                                            parentQualifiedNamePath: [],
+                                            parentResolution: 'not_applicable',
                                             callGraphHint: {
                                                 supported: true,
                                                 symbolRef: {
@@ -1371,6 +1379,8 @@ test('read_file open_symbol annotated outline drops overlapping sibling symbols'
         assert.equal(payload.outlineStatus, 'ok');
         assert.equal(payload.outline.symbols.length, 1);
         assert.equal(payload.outline.symbols[0].symbolId, 'sym_decide_recovery');
+        assert.equal(payload.outline.symbols[0].qualifiedName, 'decideInterruptedIndexingRecovery');
+        assert.equal(payload.outline.symbols[0].parentResolution, 'not_applicable');
         assert.doesNotMatch(JSON.stringify(payload.outline.symbols), /normalizeMarkerFingerprint/);
         assert.match(payload.content, /decideInterruptedIndexingRecovery/);
         assert.doesNotMatch(payload.content, /normalizeMarkerFingerprint/);

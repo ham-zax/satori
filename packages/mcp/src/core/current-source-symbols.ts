@@ -1,94 +1,88 @@
-import * as crypto from "node:crypto";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
     buildSymbolRecordsForFile,
     createLanguageAnalysisService,
     normalizeLanguageId,
-    openRegularFileInsideRoot,
-    readFileHandleExactly,
-    beginSourceMeasurementObservation,
     recordSourceProcessing,
-    sourceIoOwnerForCurrentOperation,
-    verifyStableFileObservation,
     type SymbolRecord,
     type LanguageAnalysisPort,
     type SourceMeasurementObservation,
     type SourceProcessingOutcome,
 } from "@zokizuan/satori-core";
+import { prepareInspectableSource } from "./inspectable-source.js";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 
 const CURRENT_SOURCE_MAX_BYTES = 256 * 1024;
 
-export type CurrentSourceSymbolValidation = PythonSourceBackedSpanRepair & {
-    match: "matched" | "missing" | "ambiguous" | "unavailable" | "not_applicable";
+export const CURRENT_SOURCE_SPAN_RESOLUTION_POLICY_VERSION = "current_source_span_resolution_v1" as const;
+
+export type CurrentSourceSpanResolutionEvidence = {
+    resolutionDerivation: "exact_registry_rebuild_match";
+    currentSpanIdentity: {
+        kind: "resolved_symbol_instance";
+        symbolInstanceId: string;
+    };
+    spanResolutionPolicyVersion: typeof CURRENT_SOURCE_SPAN_RESOLUTION_POLICY_VERSION;
+    extractorLanguageImplementationVersion: string;
+} | {
+    resolutionDerivation: "language_structural_reresolution";
+    currentSpanIdentity: {
+        kind: "canonical_structural_identity";
+        language: string;
+        qualifiedName: string;
+        kindName: string;
+        parentPath: string[];
+    };
+    spanResolutionPolicyVersion: string;
+    extractorLanguageImplementationVersion: string;
 };
+
+export type CurrentSourceSymbolValidation = PythonSourceBackedSpanRepair & ({
+    match: "matched";
+    validated: true;
+    resolutionEvidence: CurrentSourceSpanResolutionEvidence;
+} | {
+    match: "missing" | "ambiguous" | "unavailable" | "not_applicable";
+    validated: false;
+    resolutionEvidence?: never;
+});
 
 export type CurrentSourceEvidence = {
     canonicalRoot: string;
     relativeFile: string;
+    sourceBytes: Uint8Array;
     source: string;
     observedHash: string;
     measurementObservation?: SourceMeasurementObservation;
 };
 
-function isInsideRoot(candidate: string, root: string): boolean {
-    const relative = path.relative(root, candidate);
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 export async function readCurrentSourceEvidence(
     codebaseRoot: string,
     relativeFile: string,
 ): Promise<CurrentSourceEvidence | undefined> {
-    let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
-    try {
-        const canonicalRoot = await fs.realpath(codebaseRoot);
-        const logicalFile = path.resolve(canonicalRoot, relativeFile);
-        if (!isInsideRoot(logicalFile, canonicalRoot)) {
-            return undefined;
-        }
-        handle = await openRegularFileInsideRoot(logicalFile, canonicalRoot);
-        const stat = await handle.stat();
-        if (stat.size > CURRENT_SOURCE_MAX_BYTES) {
-            return undefined;
-        }
-        const measurementObservation = beginSourceMeasurementObservation({
-            owner: sourceIoOwnerForCurrentOperation("validation"),
-            filePath: logicalFile,
-            logicalBytesRequested: stat.size,
-            scanKind: "complete",
-        });
-        const sourceBytes = await readFileHandleExactly(handle, stat.size, measurementObservation);
-        const content = sourceBytes.toString("utf8");
-        await verifyStableFileObservation(handle, logicalFile, canonicalRoot, stat);
-        const hashingStartedAt = performance.now();
-        let hashingOutcome: SourceProcessingOutcome = "failed";
-        let observedHash: string;
-        try {
-            observedHash = crypto.createHash("sha256").update(content, "utf8").digest("hex");
-            hashingOutcome = "success";
-        } finally {
-            recordSourceProcessing({
-                observation: measurementObservation,
-                owner: "hashing",
-                inputBytesProcessed: sourceBytes.length,
-                basis: "shared_buffer",
-                outcome: hashingOutcome,
-                durationMs: performance.now() - hashingStartedAt,
-            });
-        }
-        return {
-            canonicalRoot,
-            relativeFile,
-            source: content,
-            observedHash,
-            ...(measurementObservation ? { measurementObservation } : {}),
-        };
-    } catch {
+    const prepared = await prepareInspectableSource({
+        codebaseRoot,
+        relativeFile,
+        maxInspectableBytes: CURRENT_SOURCE_MAX_BYTES,
+    });
+    if (prepared.status !== "available") {
         return undefined;
+    }
+    try {
+        const finalized = await prepared.finalizer.finalize();
+        if (finalized.status !== "available") return undefined;
+        return {
+            canonicalRoot: prepared.evidence.canonicalRoot,
+            relativeFile: prepared.evidence.relativeFile,
+            sourceBytes: prepared.evidence.sourceBytes,
+            source: prepared.evidence.source,
+            observedHash: prepared.evidence.observedHash,
+            ...(prepared.evidence.measurementObservation
+                ? { measurementObservation: prepared.evidence.measurementObservation }
+                : {}),
+        };
     } finally {
-        await handle?.close().catch(() => undefined);
+        await prepared.finalizer.release();
     }
 }
 
@@ -157,11 +151,14 @@ export function sliceHashMatchedCurrentSourceSymbolContent(
     }
 }
 
-function unchangedValidation(symbol: SymbolRecord, match: CurrentSourceSymbolValidation["match"]): CurrentSourceSymbolValidation {
+function unchangedValidation(
+    symbol: SymbolRecord,
+    match: Exclude<CurrentSourceSymbolValidation["match"], "matched">,
+): CurrentSourceSymbolValidation {
     return {
         symbol,
         attempted: match !== "not_applicable",
-        validated: match === "matched",
+        validated: false,
         repaired: false,
         startBeforeDefinition: false,
         endTruncated: false,
@@ -255,6 +252,52 @@ export async function validateCurrentSourceSymbolSpansWithEvidence(input: {
     if (!evidence) {
         return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")) };
     }
+    return validateCurrentSourceSymbolSpansFromEvidence({
+        symbols: input.symbols,
+        evidence,
+        languageAnalyzer,
+    });
+}
+
+/**
+ * Re-resolve persisted symbols against bytes already acquired by the canonical
+ * root-bound source owner. Callers must not reopen the path for this work.
+ */
+export async function validateCurrentSourceSymbolSpansFromEvidence(input: {
+    symbols: SymbolRecord[];
+    evidence: CurrentSourceEvidence;
+    languageAnalyzer?: LanguageAnalysisPort;
+}): Promise<{ validations: CurrentSourceSymbolValidation[]; evidence: CurrentSourceEvidence }> {
+    if (input.symbols.length === 0) {
+        return { validations: [], evidence: input.evidence };
+    }
+
+    const language = normalizeLanguageId(input.symbols[0].language);
+    const languageAnalyzer = input.languageAnalyzer ?? createLanguageAnalysisService({
+        chunkSize: Math.max(CURRENT_SOURCE_MAX_BYTES, input.evidence.sourceBytes.byteLength),
+        chunkOverlap: 0,
+    });
+    if (!languageAnalyzer.getStrategyForLanguage(language).structural) {
+        return {
+            validations: input.symbols.map((symbol) => unchangedValidation(symbol, "not_applicable")),
+            evidence: input.evidence,
+        };
+    }
+
+    const relativeFile = input.symbols[0].file;
+    if (
+        input.evidence.relativeFile !== relativeFile
+        || input.symbols.some((symbol) => (
+            symbol.file !== relativeFile || normalizeLanguageId(symbol.language) !== language
+        ))
+    ) {
+        return {
+            validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")),
+            evidence: input.evidence,
+        };
+    }
+
+    const evidence = input.evidence;
     const source = evidence.source;
 
     try {
@@ -277,22 +320,7 @@ export async function validateCurrentSourceSymbolSpansWithEvidence(input: {
         if (analysis.structuralStatus !== "complete") {
             return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")), evidence };
         }
-        const hashingStartedAt = performance.now();
-        let hashingOutcome: SourceProcessingOutcome = "failed";
-        let fileHash: string;
-        try {
-            fileHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
-            hashingOutcome = "success";
-        } finally {
-            recordSourceProcessing({
-                observation: evidence.measurementObservation,
-                owner: "hashing",
-                inputBytesProcessed: Buffer.byteLength(source, "utf8"),
-                basis: "shared_buffer",
-                outcome: hashingOutcome,
-                durationMs: performance.now() - hashingStartedAt,
-            });
-        }
+        const fileHash = evidence.observedHash;
         const extractorVersion = input.symbols[0].extractorVersion;
         const extractorStartedAt = performance.now();
         const currentByIdentityAndSpan = new Map<string, SymbolRecord>();
@@ -403,6 +431,15 @@ export async function validateCurrentSourceSymbolSpansWithEvidence(input: {
                 startBeforeDefinition: symbol.span.startLine < current.span.startLine,
                 endTruncated: symbol.span.endLine < current.span.endLine,
                 match: "matched",
+                resolutionEvidence: {
+                    resolutionDerivation: "exact_registry_rebuild_match",
+                    currentSpanIdentity: {
+                        kind: "resolved_symbol_instance",
+                        symbolInstanceId: symbol.symbolInstanceId,
+                    },
+                    spanResolutionPolicyVersion: CURRENT_SOURCE_SPAN_RESOLUTION_POLICY_VERSION,
+                    extractorLanguageImplementationVersion: extractorVersion,
+                },
             };
         });
         return { validations, evidence };

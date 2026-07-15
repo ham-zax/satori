@@ -6,6 +6,10 @@ import {
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
 import { validateCurrentSourceSymbolSpans } from "./current-source-symbols.js";
+import {
+    buildCanonicalSymbolRegistryView,
+    projectCanonicalSymbolIdentity,
+} from "./canonical-symbol-identity.js";
 
 function compareNullableNumbersAsc(a?: number | null, b?: number | null): number {
     const left = a ?? Number.POSITIVE_INFINITY;
@@ -104,6 +108,13 @@ export async function buildRegistryFileOutlinePayload(input: {
     buildCallGraphHint: (symbol: SymbolRecord) => CallGraphHint;
     buildOutlineSpanWarningCodes: (repair: PythonSourceBackedSpanRepair | undefined) => string[];
 }): Promise<FileOutlineResponseEnvelope> {
+    // Symbol keys bind the repo-relative file, so this complete file-scoped
+    // registry view contains every possible parent-key candidate.
+    const registry = buildCanonicalSymbolRegistryView(input.symbols);
+    const mapSymbol = (symbol: SymbolRecord): Omit<FileOutlineSymbolResult, "callGraphHint"> => (
+        projectCanonicalSymbolIdentity({ symbol, registry })
+    );
+
     if (input.resolveMode === "exact") {
         const persistedExactMatches = findExactRegistrySymbols({
             symbols: input.symbols,
@@ -128,12 +139,7 @@ export async function buildRegistryFileOutlinePayload(input: {
             });
         const exactRepairBySymbolId = new Map(validations.map((validation) => [validation.symbol.symbolInstanceId, validation]));
         const exactMapped = sortFileOutlineSymbols(validatedExactMatches.map((symbol) => ({
-            symbolId: symbol.symbolInstanceId,
-            symbolLabel: symbol.label,
-            span: {
-                startLine: symbol.span.startLine,
-                endLine: symbol.span.endLine,
-            },
+            ...mapSymbol(symbol),
             callGraphHint: input.buildCallGraphHint(symbol),
         } satisfies FileOutlineSymbolResult)));
         const exactWarningSet = new Set(input.warnings || []);
@@ -216,12 +222,7 @@ export async function buildRegistryFileOutlinePayload(input: {
     const visibleSymbols = visibleState.visibleSymbols;
 
     const mappedSymbols = sortFileOutlineSymbols(visibleSymbols.map((symbol) => ({
-        symbolId: symbol.symbolInstanceId,
-        symbolLabel: symbol.label,
-        span: {
-            startLine: symbol.span.startLine,
-            endLine: symbol.span.endLine,
-        },
+        ...mapSymbol(symbol),
         callGraphHint: input.buildCallGraphHint(symbol),
     } satisfies FileOutlineSymbolResult)));
 

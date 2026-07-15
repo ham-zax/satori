@@ -284,6 +284,16 @@ Inputs/defaults:
 
 Outputs:
 - JSON envelope: `status`, `path`, `file`, `outline|null`, `hasMore`, optional `message`, `warnings`, `hints`, and `indexingFailure` when the tracked root is in `indexfailed`.
+- Each returned outline symbol carries the canonical registry identity projection:
+  `symbolId`, `symbolKey`, `name`, `qualifiedName`, `symbolLabel`, `kind`,
+  `language`, `file`, exact `span`, `parentQualifiedNamePath`, and
+  `parentResolution`. `parentKey`, `parentSymbolId`, `exported`, and
+  `ontologyTags` are present only when the registry evidence supports them.
+  Parent resolution is `resolved`, `ambiguous`, `missing`, or
+  `not_applicable`; `parentSymbolId` is emitted only for one concrete parent
+  in the loaded registry generation. A symbol with no parent path or key is
+  `not_applicable`. A declared parent path without a usable key, or a key with
+  no candidate, is `missing`; multiple candidates are `ambiguous`.
 - Status variants: `ok|not_found|requires_reindex|not_indexed|not_ready|unsupported|ambiguous`.
 - Failed index snapshots return `status:"not_indexed"` with `reason:"index_failed"` and `manage_index {action:"create"}` hints rather than hiding the failed-state cause behind generic `not_indexed`.
 - For TypeScript, JavaScript, and Python, exact mode validates persisted identities against current source. This validation reads at most 256 KiB from the opened file descriptor; larger files return `not_ready` with `OUTLINE_SYMBOL_SPAN_UNVERIFIED`. This is an exact-navigation proof limit, not an indexing-file limit. A current-source count mismatch returns `ambiguous`; unreadable or unparseable source returns `not_ready` with the same warning. `not_found/missing_symbol` is reserved for a completed current-source parse that proves the identity is absent.
@@ -550,7 +560,7 @@ Recent vs legacy:
 3) `file_outline` exact resolution
 - Trigger: `resolveMode="exact"` with `symbolIdExact` or `symbolLabelExact`.
 - Effect: `ok` for single match, `ambiguous` for multiple, `not_found` for none.
-- Observability: envelope `status`, `outline.symbols`, `message`, `hasMore`.
+- Observability: envelope `status`, canonical `outline.symbols`, `message`, `hasMore`.
 - Determinism: exact matches explicitly sorted before truncation.
 - Performance: sidecar in-memory filter/sort on one file.
 

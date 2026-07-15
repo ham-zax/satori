@@ -163,6 +163,48 @@ test("current-source validation preserves same-key declarations on one line", as
     }
 });
 
+test("current-source span repair publishes recomputed byte and column coordinates", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-coordinates-"));
+    const relativeFile = "src/runtime.ts";
+    const indexedSource = "function currentOwner() {\n  return false;\n}\n";
+    const currentSource = "// inserted before the symbol\nfunction currentOwner() {\n  return true;\n}\n";
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), currentSource);
+
+    const buildRecords = async (content: string): Promise<SymbolRecord[]> => {
+        const analysis = await createLanguageAnalysisService({
+            chunkSize: Number.MAX_SAFE_INTEGER,
+            chunkOverlap: 0,
+        }).analyze({ content, language: "typescript", relativePath: relativeFile });
+        return buildSymbolRecordsForFile({
+            relativePath: relativeFile,
+            language: "typescript",
+            content,
+            fileHash: crypto.createHash("sha256").update(content, "utf8").digest("hex"),
+            extractorVersion: "test-extractor-v1",
+            chunks: [...analysis.chunks],
+            extractedSymbols: analysis.symbols,
+        });
+    };
+
+    try {
+        const persisted = (await buildRecords(indexedSource)).find((entry) => entry.name === "currentOwner");
+        const expectedCurrent = (await buildRecords(currentSource)).find((entry) => entry.name === "currentOwner");
+        assert.ok(persisted);
+        assert.ok(expectedCurrent);
+        const [result] = await validateCurrentSourceSymbolSpans({
+            codebaseRoot: root,
+            symbols: [persisted],
+        });
+        assert.equal(result.match, "matched");
+        assert.equal(result.repaired, true);
+        assert.deepEqual(result.symbol.span, expectedCurrent.span);
+        assert.notEqual(result.symbol.span.startByte, persisted.span.startByte);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test("current-source validation bounds exact source reads", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-large-"));
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -248,6 +290,29 @@ test("descriptor-bound source evidence can be reused without reopening the file"
             fileHash: evidence.observedHash,
             span: { startLine: 1, endLine: 3 },
         }), undefined);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("current-source evidence hashes the exact descriptor bytes before UTF-8 decoding", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-byte-hash-"));
+    const relativeFile = "src/malformed.ts";
+    const sourceBytes = Buffer.from([0x66, 0x6f, 0x80, 0x6f, 0x0a]);
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), sourceBytes);
+    try {
+        const evidence = await readCurrentSourceEvidence(root, relativeFile);
+        assert.ok(evidence);
+        assert.equal(
+            evidence.observedHash,
+            crypto.createHash("sha256").update(sourceBytes).digest("hex"),
+        );
+        assert.notEqual(
+            evidence.observedHash,
+            crypto.createHash("sha256").update(evidence.source, "utf8").digest("hex"),
+        );
+        assert.deepEqual(Buffer.from(evidence.sourceBytes), sourceBytes);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

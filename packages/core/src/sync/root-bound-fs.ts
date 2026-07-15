@@ -1,11 +1,47 @@
 import * as fsp from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
+import * as crypto from 'node:crypto';
 import {
     finishSourceMeasurementObservation,
     recordSourceIo,
     type SourceMeasurementObservation,
 } from '../measurement/source-ledger';
+
+export type RootBoundFileIdentityStrength = 'strong' | 'target_only' | 'unsupported';
+
+export interface RootBoundFileIdentity {
+    platform: string;
+    stableIdentity: string;
+    canonicalRelativePath: string;
+    traversalIdentity?: string;
+    strength: RootBoundFileIdentityStrength;
+}
+
+export type RootBoundFileErrorCode =
+    | 'root_binding_invalid'
+    | 'path_identity_unavailable'
+    | 'source_changed_during_inspection'
+    | 'path_identity_changed_during_inspection';
+
+export class RootBoundFileError extends Error {
+    constructor(
+        readonly code: RootBoundFileErrorCode,
+        message: string,
+    ) {
+        super(message);
+        this.name = 'RootBoundFileError';
+    }
+}
+
+const UNSUPPORTED_LINUX_FILE_SYSTEM_TYPES = new Set<bigint>([
+    0x6969n, // NFS
+    0xff534d42n, // CIFS
+    0xfe534d42n, // SMB2
+    0x65735546n, // FUSE
+    0x01021997n, // 9P
+    0x00c36400n, // Ceph
+]);
 
 /**
  * True when `realPath` (already realpath-resolved) is `rootDir` or a descendant.
@@ -52,7 +88,10 @@ function requiredOpenFlag(name: 'O_NOFOLLOW' | 'O_DIRECTORY'): number {
     const constants = fsSync.constants;
     const flag = constants[name];
     if (process.platform !== 'linux' || typeof flag !== 'number' || flag === 0) {
-        throw new Error(`Descriptor-bound root validation is unavailable: ${name} is unsupported on ${process.platform}`);
+        throw new RootBoundFileError(
+            'path_identity_unavailable',
+            `Descriptor-bound root validation is unavailable: ${name} is unsupported on ${process.platform}`,
+        );
     }
     return flag;
 }
@@ -71,7 +110,10 @@ export function assertDescriptorBoundIndexingSupported(): void {
 
 function descriptorLink(handle: fsp.FileHandle): string {
     if (process.platform !== 'linux') {
-        throw new Error(`Descriptor-bound root validation is unavailable on ${process.platform}`);
+        throw new RootBoundFileError(
+            'path_identity_unavailable',
+            `Descriptor-bound root validation is unavailable on ${process.platform}`,
+        );
     }
     return `/proc/self/fd/${handle.fd}`;
 }
@@ -91,7 +133,10 @@ export async function descriptorPathInsideRoot(handle: fsp.FileHandle, rootDir: 
 
     const normalized = trimTrailingSeparators(path.normalize(openedPath));
     if (!isRealPathInsideRoot(normalized, rootDir)) {
-        throw new Error(`Opened descriptor escapes indexed root: ${openedPath}`);
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            'Opened descriptor escapes indexed root.',
+        );
     }
     return normalized;
 }
@@ -113,9 +158,17 @@ async function openInsideRoot(
     rootDir: string,
     kind: 'file' | 'directory',
 ): Promise<OpenedInsideRoot> {
-    const realPath = await resolveInsideRoot(candidatePath, rootDir);
-    if (!realPath) {
-        throw new Error(`Path escapes indexed root or is unreadable: ${candidatePath}`);
+    let realPath: string;
+    try {
+        realPath = trimTrailingSeparators(path.normalize(await fsp.realpath(candidatePath)));
+    } catch {
+        throw new Error(`Path is unreadable: ${candidatePath}`);
+    }
+    if (!isRealPathInsideRoot(realPath, rootDir)) {
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            'Resolved path escapes indexed root.',
+        );
     }
 
     const preStat = await fsp.lstat(realPath);
@@ -141,6 +194,128 @@ async function openInsideRoot(
         return { handle, realPath: openedRealPath };
     } catch (error) {
         await handle.close().catch(() => undefined);
+        throw error;
+    }
+}
+
+function canonicalRelativePath(realPath: string, rootDir: string): string {
+    const relativePath = path.relative(rootDir, realPath);
+    if (
+        relativePath.length === 0
+        || relativePath === '..'
+        || relativePath.startsWith(`..${path.sep}`)
+        || path.isAbsolute(relativePath)
+    ) {
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            'Opened file does not have a root-confined relative path.',
+        );
+    }
+    return relativePath.replace(/\\/g, '/');
+}
+
+function stableFileIdentityDigest(platform: string, device: bigint, inode: bigint): string {
+    return crypto.createHash('sha256')
+        .update(`${platform}\0${device.toString(10)}\0${inode.toString(10)}`)
+        .digest('hex');
+}
+
+/**
+ * Project one opened descriptor through the platform identity capability. The
+ * The canonical adapter deliberately claims only final-target identity: it does
+ * not imply that the directory or symlink traversal chain stayed unchanged.
+ */
+export async function observeRootBoundFileIdentity(
+    handle: fsp.FileHandle,
+    rootDir: string,
+    openedRealPath?: string,
+): Promise<RootBoundFileIdentity> {
+    const realPath = openedRealPath ?? await descriptorPathInsideRoot(handle, rootDir);
+    const relativePath = canonicalRelativePath(realPath, rootDir);
+    if (process.platform !== 'linux') {
+        return {
+            platform: process.platform,
+            stableIdentity: 'unsupported',
+            canonicalRelativePath: relativePath,
+            strength: 'unsupported',
+        };
+    }
+
+    let fileSystemType: bigint;
+    try {
+        fileSystemType = (await fsp.statfs(descriptorLink(handle), { bigint: true })).type;
+    } catch {
+        return {
+            platform: process.platform,
+            stableIdentity: 'unsupported',
+            canonicalRelativePath: relativePath,
+            strength: 'unsupported',
+        };
+    }
+    const stat = await handle.stat({ bigint: true });
+    if (
+        stat.dev < 0n
+        || stat.ino <= 0n
+        || UNSUPPORTED_LINUX_FILE_SYSTEM_TYPES.has(fileSystemType)
+    ) {
+        return {
+            platform: process.platform,
+            stableIdentity: 'unsupported',
+            canonicalRelativePath: relativePath,
+            strength: 'unsupported',
+        };
+    }
+
+    return {
+        platform: process.platform,
+        stableIdentity: stableFileIdentityDigest(process.platform, stat.dev, stat.ino),
+        canonicalRelativePath: relativePath,
+        strength: 'target_only',
+    };
+}
+
+export function canPublishRootBoundFileIdentity(identity: RootBoundFileIdentity): boolean {
+    return identity.strength === 'strong' || identity.strength === 'target_only';
+}
+
+export function sameRootBoundFileIdentity(
+    left: RootBoundFileIdentity,
+    right: RootBoundFileIdentity,
+): boolean {
+    return canPublishRootBoundFileIdentity(left)
+        && canPublishRootBoundFileIdentity(right)
+        && left.platform === right.platform
+        && left.stableIdentity === right.stableIdentity
+        && left.canonicalRelativePath === right.canonicalRelativePath;
+}
+
+export interface OpenedRootBoundRegularFile {
+    handle: fsp.FileHandle;
+    identity: RootBoundFileIdentity;
+    observedStat: fsSync.Stats;
+}
+
+export async function openRegularFileWithIdentityInsideRoot(
+    filePath: string,
+    rootDir: string,
+): Promise<OpenedRootBoundRegularFile> {
+    const opened = await openInsideRoot(filePath, rootDir, 'file');
+    try {
+        const identity = await observeRootBoundFileIdentity(
+            opened.handle,
+            rootDir,
+            opened.realPath,
+        );
+        // Keep this as the final descriptor observation returned to callers;
+        // they compare it synchronously at the path-rebinding boundary.
+        const observedStat = await opened.handle.stat();
+        return {
+            handle: opened.handle,
+            identity,
+            observedStat,
+        };
+    } catch (error) {
+        await opened.handle.close().catch(() => undefined);
         throw error;
     }
 }
@@ -197,6 +372,31 @@ export async function openRegularFileInsideRootNoFollow(
 }
 
 /**
+ * Verify only the retained descriptor. Callers that need a source-validation
+ * linearization point must perform their authority checks next and the fresh
+ * path-to-identity rebinding last.
+ */
+export async function verifyStableFileDescriptorObservation(
+    handle: fsp.FileHandle,
+    filePath: string,
+    before: fsSync.Stats,
+): Promise<fsSync.Stats> {
+    const after = await handle.stat();
+    if (
+        !sameFileIdentity(before, after)
+        || after.size !== before.size
+        || after.mtimeMs !== before.mtimeMs
+        || after.ctimeMs !== before.ctimeMs
+    ) {
+        throw new RootBoundFileError(
+            'source_changed_during_inspection',
+            `File changed while being read: ${filePath}`,
+        );
+    }
+    return after;
+}
+
+/**
  * Verify that an observed descriptor stayed unchanged and that the pathname
  * still names the same file after the read completed.
  */
@@ -207,15 +407,7 @@ export async function verifyStableFileObservation(
     before: fsSync.Stats,
     options: { rejectFinalSymlink?: boolean } = {},
 ): Promise<void> {
-    const after = await handle.stat();
-    if (
-        !sameFileIdentity(before, after)
-        || after.size !== before.size
-        || after.mtimeMs !== before.mtimeMs
-        || after.ctimeMs !== before.ctimeMs
-    ) {
-        throw new Error(`File changed while being read: ${filePath}`);
-    }
+    const after = await verifyStableFileDescriptorObservation(handle, filePath, before);
 
     const currentPathHandle = options.rejectFinalSymlink
         ? await openRegularFileInsideRootNoFollow(filePath, rootDir)
@@ -223,7 +415,10 @@ export async function verifyStableFileObservation(
     try {
         const currentPathStat = await currentPathHandle.stat();
         if (!sameFileIdentity(after, currentPathStat)) {
-            throw new Error(`File path was replaced while being read: ${filePath}`);
+            throw new RootBoundFileError(
+                'path_identity_changed_during_inspection',
+                `File path was replaced while being read: ${filePath}`,
+            );
         }
     } finally {
         await currentPathHandle.close().catch(() => undefined);
@@ -239,6 +434,7 @@ export async function readFileHandleExactly(
     handle: fsp.FileHandle,
     expectedSize: number,
     measurementObservation?: SourceMeasurementObservation,
+    options: { deferSuccessfulObservationOutcome?: boolean } = {},
 ): Promise<Buffer> {
     const chunks: Buffer[] = [];
     let totalBytes = 0;
@@ -262,17 +458,25 @@ export async function readFileHandleExactly(
                 basis: 'stream_chunk',
             });
             if (totalBytes > expectedSize) {
-                throw new Error('File grew beyond the observed size while being read.');
+                throw new RootBoundFileError(
+                    'source_changed_during_inspection',
+                    'File grew beyond the observed size while being read.',
+                );
             }
             chunks.push(buffer);
         }
         if (totalBytes !== expectedSize) {
-            throw new Error(`File byte length ${totalBytes} does not match the observed size ${expectedSize}.`);
+            throw new RootBoundFileError(
+                'source_changed_during_inspection',
+                `File byte length ${totalBytes} does not match the observed size ${expectedSize}.`,
+            );
         }
-        finishSourceMeasurementObservation({
-            observation: measurementObservation,
-            status: 'completed',
-        });
+        if (!options.deferSuccessfulObservationOutcome) {
+            finishSourceMeasurementObservation({
+                observation: measurementObservation,
+                status: 'completed',
+            });
+        }
         return Buffer.concat(chunks, totalBytes);
     } catch (error) {
         finishSourceMeasurementObservation({

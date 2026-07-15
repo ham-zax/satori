@@ -2,7 +2,8 @@
 
 Date: 2026-07-15
 
-Status: planned follow-on; review validated, no production implementation changed
+Status: implementation in progress; Phase 0 measurement baseline deferred,
+Phases 1-4 implemented, Phases 5-6 pending
 
 This document records the verified product gap and the smallest staged path to
 give agents a bounded, trustworthy view of a known symbol. It is a follow-on to
@@ -11,8 +12,11 @@ search-routing work in `2026-07-15-search-quality-program.md`.
 
 ## Decision record
 
-The supplied review did not establish a current correctness or reproducibility
-defect that justifies changing production behavior in this review.
+The initial review did not establish a defect in the pre-existing exact-open
+behavior. Subsequent approved work implements the internal bounded-context
+path in staged phases while leaving public replacement to Phase 5. Phase 0's
+release-grade measurement baseline is explicitly deferred until it becomes a
+blocking input; it is not recorded as complete.
 
 The current exact-open behavior is intentional:
 
@@ -129,7 +133,7 @@ evidence falls back to provider-backed search.
 | Current structural identity may switch representation implicitly | Confirmed fingerprint ambiguity. | Use a tagged, canonically serialized identity variant fixed by derivation. |
 | Cursor payloads need no transport cap | False. Even rejected cursor input is an abuse and response-echo surface. | Freeze cursor format version, byte cap, canonical/MAC validation, and no-echo error policy. |
 
-## Verified current baseline
+## Verified pre-Phase-1 baseline
 
 ### Registry metadata exists but is not projected
 
@@ -1301,6 +1305,16 @@ Keep deterministic component proof separate from stochastic agent evaluation:
   for correctness, calls, steps, tokens, and latency. Model text itself is not
   required to be byte-identical.
 
+Execution decision on 2026-07-15: the completed exploratory paired sample was
+accepted as sufficient directional evidence to begin Phase 1. The interrupted
+acceptance run is not promoted to the immutable instrumented measurement
+baseline, and `bounded-symbol-context-baseline.json` remains ineligible for
+formal latency or source-cost comparison. The 10-pair sample remains the
+release-grade requirement before a later phase claims the statistical gates.
+It is deferred unless it becomes blocking for such a claim and is not a
+prerequisite for deterministic Phases 1-4. No additional agent-discovery
+sessions should be run solely to reopen this implementation decision.
+
 Controlled latency uses nearest-rank percentiles: sort all 30 recorded samples
 and select rank `ceil(0.95 * 30)`, the 29th observation, for p95. Run five
 unrecorded warm-ups per workload, delete no outliers after observation, and
@@ -1346,6 +1360,22 @@ Measure envelope growth before adding richer identity to grouped search or every
 call-graph node. If the composed package removes the need for those additions,
 keep the other envelopes compact.
 
+Phase 1 envelope measurement uses deterministic synthetic v1 shapes with
+64-byte-digest-style symbol handles. A representative one-symbol graph-ready
+outline grows from 575 to 827 serialized UTF-8 bytes: +252 bytes (+43.8%). A
+500-symbol outline with unsupported graph hints grows from 118,272 to 254,052
+bytes: +135,780 bytes (+114.8%). These figures measure response-envelope growth,
+not source acquisition or agent cost. The result is sufficient reason to keep
+grouped search and call-graph envelopes unchanged in Phase 1; later expansion
+requires separate utility evidence.
+
+Implementation status on 2026-07-15: the pure projection, file-outline
+integration, annotated exact-open inheritance, explicit parent outcomes,
+contract documentation, golden response, and deterministic growth fixture are
+implemented. Type checking, lint, focused coverage, and the complete MCP suite
+are green against the Phase 1 diff; it does not require another stochastic
+agent run.
+
 ### Phase 2 — Normalize relationship evidence internally
 
 Build an internal projection for graph status, completeness, truncation,
@@ -1353,6 +1383,27 @@ suppression, limitations, item source, confidence class/basis, optional
 uncalibrated raw score, and sites. Preserve current edge ordering and current
 fallback labels. Do not change the relationship sidecar schema merely to obtain
 a nicer public label.
+
+The Phase 2 projection keeps traversal status orthogonal from bounded-static
+completeness, explicit truncation and suppression counts, and source-site
+currentness. Stored edges use `relationship_graph` with
+`stored_static_relationship`; source-backed dynamic fallback edges retain a
+distinct `source_backed_dynamic` provenance. Numeric scores are optional raw,
+uncalibrated evidence and never replace the confidence class. Dynamic edges
+whose required source observation failed are suppressed rather than presented
+as current evidence. The internal projection and confidence policies are
+versioned independently as `relationship_evidence_v1` and
+`call_graph_score_bands_v1` so later relationship handles can bind both. The
+existing public `call_graph` envelope and relationship sidecar remain unchanged
+in this phase.
+
+Implementation status on 2026-07-15: the pure internal projection and focused
+fixtures cover ordered static evidence, source-backed dynamic provenance,
+confidence class/basis with uncalibrated raw scores, explicit empty,
+suppressed, truncated, unavailable, ambiguous, and unsupported outcomes, and
+failed dynamic-source suppression. Type checking, lint, focused coverage, and
+the complete 899-test MCP suite are green. Phase 2 does not alter either public
+relationship schema.
 
 ### Phase 3 — Deterministic source selector
 
@@ -1445,19 +1496,74 @@ Bounded-context v1 uses only validated local source, supplied same-generation
 evidence, and structural anchors. Semantic provider selection is a separately
 accepted or rejected post-v1 experiment, not an automatic Phase 3 expansion.
 
+Implementation status on 2026-07-15: the canonical Phase 3 component path is
+implemented. The pure selector provides complete-or-bounded source, exact
+serialized-byte accounting, deterministic evidence priority and merging,
+normalized omissions, exact normalized phrase/token matching with identifier
+splitting, and the no-line-splitting huge-line policy. Source
+continuations use separate snapshot-matched and structurally re-resolved
+fingerprint projections whose structural derivation, tagged identity, policy,
+and extractor implementation version come from the current-span resolver.
+Current source is acquired once from a retained root-bound descriptor, hashed
+from the exact observed bytes, checked against an explicit caller-supplied
+inspection ceiling, and retained through selection. Its one-shot finalizer
+checks descriptor stability, validates prepared authority, and then rebinds the
+path through the canonical platform identity owner as the last source operation.
+Atomic replacement, in-place mutation, root escape, unsupported identity,
+large-source, measurement-outcome, malformed-UTF-8 hash, and streaming
+capability cases have focused coverage. Repaired current spans are checked for
+consistent line, byte, and column coordinates. The complete 936-test MCP suite,
+plus type checking and lint, is green against the current Phase 3-4 diff. This
+phase does not add another public contract or compatibility branch; Phase 4
+supplies the single request-local composer and chooses the internal inspection
+ceiling for its prepared request.
+
 ### Phase 4 — Request-local composer
 
 Compose identity, ancestry, source, outline, relationships, provenance,
 authority, and limitations from one prepared navigation snapshot. Reuse
 existing internal owners rather than invoking MCP tools recursively. Revalidate
-authority and mutation generation immediately before immutable response-snapshot
-construction.
+authority and mutation generation at their final domain observation before
+immutable response-snapshot construction. For a source-bearing response, that
+navigation observation immediately precedes the final source-path observation;
+the two remain independent linearization points rather than one globally atomic
+repository observation.
+
+Implementation status on 2026-07-15: the single internal request-local composer
+is implemented behind the existing handler boundary. It resolves one exact
+registry target, projects canonical identity and ancestry, composes mandatory
+source before optional siblings and relationship pages, enforces the total
+serialized-response budget, and emits independent source/caller/callee
+continuation handles. Relationship preparation uses an in-memory view of the
+same prepared manifest, records, and registry through the established graph
+neighbor confidence policy; low-confidence suppression counts and notes are no
+longer reconstructed or discarded by the composer adapter. The verified loaded
+relationship-manifest hash must equal the prepared generation receipt before
+relationship evidence or continuation identity is published. Dynamic source
+fallback is not invented by this prepared path and remains explicitly unknown.
+
+For source-bearing responses, the composer completes span resolution,
+selection, relationship projection, and response budgeting before invoking the
+retained source finalizer. The finalizer checks prepared authority immediately
+before the final root-bound path observation. On success the composer performs
+only synchronous current-site projection and immutable snapshot construction;
+descriptor release occurs after that snapshot exists. A failed final source
+observation removes excerpts and source continuation, reverts repaired source
+coordinates, and marks relationship sites as not current-source validated while
+preserving independently valid static graph identity. Root-binding failure
+remains a distinct safety error. Focused Phase 3-4 coverage, MCP type checking,
+targeted lint, diff checks, and the complete 936-test MCP suite are green. The
+composer remains internal until Phase 5 replaces the one public exact-symbol
+path; no parallel public transport has been added.
 
 ### Phase 5 — Versioned public replacement
 
-Only after Phases 0–4 are green, compare at least two replacement `read_file`
-exact-symbol shapes in the smaller-model harness. Measure malformed calls,
-instruction-token overhead, redundant calls, and successful task completion.
+Only after deterministic Phases 1–4 are green, compare at least two replacement
+`read_file` exact-symbol shapes in the smaller-model harness. Complete the
+deferred Phase 0 baseline before making release-grade latency or source-cost
+claims, and before public migration when the go/no-go checkpoint requires it.
+Measure malformed calls, instruction-token overhead, redundant calls, and
+successful task completion.
 Choose the better bounded contract and publish it as a versioned exact-symbol
 response requiring `open_symbol.contractVersion: 2` for both plain and
 annotated requests.
@@ -1604,15 +1710,14 @@ surface as already implemented.
 
 ## Continuation checkpoint
 
-The next session should begin with Phase 0, not production schema work:
+The current implementation session continues with Phase 3 under the recorded
+2026-07-15 directional-sample decision:
 
-1. Confirm the worktree and current six-tool names are unchanged.
-2. Add the deterministic small/large/minified/graph-state fixtures and adaptive
-   baseline recorder.
-3. Record `historicalProductBaseline`, add measurement-only instrumentation,
-   and prove its behavioral invariance.
-4. Record `instrumentedMeasurementBaseline` with immutable tree/diff identity.
-5. Implement only Phase 1 after both identities and the frozen artifacts exist.
-
-No production code was changed while writing this plan because the review did
-not prove a current correctness or reproducibility defect.
+1. Keep `instrumentedMeasurementBaseline` deferred and ineligible until it
+   becomes blocking for a release-grade statistical claim.
+2. Keep the completed internal relationship evidence projection separate from
+   the unchanged public call-graph and sidecar schemas.
+3. Implement Phase 3 as pure source-selection and descriptor-evidence owners
+   before integrating either into a request-local composer.
+4. Keep grouped-search and public call-graph envelopes compact unless measured
+   utility justifies their enrichment.

@@ -257,6 +257,6 @@ Keep implementation detail out of this workflow guide. Maintainers should use:
 - [SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md](./SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md) for authoritative behavior;
 - generated MCP tool documentation for schemas and response contracts;
 - package tests for executable proof;
-- [OPERATIONAL_TRUST_PRODUCT_PLAN.md](./OPERATIONAL_TRUST_PRODUCT_PLAN.md) for roadmap state and fixed boundaries.
+- [Operational trust plan](./plans/OPERATIONAL_TRUST_PRODUCT_PLAN.md) for roadmap state and fixed boundaries.
 
 When public behavior changes, update the authoritative contract, generated reference, and proving tests in the same patch.

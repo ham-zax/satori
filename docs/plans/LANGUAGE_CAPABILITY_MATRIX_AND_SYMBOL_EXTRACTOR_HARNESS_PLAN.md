@@ -409,7 +409,7 @@ Files:
 - `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md`
 - `packages/core/README.md`
 - `packages/mcp/README.md`
-- `docs/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md`
+- `docs/plans/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md`
 - `THIRD_PARTY.md` if required
 
 Tasks:

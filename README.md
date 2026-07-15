@@ -260,7 +260,7 @@ Planned work includes:
 packages/core   indexing, retrieval, embeddings, vector store, sync
 packages/mcp    MCP server, tool schemas, lifecycle gates, generated tool docs
 packages/cli    managed installer, doctor, direct shell tool calls
-docs/           behavior specs, feature inventory, architecture notes
+docs/           current docs map, behavior specs, active plans, dated evidence
 satori-landing/ static website HTML source
 ```
 
@@ -345,6 +345,7 @@ npm view @zokizuan/satori-cli@<version> dist.integrity dist.shasum
 
 ## More Docs
 
+- [Documentation map](./docs/README.md)
 - [Architecture](./ARCHITECTURE.md)
 - [End-to-end behavior spec](./docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md)
 - [Features and use cases](./docs/SATORI_FEATURES_AND_USE_CASES.md)

@@ -293,21 +293,25 @@ Satori's architecture maps cleanly onto Azure services. Today it runs on Milvus/
 - First-party skills: `satori`, `satori-search`, `satori-navigation`, `satori-indexing` — `packages/mcp/assets/skills/`
 - Comparison eval harness (Satori vs codebase-memory-mcp) — `evals/code-intelligence-vs/`
 - Snapshot v3 lock/merge hardening — `CHANGELOG.md:431,679`
+- Indexing lock, snapshot, bridge, and search-side ignore hardening — current
+  contracts are in `ARCHITECTURE.md` and
+  `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md`
+- Search query-intent routing and lexical rescue —
+  `packages/mcp/src/core/search-query-planning.ts` and
+  `packages/mcp/src/core/search-lexical-scoring.ts`
 - PI extension bridge example — `examples/pi-extension/satori-bridge/`
 - Server manifest for installer catalogs — `server.json`
 
-### In Progress (plan docs exist, checkboxes mostly open)
-- **Symbol-owned retrieval** — `docs/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md`. Chunk-first → symbol-first grouping. Owner metadata on indexed chunks. SQLite parity-gated navigation backend.
-- **Bridge reliability hardening** — `docs/SATORI_BRIDGE_RELIABILITY_HARDENING_PLAN.md`
-- **Search query intent redesign** — `docs/superpowers/specs/2026-03-16-satori-search-query-intent-design.md`
-- **Indexing lock hardening** — `docs/INDEXING_LOCK_HARDENING_PLAN.md`
-- **Snapshot manager hardening** — `docs/SNAPSHOT_MANAGER_HARDENING_PLAN.md`
-- **Search-side ignore guidance hardening** — `docs/SEARCH_SIDE_IGNORE_GUIDANCE_HARDENING_PLAN.md`
+### In Progress
+- **Symbol-owned retrieval** — `docs/plans/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md`. Chunk-first → symbol-first grouping. Owner metadata on indexed chunks. SQLite parity-gated navigation backend.
+- **Operational trust baseline** — `docs/plans/OPERATIONAL_TRUST_PRODUCT_PLAN.md`.
+- **Bounded symbol context** — `docs/release/2026-07-15-bounded-symbol-context-plan.md`.
+- **Search-quality evaluation** — `docs/release/2026-07-15-search-quality-program.md`.
 
 ### Planned (design-finalized, not yet built)
-- **SQLite navigation backend** (opt-in, parity-gated) — `docs/RELATIONSHIP_BACKED_NAVIGATION_AND_SQLITE_STORE_PLAN.md`. Explicitly **not** the default.
-- **Expanded language support** — Call graph for Go, Rust (from `symbol_only`). `docs/LANGUAGE_CAPABILITY_MATRIX_AND_SYMBOL_EXTRACTOR_HARNESS_PLAN.md`. Not yet started.
-- **Codebase-memory import-export adoption** — Documented in `docs/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md`. Move from heuristic `CALLS v0` to receiver-aware edges.
+- **SQLite navigation backend** (opt-in, parity-gated) — `docs/plans/RELATIONSHIP_BACKED_NAVIGATION_AND_SQLITE_STORE_PLAN.md`. Explicitly **not** the default.
+- **Expanded language support** — Call graph for Go and Rust (from `symbol_only`). `docs/plans/LANGUAGE_CAPABILITY_MATRIX_AND_SYMBOL_EXTRACTOR_HARNESS_PLAN.md`.
+- **Codebase-memory import-export adoption** — Documented in `docs/plans/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md`. Move from heuristic `CALLS v0` to receiver-aware edges.
 
 ### Speculative (no plan doc; engagement subjects)
 - **Hosted team workflows** — Shared indexes, per-user freshness tracking. Per-repo `.satoriignore` is the only scoping today.
@@ -315,7 +319,7 @@ Satori's architecture maps cleanly onto Azure services. Today it runs on Milvus/
 - **Azure adapters** — Azure AI Search, Azure OpenAI, Azure Blob, HTTP transport. Depends on Slide 11 prioritization.
 - **Pricing model** — Self-hosted with enterprise features vs managed SaaS vs hybrid. No code today.
 
-**Evidence:** `docs/superpowers/plans/`, `docs/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md`, `docs/RELATIONSHIP_BACKED_NAVIGATION_AND_SQLITE_STORE_PLAN.md`, `docs/INDEXING_LOCK_HARDENING_PLAN.md`, `docs/SNAPSHOT_MANAGER_HARDENING_PLAN.md`, `docs/SEARCH_SIDE_IGNORE_GUIDANCE_HARDENING_PLAN.md`, `docs/SATORI_BRIDGE_RELIABILITY_HARDENING_PLAN.md`
+**Evidence:** `docs/README.md`, `docs/plans/`, `docs/release/`, and Git history for completed implementation plans.
 
 ---
 

@@ -101,10 +101,12 @@ CLI owns installation and shell invocation.
 |-- pnpm-workspace.yaml
 |-- server.json
 |-- docs/
+|   |-- README.md
 |   |-- SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md
 |   |-- SATORI_FEATURES_AND_USE_CASES.md
-|   |-- ARCHITECTURE.md
-|   |-- hardening and planning docs
+|   |-- plans/
+|   |-- release/
+|   |-- remediation/
 |-- packages/
 |   |-- core/
 |   |   |-- src/core/context.ts
@@ -1300,8 +1302,8 @@ Read:
 - `packages/mcp/src/config.ts`
 - `packages/mcp/src/core/completion-proof.ts`
 - `packages/mcp/src/core/indexing-recovery.ts`
-- `docs/INDEX_STATE_STABILITY_PLAN.md`
-- `docs/SNAPSHOT_MANAGER_HARDENING_PLAN.md`
+- `docs/plans/INDEX_STATE_STABILITY_PLAN.md`
+- `ARCHITECTURE.md` for the current snapshot and readiness contract
 
 Learn:
 

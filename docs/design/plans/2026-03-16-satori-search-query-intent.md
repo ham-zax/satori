@@ -19,7 +19,7 @@
 
 ## Spec Reference
 
-- Design: `docs/superpowers/specs/2026-03-16-satori-search-query-intent-design.md`
+- Design: `docs/design/specs/2026-03-16-satori-search-query-intent-design.md`
 - Architecture reference: `docs/ARCHITECTURE.md`
 
 ## Chunk 1: Make Score Semantics Explicit in Core

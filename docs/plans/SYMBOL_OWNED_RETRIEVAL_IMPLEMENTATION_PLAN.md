@@ -888,7 +888,7 @@ Acceptance:
 ## Documentation Updates Required With Implementation
 
 - Update `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md` when behavior changes land.
-- Update `docs/ARCHITECTURE.md` with symbol registry/navigation index diagrams.
+- Update root `ARCHITECTURE.md` with symbol registry/navigation index diagrams.
 - Update README language support matrix after capabilities are implemented.
 - Add third-party/MIT attribution before copying any code or tables.
 

@@ -263,12 +263,17 @@ async function publishCurrentAuthorityCheckpoint(
 
 function createSnapshotManager(repoPath: string): SnapshotManager {
     const info = { status: 'indexed', indexStatus: 'completed' };
+    // Only the codebase root is tracked. Unrestricted getters make nested file paths
+    // look like roots and break prepared-generation identity comparisons.
+    const isTrackedRoot = (codebasePath: string): boolean => codebasePath === repoPath;
     return {
         getAllCodebases: () => [{ path: repoPath, info }],
         getIndexedCodebases: () => [repoPath],
         getIndexingCodebases: () => [],
-        getCodebaseInfo: () => info,
-        getCodebaseStatus: () => info.status,
+        getCodebaseInfo: (codebasePath: string) => (isTrackedRoot(codebasePath) ? info : undefined),
+        getCodebaseStatus: (codebasePath: string) => (
+            isTrackedRoot(codebasePath) ? info.status : 'not_found'
+        ),
         getCodebaseCallGraphSidecar: () => undefined,
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
         saveCodebaseSnapshot: () => undefined,
@@ -331,7 +336,11 @@ test('cached exact search cannot survive direct collection deletion', async () =
         const receipt = await context.resolveProvenGeneration(repoPath);
         assert.ok(receipt);
         const syncManager = {
-            getPreparedReadObservation: () => ({ freshnessEpoch: 1 }),
+            getPreparedReadObservation: () => ({
+                available: false as const,
+                reason: 'watcher_manager_not_started' as const,
+                freshnessEpoch: 1,
+            }),
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: '2026-06-18T00:00:00.000Z',
@@ -403,7 +412,11 @@ test('cached exact search downgrades navigation after direct symbol shard deleti
         assert.ok(receipt?.navigation);
         vectorDatabase.payloadCountQueryCount = 0;
         const syncManager = {
-            getPreparedReadObservation: () => ({ freshnessEpoch: 1 }),
+            getPreparedReadObservation: () => ({
+                available: false as const,
+                reason: 'watcher_manager_not_started' as const,
+                freshnessEpoch: 1,
+            }),
             ensureFreshness: async () => ({
                 mode: 'skipped_recent',
                 checkedAt: '2026-06-18T00:00:00.000Z',
@@ -574,6 +587,11 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
 
         let syncTriggered = false;
         const syncManager = {
+            getPreparedReadObservation: () => ({
+                available: false,
+                reason: 'watcher_manager_not_started',
+                freshnessEpoch: 1,
+            }),
             ensureFreshness: async () => {
                 syncTriggered = true;
                 const stats = await context.reindexByChange(repoPath);
@@ -586,6 +604,12 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
             },
             touchWatchedCodebase: async () => undefined,
         } as unknown as SyncManager;
+        // Prepared-generation identity requires a mutation lease observer; without it exact
+        // opens collapse to NAVIGATION_UNAVAILABLE even under a proven generation receipt.
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(stateRoot, 'leases'),
+            ownerId: 'rename-lifecycle-test',
+        });
         const handlers = new ToolHandlers(
             context,
             createSnapshotManager(repoPath),
@@ -593,6 +617,12 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             () => Date.parse('2026-06-18T00:00:00.000Z'),
+            undefined,
+            null,
+            undefined,
+            undefined,
+            null,
+            coordinator,
         );
         const testHandlers = handlers as unknown as {
             validateCompletionProof: () => Promise<Record<string, unknown>>;
@@ -676,23 +706,39 @@ test('MCP handlers reject stale rename symbols and publish new navigation after 
         const toolContext = createToolContext(repoPath, handlers);
         const oldReadResponse = await readFileTool.execute({
             path: newFilePath,
+            mode: 'plain',
             open_symbol: {
+                contractVersion: 2,
                 symbolId: oldSymbolInstanceId,
+                context: { preset: 'implementation' },
             },
         }, toolContext);
         assert.equal(oldReadResponse.isError, true);
         const oldReadPayload = parsePayload(oldReadResponse);
-        assert.equal(oldReadPayload.status, 'not_found');
+        assert.equal(oldReadPayload.formatVersion, 2);
+        assert.equal(oldReadPayload.kind, 'symbol_context');
+        assert.equal(oldReadPayload.status, 'error');
+        // Valid prepared authority + missing identity → structured symbol miss, not authority collapse.
+        assert.equal(oldReadPayload.code, 'SYMBOL_NOT_FOUND');
+        assert.equal(oldReadPayload.reason, 'symbol_not_found');
 
         const newReadResponse = await readFileTool.execute({
             path: newFilePath,
+            mode: 'plain',
             open_symbol: {
+                contractVersion: 2,
                 symbolId: newLoginGroup.target.symbolId,
+                context: { preset: 'implementation' },
             },
         }, toolContext);
         assert.equal(newReadResponse.isError, undefined);
-        assert.match(newReadResponse.content[0]?.text || '', /export function login/);
-        assert.doesNotMatch(newReadResponse.content[0]?.text || '', /from '\.\/old'/);
+        const newReadPayload = parsePayload(newReadResponse);
+        assert.equal(newReadPayload.formatVersion, 2);
+        assert.equal(newReadPayload.kind, 'symbol_context');
+        assert.equal(newReadPayload.status, 'ok');
+        assert.equal(newReadPayload.symbol?.symbolId, newLoginGroup.target.symbolId);
+        assert.match(JSON.stringify(newReadPayload.source), /export function login/);
+        assert.doesNotMatch(JSON.stringify(newReadPayload.source), /from '\.\/old'/);
 
         const oldCallGraph = parsePayload(await handlers.handleCallGraph({
             path: repoPath,
@@ -746,6 +792,11 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
 
         let ensureFreshnessCalls = 0;
         const syncManager = {
+            getPreparedReadObservation: () => ({
+                available: false,
+                reason: 'watcher_manager_not_started',
+                freshnessEpoch: 1,
+            }),
             ensureFreshness: async () => {
                 ensureFreshnessCalls += 1;
                 const stats = await context.reindexByChange(repoPath);
@@ -758,6 +809,11 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
             },
             touchWatchedCodebase: async () => undefined,
         } as unknown as SyncManager;
+        // Lease observer is required for prepared-generation identity on exact opens.
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(stateRoot, 'leases'),
+            ownerId: 'dirty-navigation-lifecycle-test',
+        });
         const handlers = new ToolHandlers(
             context,
             createSnapshotManager(repoPath),
@@ -765,6 +821,12 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
             RUNTIME_FINGERPRINT,
             CAPABILITIES,
             () => Date.parse('2026-06-18T00:00:00.000Z'),
+            undefined,
+            null,
+            undefined,
+            undefined,
+            null,
+            coordinator,
         );
         const testHandlers = handlers as unknown as {
             validateCompletionProof: () => Promise<Record<string, unknown>>;
@@ -789,6 +851,40 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
         const oldRunSymbol = findSymbol(initialOutline, 'run');
         const oldSymbolInstanceId = oldRunSymbol.symbolId;
 
+        // Known current identity under valid prepared authority returns bounded symbol_context.
+        const currentReadResponse = await readFileTool.execute({
+            path: filePath,
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: oldSymbolInstanceId,
+                context: { preset: 'implementation' },
+            },
+        }, createToolContext(repoPath, handlers));
+        assert.equal(currentReadResponse.isError, undefined);
+        const currentReadPayload = parsePayload(currentReadResponse);
+        assert.equal(currentReadPayload.formatVersion, 2);
+        assert.equal(currentReadPayload.kind, 'symbol_context');
+        assert.equal(currentReadPayload.status, 'ok');
+        assert.equal(currentReadPayload.symbol?.symbolId, oldSymbolInstanceId);
+
+        // Missing identity under the same valid authority is a structured symbol miss.
+        const missingReadResponse = await readFileTool.execute({
+            path: filePath,
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: 'sym_missing_under_valid_authority',
+                context: { preset: 'implementation' },
+            },
+        }, createToolContext(repoPath, handlers));
+        assert.equal(missingReadResponse.isError, true);
+        const missingReadPayload = parsePayload(missingReadResponse);
+        assert.equal(missingReadPayload.formatVersion, 2);
+        assert.equal(missingReadPayload.kind, 'symbol_context');
+        assert.equal(missingReadPayload.status, 'error');
+        assert.equal(missingReadPayload.code, 'SYMBOL_NOT_FOUND');
+
         fs.writeFileSync(filePath, 'export function runFresh() {\n  return false;\n}\n', 'utf8');
 
         const staleExactOutline = parsePayload(await handlers.handleFileOutline({
@@ -801,17 +897,52 @@ test('MCP direct navigation fails closed for dirty files until search freshness 
         assert.equal(staleExactOutline.reason, 'stale_symbol_ref');
         assert.equal(ensureFreshnessCalls, 0);
 
+        // The prepared registry still owns the old identity, but the renamed current source
+        // cannot validate its span. Preserve identity while withholding stale source bytes.
         const staleReadResponse = await readFileTool.execute({
             path: filePath,
+            mode: 'plain',
             open_symbol: {
+                contractVersion: 2,
                 symbolId: oldSymbolInstanceId,
+                context: { preset: 'implementation' },
             },
         }, createToolContext(repoPath, handlers));
-        assert.equal(staleReadResponse.isError, true);
+        assert.equal(staleReadResponse.isError, undefined);
         const staleReadPayload = parsePayload(staleReadResponse);
-        assert.equal(staleReadPayload.status, 'requires_reindex');
-        assert.equal(staleReadPayload.reason, 'stale_symbol_ref');
-        assert.equal(JSON.stringify(staleReadPayload).includes('return false'), false);
+        assert.equal(staleReadPayload.formatVersion, 2);
+        assert.equal(staleReadPayload.kind, 'symbol_context');
+        assert.equal(staleReadPayload.status, 'ok');
+        assert.equal(
+            (staleReadPayload.symbol as { symbolId?: string } | undefined)?.symbolId,
+            oldSymbolInstanceId,
+        );
+        const staleSource = staleReadPayload.source as {
+            status?: string;
+            mode?: string;
+            completeSymbolReturned?: boolean;
+            excerpts?: unknown[];
+            omittedRanges?: unknown[];
+            truncated?: boolean;
+            emptyReason?: string;
+        };
+        assert.equal(staleSource.status, 'unavailable');
+        assert.equal(staleSource.mode, 'bounded');
+        assert.equal(staleSource.completeSymbolReturned, false);
+        assert.deepEqual(staleSource.excerpts, []);
+        assert.deepEqual(staleSource.omittedRanges, []);
+        assert.equal(staleSource.truncated, true);
+        assert.equal(staleSource.emptyReason, 'current_symbol_span_unavailable');
+        assert.deepEqual(
+            (staleReadPayload.authority as {
+                source?: { freshness?: string; spanResolution?: string };
+            } | undefined)?.source,
+            {
+                freshness: 'current_at_final_observation',
+                spanResolution: 'unavailable',
+            },
+        );
+        assert.equal(JSON.stringify(staleReadPayload).includes('runFresh'), false);
         assert.equal(ensureFreshnessCalls, 0);
 
         const staleCallGraph = parsePayload(await handlers.handleCallGraph({

@@ -16,12 +16,19 @@ import {
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
 } from '@zokizuan/satori-core';
-import type { RelationshipRecord, SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
+import type {
+    ProvenGenerationReceipt,
+    ProvenVectorGenerationReceipt,
+    RelationshipRecord,
+    SymbolRecord,
+    SymbolRegistryManifest,
+} from '@zokizuan/satori-core';
 import { readFileTool } from '../tools/read_file.js';
 import type { ToolContext } from '../tools/types.js';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
+import type { MutationLeaseCoordinator } from './mutation-lease.js';
 
 const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
@@ -197,7 +204,7 @@ async function writeNavigationSidecars(input: {
         stateRoot: input.stateRoot,
         registry,
     });
-    await writeRelationshipSidecar({
+    const relationshipResult = await writeRelationshipSidecar({
         stateRoot: input.stateRoot,
         normalizedRootPath: input.repoPath,
         symbolRegistryManifestHash: input.relationshipManifestHash || registryResult.manifestHash,
@@ -206,7 +213,11 @@ async function writeNavigationSidecars(input: {
         files: manifest.files,
         records: input.records || [],
     });
-    return { registry, manifestHash: registryResult.manifestHash };
+    return {
+        registry,
+        manifestHash: registryResult.manifestHash,
+        relationshipManifestHash: relationshipResult.manifestHash,
+    };
 }
 
 async function writeSearchNavigationSidecars(input: {
@@ -249,23 +260,106 @@ async function writeSearchNavigationSidecars(input: {
 }
 
 function createSnapshotManager(repoPath: string, info: Record<string, unknown> = { status: 'indexed' }): HandlerSnapshotManager {
+    // Path-scoped lookups only: an unrestricted getter makes file paths look like
+    // tracked roots and breaks prepared-generation identity (policy root !== entry path).
+    const isTrackedRoot = (codebasePath: string): boolean => codebasePath === repoPath;
     return {
         getAllCodebases: () => [{ path: repoPath, info }],
         getIndexedCodebases: () => [repoPath],
         getIndexingCodebases: () => [],
-        getCodebaseInfo: () => info,
-        getCodebaseStatus: () => info.status || 'indexed',
+        getCodebaseInfo: (codebasePath: string) => (isTrackedRoot(codebasePath) ? info : undefined),
+        getCodebaseStatus: (codebasePath: string) => (
+            isTrackedRoot(codebasePath) ? (info.status || 'indexed') : 'not_found'
+        ),
         getCodebaseCallGraphSidecar: () => undefined,
         ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
         saveCodebaseSnapshot: () => undefined,
     } as unknown as HandlerSnapshotManager;
 }
 
-function createHandlers(repoPath: string, searchResults: SearchFixtureResult[] = []) {
+type PreparedAuthorityFixture = {
+    symbolRegistryManifestHash: string;
+    relationshipManifestHash: string;
+};
+
+function createGenerationReceipt(
+    repoPath: string,
+    preparedAuthority: PreparedAuthorityFixture,
+): ProvenGenerationReceipt {
+    let canonicalRoot = repoPath;
+    try {
+        canonicalRoot = fs.realpathSync(repoPath);
+    } catch {
+        canonicalRoot = path.resolve(repoPath);
+    }
+    return {
+        collectionName: 'hybrid_code_chunks_golden',
+        marker: {
+            kind: 'satori_index_completion_v3' as const,
+            runId: 'golden-run-1',
+            indexPolicyHash: 'policy-hash-golden',
+        },
+        policy: {
+            canonicalRoot,
+            policyHash: 'policy-hash-golden',
+        },
+        policyDocumentDigest: '1'.repeat(64),
+        exactPayloadCount: 1,
+        navigation: {
+            generationId: 'navigation-generation-golden',
+            generationRoot: path.join(repoPath, '.satori-navigation-generation-golden'),
+            symbolRegistryManifestHash: preparedAuthority.symbolRegistryManifestHash,
+            relationshipManifestHash: preparedAuthority.relationshipManifestHash,
+            navigationSealHash: '3'.repeat(64),
+        },
+        observations: {
+            profileFileToken: null,
+            policyFileToken: 'policy-token-golden',
+            navigationToken: 'navigation-token-golden',
+        },
+    };
+}
+
+function createHandlers(
+    repoPath: string,
+    searchResults: SearchFixtureResult[] = [],
+    preparedAuthority?: PreparedAuthorityFixture,
+) {
+    const generationReceipt = preparedAuthority
+        ? createGenerationReceipt(repoPath, preparedAuthority)
+        : {
+            navigation: { navigationSealHash: 'a'.repeat(64) },
+        };
+    const vectorReceipt: ProvenVectorGenerationReceipt | undefined = preparedAuthority
+        ? {
+            collectionName: generationReceipt.collectionName,
+            marker: generationReceipt.marker,
+            policy: generationReceipt.policy,
+            policyDocumentDigest: generationReceipt.policyDocumentDigest,
+            exactPayloadCount: 1,
+            observations: {
+                profileFileToken: null,
+                policyFileToken: 'policy-token-golden',
+            },
+        }
+        : undefined;
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         getVectorStore: () => ({ listCollections: async () => [] }),
         semanticSearch: async () => searchResults,
+        ...(preparedAuthority
+            ? {
+                getIndexAuthorityObservations: () => ({
+                    vector: 'vector-authority-golden',
+                    navigation: 'navigation-authority-golden',
+                }),
+                revalidatePreparedGeneration: async () => ({
+                    vectorReceipt,
+                    navigationProof: { status: 'valid' as const },
+                    generationReceipt,
+                }),
+            }
+            : {}),
     } as unknown as HandlerContext;
     const syncManager = {
         ensureFreshness: async () => ({
@@ -274,9 +368,24 @@ function createHandlers(repoPath: string, searchResults: SearchFixtureResult[] =
             thresholdMs: 180000,
         }),
         touchWatchedCodebase: async () => undefined,
+        ...(preparedAuthority
+            ? {
+                getPreparedReadObservation: () => ({
+                    available: false as const,
+                    reason: 'watcher_manager_not_started' as const,
+                    freshnessEpoch: 1,
+                }),
+            }
+            : {}),
     } as unknown as HandlerSyncManager;
 
     const snapshotManager = createSnapshotManager(repoPath);
+    const mutationLeaseCoordinator = preparedAuthority
+        ? {
+            observe: () => ({ mutationActive: false, generation: 1 }),
+            getActiveLease: () => null,
+        } as unknown as MutationLeaseCoordinator
+        : null;
     const handlers = new ToolHandlers(
         context,
         snapshotManager,
@@ -284,13 +393,18 @@ function createHandlers(repoPath: string, searchResults: SearchFixtureResult[] =
         RUNTIME_FINGERPRINT,
         CAPABILITIES,
         () => Date.parse('2026-01-01T01:00:00.000Z'),
+        undefined,
+        null,
+        undefined,
+        undefined,
+        null,
+        mutationLeaseCoordinator,
     );
     (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({
         outcome: 'valid',
         navigationStatus: 'valid',
-        generationReceipt: {
-            navigation: { navigationSealHash: 'a'.repeat(64) },
-        },
+        ...(vectorReceipt ? { collectionName: vectorReceipt.collectionName, vectorReceipt } : {}),
+        generationReceipt,
     });
     return { handlers, snapshotManager, syncManager };
 }
@@ -521,11 +635,14 @@ test('golden MCP search_codebase grouped symbol result shape', async () => {
                 tool: 'read_file',
                 args: {
                     path: '<repo>/src/auth.ts',
+                    mode: 'plain',
                     open_symbol: {
+                        contractVersion: 2,
                         symbolId: '<symbol:function:validateSession>',
+                        context: { preset: 'implementation' },
                     },
                 },
-                reason: 'Open the highest-ranked concrete symbol before graph traversal or editing.',
+                reason: 'Open bounded implementation context for the highest-ranked concrete symbol before graph traversal or editing.',
             },
             results: [{
                 target: {
@@ -1134,7 +1251,7 @@ test('golden MCP call_graph incompatible relationship sidecar shape', async () =
     }));
 });
 
-test('golden MCP read_file open_symbol success shape', async () => {
+test('golden historical read_file exact-open request is rejected by the canonical contract', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const historical = PHASE_0_CONTRACT.historicalExactOpen;
         const filePath = path.join(repoPath, historical.symbol.file);
@@ -1152,6 +1269,7 @@ test('golden MCP read_file open_symbol success shape', async () => {
 
         const response = await readFileTool.execute({
             path: filePath,
+            mode: historical.request.mode,
             open_symbol: { symbolId: run.symbolInstanceId },
         }, createReadFileToolContext({
             handlers,
@@ -1159,8 +1277,55 @@ test('golden MCP read_file open_symbol success shape', async () => {
             syncManager,
         }));
 
-        const payload = scrubGolden(response, { repoPath, stateRoot, symbols: [run] });
-        assert.deepEqual(payload, historical.normalizedResponse);
+        assert.equal(response.isError, true);
+        const text = response.content[0]?.text || '';
+        // Zod union rejection is a generic schema failure; do not assert internal field names.
+        assert.match(text, /Invalid arguments for 'read_file'/);
+        assert.match(text, /open_symbol/);
+        assert.equal(text.includes('"kind":"symbol_context"'), false);
+        assert.equal(text.includes('"status":"ok"'), false);
+    }));
+});
+
+test('golden MCP read_file open_symbol current id returns bounded symbol_context', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const filePath = path.join(repoPath, 'src/runtime.ts');
+        const source = 'export function run() {\n  return true;\n}\n';
+        fs.writeFileSync(filePath, source, 'utf8');
+        const run = createFunctionSymbol({
+            file: 'src/runtime.ts',
+            name: 'run',
+            startLine: 1,
+            endLine: 3,
+            fileHash: sha256Content(source),
+            label: 'function run()',
+        });
+        const sidecars = await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
+        const { handlers, snapshotManager, syncManager } = createHandlers(repoPath, [], {
+            symbolRegistryManifestHash: sidecars.manifestHash,
+            relationshipManifestHash: sidecars.relationshipManifestHash,
+        });
+
+        const response = await readFileTool.execute({
+            path: filePath,
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: run.symbolInstanceId,
+                context: { preset: 'implementation' },
+            },
+        }, createReadFileToolContext({
+            handlers,
+            snapshotManager,
+            syncManager,
+        }));
+
+        assert.equal(response.isError, undefined);
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] }) as Record<string, unknown>;
+        assert.equal(payload.formatVersion, 2);
+        assert.equal(payload.kind, 'symbol_context');
+        assert.equal(payload.status, 'ok');
+        assert.equal((payload.symbol as { symbolId?: string } | undefined)?.symbolId, symbolPlaceholder(run));
     }));
 });
 
@@ -1176,12 +1341,20 @@ test('golden MCP read_file open_symbol stale id shape', async () => {
             fileHash: 'hash-runtime',
             label: 'function run()',
         });
-        await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
-        const { handlers, snapshotManager, syncManager } = createHandlers(repoPath);
+        const sidecars = await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
+        const { handlers, snapshotManager, syncManager } = createHandlers(repoPath, [], {
+            symbolRegistryManifestHash: sidecars.manifestHash,
+            relationshipManifestHash: sidecars.relationshipManifestHash,
+        });
 
         const response = await readFileTool.execute({
             path: filePath,
-            open_symbol: { symbolId: 'sym_stale_runtime_run' },
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: 'sym_stale_runtime_run',
+                context: { preset: 'implementation' },
+            },
         }, createReadFileToolContext({
             handlers,
             snapshotManager,
@@ -1191,10 +1364,55 @@ test('golden MCP read_file open_symbol stale id shape', async () => {
         assert.equal(response.isError, true);
         const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });
         assert.deepEqual(payload, {
-            status: 'not_found',
-            reason: 'missing_symbol',
-            message: 'No exact symbol match found in file outline.',
+            formatVersion: 2,
+            kind: 'symbol_context',
+            status: 'error',
+            code: 'SYMBOL_NOT_FOUND',
+            reason: 'symbol_not_found',
+            message: 'No exact symbol matched the current navigation snapshot.',
+        });
+    }));
+});
+
+test('golden MCP read_file open_symbol unavailable authority shape', async () => {
+    await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
+        const filePath = path.join(repoPath, 'src/runtime.ts');
+        fs.writeFileSync(filePath, 'export function run() {\n  return true;\n}\n', 'utf8');
+        const run = createFunctionSymbol({
             file: 'src/runtime.ts',
+            name: 'run',
+            startLine: 1,
+            endLine: 3,
+            fileHash: 'hash-runtime',
+            label: 'function run()',
+        });
+        await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
+        // Default createHandlers omits prepared-authority observers/receipts.
+        const { handlers, snapshotManager, syncManager } = createHandlers(repoPath);
+
+        const response = await readFileTool.execute({
+            path: filePath,
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: run.symbolInstanceId,
+                context: { preset: 'implementation' },
+            },
+        }, createReadFileToolContext({
+            handlers,
+            snapshotManager,
+            syncManager,
+        }));
+
+        assert.equal(response.isError, true);
+        const payload = scrubGolden(parsePayload(response), { repoPath, stateRoot, symbols: [run] });
+        assert.deepEqual(payload, {
+            formatVersion: 2,
+            kind: 'symbol_context',
+            status: 'error',
+            code: 'NAVIGATION_UNAVAILABLE',
+            reason: 'navigation_unavailable',
+            message: 'Current navigation authority is unavailable; refresh the index state and retry.',
         });
     }));
 });

@@ -19,8 +19,19 @@ import { requireAbsoluteFilesystemPath } from "../utils.js";
 import type {
     ReadFileAnnotatedOutlineStatus,
     ReadFileAnnotatedResponseEnvelope,
-    ReadFileOpenSymbolResponseEnvelope,
+    ReadFileStructuredErrorResponseEnvelope,
 } from "../core/search-types.js";
+import {
+    SYMBOL_CONTEXT_FORMAT_VERSION,
+    SYMBOL_CONTEXT_KIND,
+    SYMBOL_CONTEXT_LIMITS,
+    composePublicSymbolContextEnvelope,
+    exactSymbolOpenRequestSchema,
+    openSymbolRequestSchema,
+    resolveSymbolContextOperation,
+    type ExactSymbolOpenRequest,
+    type ResolvedSymbolContextOperation,
+} from "../core/symbol-context-public-contract.js";
 
 export const readFileInputSchema = z.object({
     path: absoluteFilesystemPathSchema(
@@ -28,23 +39,22 @@ export const readFileInputSchema = z.object({
     ),
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive)."),
-    mode: z.enum(["plain", "annotated"]).default("plain").optional().describe("Output mode. plain returns text only; annotated returns content plus sidecar-backed outline metadata."),
-    open_symbol: z.object({
-        symbolId: z.string().min(1).optional().describe("Deterministic symbol identifier to open in the target file. On symbol-owned flows, this should carry the symbolInstanceId."),
-        symbolLabel: z.string().min(1).optional().describe("Exact symbol label to open in the target file."),
-        start_line: z.number().int().positive().optional().describe("Optional direct symbol span start line (1-based, inclusive)."),
-        end_line: z.number().int().positive().optional().describe("Optional direct symbol span end line (1-based, inclusive).")
-    }).optional().describe("Optional deterministic symbol jump request for this file path. Uses exact symbol resolution within `path` when symbolId/symbolLabel is provided, and only uses direct span opens when no symbol identity fields are supplied. On symbol-owned flows, symbolId should carry the symbolInstanceId.")
-}).superRefine((input, ctx) => {
-    if (!input.open_symbol) {
-        return;
-    }
-    const request = input.open_symbol;
-    if (!request.symbolId && !request.symbolLabel && request.start_line === undefined) {
+    mode: z.enum(["plain", "annotated"]).optional().describe("Output mode. Required for exact-symbol context requests. Other reads default to plain."),
+    open_symbol: openSymbolRequestSchema.optional().describe("Strict exact-symbol context or direct-span request. Exact symbols require contractVersion 2 and exactly one context or continuation operation; direct spans use one-based inclusive startLine/endLine.")
+}).strict().superRefine((input, ctx) => {
+    if (!input.open_symbol) return;
+    if (input.start_line !== undefined || input.end_line !== undefined) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            path: ['open_symbol'],
-            message: 'open_symbol requires symbolId, symbolLabel, or start_line.'
+            path: ["open_symbol"],
+            message: "open_symbol cannot be combined with top-level line ranges.",
+        });
+    }
+    if (exactSymbolOpenRequestSchema.safeParse(input.open_symbol).success && input.mode === undefined) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["mode"],
+            message: "mode is required for exact-symbol context requests.",
         });
     }
 });
@@ -95,13 +105,81 @@ function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
-function readFileErrorResponse(payload: ReadFileOpenSymbolResponseEnvelope) {
+function readFileErrorResponse(payload: ReadFileStructuredErrorResponseEnvelope) {
     return {
         content: [{
             type: "text" as const,
             text: JSON.stringify(payload, null, 2)
         }],
         isError: true
+    };
+}
+
+type SymbolContextErrorCode =
+    | "STALE_CONTINUATION"
+    | "AMBIGUOUS_SYMBOL"
+    | "SYMBOL_NOT_FOUND"
+    | "NAVIGATION_UNAVAILABLE"
+    | "INVALID_RELATIONSHIP_CONTINUATION"
+    | "UNSUPPORTED_CONTINUATION_KIND"
+    | "ROOT_BINDING_INVALID"
+    | "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT";
+
+function symbolContextErrorResponse(input: {
+    code: SymbolContextErrorCode;
+    reason: string;
+    message: string;
+    extra?: Record<string, string | number>;
+}): ToolTextResponse {
+    const payload = {
+        formatVersion: SYMBOL_CONTEXT_FORMAT_VERSION,
+        kind: SYMBOL_CONTEXT_KIND,
+        status: "error",
+        code: input.code,
+        reason: input.reason,
+        ...input.extra,
+        message: input.message,
+    };
+    const serialized = JSON.stringify(payload);
+    const errorLimit = input.code === "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT"
+        || input.code === "ROOT_BINDING_INVALID"
+        ? SYMBOL_CONTEXT_LIMITS.emergencyErrorLimitBytes
+        : SYMBOL_CONTEXT_LIMITS.acceptedErrorLimitBytes;
+    if (Buffer.byteLength(serialized, "utf8") > errorLimit) {
+        throw new Error("The fixed symbol-context error envelope exceeded its transport limit.");
+    }
+    return {
+        content: [{ type: "text", text: serialized }],
+        isError: true,
+    };
+}
+
+function isExactSymbolRequest(
+    request: z.infer<typeof openSymbolRequestSchema> | undefined,
+): request is ExactSymbolOpenRequest {
+    return exactSymbolOpenRequestSchema.safeParse(request).success;
+}
+
+function composeSymbolContextRequest(input: {
+    root: string;
+    relativeFile: string;
+    request: ExactSymbolOpenRequest;
+    operation: Exclude<ResolvedSymbolContextOperation, { kind: "unsupported_continuation" }>;
+}) {
+    return {
+        codebaseRoot: input.root,
+        relativeFile: input.relativeFile,
+        ...(input.request.symbolId
+            ? { symbolId: input.request.symbolId }
+            : { symbolLabel: input.request.symbolLabel as string }),
+        include: input.operation.include,
+        budgets: input.operation.budgets,
+        ...(input.operation.kind === "context" && input.operation.query
+            ? { query: input.operation.query }
+            : {}),
+        ...(input.operation.kind === "continuation"
+            ? { continuation: input.operation.continuation }
+            : {}),
     };
 }
 
@@ -331,7 +409,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
 export const readFileTool: McpTool = {
     name: "read_file",
     description: () =>
-        "Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). For a grouped search target, resolve target.file under codebaseRoot; when target.symbolId exists, pass it as open_symbol.symbolId, otherwise pass target.span as the 1-based inclusive start_line/end_line window. The canonical real file path must stay inside a tracked root with status indexed or sync_completed.",
+        "Read source only under an indexed/searchable Satori root. Ordinary reads and unversioned open_symbol startLine/endLine requests return source text. Exact symbolId/symbolLabel requests require mode plus open_symbol contractVersion 2 and exactly one context or continuation operation; they return one bounded structured symbol_context package in both modes. The canonical real path must remain inside a tracked indexed or sync_completed root.",
     inputSchemaZod: () => readFileInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});
@@ -357,6 +435,9 @@ export const readFileTool: McpTool = {
 
         const input = parsed.data;
         const mode = input.mode || "plain";
+        const exactRequest = isExactSymbolRequest(input.open_symbol)
+            ? input.open_symbol
+            : undefined;
 
         try {
             // Schema already requires an absolute path; collapse . / .. and realpath when present.
@@ -368,6 +449,13 @@ export const readFileTool: McpTool = {
             // Indexing roots are handled next with not_ready (still no content).
             const indexingBlock = resolveIndexingBlockForFile(absolutePath, ctx);
             if (indexingBlock) {
+                if (exactRequest) {
+                    return symbolContextErrorResponse({
+                        code: "NAVIGATION_UNAVAILABLE",
+                        reason: "navigation_unavailable",
+                        message: "Current navigation authority is unavailable; wait for indexing to complete and retry.",
+                    });
+                }
                 return {
                     content: [{
                         type: "text",
@@ -401,7 +489,116 @@ export const readFileTool: McpTool = {
 
             const allowedRoot = resolveContentAllowedRoot(absolutePath, ctx);
             if (!allowedRoot) {
+                if (exactRequest) {
+                    return symbolContextErrorResponse({
+                        code: "NAVIGATION_UNAVAILABLE",
+                        reason: "navigation_unavailable",
+                        message: "Current navigation authority is unavailable; refresh the indexed root state and retry.",
+                    });
+                }
                 return outsideIndexedRootResponse(absolutePath);
+            }
+
+            if (exactRequest) {
+                const relativeFile = normalizeRelativePath(path.relative(allowedRoot, absolutePath));
+                const operation = resolveSymbolContextOperation({
+                    mode: input.mode as "plain" | "annotated",
+                    request: exactRequest,
+                });
+                if (operation.kind === "unsupported_continuation") {
+                    return symbolContextErrorResponse({
+                        code: "UNSUPPORTED_CONTINUATION_KIND",
+                        reason: "unsupported_continuation_kind",
+                        message: "The requested symbol-context continuation kind is unsupported.",
+                    });
+                }
+
+                await touchResolvedCodebaseRoot(absolutePath, ctx);
+                const result = await ctx.toolHandlers.composeSymbolContext(
+                    composeSymbolContextRequest({
+                        root: allowedRoot,
+                        relativeFile,
+                        request: exactRequest,
+                        operation,
+                    }),
+                );
+                if (result.status === "ok") {
+                    const payload = composePublicSymbolContextEnvelope({
+                        effectiveRequest: operation.effectiveRequest,
+                        context: result.context,
+                    });
+                    const serialized = JSON.stringify(payload);
+                    const hardLimit = operation.effectiveRequest.budgets.totalResponseBytes;
+                    if (Buffer.byteLength(serialized, "utf8") > hardLimit) {
+                        return symbolContextErrorResponse({
+                            code: "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT",
+                            reason: "minimum_safe_package_exceeds_limit",
+                            message: "The exact symbol cannot be represented safely within the bounded response contract.",
+                            extra: {
+                                symbolId: result.context.symbol.symbolId,
+                                minimumRequiredResponseBytes: Buffer.byteLength(serialized, "utf8"),
+                                hardResponseLimitBytes: SYMBOL_CONTEXT_LIMITS.hardResponseLimitBytes,
+                            },
+                        });
+                    }
+                    return {
+                        content: [{ type: "text", text: serialized }],
+                    };
+                }
+
+                switch (result.status) {
+                    case "symbol_not_found":
+                        return symbolContextErrorResponse({
+                            code: "SYMBOL_NOT_FOUND",
+                            reason: "symbol_not_found",
+                            message: "No exact symbol matched the current navigation snapshot.",
+                        });
+                    case "ambiguous_symbol":
+                        return symbolContextErrorResponse({
+                            code: "AMBIGUOUS_SYMBOL",
+                            reason: "ambiguous_symbol",
+                            message: "The exact symbol label resolves to more than one current symbol.",
+                        });
+                    case "stale_continuation":
+                        return symbolContextErrorResponse({
+                            code: "STALE_CONTINUATION",
+                            reason: "continuation_identity_changed",
+                            message: "The continuation no longer matches current evidence; request fresh symbol context.",
+                        });
+                    case "invalid_relationship_continuation":
+                        return symbolContextErrorResponse({
+                            code: "INVALID_RELATIONSHIP_CONTINUATION",
+                            reason: "invalid_relationship_continuation",
+                            message: "The relationship cursor is invalid for the current traversal.",
+                        });
+                    case "safety_error":
+                        return symbolContextErrorResponse({
+                            code: "ROOT_BINDING_INVALID",
+                            reason: "root_binding_invalid",
+                            message: "Source evidence could not be bound safely to the indexed root.",
+                        });
+                    case "resource_limit": {
+                        const publicLimit = operation.effectiveRequest.budgets.totalResponseBytes;
+                        const wrapperBytes = publicLimit - operation.budgets.maxSerializedResponseBytes;
+                        return symbolContextErrorResponse({
+                            code: "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT",
+                            reason: "minimum_safe_package_exceeds_limit",
+                            message: "The exact symbol cannot be represented safely within the bounded response contract.",
+                            extra: {
+                                symbolId: result.symbolId,
+                                minimumRequiredResponseBytes: result.minimumRequiredResponseBytes + wrapperBytes,
+                                hardResponseLimitBytes: SYMBOL_CONTEXT_LIMITS.hardResponseLimitBytes,
+                            },
+                        });
+                    }
+                    case "navigation_unavailable":
+                    case "stale":
+                        return symbolContextErrorResponse({
+                            code: "NAVIGATION_UNAVAILABLE",
+                            reason: "navigation_unavailable",
+                            message: "Current navigation authority is unavailable; refresh the index state and retry.",
+                        });
+                }
             }
 
             if (!fs.existsSync(absolutePath)) {
@@ -485,13 +682,6 @@ export const readFileTool: McpTool = {
             let startLine = 1;
             let endLine = totalLines > 0 ? totalLines : 0;
             let addContinuationHint = false;
-            // Exact open_symbol already resolved one symbol — reuse it for annotated outline
-            // instead of a windowed re-outline that reintroduces overlapping siblings (M4/A1).
-            let exactOpenOutline: {
-                symbols: unknown[];
-                warnings?: string[];
-                hints?: Record<string, unknown>;
-            } | null = null;
 
             if (totalLines === 0) {
                 startLine = 1;
@@ -512,111 +702,11 @@ export const readFileTool: McpTool = {
                 endLine = clamp(input.end_line as number, startLine, totalLines);
             }
 
-            if (input.open_symbol && totalLines > 0) {
+            if (input.open_symbol && !isExactSymbolRequest(input.open_symbol) && totalLines > 0) {
                 const openSymbol = input.open_symbol;
-                const hasExactIdentity = Boolean(openSymbol.symbolId || openSymbol.symbolLabel);
-                const spanStart = Number.isFinite(openSymbol.start_line) ? Number(openSymbol.start_line) : undefined;
-                const spanEnd = Number.isFinite(openSymbol.end_line) ? Number(openSymbol.end_line) : undefined;
-                if (hasExactIdentity) {
-                    if (!isOutlineSupportedFile(absolutePath)) {
-                        return readFileErrorResponse({
-                            status: "unsupported",
-                            reason: "unsupported_language",
-                            message: `Error opening symbol: file '${absolutePath}' is not outline-capable.`,
-                        });
-                    }
-
-                    const resolvedRoot = resolveCodebaseRootForFile(absolutePath, ctx);
-                    const relativeFile = resolvedRoot
-                        ? normalizeRelativePath(path.relative(resolvedRoot, absolutePath))
-                        : undefined;
-                    if (!resolvedRoot || !relativeFile) {
-                        const nextSteps = buildRootDiscoveryNextSteps(absolutePath, ctx);
-                        const payload: ReadFileOpenSymbolResponseEnvelope = {
-                            status: "requires_reindex",
-                            message: "Cannot resolve codebase root for open_symbol. Resolve the indexed repo root first via list_codebases/manage_index status, then reindex that root and retry.",
-                            hints: {
-                                nextSteps
-                            }
-                        };
-                        return {
-                            content: [{
-                                type: "text",
-                                text: JSON.stringify(payload, null, 2)
-                            }],
-                            isError: true
-                        };
-                    }
-
-                    const executionContext = await resolveVectorBackedToolContext(ctx, {
-                        tool: "read_file",
-                        path: resolvedRoot,
-                        file: relativeFile,
-                        messagePrefix: "Cannot resolve open_symbol because navigation readiness could not be verified.",
-                    });
-                    if (!executionContext.ok) {
-                        return executionContext.response;
-                    }
-
-                    const outlineResponse = await executionContext.context.toolHandlers.handleFileOutline({
-                        path: resolvedRoot,
-                        file: relativeFile,
-                        resolveMode: "exact",
-                        symbolIdExact: openSymbol.symbolId,
-                        symbolLabelExact: openSymbol.symbolLabel,
-                        limitSymbols: 25
-                    });
-                    const parsedOutline = JSON.parse(outlineResponse.content?.[0]?.text || "{}");
-                    if (parsedOutline?.status !== "ok") {
-                        const payload: ReadFileOpenSymbolResponseEnvelope = {
-                            status: parsedOutline?.status || "not_found",
-                            ...(typeof parsedOutline?.reason === "string" ? { reason: parsedOutline.reason } : {}),
-                            message: parsedOutline?.message || "Failed to resolve open_symbol request.",
-                            file: relativeFile,
-                            ...(parsedOutline?.outline ? { matches: parsedOutline.outline.symbols } : {}),
-                            ...(parsedOutline?.warnings ? { warnings: parsedOutline.warnings } : {}),
-                            ...(parsedOutline?.hints ? { hints: parsedOutline.hints } : {}),
-                            ...(parsedOutline?.indexingFailure ? { indexingFailure: parsedOutline.indexingFailure } : {})
-                        };
-                        return {
-                            content: [{
-                                type: "text",
-                                text: JSON.stringify(payload, null, 2)
-                            }],
-                            isError: true
-                        };
-                    }
-
-                    const resolvedSymbol = parsedOutline?.outline?.symbols?.[0];
-                    if (!resolvedSymbol?.span || !Number.isFinite(resolvedSymbol.span.startLine) || !Number.isFinite(resolvedSymbol.span.endLine)) {
-                        return readFileErrorResponse({
-                            status: "not_found",
-                            reason: "missing_symbol",
-                            message: "Error opening symbol: resolved symbol is missing a valid span.",
-                        });
-                    }
-                    startLine = clamp(Number(resolvedSymbol.span.startLine), 1, totalLines);
-                    endLine = clamp(Number(resolvedSymbol.span.endLine), startLine, totalLines);
-                    addContinuationHint = false;
-                    const outlineWarnings = Array.isArray(parsedOutline?.warnings)
-                        ? parsedOutline.warnings.filter((item: unknown): item is string => typeof item === "string")
-                        : undefined;
-                    const outlineHints = parsedOutline?.hints && typeof parsedOutline.hints === "object"
-                        ? parsedOutline.hints as Record<string, unknown>
-                        : undefined;
-                    exactOpenOutline = {
-                        // Only the exact resolved symbol — drop siblings even if exact outline returned more.
-                        symbols: [resolvedSymbol],
-                        ...(outlineWarnings && outlineWarnings.length > 0 ? { warnings: outlineWarnings } : {}),
-                        ...(outlineHints ? { hints: outlineHints } : {}),
-                    };
-                } else if (spanStart !== undefined) {
-                    startLine = clamp(spanStart, 1, totalLines);
-                    endLine = spanEnd !== undefined
-                        ? clamp(spanEnd, startLine, totalLines)
-                        : startLine;
-                    addContinuationHint = false;
-                }
+                startLine = clamp(openSymbol.startLine, 1, totalLines);
+                endLine = clamp(openSymbol.endLine, startLine, totalLines);
+                addContinuationHint = false;
             }
 
             const selected = totalLines === 0 ? content : lines.slice(startLine - 1, endLine).join("\n");
@@ -646,14 +736,7 @@ export const readFileTool: McpTool = {
             let warnings: string[] | undefined;
             let hints: Record<string, unknown> | undefined;
 
-            if (exactOpenOutline) {
-                // Exact open already owns identity + span; do not re-query a windowed outline.
-                outlineStatus = "ok";
-                outline = { symbols: exactOpenOutline.symbols };
-                hasMore = false;
-                warnings = exactOpenOutline.warnings;
-                hints = exactOpenOutline.hints;
-            } else if (!supportedByExtension) {
+            if (!supportedByExtension) {
                 outlineStatus = "unsupported";
             } else if (!resolvedRoot || !relativeFile) {
                 outlineStatus = "requires_reindex";
@@ -720,6 +803,13 @@ export const readFileTool: McpTool = {
                 }]
             };
         } catch (error) {
+            if (exactRequest) {
+                return symbolContextErrorResponse({
+                    code: "NAVIGATION_UNAVAILABLE",
+                    reason: "navigation_unavailable",
+                    message: "Current symbol context could not be prepared safely; refresh index state and retry.",
+                });
+            }
             if (mode === "annotated" || input.open_symbol) {
                 return readFileErrorResponse({
                     status: "not_ready",

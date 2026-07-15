@@ -448,10 +448,15 @@ test("documented grouped navigation mappings validate and execute through regist
         exactResult.target.span.endLine = 2;
         const exactReadInput = {
             path: absoluteFile,
-            open_symbol: { symbolId: exactResult.target.symbolId },
+            mode: "plain" as const,
+            open_symbol: {
+                contractVersion: 2 as const,
+                symbolId: exactResult.target.symbolId,
+                context: { preset: "implementation" as const },
+            },
         };
         assert.equal(readFileInputSchema.safeParse(exactReadInput).success, true);
-        let outlineInput: unknown;
+        let composedInput: unknown;
         const exactReadResponse = await readFileTool.execute(exactReadInput, {
             readFileMaxLines: 100,
             snapshotManager: {
@@ -459,35 +464,39 @@ test("documented grouped navigation mappings validate and execute through regist
             },
             syncManager: { touchWatchedCodebase: async () => undefined },
             toolHandlers: {
-                handleFileOutline: async (input: unknown) => {
-                    outlineInput = input;
+                composeSymbolContext: async (input: unknown) => {
+                    composedInput = input;
                     return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                status: "ok",
-                                outline: {
-                                    symbols: [{
-                                        symbolId: exactResult.target.symbolId,
-                                        span: exactResult.target.span,
-                                    }],
-                                },
-                            }),
-                        }],
+                        status: "ok",
+                        context: {
+                            status: "ok",
+                            symbol: { symbolId: exactResult.target.symbolId },
+                            source: { status: "not_requested" },
+                            relationships: {
+                                callers: { status: "not_requested" },
+                                callees: { status: "not_requested" },
+                            },
+                            continuations: [],
+                            limitations: [],
+                        },
                     };
                 },
             },
         } as unknown as ToolContext);
         assert.equal(exactReadResponse.isError, undefined);
-        assert.equal(exactReadResponse.content[0]?.text, "line one\nline two");
-        assert.deepEqual(outlineInput, {
-            path: tempRoot,
-            file: relativeFile,
-            resolveMode: "exact",
-            symbolIdExact: exactResult.target.symbolId,
-            symbolLabelExact: undefined,
-            limitSymbols: 25,
+        const exactPayload = JSON.parse(exactReadResponse.content[0]?.text || "{}");
+        assert.deepEqual({
+            formatVersion: exactPayload.formatVersion,
+            kind: exactPayload.kind,
+            status: exactPayload.status,
+            symbolId: exactPayload.symbol?.symbolId,
+        }, {
+            formatVersion: 2,
+            kind: "symbol_context",
+            status: "ok",
+            symbolId: exactResult.target.symbolId,
         });
+        assert.equal((composedInput as { symbolId?: string })?.symbolId, exactResult.target.symbolId);
 
         const spanResult = makeGroup(1, { file: relativeFile, symbolId: "", startLine: 2 });
         spanResult.target.span.endLine = 3;

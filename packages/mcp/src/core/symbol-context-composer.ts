@@ -28,6 +28,7 @@ import {
     type PrepareInspectableSourceResult,
 } from "./inspectable-source.js";
 import {
+    InvalidRelationshipContinuationError,
     paginateRelationshipEdges,
     buildRelationshipTraversalFingerprint,
     type RelationshipTraversalFingerprint,
@@ -120,6 +121,18 @@ export interface SymbolContextBudgets {
     maxSerializedResponseBytes: number;
 }
 
+export type SymbolContextContinuationRequest = {
+    kind: "source_range";
+    fingerprint: string;
+    startLine: number;
+    endLine: number;
+} | {
+    kind: "caller_page" | "callee_page";
+    fingerprint: string;
+    cursor: string;
+    pageSize: number;
+};
+
 type ExactSymbolTarget = {
     symbolId: string;
     symbolLabel?: never;
@@ -134,6 +147,7 @@ export type ComposeSymbolContextInput = ExactSymbolTarget & {
     include: SymbolContextInclude;
     budgets: SymbolContextBudgets;
     query?: string;
+    continuation?: SymbolContextContinuationRequest;
 };
 
 export type SourceSpanResolution =
@@ -224,11 +238,18 @@ export type ComposeSymbolContextResult = {
     status: "stale";
     reason: "prepared_authority_changed";
 } | {
+    status: "stale_continuation";
+    reason: "continuation_identity_changed";
+} | {
+    status: "invalid_relationship_continuation";
+    reason: "cursor_invalid_for_prepared_traversal";
+} | {
     status: "safety_error";
     reason: "root_binding_invalid";
     diagnosticCode: "ROOT_BINDING_INVALID";
 } | {
     status: "resource_limit";
+    symbolId: string;
     minimumRequiredResponseBytes: number;
     hardResponseLimitBytes: number;
 };
@@ -274,6 +295,45 @@ function validateBudgets(budgets: SymbolContextBudgets): void {
     }
     if (!Number.isSafeInteger(budgets.maxSerializedResponseBytes) || budgets.maxSerializedResponseBytes < 1) {
         throw new RangeError("maxSerializedResponseBytes must be a positive safe integer.");
+    }
+}
+
+function validateContinuationRequest(input: ComposeSymbolContextInput): void {
+    const continuation = input.continuation;
+    if (!continuation) return;
+    if (!continuation.fingerprint.trim()) {
+        throw new TypeError("A continuation fingerprint must be non-empty.");
+    }
+    if (continuation.kind === "source_range") {
+        if (
+            !Number.isSafeInteger(continuation.startLine)
+            || !Number.isSafeInteger(continuation.endLine)
+            || continuation.startLine < 1
+            || continuation.endLine < continuation.startLine
+        ) {
+            throw new RangeError("A source continuation requires a valid line range.");
+        }
+        if (
+            !input.include.source
+            || input.include.siblings
+            || input.include.callers
+            || input.include.callees
+        ) {
+            throw new TypeError("A source continuation may request only source evidence.");
+        }
+        return;
+    }
+    if (!continuation.cursor || !Number.isSafeInteger(continuation.pageSize) || continuation.pageSize < 1) {
+        throw new RangeError("A relationship continuation requires a cursor and positive page size.");
+    }
+    const requestsCallers = continuation.kind === "caller_page";
+    if (
+        input.include.source
+        || input.include.siblings
+        || input.include.callers !== requestsCallers
+        || input.include.callees === requestsCallers
+    ) {
+        throw new TypeError("A relationship continuation may request only its matching direction.");
     }
 }
 
@@ -499,6 +559,7 @@ function projectRelationshipPage(input: {
     composition: RelationshipComposition;
     returnedCount: number;
     pageSize: number;
+    cursor?: string;
     currentSiteFile?: string;
 }): {
     projection: SymbolContextRelationshipProjection;
@@ -516,9 +577,12 @@ function projectRelationshipPage(input: {
         edges: value.allEdges,
         traversalFingerprint: value.fingerprint?.fingerprint || "",
         pageSize: Math.max(1, input.returnedCount || 1),
+        ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
     });
-    const edges = input.returnedCount === 0 ? [] : page.edges.slice(0, input.returnedCount);
-    const truncated = edges.length < value.availableCount;
+    const edges = input.returnedCount === 0 ? [] : page.edges;
+    const truncated = input.returnedCount === 0
+        ? value.availableCount > 0
+        : !page.terminal;
     const siteStatusByFile = input.currentSiteFile
         ? new Map([[input.currentSiteFile, "current_source_validated" as const]])
         : undefined;
@@ -533,22 +597,16 @@ function projectRelationshipPage(input: {
         limitations: value.limitations,
         siteStatusByFile,
     });
-    if (!truncated || edges.length === 0 || !value.fingerprint) {
+    if (!truncated || edges.length === 0 || !value.fingerprint || !page.nextCursor) {
         return { projection };
     }
-    const cursorPage = paginateRelationshipEdges({
-        edges: value.allEdges,
-        traversalFingerprint: value.fingerprint.fingerprint,
-        pageSize: edges.length,
-    });
-    if (!cursorPage.nextCursor) return { projection };
     return {
         projection,
         continuation: {
             kind: value.fingerprint.kind,
             domains: value.fingerprint.domains,
             fingerprint: value.fingerprint.fingerprint,
-            cursor: cursorPage.nextCursor,
+            cursor: page.nextCursor,
             pageSize: input.pageSize,
             terminal: false,
         },
@@ -755,6 +813,12 @@ async function composeSource(input: {
         return prepared;
     }
     if (prepared.status !== "available") {
+        if (input.request.continuation?.kind === "source_range") {
+            return {
+                status: "stale_continuation",
+                reason: "continuation_identity_changed",
+            };
+        }
         return {
             source: unavailableSource(prepared.status, prepared.reason),
             freshness: prepared.status,
@@ -772,6 +836,12 @@ async function composeSource(input: {
             resolveCurrentSpans: input.resolveCurrentSpans,
         });
         if (!resolution.symbol || !resolution.continuationIdentity) {
+            if (input.request.continuation?.kind === "source_range") {
+                return {
+                    status: "stale_continuation",
+                    reason: "continuation_identity_changed",
+                };
+            }
             transferFinalizer = true;
             return {
                 source: unavailableSource(
@@ -798,9 +868,39 @@ async function composeSource(input: {
         const continuationFingerprint = buildSourceContinuationFingerprint(
             continuationIdentity,
         );
+        const requestedContinuation = input.request.continuation?.kind === "source_range"
+            ? input.request.continuation
+            : undefined;
+        if (
+            requestedContinuation
+            && requestedContinuation.fingerprint !== continuationFingerprint.fingerprint
+        ) {
+            return {
+                status: "stale_continuation",
+                reason: "continuation_identity_changed",
+            };
+        }
+        if (
+            requestedContinuation
+            && (
+                requestedContinuation.startLine < resolvedSymbol.span.startLine
+                || requestedContinuation.endLine > resolvedSymbol.span.endLine
+            )
+        ) {
+            return {
+                status: "stale_continuation",
+                reason: "continuation_identity_changed",
+            };
+        }
+        const selectionSpan = requestedContinuation
+            ? {
+                startLine: requestedContinuation.startLine,
+                endLine: requestedContinuation.endLine,
+            }
+            : resolvedSymbol.span;
         const selectWithBudget = (maxSerializedSourceBytes: number) => selectBoundedSource({
             sourceBytes: prepared.evidence.sourceBytes,
-            symbolSpan: resolvedSymbol.span,
+            symbolSpan: selectionSpan,
             budgets: {
                 ...input.request.budgets.source,
                 maxSerializedSourceBytes,
@@ -836,6 +936,7 @@ async function composeSource(input: {
             const minimum = selectMinimumRepresentableSource(firstFailure);
             return {
                 status: "resource_limit",
+                symbolId: resolvedSymbol.symbolInstanceId,
                 minimumRequiredResponseBytes: reservedResponseBytes
                     + minimum.serializedSourceBytes
                     + continuationBytesForSource(minimum.source),
@@ -926,6 +1027,7 @@ export async function composeSymbolContext(
     dependencies: SymbolContextComposerDependencies,
 ): Promise<ComposeSymbolContextResult> {
     validateBudgets(input.budgets);
+    validateContinuationRequest(input);
     const prepared = await dependencies.prepareSnapshot({
         codebaseRoot: input.codebaseRoot,
         relativeFile: input.relativeFile,
@@ -1043,6 +1145,7 @@ export async function composeSymbolContext(
     });
     if ("status" in sourceResult && (
         sourceResult.status === "stale"
+        || sourceResult.status === "stale_continuation"
         || sourceResult.status === "safety_error"
         || sourceResult.status === "resource_limit"
     )) {
@@ -1088,8 +1191,68 @@ export async function composeSymbolContext(
     if (serializedBytes(context) > input.budgets.maxSerializedResponseBytes) {
         return {
             status: "resource_limit",
+            symbolId: resolvedIdentity.symbolId,
             minimumRequiredResponseBytes: serializedBytes(context),
             hardResponseLimitBytes: input.budgets.maxSerializedResponseBytes,
+        };
+    }
+
+    const relationshipContinuation = input.continuation?.kind === "caller_page"
+        || input.continuation?.kind === "callee_page"
+        ? input.continuation
+        : undefined;
+    if (relationshipContinuation) {
+        const composition = relationshipContinuation.kind === "caller_page"
+            ? callers
+            : callees;
+        if (
+            !composition.fingerprint
+            || composition.fingerprint.fingerprint !== relationshipContinuation.fingerprint
+        ) {
+            return {
+                status: "stale_continuation",
+                reason: "continuation_identity_changed",
+            };
+        }
+        let page: ReturnType<typeof projectRelationshipPage>;
+        try {
+            page = projectRelationshipPage({
+                composition,
+                returnedCount: relationshipContinuation.pageSize,
+                pageSize: relationshipContinuation.pageSize,
+                cursor: relationshipContinuation.cursor,
+            });
+        } catch (error) {
+            if (error instanceof InvalidRelationshipContinuationError) {
+                return {
+                    status: "invalid_relationship_continuation",
+                    reason: "cursor_invalid_for_prepared_traversal",
+                };
+            }
+            throw error;
+        }
+        context = withRelationshipPage({
+            context,
+            relationship: composition.relationship,
+            page,
+        });
+        if (serializedBytes(context) > input.budgets.maxSerializedResponseBytes) {
+            return {
+                status: "resource_limit",
+                symbolId: resolvedIdentity.symbolId,
+                minimumRequiredResponseBytes: serializedBytes(context),
+                hardResponseLimitBytes: input.budgets.maxSerializedResponseBytes,
+            };
+        }
+        if (!await snapshot.validateAuthority()) {
+            return { status: "stale", reason: "prepared_authority_changed" };
+        }
+        return {
+            status: "ok",
+            context: deepFreeze({
+                ...context,
+                continuations: [...context.continuations],
+            }),
         };
     }
 

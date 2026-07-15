@@ -1,65 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readFileTool } from './read_file.js';
 import { ToolContext } from './types.js';
-import { ToolHandlers } from '../core/handlers.js';
-import { CapabilityResolver } from '../core/capabilities.js';
-import { IndexFingerprint } from '../config.js';
-import type { FileOutlineInput } from '../core/search-types.js';
-import {
-    SYMBOL_REGISTRY_SCHEMA_VERSION,
-    buildSymbolRecordsForFile,
-    buildSymbolRegistry,
-    withSourceMeasurementOperation,
-    writeSymbolRegistrySidecar,
-} from '@zokizuan/satori-core';
-import type { SymbolRegistryManifest } from '@zokizuan/satori-core';
+import { withSourceMeasurementOperation } from '@zokizuan/satori-core';
 
 type SnapshotManagerLike = ToolContext['snapshotManager'];
 type SyncManagerLike = ToolContext['syncManager'];
 type ToolHandlersLike = ToolContext['toolHandlers'];
-type HandlerContext = ConstructorParameters<typeof ToolHandlers>[0];
-
-const RUNTIME_FINGERPRINT: IndexFingerprint = {
-    embeddingProvider: 'VoyageAI',
-    embeddingModel: 'voyage-4-large',
-    embeddingDimension: 1024,
-    vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3',
-    parserVersion: 'parser-v1',
-    extractorVersion: 'extractor-v1',
-    relationshipVersion: 'relationships-v1',
-};
-
-const CAPABILITIES = new CapabilityResolver({
-    name: 'test',
-    version: '0.0.0',
-    encoderProvider: 'VoyageAI',
-    encoderModel: 'voyage-4-large',
-});
-
-function buildMarker(repoPath: string, fingerprint: IndexFingerprint = RUNTIME_FINGERPRINT) {
-    return {
-        kind: 'satori_index_completion_v3',
-        codebasePath: repoPath,
-        fingerprint,
-        indexedFiles: 4,
-        totalChunks: 8,
-        completedAt: '2026-02-28T08:00:00.000Z',
-        runId: 'run_test',
-        indexPolicyHash: 'a'.repeat(64),
-        indexStatus: 'completed',
-        navigation: { status: 'not_bound' },
-    };
-}
-
-function sha256Content(content: string): string {
-    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-}
 
 function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> | T {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-read-file-test-'));
@@ -67,22 +17,6 @@ function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> | T {
     return run().finally(() => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
-}
-
-async function withTempStateRoot<T>(fn: () => Promise<T>): Promise<T> {
-    const previousStateRoot = process.env.SATORI_STATE_ROOT;
-    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-read-file-state-'));
-    process.env.SATORI_STATE_ROOT = stateRoot;
-    try {
-        return await fn();
-    } finally {
-        if (previousStateRoot === undefined) {
-            delete process.env.SATORI_STATE_ROOT;
-        } else {
-            process.env.SATORI_STATE_ROOT = previousStateRoot;
-        }
-        fs.rmSync(stateRoot, { recursive: true, force: true });
-    }
 }
 
 function indexedSnapshot(
@@ -662,1091 +596,430 @@ test('read_file annotated mode treats Go and Rust files as outline-capable', asy
     });
 });
 
-test('read_file open_symbol treats symbolId as canonical symbolInstanceId on exact opens', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    assert.equal(args.resolveMode, 'exact');
-                    assert.equal(args.symbolIdExact, 'sym_runtime_instance');
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'ok',
-                                path: repoPath,
-                                file: 'src/runtime.ts',
-                                outline: {
-                                    symbols: [{
-                                        symbolId: 'sym_runtime_instance',
-                                        symbolLabel: 'function run()',
-                                        span: { startLine: 2, endLine: 3 },
-                                        callGraphHint: {
-                                            supported: true,
-                                            symbolRef: { file: 'src/runtime.ts', symbolId: 'sym_runtime_instance' }
-                                        }
-                                    }]
-                                },
-                                hasMore: false
-                            })
-                        }]
-                    };
-                }
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, undefined);
-        assert.equal(response.content[0].text, 'line2\nline3');
-    });
-});
-
-test('read_file open_symbol uses provider vector context when available', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
-
-        let requestedOperation: string | undefined;
-        let receivedArgs: FileOutlineInput | undefined;
-        const providerContext = {
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    receivedArgs = args;
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'ok',
-                                path: repoPath,
-                                file: 'src/runtime.ts',
-                                outline: {
-                                    symbols: [{
-                                        symbolId: 'sym_runtime_instance',
-                                        symbolLabel: 'function run()',
-                                        span: { startLine: 2, endLine: 3 },
-                                        callGraphHint: {
-                                            supported: true,
-                                            symbolRef: { file: 'src/runtime.ts', symbolId: 'sym_runtime_instance' }
-                                        }
-                                    }]
-                                },
-                                hasMore: false
-                            })
-                        }]
-                    };
-                }
-            }
-        } as unknown as ToolContext;
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance'
-            }
-        }, 1000, {
-            providerRuntime: {
-                requireToolContext: async (operation: string) => {
-                    requestedOperation = operation;
-                    return providerContext;
-                }
+test('read_file exact-symbol schema rejects legacy, mixed, and unknown request shapes', async () => {
+    const base = {
+        path: '/repo/src/runtime.ts',
+        mode: 'plain' as const,
+    };
+    for (const open_symbol of [
+        { symbolId: 'sym_runtime', context: { preset: 'implementation' } },
+        {
+            contractVersion: 2,
+            symbolId: 'sym_runtime',
+            symbolLabel: 'runtime',
+            context: { preset: 'implementation' },
+        },
+        {
+            contractVersion: 2,
+            symbolId: 'sym_runtime',
+            context: { preset: 'implementation' },
+            continuation: {
+                kind: 'source_range',
+                fingerprint: 'sha256_source_fixture',
+                startLine: 1,
+                endLine: 2,
             },
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async () => {
-                    throw new Error('startup context should not resolve open_symbol when provider context is available');
-                }
-            } as unknown as ToolHandlersLike
-        });
+        },
+        {
+            contractVersion: 2,
+            symbolId: 'sym_runtime',
+            context: { preset: 'implementation' },
+            fullSymbol: true,
+        },
+    ]) {
+        const response = await runReadFile({ ...base, open_symbol });
+        assert.equal(response.isError, true);
+        assert.match(response.content[0].text, /Invalid arguments for 'read_file'/);
+    }
 
-        assert.equal(response.isError, undefined);
-        assert.equal(response.content[0].text, 'line2\nline3');
-        assert.equal(requestedOperation, 'vector_only');
-        assert.equal(receivedArgs?.resolveMode, 'exact');
-        assert.equal(receivedArgs?.symbolIdExact, 'sym_runtime_instance');
+    const missingMode = await runReadFile({
+        path: base.path,
+        open_symbol: {
+            contractVersion: 2,
+            symbolId: 'sym_runtime',
+            context: { preset: 'implementation' },
+        },
     });
+    assert.equal(missingMode.isError, true);
+    assert.match(missingMode.content[0].text, /mode is required/);
 });
 
-test('read_file open_symbol opens source-repaired Python multiline function spans', async () => {
-    await withTempStateRoot(async () => withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const relativePath = 'src/phases.py';
-        const filePath = path.join(repoPath, relativePath);
-        const source = [
-            'def previous_phase():',
-            '    return _rename_outputs(signal)',
-            '',
-            'def _attach_entry_telemetry(',
-            '    *,',
-            '    signal=None,',
-            '    entry_decision=None,',
-            '    pending=None,',
-            ') -> None:',
-            '    telemetry = build_entry_telemetry(',
-            '        signal=signal,',
-            '        entry_decision=entry_decision,',
-            '        pending=pending,',
-            '    )',
-            '    return telemetry',
-            '',
-            'def build_entry_telemetry(*, signal=None, entry_decision=None, pending=None):',
-            '    return (signal, entry_decision, pending)',
-            '',
-        ].join('\n');
-        fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        fs.writeFileSync(filePath, source, 'utf8');
-
-        const fileHash = sha256Content(source);
-        const staleHeaderContent = source.split('\n').slice(1, 9).join('\n');
-        const symbols = buildSymbolRecordsForFile({
-            relativePath,
-            language: 'python',
-            content: source,
-            fileHash,
-            extractorVersion: 'test-extractor-v1',
-            chunks: [{
-                content: staleHeaderContent,
-                metadata: {
-                    startLine: 2,
-                    endLine: 9,
-                    language: 'python',
-                    filePath: relativePath,
-                    symbolLabel: 'function _attach_entry_telemetry(',
-                },
-            }],
-        });
-        const attach = symbols.find((symbol) => symbol.name === '_attach_entry_telemetry');
-        assert.ok(attach);
-        assert.equal(attach.span.endLine, 9);
-        const manifest: SymbolRegistryManifest = {
-            schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
-            normalizedRootPath: repoPath,
-            rootFingerprint: 'test-root-fingerprint',
-            indexPolicyHash: 'test-policy',
-            languageRouterVersion: 'test-router-v1',
-            extractorVersion: 'test-extractor-v1',
-            relationshipVersion: 'test-relationships-v1',
-            builtAt: '2026-01-01T00:00:00.000Z',
-            files: [{
-                path: relativePath,
-                hash: fileHash,
-                language: 'python',
-                symbolCount: symbols.length,
-            }],
-        };
-        await writeSymbolRegistrySidecar({
-            registry: buildSymbolRegistry({ manifest, symbols }),
-        });
-
-        const codebaseInfo = {
-            status: 'indexed',
-            lastUpdated: '2026-02-28T08:00:00.000Z',
-            indexFingerprint: RUNTIME_FINGERPRINT,
-            fingerprintSource: 'verified',
-        };
-        const snapshotManager = {
-            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
-            getIndexedCodebases: () => [repoPath],
-            getIndexingCodebases: () => [],
-            getCodebaseInfo: (codebasePath: string) => codebasePath === repoPath ? codebaseInfo : undefined,
-            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-            saveCodebaseSnapshot: () => undefined,
-        } as unknown as SnapshotManagerLike;
-        const handlers = new ToolHandlers(
-            {
-                getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            } as unknown as HandlerContext,
-            snapshotManager,
-            {} as unknown as SyncManagerLike,
-            RUNTIME_FINGERPRINT,
-            CAPABILITIES
-        );
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: attach.symbolInstanceId,
+function composedContextFixture() {
+    return {
+        status: 'ok' as const,
+        symbol: {
+            symbolId: 'sym_runtime',
+            symbolKey: 'key:runtime',
+            name: 'runtime',
+            qualifiedName: 'runtime',
+            label: 'function runtime()',
+            kind: 'function',
+            language: 'typescript',
+            file: 'src/runtime.ts',
+            span: { startLine: 1, endLine: 3 },
+            parentQualifiedNamePath: [],
+            parentResolution: 'not_applicable',
+        },
+        outline: {
+            siblings: {
+                items: [],
+                returnedCount: 0,
+                availableCount: 0,
+                truncated: false,
             },
-        }, 1000, {
-            snapshotManager,
-            syncManager: {} as unknown as SyncManagerLike,
-            toolHandlers: handlers,
-        });
+        },
+        source: {
+            selectionPolicyVersion: 'bounded_source_selection_v1',
+            mode: 'complete',
+            status: 'available',
+            span: { startLine: 1, endLine: 3, startByte: 0, endByte: 42 },
+            completeSymbolReturned: true,
+            totalLines: 3,
+            totalBytes: 42,
+            returnedLines: 3,
+            returnedBytes: 42,
+            excerptCount: 1,
+            excerpts: [{
+                reason: 'complete_symbol',
+                selectionBases: ['complete_symbol'],
+                startLine: 1,
+                endLine: 3,
+                startByte: 0,
+                endByte: 42,
+                content: 'export function runtime() {\n  return true;\n}',
+            }],
+            omittedRanges: [],
+            truncated: false,
+            selectionCapabilities: {
+                localLexical: 'available',
+                lineWindows: 'available',
+                syntaxBoundaries: 'available',
+                controlFlowAnchors: 'available',
+            },
+            limitations: [],
+        },
+        relationships: {
+            callers: { status: 'not_requested', relationship: 'caller' },
+            callees: { status: 'not_requested', relationship: 'callee' },
+        },
+        authority: {
+            vector: 'not_required',
+            navigation: 'remote_generation_proven',
+            source: {
+                freshness: 'current_at_final_observation',
+                spanResolution: 'index_snapshot_matched',
+            },
+            relationships: 'not_requested',
+        },
+        continuations: [],
+        limitations: [],
+    };
+}
 
-        assert.equal(response.isError, undefined);
-        assert.match(response.content[0].text, /telemetry = build_entry_telemetry\(/);
-        assert.match(response.content[0].text, /return telemetry/);
-        assert.doesNotMatch(response.content[0].text, /def previous_phase/);
-        assert.doesNotMatch(response.content[0].text, /return _rename_outputs\(signal\)/);
-        assert.doesNotMatch(response.content[0].text, /def build_entry_telemetry/);
-    }));
-});
-
-test('read_file open_symbol opens a Go symbol by symbolInstanceId through exact outline resolution', async () => {
+test('read_file exact symbols return one bounded structured transport in both modes without provider access', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
-        const filePath = path.join(repoPath, 'service.go');
+        const filePath = path.join(repoPath, 'src', 'runtime.ts');
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        fs.writeFileSync(filePath, 'package svc\n\nfunc add() {\n  println("ok")\n}\n', 'utf8');
+        fs.writeFileSync(filePath, 'DO_NOT_READ_THROUGH_LEGACY_BRANCH\n', 'utf8');
 
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'go_add_instance'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    assert.equal(args.resolveMode, 'exact');
-                    assert.equal(args.symbolIdExact, 'go_add_instance');
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'ok',
-                                path: repoPath,
-                                file: 'service.go',
-                                outline: {
-                                    symbols: [{
-                                        symbolId: 'go_add_instance',
-                                        symbolLabel: 'function add',
-                                        span: { startLine: 3, endLine: 5 },
-                                        callGraphHint: {
-                                            supported: false,
-                                            reason: 'unsupported_language'
-                                        }
-                                    }]
-                                },
-                                hasMore: false
-                            })
-                        }]
-                    };
-                }
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, undefined);
-        assert.equal(response.content[0].text, 'func add() {\n  println("ok")\n}');
-    });
-});
-
-test('read_file open_symbol opens a Rust symbol by symbolInstanceId through exact outline resolution', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const filePath = path.join(repoPath, 'stack.rs');
-        fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        fs.writeFileSync(filePath, [
-            'pub struct Stack { value: i32 }',
-            '',
-            'impl Stack {',
-            '  pub fn push(&mut self, value: i32) {',
-            '    self.value = value;',
-            '  }',
-            '}',
-            '',
-        ].join('\n'), 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'rust_push_instance'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    assert.equal(args.resolveMode, 'exact');
-                    assert.equal(args.symbolIdExact, 'rust_push_instance');
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'ok',
-                                path: repoPath,
-                                file: 'stack.rs',
-                                outline: {
-                                    symbols: [{
-                                        symbolId: 'rust_push_instance',
-                                        symbolLabel: 'method push',
-                                        span: { startLine: 4, endLine: 6 },
-                                        callGraphHint: {
-                                            supported: false,
-                                            reason: 'unsupported_language'
-                                        }
-                                    }]
-                                },
-                                hasMore: false
-                            })
-                        }]
-                    };
-                }
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, undefined);
-        assert.equal(response.content[0].text, '  pub fn push(&mut self, value: i32) {\n    self.value = value;\n  }');
-    });
-});
-
-test('read_file open_symbol opens Java, C#, C++, and Scala symbol-only spans', async () => {
-    const fixtures = [
-        {
-            file: 'Service.java',
-            symbolId: 'java_run_instance',
-            source: 'class Service {\n  int run() {\n    return 1;\n  }\n}\n',
-            startLine: 2,
-            endLine: 4,
-            expected: '  int run() {\n    return 1;\n  }',
-        },
-        {
-            file: 'Service.cs',
-            symbolId: 'csharp_run_instance',
-            source: 'class Service {\n  int Run() {\n    return 1;\n  }\n}\n',
-            startLine: 2,
-            endLine: 4,
-            expected: '  int Run() {\n    return 1;\n  }',
-        },
-        {
-            file: 'service.cpp',
-            symbolId: 'cpp_run_instance',
-            source: 'class Service {\n};\nint run() {\n  return 1;\n}\n',
-            startLine: 3,
-            endLine: 5,
-            expected: 'int run() {\n  return 1;\n}',
-        },
-        {
-            file: 'Service.scala',
-            symbolId: 'scala_run_instance',
-            source: 'class Service {\n  def run(): Int = {\n    1\n  }\n}\n',
-            startLine: 2,
-            endLine: 4,
-            expected: '  def run(): Int = {\n    1\n  }',
-        },
-    ] as const;
-
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        fs.mkdirSync(repoPath, { recursive: true });
-
-        for (const fixture of fixtures) {
-            const filePath = path.join(repoPath, fixture.file);
-            fs.writeFileSync(filePath, fixture.source, 'utf8');
-
+        for (const mode of ['plain', 'annotated'] as const) {
+            let received: unknown;
             const response = await runReadFile({
                 path: filePath,
-                open_symbol: { symbolId: fixture.symbolId },
+                mode,
+                open_symbol: {
+                    contractVersion: 2,
+                    symbolId: 'sym_runtime',
+                    context: {
+                        preset: 'implementation',
+                        budgets: {
+                            sourceBytes: 999_999,
+                            totalResponseBytes: 999_999,
+                        },
+                    },
+                },
             }, 1000, {
-                snapshotManager: {
-                    getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
-                } as unknown as SnapshotManagerLike,
+                snapshotManager: indexedSnapshot(repoPath),
+                providerRuntime: {
+                    requireToolContext: async () => {
+                        throw new Error('exact symbol context must remain provider-free');
+                    },
+                },
                 toolHandlers: {
-                    handleFileOutline: async (args: FileOutlineInput) => {
-                        assert.equal(args.resolveMode, 'exact');
-                        assert.equal(args.symbolIdExact, fixture.symbolId);
-                        return {
-                            content: [{
-                                type: 'text',
-                                text: JSON.stringify({
-                                    status: 'ok',
-                                    path: repoPath,
-                                    file: fixture.file,
-                                    outline: {
-                                        symbols: [{
-                                            symbolId: fixture.symbolId,
-                                            symbolLabel: 'target',
-                                            span: {
-                                                startLine: fixture.startLine,
-                                                endLine: fixture.endLine,
-                                            },
-                                            callGraphHint: {
-                                                supported: false,
-                                                reason: 'unsupported_language',
-                                            },
-                                        }],
-                                    },
-                                    hasMore: false,
-                                }),
-                            }],
-                        };
+                    composeSymbolContext: async (input: unknown) => {
+                        received = input;
+                        return { status: 'ok', context: composedContextFixture() };
                     },
                 } as unknown as ToolHandlersLike,
             });
 
-            assert.equal(response.isError, undefined, fixture.file);
-            assert.equal(response.content[0].text, fixture.expected, fixture.file);
+            assert.equal(response.isError, undefined);
+            const payload = JSON.parse(response.content[0].text);
+            assert.equal(payload.formatVersion, 2);
+            assert.equal(payload.kind, 'symbol_context');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.effectiveRequest.requestedMode, mode);
+            assert.equal(payload.effectiveRequest.budgets.sourceBytes, 16_384);
+            assert.equal(payload.effectiveRequest.budgets.totalResponseBytes, 32_768);
+            assert.equal(payload.source.excerpts[0].content.includes('DO_NOT_READ'), false);
+            assert.equal((received as { symbolId?: string }).symbolId, 'sym_runtime');
         }
     });
 });
 
-test('read_file open_symbol returns not_found for a stale symbolInstanceId without span fallback', async () => {
+test('read_file exact-symbol continuations forward only their scoped evidence request', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
+        const filePath = path.join(repoPath, 'src', 'runtime.ts');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'export function runtime() {}\n', 'utf8');
 
+        let received: {
+            include?: Record<string, boolean>;
+            continuation?: Record<string, unknown>;
+        } | undefined;
         const response = await runReadFile({
             path: filePath,
+            mode: 'plain',
             open_symbol: {
-                symbolId: 'sym_runtime_instance_stale'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    assert.equal(args.resolveMode, 'exact');
-                    assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'not_found',
-                                path: repoPath,
-                                file: 'src/runtime.ts',
-                                message: 'Exact symbol not found for symbolInstanceId.',
-                                hasMore: false
-                            })
-                        }]
-                    };
-                }
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'not_found');
-        assert.match(payload.message, /Exact symbol not found/);
-    });
-});
-
-test('read_file open_symbol preserves unverified current-source outcome', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'export function runtimeOwner() {}\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: { symbolId: 'sym_runtime_owner' }
+                contractVersion: 2,
+                symbolId: 'sym_runtime',
+                continuation: {
+                    kind: 'source_range',
+                    fingerprint: 'sha256_source_fixture',
+                    startLine: 10,
+                    endLine: 20,
+                },
+            },
         }, 1000, {
             snapshotManager: indexedSnapshot(repoPath),
             toolHandlers: {
-                handleFileOutline: async () => ({
-                    content: [{
-                        type: 'text',
-                        text: JSON.stringify({
-                            status: 'not_ready',
-                            path: repoPath,
-                            file: 'src/runtime.ts',
-                            outline: null,
-                            hasMore: false,
-                            message: 'The exact symbol span could not be verified against current source.',
-                            warnings: ['OUTLINE_SYMBOL_SPAN_UNVERIFIED']
-                        })
-                    }]
-                })
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'not_ready');
-        assert.equal(payload.reason, undefined);
-        assert.deepEqual(payload.warnings, ['OUTLINE_SYMBOL_SPAN_UNVERIFIED']);
-    });
-});
-
-test('read_file open_symbol returns json envelope for unsupported outline file', async () => {
-    await withTempDir(async (dir) => {
-        const filePath = path.join(dir, 'notes.txt');
-        fs.writeFileSync(filePath, 'plain text\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_notes'
-            }
-        }, 1000, {
-            snapshotManager: indexedSnapshot(dir)
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'unsupported');
-        assert.equal(payload.reason, 'unsupported_language');
-        assert.match(payload.message, /not outline-capable/);
-    });
-});
-
-test('read_file open_symbol returns json envelope when resolved symbol span is invalid', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async () => ({
-                    content: [{
-                        type: 'text',
-                        text: JSON.stringify({
-                            status: 'ok',
-                            path: repoPath,
-                            file: 'src/runtime.ts',
-                            outline: { symbols: [{ symbolId: 'sym_runtime_instance' }] },
-                            hasMore: false
-                        })
-                    }]
-                })
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'not_found');
-        assert.equal(payload.reason, 'missing_symbol');
-        assert.match(payload.message, /missing a valid span/);
-    });
-});
-
-test('read_file open_symbol catch-all returns json envelope', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async () => ({
-                    content: [{ type: 'text', text: 'not-json' }]
-                })
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'not_ready');
-        assert.match(payload.message, /Error reading file/);
-    });
-});
-
-test('read_file open_symbol annotated outline drops overlapping sibling symbols', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'recovery.ts');
-        // Lines 1–3 sibling-ish header; 4–6 target body (resolved span 4–6).
-        fs.writeFileSync(filePath, [
-            'function normalizeMarkerFingerprint() {',
-            '  return 1;',
-            '}',
-            'function decideInterruptedIndexingRecovery() {',
-            '  return 2;',
-            '}',
-            '',
-        ].join('\n'), 'utf8');
-
-        let outlineCalls = 0;
-        const response = await runReadFile({
-            path: filePath,
-            mode: 'annotated',
-            open_symbol: {
-                symbolId: 'sym_decide_recovery',
-            },
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    outlineCalls += 1;
-                    // Windowed re-outline would return both overlapping/adjacent symbols.
-                    if (args.resolveMode === 'exact') {
-                        return {
-                            content: [{
-                                type: 'text',
-                                text: JSON.stringify({
-                                    status: 'ok',
-                                    path: repoPath,
-                                    file: 'src/recovery.ts',
-                                    outline: {
-                                        symbols: [{
-                                            symbolId: 'sym_decide_recovery',
-                                            symbolKey: 'symkey_decide_recovery',
-                                            name: 'decideInterruptedIndexingRecovery',
-                                            qualifiedName: 'decideInterruptedIndexingRecovery',
-                                            symbolLabel: 'function decideInterruptedIndexingRecovery()',
-                                            kind: 'function',
-                                            language: 'typescript',
-                                            file: 'src/recovery.ts',
-                                            span: { startLine: 4, endLine: 6 },
-                                            parentQualifiedNamePath: [],
-                                            parentResolution: 'not_applicable',
-                                            callGraphHint: {
-                                                supported: true,
-                                                symbolRef: {
-                                                    file: 'src/recovery.ts',
-                                                    symbolId: 'sym_decide_recovery',
-                                                },
-                                            },
-                                        }],
-                                    },
-                                    hasMore: false,
-                                }),
-                            }],
-                        };
-                    }
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'ok',
-                                path: repoPath,
-                                file: 'src/recovery.ts',
-                                outline: {
-                                    symbols: [
-                                        {
-                                            symbolId: 'sym_normalize',
-                                            symbolLabel: 'function normalizeMarkerFingerprint()',
-                                            span: { startLine: 1, endLine: 3 },
-                                        },
-                                        {
-                                            symbolId: 'sym_decide_recovery',
-                                            symbolLabel: 'function decideInterruptedIndexingRecovery()',
-                                            span: { startLine: 4, endLine: 6 },
-                                        },
-                                    ],
-                                },
-                                hasMore: false,
-                            }),
-                        }],
-                    };
+                composeSymbolContext: async (input: typeof received) => {
+                    received = input;
+                    return { status: 'ok', context: composedContextFixture() };
                 },
             } as unknown as ToolHandlersLike,
         });
 
         assert.equal(response.isError, undefined);
+        assert.deepEqual(received?.include, {
+            source: true,
+            siblings: false,
+            callers: false,
+            callees: false,
+        });
+        assert.deepEqual(received?.continuation, {
+            kind: 'source_range',
+            fingerprint: 'sha256_source_fixture',
+            startLine: 10,
+            endLine: 20,
+        });
         const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.mode, 'annotated');
-        assert.equal(payload.outlineStatus, 'ok');
-        assert.equal(payload.outline.symbols.length, 1);
-        assert.equal(payload.outline.symbols[0].symbolId, 'sym_decide_recovery');
-        assert.equal(payload.outline.symbols[0].qualifiedName, 'decideInterruptedIndexingRecovery');
-        assert.equal(payload.outline.symbols[0].parentResolution, 'not_applicable');
-        assert.doesNotMatch(JSON.stringify(payload.outline.symbols), /normalizeMarkerFingerprint/);
-        assert.match(payload.content, /decideInterruptedIndexingRecovery/);
-        assert.doesNotMatch(payload.content, /normalizeMarkerFingerprint/);
-        // Exact open must not re-query a windowed outline that reintroduces siblings.
-        assert.equal(outlineCalls, 1);
+        assert.equal(payload.effectiveRequest.continuation.kind, 'source_range');
+        assert.equal(JSON.stringify(payload).includes('sha256_source_fixture'), false);
     });
 });
 
-test('read_file open_symbol plain content uses resolved span only even if request span is wider', async () => {
+test('read_file exact-symbol errors use bounded common envelopes without caller-controlled values', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\nline5\n', 'utf8');
+        const filePath = path.join(repoPath, 'src', 'runtime.ts');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'SECRET_SOURCE\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolLabel: 'CALLER_CONTROLLED_SECRET_LABEL',
+                context: { preset: 'definition' },
+            },
+        }, 1000, {
+            snapshotManager: indexedSnapshot(repoPath),
+            toolHandlers: {
+                composeSymbolContext: async () => ({
+                    status: 'symbol_not_found',
+                    reason: 'arbitrary internal detail',
+                }),
+            } as unknown as ToolHandlersLike,
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.deepEqual({
+            formatVersion: payload.formatVersion,
+            kind: payload.kind,
+            status: payload.status,
+            code: payload.code,
+        }, {
+            formatVersion: 2,
+            kind: 'symbol_context',
+            status: 'error',
+            code: 'SYMBOL_NOT_FOUND',
+        });
+        assert.equal(response.content[0].text.includes('CALLER_CONTROLLED'), false);
+        assert.equal(response.content[0].text.includes(filePath), false);
+        assert.equal(response.content[0].text.includes('SECRET_SOURCE'), false);
+        assert.ok(Buffer.byteLength(response.content[0].text) <= 4_096);
+    });
+});
+
+test('read_file exact-symbol outcome matrix uses the canonical bounded error transport', async () => {
+    await withTempDir(async (dir) => {
+        const repoPath = path.join(dir, 'repo');
+        const filePath = path.join(repoPath, 'src', 'runtime.ts');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'export function runtime() {}\n', 'utf8');
+
+        const cases = [
+            {
+                result: { status: 'ambiguous_symbol', reason: 'ambiguous_symbol_label' },
+                code: 'AMBIGUOUS_SYMBOL',
+            },
+            {
+                result: { status: 'symbol_not_found', reason: 'symbol_identity_not_found' },
+                code: 'SYMBOL_NOT_FOUND',
+            },
+            {
+                result: { status: 'stale_continuation', reason: 'continuation_identity_changed' },
+                code: 'STALE_CONTINUATION',
+            },
+            {
+                result: {
+                    status: 'invalid_relationship_continuation',
+                    reason: 'cursor_invalid_for_prepared_traversal',
+                },
+                code: 'INVALID_RELATIONSHIP_CONTINUATION',
+            },
+            {
+                result: {
+                    status: 'safety_error',
+                    reason: 'root_binding_invalid',
+                    diagnosticCode: 'ROOT_BINDING_INVALID',
+                },
+                code: 'ROOT_BINDING_INVALID',
+            },
+            {
+                result: {
+                    status: 'resource_limit',
+                    symbolId: 'sym_runtime',
+                    minimumRequiredResponseBytes: 40_000,
+                    hardResponseLimitBytes: 24_000,
+                },
+                code: 'MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT',
+            },
+            {
+                result: { status: 'navigation_unavailable', reason: 'prepared_navigation_unavailable' },
+                code: 'NAVIGATION_UNAVAILABLE',
+            },
+            {
+                result: { status: 'stale', reason: 'prepared_authority_changed' },
+                code: 'NAVIGATION_UNAVAILABLE',
+            },
+        ] as const;
+
+        for (const fixture of cases) {
+            const response = await runReadFile({
+                path: filePath,
+                mode: 'plain',
+                open_symbol: {
+                    contractVersion: 2,
+                    symbolId: 'sym_runtime',
+                    context: { preset: 'implementation' },
+                },
+            }, 1000, {
+                snapshotManager: indexedSnapshot(repoPath),
+                toolHandlers: {
+                    composeSymbolContext: async () => fixture.result,
+                } as unknown as ToolHandlersLike,
+            });
+
+            assert.equal(response.isError, true, fixture.code);
+            const payload = JSON.parse(response.content[0].text);
+            assert.deepEqual({
+                formatVersion: payload.formatVersion,
+                kind: payload.kind,
+                status: payload.status,
+                code: payload.code,
+            }, {
+                formatVersion: 2,
+                kind: 'symbol_context',
+                status: 'error',
+                code: fixture.code,
+            });
+            const limit = fixture.code === 'ROOT_BINDING_INVALID'
+                || fixture.code === 'MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT'
+                ? 1_024
+                : 4_096;
+            assert.ok(Buffer.byteLength(response.content[0].text) <= limit, fixture.code);
+            if (fixture.code === 'MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT') {
+                assert.equal(payload.hardResponseLimitBytes, 32_768);
+            }
+        }
+
+        const unsupported = await runReadFile({
+            path: filePath,
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: 'sym_runtime',
+                continuation: { kind: 'future_continuation' },
+            },
+        }, 1000, {
+            snapshotManager: indexedSnapshot(repoPath),
+            toolHandlers: {
+                composeSymbolContext: async () => {
+                    throw new Error('unsupported continuations must not reach the composer');
+                },
+            } as unknown as ToolHandlersLike,
+        });
+        assert.equal(unsupported.isError, true);
+        assert.equal(JSON.parse(unsupported.content[0].text).code, 'UNSUPPORTED_CONTINUATION_KIND');
+    });
+});
+
+test('read_file exact-symbol root discovery failures use navigation-unavailable transport', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'runtime.ts');
+        fs.writeFileSync(filePath, 'ROOT_DISCOVERY_SECRET\n', 'utf8');
+
+        const response = await runReadFile({
+            path: filePath,
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: 'sym_runtime',
+                context: { preset: 'definition' },
+            },
+        });
+
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0].text);
+        assert.equal(payload.code, 'NAVIGATION_UNAVAILABLE');
+        assert.equal(response.content[0].text.includes(filePath), false);
+        assert.equal(response.content[0].text.includes('ROOT_DISCOVERY_SECRET'), false);
+    });
+});
+
+test('read_file open_symbol direct spans remain unversioned and bounded to the requested range', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'runtime.ts');
+        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
 
         const response = await runReadFile({
             path: filePath,
             open_symbol: {
-                symbolId: 'sym_runtime_instance',
-                start_line: 1,
-                end_line: 5,
+                startLine: 2,
+                endLine: 3,
             },
         }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }],
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    assert.equal(args.resolveMode, 'exact');
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'ok',
-                                path: repoPath,
-                                file: 'src/runtime.ts',
-                                outline: {
-                                    symbols: [{
-                                        symbolId: 'sym_runtime_instance',
-                                        symbolLabel: 'function run()',
-                                        span: { startLine: 2, endLine: 3 },
-                                        callGraphHint: {
-                                            supported: true,
-                                            symbolRef: {
-                                                file: 'src/runtime.ts',
-                                                symbolId: 'sym_runtime_instance',
-                                            },
-                                        },
-                                    }],
-                                },
-                                hasMore: false,
-                            }),
-                        }],
-                    };
-                },
-            } as unknown as ToolHandlersLike,
+            snapshotManager: indexedSnapshot(dir),
         });
 
         assert.equal(response.isError, undefined);
         assert.equal(response.content[0].text, 'line2\nline3');
-    });
-});
-
-test('read_file open_symbol does not bypass exact resolution when stale symbolInstanceId also includes a span', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance_stale',
-                start_line: 4,
-                end_line: 4,
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    assert.equal(args.resolveMode, 'exact');
-                    assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'not_found',
-                                path: repoPath,
-                                file: 'src/runtime.ts',
-                                message: 'Exact symbol not found for symbolInstanceId.',
-                                hasMore: false
-                            })
-                        }]
-                    };
-                }
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'not_found');
-        assert.match(payload.message, /Exact symbol not found/);
-    });
-});
-
-test('read_file open_symbol returns requires_reindex for stale symbolInstanceId when exact navigation is incompatible', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance_stale'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async (args: FileOutlineInput) => {
-                    assert.equal(args.resolveMode, 'exact');
-                    assert.equal(args.symbolIdExact, 'sym_runtime_instance_stale');
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: JSON.stringify({
-                                status: 'requires_reindex',
-                                path: repoPath,
-                                file: 'src/runtime.ts',
-                                message: 'Symbol registry is incompatible with the current file state.',
-                                hints: {
-                                    reindex: {
-                                        tool: 'manage_index',
-                                        args: { action: 'reindex', path: repoPath }
-                                    }
-                                },
-                                hasMore: false
-                            })
-                        }]
-                    };
-                }
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'requires_reindex');
-        assert.equal(payload.hints.reindex.tool, 'manage_index');
-        assert.deepEqual(payload.hints.reindex.args, { action: 'reindex', path: repoPath });
-    });
-});
-
-test('read_file open_symbol returns not_indexed when delegated exact navigation finds missing vector collection readiness', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
-
-        const codebaseInfo = {
-            status: 'indexed',
-            lastUpdated: '2026-02-28T08:00:00.000Z',
-            indexFingerprint: RUNTIME_FINGERPRINT,
-            fingerprintSource: 'verified'
-        };
-        const snapshotManager = {
-            getAllCodebases: () => [{ path: repoPath, info: codebaseInfo }],
-            getIndexedCodebases: () => [repoPath],
-            getIndexingCodebases: () => [],
-            getCodebaseInfo: () => codebaseInfo,
-            getCodebaseStatus: () => 'indexed',
-            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-            getCodebaseCallGraphSidecar: () => undefined,
-            removeCodebaseCompletely: () => undefined,
-            saveCodebaseSnapshot: () => undefined
-        } as unknown as SnapshotManagerLike;
-        const syncManager = {
-            unwatchCodebase: async () => undefined
-        } as unknown as SyncManagerLike;
-        const handlerContext = {
-            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            getVectorStore: () => ({
-                hasCollection: async () => false
-            }),
-            resolveCollectionName: () => 'satori_repo_missing_collection',
-            getActiveIndexedCollectionName: async () => null,
-            getIndexCompletionMarker: async () => buildMarker(repoPath)
-        } as unknown as HandlerContext;
-        const toolHandlers = new ToolHandlers(handlerContext, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES);
-        (toolHandlers as unknown as {
-            validateCompletionProof: () => Promise<{ outcome: 'valid'; marker: ReturnType<typeof buildMarker> }>;
-        }).validateCompletionProof = async () => ({ outcome: 'valid', marker: buildMarker(repoPath) });
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance'
-            }
-        }, 1000, {
-            snapshotManager,
-            syncManager,
-            toolHandlers
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'not_indexed');
-        assert.equal(payload.reason, 'not_indexed');
-        assert.match(payload.message, /vector collection is missing from the configured vector backend/i);
-        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
-    });
-});
-
-test('read_file open_symbol preserves failed-index diagnostics from delegated exact navigation', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{
-                    path: repoPath,
-                    info: { status: 'indexed' }
-                }]
-            } as unknown as SnapshotManagerLike,
-            syncManager: {} as unknown as SyncManagerLike,
-            toolHandlers: {
-                handleFileOutline: async () => ({
-                    content: [{
-                        type: 'text',
-                        text: JSON.stringify({
-                            status: 'not_indexed',
-                            reason: 'index_failed',
-                            path: repoPath,
-                            codebaseRoot: repoPath,
-                            file: 'src/runtime.ts',
-                            outline: null,
-                            hasMore: false,
-                            message: 'Codebase has a failed indexing attempt.',
-                            indexingFailure: {
-                                errorMessage: 'Interrupted indexing detected without completion marker proof.',
-                                lastAttemptedPercentage: 0,
-                                lastUpdated: '2026-06-19T12:15:18.574Z'
-                            },
-                            hints: {
-                                create: {
-                                    tool: 'manage_index',
-                                    args: { action: 'create', path: repoPath }
-                                }
-                            }
-                        })
-                    }]
-                })
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, true);
-        const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'not_indexed');
-        assert.equal(payload.reason, 'index_failed');
-        assert.equal(payload.indexingFailure?.errorMessage, 'Interrupted indexing detected without completion marker proof.');
-        assert.equal(payload.indexingFailure?.lastAttemptedPercentage, 0);
-        assert.equal(payload.indexingFailure?.lastUpdated, '2026-06-19T12:15:18.574Z');
-        assert.deepEqual(payload.hints?.create?.args, { action: 'create', path: repoPath });
-    });
-});
-
-test('read_file open_symbol still supports direct span opens when no symbol identity is supplied', async () => {
-    await withTempDir(async (dir) => {
-        const filePath = path.join(dir, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                start_line: 3,
-                end_line: 4,
-            }
-        }, 1000, {
-            snapshotManager: indexedSnapshot(dir)
-        });
-
-        assert.equal(response.isError, undefined);
-        assert.equal(response.content[0].text, 'line3\nline4');
-    });
-});
-
-test('read_file open_symbol returns explicit error on ambiguous symbol resolution', async () => {
-    await withTempDir(async (dir) => {
-        const repoPath = path.join(dir, 'repo');
-        const srcPath = path.join(repoPath, 'src');
-        fs.mkdirSync(srcPath, { recursive: true });
-        const filePath = path.join(srcPath, 'runtime.ts');
-        fs.writeFileSync(filePath, 'line1\nline2\nline3\nline4\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolLabel: 'function same()'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => [{ path: repoPath, info: { status: 'indexed' } }]
-            } as unknown as SnapshotManagerLike,
-            toolHandlers: {
-                handleFileOutline: async () => ({
-                    content: [{
-                        type: 'text',
-                        text: JSON.stringify({
-                            status: 'ambiguous',
-                            path: repoPath,
-                            file: 'src/runtime.ts',
-                            message: 'Multiple exact symbol matches found (2).',
-                            outline: {
-                                symbols: [
-                                    { symbolId: 'sym_a', symbolLabel: 'function same()', span: { startLine: 1, endLine: 1 } },
-                                    { symbolId: 'sym_b', symbolLabel: 'function same()', span: { startLine: 3, endLine: 3 } }
-                                ]
-                            },
-                            hasMore: false
-                        })
-                    }]
-                })
-            } as unknown as ToolHandlersLike
-        });
-
-        assert.equal(response.isError, true);
-        assert.match(response.content[0].text, /"status": "ambiguous"/);
-    });
-});
-
-test('read_file open_symbol unresolved root returns structured outside_indexed_root without file content', async () => {
-    await withTempDir(async (dir) => {
-        const filePath = path.join(dir, 'runtime.ts');
-        fs.writeFileSync(filePath, 'OPEN_SYMBOL_SECRET\nline2\n', 'utf8');
-
-        const response = await runReadFile({
-            path: filePath,
-            open_symbol: {
-                symbolId: 'sym_runtime_instance'
-            }
-        }, 1000, {
-            snapshotManager: {
-                getAllCodebases: () => []
-            } as unknown as SnapshotManagerLike
-        });
-
-        assertOutsideIndexedRoot(response, 'OPEN_SYMBOL_SECRET');
     });
 });
 
@@ -1773,7 +1046,7 @@ test('read_file annotated mode denies content when only non-searchable requires_
     });
 });
 
-test('read_file open_symbol request is blocked with not_ready when parent codebase is indexing', async () => {
+test('read_file exact-symbol request reports navigation unavailable while its root is indexing', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
         const srcPath = path.join(repoPath, 'src');
@@ -1783,8 +1056,11 @@ test('read_file open_symbol request is blocked with not_ready when parent codeba
 
         const response = await runReadFile({
             path: filePath,
+            mode: 'plain',
             open_symbol: {
-                symbolId: 'sym_runtime_instance'
+                contractVersion: 2,
+                symbolId: 'sym_runtime_instance',
+                context: { preset: 'implementation' },
             }
         }, 1000, {
             snapshotManager: {
@@ -1794,12 +1070,19 @@ test('read_file open_symbol request is blocked with not_ready when parent codeba
             } as unknown as SnapshotManagerLike
         });
 
-        assert.equal(response.isError, undefined);
+        assert.equal(response.isError, true);
         const payload = JSON.parse(response.content[0].text);
-        assert.equal(payload.status, 'not_ready');
-        assert.equal(payload.reason, 'indexing');
-        assert.equal(payload.hints?.status?.tool, 'manage_index');
-        assert.equal(payload.hints?.status?.args?.action, 'status');
-        assert.equal(payload.hints?.status?.args?.path, repoPath);
+        assert.deepEqual({
+            formatVersion: payload.formatVersion,
+            kind: payload.kind,
+            status: payload.status,
+            code: payload.code,
+        }, {
+            formatVersion: 2,
+            kind: 'symbol_context',
+            status: 'error',
+            code: 'NAVIGATION_UNAVAILABLE',
+        });
+        assert.equal(response.content[0].text.includes(repoPath), false);
     });
 });

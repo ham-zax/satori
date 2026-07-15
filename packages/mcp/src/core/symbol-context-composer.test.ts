@@ -388,6 +388,138 @@ test("bounded source and traversal fingerprints are deterministic and domain sco
     assert.notEqual(changedCaller?.fingerprint, callerHandle.fingerprint);
 });
 
+test("source continuations revalidate their fingerprint and return only the requested range", async () => {
+    const source = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join("\n");
+    const data = fixture(source);
+    data.target.span = { startLine: 2, endLine: 78 };
+    const budgets = defaultBudgets();
+    budgets.source = {
+        ...budgets.source,
+        maxSourceBytes: 120,
+        maxSourceLines: 8,
+        maxExcerptBytes: 120,
+        maxExcerptLines: 8,
+        maxSerializedSourceBytes: 4_000,
+    };
+    const initial = await composeSymbolContext(
+        request({ budgets }),
+        dependencies({ source, symbols: data.symbols }),
+    );
+    assert.equal(initial.status, "ok");
+    if (initial.status !== "ok") return;
+    const handle = initial.context.continuations.find((entry) => entry.kind === "source_range");
+    assert.ok(handle && handle.kind === "source_range");
+
+    const continued = await composeSymbolContext(
+        request({
+            budgets,
+            include: { source: true, siblings: false, callers: false, callees: false },
+            continuation: {
+                kind: "source_range",
+                fingerprint: handle.fingerprint,
+                startLine: handle.startLine,
+                endLine: handle.endLine,
+            },
+        }),
+        dependencies({ source, symbols: data.symbols }),
+    );
+    assert.equal(continued.status, "ok");
+    if (continued.status !== "ok") return;
+    assert.equal(continued.context.source.status, "available");
+    if (continued.context.source.status !== "available") return;
+    assert.ok(continued.context.source.span.startLine >= handle.startLine);
+    assert.ok(continued.context.source.span.endLine <= handle.endLine);
+    assert.equal(continued.context.relationships.callers.status, "not_requested");
+    assert.equal(continued.context.relationships.callees.status, "not_requested");
+
+    const stale = await composeSymbolContext(
+        request({
+            budgets,
+            include: { source: true, siblings: false, callers: false, callees: false },
+            continuation: {
+                kind: "source_range",
+                fingerprint: `${handle.fingerprint}-stale`,
+                startLine: handle.startLine,
+                endLine: handle.endLine,
+            },
+        }),
+        dependencies({ source, symbols: data.symbols }),
+    );
+    assert.deepEqual(stale, {
+        status: "stale_continuation",
+        reason: "continuation_identity_changed",
+    });
+
+    const outOfSymbolRange = await composeSymbolContext(
+        request({
+            budgets,
+            include: { source: true, siblings: false, callers: false, callees: false },
+            continuation: {
+                kind: "source_range",
+                fingerprint: handle.fingerprint,
+                startLine: data.target.span.endLine + 1,
+                endLine: data.target.span.endLine + 10,
+            },
+        }),
+        dependencies({ source, symbols: data.symbols }),
+    );
+    assert.deepEqual(outOfSymbolRange, {
+        status: "stale_continuation",
+        reason: "continuation_identity_changed",
+    });
+});
+
+test("relationship continuations resume after canonical cursors and reject cross-direction cursors", async () => {
+    const source = "class Parent {\n  target() { return true; }\n}\n";
+    const data = fixture(source);
+    const initial = await composeSymbolContext(
+        request({ include: { source: false, siblings: false, callers: true, callees: true } }),
+        dependencies({ source, symbols: data.symbols }),
+    );
+    assert.equal(initial.status, "ok");
+    if (initial.status !== "ok") return;
+    const callerHandle = initial.context.continuations.find((entry) => entry.kind === "caller_page");
+    const calleeHandle = initial.context.continuations.find((entry) => entry.kind === "callee_page");
+    assert.ok(callerHandle && callerHandle.kind === "caller_page");
+    assert.ok(calleeHandle && calleeHandle.kind === "callee_page");
+
+    const continued = await composeSymbolContext(
+        request({
+            include: { source: false, siblings: false, callers: true, callees: false },
+            continuation: {
+                kind: "caller_page",
+                fingerprint: callerHandle.fingerprint,
+                cursor: callerHandle.cursor,
+                pageSize: 1,
+            },
+        }),
+        dependencies({ source, symbols: data.symbols }),
+    );
+    assert.equal(continued.status, "ok");
+    if (continued.status !== "ok") return;
+    assert.equal(continued.context.relationships.callers.status, "ok");
+    if (continued.context.relationships.callers.status !== "ok") return;
+    assert.equal(continued.context.relationships.callers.returnedCount, 1);
+    assert.equal(continued.context.relationships.callers.items[0]?.symbolId, "caller-2");
+
+    const crossDirection = await composeSymbolContext(
+        request({
+            include: { source: false, siblings: false, callers: false, callees: true },
+            continuation: {
+                kind: "callee_page",
+                fingerprint: calleeHandle.fingerprint,
+                cursor: callerHandle.cursor,
+                pageSize: 1,
+            },
+        }),
+        dependencies({ source, symbols: data.symbols }),
+    );
+    assert.deepEqual(crossDirection, {
+        status: "invalid_relationship_continuation",
+        reason: "cursor_invalid_for_prepared_traversal",
+    });
+});
+
 test("composer preserves prepared relationship suppression evidence", async () => {
     const source = "class Parent {\n  target() { return true; }\n}\n";
     const data = fixture(source);

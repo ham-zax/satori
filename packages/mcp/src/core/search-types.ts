@@ -729,7 +729,7 @@ export interface CallGraphTraversalResponseEnvelope {
 
 export type CallGraphResponseEnvelope = CallGraphTraversalResponseEnvelope;
 
-export interface ReadFileOpenSymbolResponseEnvelope {
+export interface ReadFileStructuredErrorResponseEnvelope {
     status: Exclude<FileOutlineStatus, "ok">;
     reason?: NonOkReason;
     message: string;

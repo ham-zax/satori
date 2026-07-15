@@ -42,7 +42,7 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
             severity: "caution",
             blocksUse: false,
             message: "The stored Python symbol span started before the actual definition; Satori repaired the start from source.",
-            action: "Use read_file(open_symbol) or file_outline exact output as the canonical span before relying on graph traversal.",
+            action: "Use the canonical read_file request from recommendedNextAction or file_outline exact output before relying on graph traversal.",
         };
     }
     if (code === "SEARCH_TRUNCATED_SYMBOL_SPAN") {
@@ -387,9 +387,14 @@ export function buildSearchGroupRecommendedAction(
             tool: "read_file",
             args: {
                 path: absolutePath,
-                open_symbol: { symbolId: result.target.symbolId },
+                mode: "plain",
+                open_symbol: {
+                    contractVersion: 2,
+                    symbolId: result.target.symbolId,
+                    context: { preset: "implementation" },
+                },
             },
-            reason: "Open the highest-ranked concrete symbol before graph traversal or editing.",
+            reason: "Open bounded implementation context for the highest-ranked concrete symbol before graph traversal or editing.",
         };
     }
 

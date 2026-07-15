@@ -32,6 +32,8 @@ test("buildSearchWarningDetails sorts warning codes with contract order (localeC
             "SEARCH_SYMBOL_SPAN_UNVERIFIED",
             "SEARCH_TRUNCATED_SYMBOL_SPAN",
         ]);
+        assert.match(details[0]?.action ?? "", /canonical read_file request from recommendedNextAction/i);
+        assert.doesNotMatch(details[0]?.action ?? "", /read_file\(open_symbol\)/i);
         const again = buildSearchWarningDetails([
             "SEARCH_SYMBOL_SPAN_UNVERIFIED",
             "SEARCH_TRUNCATED_SYMBOL_SPAN",
@@ -119,7 +121,12 @@ test("non-oversized concrete symbol recommends exact open_symbol", () => {
     assert.ok(action);
     assert.deepEqual(action.args, {
         path: "/repo/src/tool-handlers.ts",
-        open_symbol: { symbolId: "sym_tool_handlers" },
+        mode: "plain",
+        open_symbol: {
+            contractVersion: 2,
+            symbolId: "sym_tool_handlers",
+            context: { preset: "implementation" },
+        },
     });
 });
 

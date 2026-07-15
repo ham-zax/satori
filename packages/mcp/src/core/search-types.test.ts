@@ -5,7 +5,7 @@ import type {
     CallGraphResponseEnvelope,
     NavigationUnavailableReason,
     ReadFileAnnotatedResponseEnvelope,
-    ReadFileOpenSymbolResponseEnvelope,
+    ReadFileStructuredErrorResponseEnvelope,
 } from "./search-types.js";
 
 test("navigation response contracts include call_graph invalid symbol refs", () => {
@@ -167,8 +167,8 @@ test("navigation response contracts include structured suppressed call_graph edg
 const legacyMissingSidecarHint: CallGraphHint = { supported: false, reason: "missing_sidecar" };
 void legacyMissingSidecarHint;
 
-test("navigation response contracts include read_file open_symbol failures", () => {
-    const payload: ReadFileOpenSymbolResponseEnvelope = {
+test("navigation response contracts include non-symbol read_file structured failures", () => {
+    const payload: ReadFileStructuredErrorResponseEnvelope = {
         status: "requires_reindex",
         reason: "stale_symbol_ref",
         message: "Cannot resolve codebase root for open_symbol.",

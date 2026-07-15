@@ -24,6 +24,7 @@ import type {
 import { readFileTool } from '../tools/read_file.js';
 import type { ToolContext } from '../tools/types.js';
 import { CapabilityResolver } from './capabilities.js';
+import type { CompletionProofValidationResult } from './completion-proof.js';
 import { IndexFingerprint } from '../config.js';
 import { ToolHandlers } from './handlers.js';
 import type { SnapshotManager } from './snapshot.js';
@@ -378,8 +379,10 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
             CAPABILITIES,
             () => Date.parse('2026-06-18T00:00:00.000Z'),
         );
+        // Incomplete completion proof (no generation receipt) models genuinely unavailable
+        // prepared authority; exact opens must fail closed as NAVIGATION_UNAVAILABLE.
         const testHandlers = handlers as unknown as {
-            validateCompletionProof: () => Promise<{ outcome: 'ok' }>;
+            validateCompletionProof: (codebasePath: string) => Promise<CompletionProofValidationResult>;
         };
         testHandlers.validateCompletionProof = async () => ({ outcome: 'valid' });
 
@@ -390,6 +393,23 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
         assert.equal(initialOutline.status, 'ok');
         const ignoredSymbol = findSymbol(initialOutline, 'ignoredLogin');
         const oldSymbolInstanceId = ignoredSymbol.symbolId;
+
+        // Before ignore reconciliation, incomplete authority still cannot prove exact opens.
+        const unavailableBeforeIgnore = await readFileTool.execute({
+            path: ignoredFilePath,
+            mode: 'plain',
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: oldSymbolInstanceId,
+                context: { preset: 'implementation' },
+            },
+        }, createToolContext(snapshotManager, syncManager, handlers));
+        assert.equal(unavailableBeforeIgnore.isError, true);
+        const unavailableBeforePayload = parsePayload(unavailableBeforeIgnore);
+        assert.equal(unavailableBeforePayload.formatVersion, 2);
+        assert.equal(unavailableBeforePayload.kind, 'symbol_context');
+        assert.equal(unavailableBeforePayload.status, 'error');
+        assert.equal(unavailableBeforePayload.code, 'NAVIGATION_UNAVAILABLE');
 
         fs.writeFileSync(path.join(repoPath, '.satoriignore'), `${ignoredRelativePath}\n`, 'utf8');
 
@@ -462,15 +482,21 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
             const toolContext = createToolContext(snapshotManager, syncManager, handlers);
             const staleReadResponse = await readFileTool.execute({
                 path: ignoredFilePath,
+                mode: 'plain',
                 open_symbol: {
+                    contractVersion: 2,
                     symbolId: oldSymbolInstanceId,
+                    context: { preset: 'implementation' },
                 },
             }, toolContext);
             assert.equal(staleReadResponse.isError, true);
             const staleReadPayload = parsePayload(staleReadResponse);
             // File is no longer under a searchable indexed root after ignore reconciliation;
-            // read_file fail-closes with outside_indexed_root (F1 containment) rather than serving content.
-            assert.equal(staleReadPayload.status, 'outside_indexed_root');
+            // accepted exact-symbol requests fail through the canonical navigation boundary.
+            assert.equal(staleReadPayload.formatVersion, 2);
+            assert.equal(staleReadPayload.kind, 'symbol_context');
+            assert.equal(staleReadPayload.status, 'error');
+            assert.equal(staleReadPayload.code, 'NAVIGATION_UNAVAILABLE');
             assert.doesNotMatch(staleReadResponse.content[0]?.text || '', /export function ignoredLogin/);
 
             const staleCallGraph = parsePayload(await handlers.handleCallGraph({

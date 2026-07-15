@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
+import { withSourceMeasurementOperation } from "@zokizuan/satori-core";
 import {
     buildRuntimeIndexFingerprint,
     ContextMcpConfig,
@@ -256,7 +257,10 @@ class ContextMcpServer {
                 };
             }
 
-            return tool.execute(args || {}, this.getToolContext());
+            return withSourceMeasurementOperation(
+                { operation: name },
+                () => tool.execute(args || {}, this.getToolContext()),
+            );
         });
     }
 

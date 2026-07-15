@@ -691,18 +691,22 @@
     "sourceIoSummaryMetrics": [
       "portableBytesObtained",
       "uniqueBytesCovered",
-      "readOperations"
+      "readOperations",
+      "byBasis"
     ],
     "sourceWorkloadMetrics": [
       "logicalSourceBytesRequested",
       "completeFileScanCount",
       "partialScanCount",
+      "incompleteScanCount",
       "filesOpened",
       "osPhysicalReadBytes"
     ],
     "sourceProcessingMetrics": [
       "observationId",
       "inputBytesProcessed",
+      "outcome",
+      "byOutcome",
       "hashingTimeMs",
       "excerptSelectionTimeMs",
       "continuationLatencyMs"
@@ -726,7 +730,8 @@
       ],
       "ioMeasurementBases": [
         "descriptor_read",
-        "stream_chunk"
+        "stream_chunk",
+        "path_read"
       ],
       "processingMeasurementBases": [
         "shared_buffer",
@@ -735,6 +740,9 @@
         "mmap_estimate"
       ],
       "observationIdRequired": true,
+      "observationOutcomeRequired": true,
+      "observationOutcomes": ["completed", "partial", "failed"],
+      "completeScanRequiresCompletedOutcomeAndFullCoverage": true,
       "readIdRequired": true,
       "readIdUniquenessScope": "observation",
       "byteRangeConvention": "zero_based_half_open",
@@ -754,6 +762,8 @@
       "alternateFileHelperBypassAllowed": false,
       "processingOwnersMayOpenSourceDirectly": false,
       "processingOwnersRequireExistingObservationId": true,
+      "processingOutcomeRequired": true,
+      "processingOutcomes": ["success", "failed", "rejected"],
       "processingBytesExcludedFromPortableIoGate": true,
       "mmapEstimateExcludedFromPortableIoGate": true,
       "portableIoGateMetric": "SourceIoSummary.portableBytesObtained_per_completed_task",

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ import {
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CONTRACT_FILE = path.join(TEST_DIR, "bounded-symbol-context-phase-0.json");
+const BASELINE_FILE = path.join(TEST_DIR, "bounded-symbol-context-baseline.json");
 
 test("bounded symbol-context Phase 0 contract is deterministic and internally consistent", () => {
     const contract = loadPhase0Contract(CONTRACT_FILE);
@@ -50,6 +52,33 @@ test("Phase 0 freezes future acceptance without requiring production behavior", 
         contract.baselineIdentityContract.candidateMustUseSameInstrumentationImplementation,
         true,
     );
+});
+
+test("Phase 0 records historical identity separately from the pending instrumented baseline", () => {
+    const baseline = JSON.parse(fs.readFileSync(BASELINE_FILE, "utf8"));
+
+    assert.equal(baseline.phase0Contract.fixtureId, "satori-bounded-symbol-context-phase-0-v1");
+    assert.match(baseline.phase0Contract.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(baseline.historicalProductBaseline.status, "recorded");
+    assert.match(baseline.historicalProductBaseline.gitRevision, /^[a-f0-9]{40}$/);
+    assert.match(baseline.historicalProductBaseline.gitTree, /^[a-f0-9]{40}$/);
+    assert.equal(
+        baseline.historicalProductBaseline.gitDiffSha256,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
+    assert.equal(
+        baseline.historicalProductBaseline.eligibleForLatencyAndSourceCostComparison,
+        false,
+    );
+    assert.equal(
+        baseline.instrumentedMeasurementBaseline.status,
+        "pending_clean_instrumented_revision",
+    );
+    assert.equal(
+        baseline.instrumentedMeasurementBaseline.eligibleForLatencyAndSourceCostComparison,
+        false,
+    );
+    assert.equal(baseline.instrumentedMeasurementBaseline.intendedComparisonBaseline, true);
 });
 
 test("large fixtures preserve beginning, middle, end, repeated-branch, and Python evidence", () => {
@@ -319,8 +348,11 @@ test("source I/O and downstream processing accounting cannot double-count bytes"
     assert.equal(contract.evaluation.sourceIoSummaryMetrics.includes("portableBytesObtained"), true);
     assert.equal(contract.evaluation.sourceIoSummaryMetrics.includes("uniqueBytesCovered"), true);
     assert.equal(contract.evaluation.sourceIoSummaryMetrics.includes("readOperations"), true);
+    assert.equal(contract.evaluation.sourceIoSummaryMetrics.includes("byBasis"), true);
     assert.equal(contract.evaluation.sourceIoEventFields.includes("inputBytesProcessed"), false);
     assert.equal(contract.evaluation.sourceProcessingMetrics.includes("inputBytesProcessed"), true);
+    assert.equal(contract.evaluation.sourceProcessingMetrics.includes("outcome"), true);
+    assert.equal(contract.evaluation.sourceProcessingMetrics.includes("byOutcome"), true);
     assert.equal(contract.evaluation.sourceProcessingMetrics.includes("bytesObtained"), false);
     assert.deepEqual(accounting.ioOwners, [
         "validation",
@@ -338,12 +370,18 @@ test("source I/O and downstream processing accounting cannot double-count bytes"
         "search_evidence",
     ]);
     assert.equal(accounting.observationIdRequired, true);
+    assert.equal(accounting.observationOutcomeRequired, true);
+    assert.deepEqual(accounting.observationOutcomes, ["completed", "partial", "failed"]);
+    assert.equal(accounting.completeScanRequiresCompletedOutcomeAndFullCoverage, true);
     assert.equal(accounting.readIdRequired, true);
     assert.equal(accounting.readIdUniquenessScope, "observation");
     assert.equal(accounting.oneAcquisitionBasisPerObservation, true);
+    assert.deepEqual(accounting.ioMeasurementBases, ["descriptor_read", "stream_chunk", "path_read"]);
     assert.equal(accounting.bytesObtainedEqualsRangeLength, true);
     assert.equal(accounting.descriptorAndWrappingStreamDoubleRecordingAllowed, false);
     assert.equal(accounting.sourceIoMetricRepresentsSingleAcquisitionEvent, true);
+    assert.equal(accounting.processingOutcomeRequired, true);
+    assert.deepEqual(accounting.processingOutcomes, ["success", "failed", "rejected"]);
     assert.deepEqual(accounting.duplicateEventDeduplicationKey, ["observationId", "readId"]);
     assert.equal(accounting.duplicateEventRequiresIdenticalFields, true);
     assert.equal(

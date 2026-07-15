@@ -1,6 +1,6 @@
 # Satori OpenCode agent-discovery evaluation
 
-Protocol version: `satori-agent-discovery-v2`
+Protocol version: `satori-agent-discovery-v3`
 
 ## Instruction for the OpenCode agent reading this file
 
@@ -112,7 +112,8 @@ agent does not read this file as a tool step.
    `packages/mcp/src`.
 3. Never inspect `*.test.ts`, docs, evaluator files, Git history, prior results,
    or another session.
-4. Make at most 12 tool calls and exactly one tool call per model turn.
+4. Make at most 24 tool calls. Parallel calls are allowed and every call is
+   measured.
 5. Follow visible evidence from one result to the next. Do not jump to a
    remembered path.
 6. Stop when the owner source, complete inclusive span, required relationships,

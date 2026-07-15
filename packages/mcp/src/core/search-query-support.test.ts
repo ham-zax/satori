@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { withSourceMeasurementOperation } from '@zokizuan/satori-core';
 import { SearchQuerySupport } from './search-query-support.js';
 import type { SearchQuerySupportHost } from './search-query-support.js';
 import { buildSearchQueryPlan, parseSearchOperators } from './search-query-planning.js';
@@ -118,6 +119,29 @@ test('exact live-path recovery rejects substring-only whole-token evidence', asy
         const positive = await run('const auth = true;\n');
         assert.equal(positive.length, 1);
         assert.match(positive[0]?.content ?? '', /\bauth\b/);
+
+        const ledgerFile = path.join(root, 'source-ledger.jsonl');
+        const measured = await withSourceMeasurementOperation({
+            operation: 'search_codebase',
+            ledgerFile,
+            rootDir: root,
+        }, () => run('const auth = true;\n'));
+        assert.deepEqual(measured, positive);
+        const records = fs.readFileSync(ledgerFile, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        assert.deepEqual(records.map((record) => record.kind), [
+            'source_observation',
+            'source_io',
+            'source_observation_outcome',
+            'source_processing',
+        ]);
+        assert.equal(records[0].owner, 'search_evidence');
+        assert.equal(records[1].bytesObtained, Buffer.byteLength('const auth = true;\n'));
+        assert.equal(records[2].status, 'completed');
+        assert.equal(records[3].owner, 'search_evidence');
+        assert.equal(records[3].outcome, 'success');
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

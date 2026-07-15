@@ -7,9 +7,14 @@ import {
     normalizeLanguageId,
     openRegularFileInsideRoot,
     readFileHandleExactly,
+    beginSourceMeasurementObservation,
+    recordSourceProcessing,
+    sourceIoOwnerForCurrentOperation,
     verifyStableFileObservation,
     type SymbolRecord,
     type LanguageAnalysisPort,
+    type SourceMeasurementObservation,
+    type SourceProcessingOutcome,
 } from "@zokizuan/satori-core";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 
@@ -24,6 +29,7 @@ export type CurrentSourceEvidence = {
     relativeFile: string;
     source: string;
     observedHash: string;
+    measurementObservation?: SourceMeasurementObservation;
 };
 
 function isInsideRoot(candidate: string, root: string): boolean {
@@ -47,13 +53,37 @@ export async function readCurrentSourceEvidence(
         if (stat.size > CURRENT_SOURCE_MAX_BYTES) {
             return undefined;
         }
-        const content = (await readFileHandleExactly(handle, stat.size)).toString("utf8");
+        const measurementObservation = beginSourceMeasurementObservation({
+            owner: sourceIoOwnerForCurrentOperation("validation"),
+            filePath: logicalFile,
+            logicalBytesRequested: stat.size,
+            scanKind: "complete",
+        });
+        const sourceBytes = await readFileHandleExactly(handle, stat.size, measurementObservation);
+        const content = sourceBytes.toString("utf8");
         await verifyStableFileObservation(handle, logicalFile, canonicalRoot, stat);
+        const hashingStartedAt = performance.now();
+        let hashingOutcome: SourceProcessingOutcome = "failed";
+        let observedHash: string;
+        try {
+            observedHash = crypto.createHash("sha256").update(content, "utf8").digest("hex");
+            hashingOutcome = "success";
+        } finally {
+            recordSourceProcessing({
+                observation: measurementObservation,
+                owner: "hashing",
+                inputBytesProcessed: sourceBytes.length,
+                basis: "shared_buffer",
+                outcome: hashingOutcome,
+                durationMs: performance.now() - hashingStartedAt,
+            });
+        }
         return {
             canonicalRoot,
             relativeFile,
             source: content,
-            observedHash: crypto.createHash("sha256").update(content, "utf8").digest("hex"),
+            observedHash,
+            ...(measurementObservation ? { measurementObservation } : {}),
         };
     } catch {
         return undefined;
@@ -104,12 +134,27 @@ export function sliceHashMatchedCurrentSourceSymbolContent(
     ) {
         return undefined;
     }
-    const lines = evidence.source.split(/\r\n?|\n/);
-    if (startLine > lines.length || endLine > lines.length) {
-        return undefined;
+    const selectorStartedAt = performance.now();
+    let selectorOutcome: SourceProcessingOutcome = "failed";
+    try {
+        const lines = evidence.source.split(/\r\n?|\n/);
+        if (startLine > lines.length || endLine > lines.length) {
+            selectorOutcome = "rejected";
+            return undefined;
+        }
+        const content = lines.slice(startLine - 1, endLine).join("\n");
+        selectorOutcome = content.length > 0 ? "success" : "rejected";
+        return content.length > 0 ? content : undefined;
+    } finally {
+        recordSourceProcessing({
+            observation: evidence.measurementObservation,
+            owner: "selector",
+            inputBytesProcessed: Buffer.byteLength(evidence.source, "utf8"),
+            basis: "shared_buffer",
+            outcome: selectorOutcome,
+            durationMs: performance.now() - selectorStartedAt,
+        });
     }
-    const content = lines.slice(startLine - 1, endLine).join("\n");
-    return content.length > 0 ? content : undefined;
 }
 
 function unchangedValidation(symbol: SymbolRecord, match: CurrentSourceSymbolValidation["match"]): CurrentSourceSymbolValidation {
@@ -213,22 +258,67 @@ export async function validateCurrentSourceSymbolSpansWithEvidence(input: {
     const source = evidence.source;
 
     try {
-        const analysis = await languageAnalyzer.analyze({ content: source, language, relativePath: relativeFile });
+        const parserStartedAt = performance.now();
+        let parserOutcome: SourceProcessingOutcome = "failed";
+        let analysis: Awaited<ReturnType<LanguageAnalysisPort["analyze"]>>;
+        try {
+            analysis = await languageAnalyzer.analyze({ content: source, language, relativePath: relativeFile });
+            parserOutcome = "success";
+        } finally {
+            recordSourceProcessing({
+                observation: evidence.measurementObservation,
+                owner: "parser",
+                inputBytesProcessed: Buffer.byteLength(source, "utf8"),
+                basis: "parser_input",
+                outcome: parserOutcome,
+                durationMs: performance.now() - parserStartedAt,
+            });
+        }
         if (analysis.structuralStatus !== "complete") {
             return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")), evidence };
         }
-        const fileHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
+        const hashingStartedAt = performance.now();
+        let hashingOutcome: SourceProcessingOutcome = "failed";
+        let fileHash: string;
+        try {
+            fileHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
+            hashingOutcome = "success";
+        } finally {
+            recordSourceProcessing({
+                observation: evidence.measurementObservation,
+                owner: "hashing",
+                inputBytesProcessed: Buffer.byteLength(source, "utf8"),
+                basis: "shared_buffer",
+                outcome: hashingOutcome,
+                durationMs: performance.now() - hashingStartedAt,
+            });
+        }
         const extractorVersion = input.symbols[0].extractorVersion;
+        const extractorStartedAt = performance.now();
         const currentByIdentityAndSpan = new Map<string, SymbolRecord>();
-        const currentRecords = buildSymbolRecordsForFile({
-            relativePath: relativeFile,
-            language,
-            content: source,
-            fileHash,
-            extractorVersion,
-            chunks: [...analysis.chunks],
-            extractedSymbols: analysis.symbols,
-        });
+        let extractorOutcome: SourceProcessingOutcome = "failed";
+        let currentRecords: SymbolRecord[];
+        try {
+            currentRecords = buildSymbolRecordsForFile({
+                relativePath: relativeFile,
+                language,
+                content: source,
+                fileHash,
+                extractorVersion,
+                chunks: [...analysis.chunks],
+                extractedSymbols: analysis.symbols,
+            });
+            extractorOutcome = "success";
+        } finally {
+            recordSourceProcessing({
+                observation: evidence.measurementObservation,
+                owner: "extractor",
+                inputBytesProcessed: Buffer.byteLength(source, "utf8"),
+                basis: "extractor_input",
+                outcome: extractorOutcome,
+                durationMs: performance.now() - extractorStartedAt,
+            });
+        }
         const currentFileOwner = currentRecords.find((symbol) => symbol.kind === "file");
         if (currentFileOwner) {
             currentByIdentityAndSpan.set(

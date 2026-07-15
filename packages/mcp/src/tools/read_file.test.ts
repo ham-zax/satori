@@ -14,6 +14,7 @@ import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRecordsForFile,
     buildSymbolRegistry,
+    withSourceMeasurementOperation,
     writeSymbolRegistrySidecar,
 } from '@zokizuan/satori-core';
 import type { SymbolRegistryManifest } from '@zokizuan/satori-core';
@@ -167,6 +168,40 @@ test('read_file returns full content for small files when range is omitted', asy
         });
         assert.equal(response.isError, undefined);
         assert.equal(response.content[0].text, 'a\nb\nc');
+    });
+});
+
+test('read_file source instrumentation preserves output and records one acquisition boundary', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'small.ts');
+        const ledgerFile = path.join(dir, 'source-ledger.jsonl');
+        fs.writeFileSync(filePath, 'a\nb\nc\n', 'utf8');
+        const overrides = { snapshotManager: indexedSnapshot(dir) };
+
+        const unmeasured = await runReadFile({ path: filePath }, 1000, overrides);
+        const measured = await withSourceMeasurementOperation({
+            operation: 'read_file',
+            ledgerFile,
+            rootDir: dir,
+        }, () => runReadFile({ path: filePath }, 1000, overrides));
+
+        assert.deepEqual(measured, unmeasured);
+        const records = fs.readFileSync(ledgerFile, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+        assert.deepEqual(records.map((record) => record.kind), [
+            'source_observation',
+            'source_io',
+            'source_observation_outcome',
+            'source_processing',
+        ]);
+        assert.equal(records[0].relativeFile, 'small.ts');
+        assert.equal(records[1].bytesObtained, 6);
+        assert.equal(records[1].basis, 'path_read');
+        assert.equal(records[2].status, 'completed');
+        assert.equal(records[3].owner, 'selector');
+        assert.equal(records[3].outcome, 'success');
     });
 });
 

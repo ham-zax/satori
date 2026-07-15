@@ -7,11 +7,14 @@ import test from "node:test";
 import {
     aggregateSessionData,
     buildAgentPrompt,
+    buildIsolatedOpenCodeConfig,
     buildOpenCodeRunArguments,
     buildRunSchedule,
     extractAgentResult,
+    formatArmCompletion,
     formatMarkdownReport,
     getRepositoryIdentity,
+    getSatoriRuntimeIdentity,
     gradeRun,
     inspectNamedSymbol,
     loadTaskManifest,
@@ -32,7 +35,7 @@ const knownTask = {
     id: "known-exact-target",
     prompt: "Locate the production definition of targetOwner.",
     satoriQuery: "targetOwner",
-    taskFactsTemplate: { exactMatchResolver: null },
+    taskFactsTemplate: { exactMatchResolver: "exact bare symbol identifier" },
     expected: {
         ownerFile: "packages/mcp/src/owner.ts",
         ownerSymbol: "targetOwner",
@@ -80,6 +83,16 @@ test("run schedule alternates arm order in fresh paired repetitions", () => {
     ]);
 });
 
+test("arm completion output reports outcome and bounded wall time", () => {
+    assert.equal(formatArmCompletion({
+        taskId: "task",
+        repetition: 2,
+        arm: "satori",
+        passed: false,
+        wallTimeMs: 12_345,
+    }), "Completed task repetition 2: satori FAIL in 12.3s");
+});
+
 test("generated prompts embed all run values and never request harness setup", () => {
     const prompt = buildAgentPrompt({
         repoRoot: "/repo",
@@ -93,6 +106,9 @@ test("generated prompts embed all run values and never request harness setup", (
     assert.match(prompt, /ARM=satori/);
     assert.match(prompt, /Do not ask the user or harness any questions/);
     assert.match(prompt, /targetOwner/);
+    assert.match(prompt, /exact bare symbol identifier/);
+    assert.match(prompt, /exact bare identifiers/);
+    assert.match(prompt, /exact bare identifier or null; no dots, spaces, or prefixes/);
     assert.doesNotMatch(prompt, /NATIVE_TOOL_PROFILE=/);
 });
 
@@ -113,6 +129,56 @@ test("OpenCode command creates a new session instead of continuing another arm",
     assert.ok(!args.includes("--session"));
     assert.ok(!args.includes("--continue"));
     assert.ok(!args.includes("--fork"));
+});
+
+test("isolated OpenCode config binds Satori to the measured worktree runtime", () => {
+    const config = buildIsolatedOpenCodeConfig({
+        mcp: {
+            satori: {
+                type: "local",
+                command: ["node", "/other/checkout/packages/mcp/dist/index.js"],
+                environment: { SATORI_STATE_ROOT: "/state" },
+            },
+        },
+    }, "opencode/model", "/measured/repo");
+
+    assert.deepEqual(config.mcp.satori.command, [
+        process.execPath,
+        "/measured/repo/packages/mcp/dist/index.js",
+    ]);
+    assert.deepEqual(config.mcp.satori.environment, { SATORI_STATE_ROOT: "/state" });
+    assert.equal(config.agent["satori-eval-native"].steps, 26);
+    assert.equal(config.agent["satori-eval-satori"].steps, 26);
+});
+
+test("Satori runtime identity covers deterministic Core and MCP build outputs", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-agent-runtime-"));
+    const coreDist = path.join(repoRoot, "packages/core/dist");
+    const mcpDist = path.join(repoRoot, "packages/mcp/dist");
+    fs.mkdirSync(path.join(coreDist, "nested"), { recursive: true });
+    fs.mkdirSync(mcpDist, { recursive: true });
+    fs.writeFileSync(path.join(coreDist, "index.js"), "export * from './nested/helper.js';\n");
+    fs.writeFileSync(path.join(coreDist, "nested/helper.js"), "export const value = 1;\n");
+    fs.writeFileSync(path.join(mcpDist, "index.js"), "import '@zokizuan/satori-core';\n");
+
+    try {
+        const initial = getSatoriRuntimeIdentity(repoRoot);
+        const repeated = getSatoriRuntimeIdentity(repoRoot);
+        assert.deepEqual(repeated, initial);
+        assert.equal(initial.nodeVersion, process.version);
+        assert.deepEqual(initial.roots.map(({ relativeRoot, fileCount }) => ({
+            relativeRoot,
+            fileCount,
+        })), [
+            { relativeRoot: "packages/core/dist", fileCount: 2 },
+            { relativeRoot: "packages/mcp/dist", fileCount: 1 },
+        ]);
+
+        fs.writeFileSync(path.join(coreDist, "nested/helper.js"), "export const value = 2;\n");
+        assert.notEqual(getSatoriRuntimeIdentity(repoRoot).sha256, initial.sha256);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
 });
 
 test("task-key validation aborts when a versioned source span is stale", () => {
@@ -148,6 +214,20 @@ test("task-key validation aborts when a versioned source span is stale", () => {
         }),
         /Stale task key/,
     );
+    assert.throws(
+        () => validateTaskKey(repoRoot, {
+            ...knownTask,
+            expected: {
+                ...knownTask.expected,
+                requiredRelations: knownTask.expected.requiredRelations.map((relation) => (
+                    relation.symbol === "resolver"
+                        ? { ...relation, file: "packages/mcp/src/caller.ts" }
+                        : relation
+                )),
+            },
+        }),
+        /Expected symbol resolver was not found in packages\/mcp\/src\/caller\.ts/,
+    );
 });
 
 test("versioned task keys match the current production source", () => {
@@ -157,6 +237,15 @@ test("versioned task keys match the current production source", () => {
     for (const task of manifest.tasks) {
         assert.doesNotThrow(() => validateTaskKey(repoRoot, task));
     }
+});
+
+test("unknown-target prompt explicitly requests every graded relationship", () => {
+    const manifest = loadTaskManifest();
+    const task = manifest.tasks.find((candidate) => candidate.id === "unknown-freshness-reuse");
+
+    assert.match(task.prompt, /production caller/i);
+    assert.match(task.prompt, /authority-preservation helper/i);
+    assert.match(task.prompt, /second-readiness-proof/i);
 });
 
 test("repository identity binds revision, tree, staged diff, and unstaged diff", async () => {
@@ -228,6 +317,35 @@ test("guard rejects forbidden tools and native reads without an explicit bound",
         offset: 1,
         limit: 200,
     }, repoRoot));
+});
+
+test("guard uses a 24-call runaway ceiling while OpenCode has 26 model steps", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-agent-budget-"));
+    const hooks = createAgentDiscoveryGuard({
+        SATORI_AGENT_DISCOVERY_RUN_ID: "suite",
+        SATORI_AGENT_DISCOVERY_REPO_ROOT: "/repo",
+        SATORI_AGENT_DISCOVERY_TOOL_LEDGER: path.join(directory, "ledger.jsonl"),
+        SATORI_AGENT_DISCOVERY_TOOL_DEFINITIONS: path.join(directory, "definitions.jsonl"),
+    });
+    const output = {
+        args: {
+            path: "/repo/packages/mcp/src",
+            pattern: "target",
+        },
+    };
+
+    for (let index = 1; index <= 24; index += 1) {
+        await assert.doesNotReject(() => hooks["tool.execute.before"]({
+            tool: "grep",
+            sessionID: "session",
+            callID: `call-${index}`,
+        }, output));
+    }
+    await assert.rejects(() => hooks["tool.execute.before"]({
+        tool: "grep",
+        sessionID: "session",
+        callID: "call-25",
+    }, output), /agent_discovery_tool_budget_exhausted/);
 });
 
 test("guard strips test evidence and caps model-visible tool output at 32768 bytes", () => {
@@ -416,7 +534,7 @@ test("session aggregation uses provider and tool events for authoritative measur
     assert.equal(aggregated.events.length, 3);
 });
 
-test("grading checks hidden facts, relationships, and the real tool sequence", () => {
+test("grading checks hidden facts and relationships while allowing parallel tool calls", () => {
     const agentResult = {
         status: "success",
         answer: {
@@ -435,7 +553,7 @@ test("grading checks hidden facts, relationships, and the real tool sequence", (
         output: "packages/mcp/src/owner.ts:1 targetOwner\npackages/mcp/src/caller.ts:1 caller",
     }, {
         tool: "read",
-        messageId: "m2",
+        messageId: "m1",
         input: { filePath: "/repo/packages/mcp/src/owner.ts", offset: 1, limit: 20 },
         output: "targetOwner resolver",
     }];
@@ -452,6 +570,45 @@ test("grading checks hidden facts, relationships, and the real tool sequence", (
     assert.deepEqual(grade.failureReasons, []);
 });
 
+test("grading accepts qualified identifiers but rejects prose symbol labels", () => {
+    const resultWithCaller = (symbol) => ({
+        status: "success",
+        answer: {
+            ownerFile: knownTask.expected.ownerFile,
+            ownerSymbol: "SearchOwner.targetOwner",
+            ownerSpan: knownTask.expected.ownerSpan,
+            relatedSymbols: knownTask.expected.requiredRelations.map((relation) => (
+                relation.relation === "caller" ? { ...relation, symbol } : relation
+            )),
+            taskFacts: knownTask.expected.taskFacts,
+            behavioralConclusion: "Owner behavior.",
+        },
+    });
+    const tools = [{
+        tool: "grep",
+        messageId: "m1",
+        input: { path: "/repo/packages/mcp/src", pattern: "targetOwner" },
+        output: "packages/mcp/src/owner.ts targetOwner packages/mcp/src/caller.ts caller",
+    }];
+
+    assert.equal(gradeRun({
+        agentResult: resultWithCaller("ToolHandlers.caller"),
+        task: knownTask,
+        arm: "native",
+        mode: "natural",
+        repoRoot: "/repo",
+        tools,
+    }).passed, true);
+    assert.match(gradeRun({
+        agentResult: resultWithCaller("method caller"),
+        task: knownTask,
+        arm: "native",
+        mode: "natural",
+        repoRoot: "/repo",
+        tools,
+    }).failureReasons.join(","), /missing_relation:caller:caller/);
+});
+
 test("reporting uses medians and ranges from correct runs only", () => {
     const run = (arm, passed, wall) => ({
         taskId: "task",
@@ -466,6 +623,7 @@ test("reporting uses medians and ranges from correct runs only", () => {
             cachedInputTokens: 2,
             visibleToolResultBytes: 100,
             toolCalls: arm === "native" ? 4 : 3,
+            modelTurns: arm === "native" ? 5 : 4,
             stepsToVerifiedAnswer: arm === "native" ? 4 : 3,
         },
     });
@@ -493,12 +651,42 @@ test("reporting uses medians and ranges from correct runs only", () => {
         max: 300,
     });
     assert.equal(summary.task.native.metrics.taskWallTimeMs.median, 300);
+    assert.equal(summary.task.native.allMetrics.taskWallTimeMs.median, 100);
     assert.match(report, /Only correct runs contribute/);
     assert.match(report, /300 \[100-300\]/);
+    assert.match(report, /Raw cost of all attempts/);
+    assert.match(report, /100 \[1-300\]/);
+    assert.match(report, /Raw Satori minus native median/);
 });
 
 test("agent result parser accepts compact JSON without a model-authored ledger", () => {
     assert.deepEqual(extractAgentResult("```json\n{\"status\":\"success\",\"answer\":{}}\n```"), {
+        status: "success",
+        answer: {},
+    });
+});
+
+test("agent result parser prefers fenced result JSON over earlier brace fragments", () => {
+    const response = [
+        'Observed ownerSpan: {"startLine":176,"endLine":542}',
+        "```json",
+        '{"status":"success","answer":{"ownerSymbol":"targetOwner"}}',
+        "```",
+    ].join("\n");
+
+    assert.deepEqual(extractAgentResult(response), {
+        status: "success",
+        answer: { ownerSymbol: "targetOwner" },
+    });
+});
+
+test("agent result parser finds a result object after an unmatched prose brace", () => {
+    const response = [
+        "Unfinished note: { owner span follows",
+        '{"status":"success","answer":{}}',
+    ].join("\n");
+
+    assert.deepEqual(extractAgentResult(response), {
         status: "success",
         answer: {},
     });

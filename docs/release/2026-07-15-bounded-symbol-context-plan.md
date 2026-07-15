@@ -113,7 +113,7 @@ evidence falls back to provider-backed search.
 | Relationship sites inherit edge authority | False when the current site source was not validated. | Project edge authority and site-currentness independently; suppress dynamic source-backed edges after their source observation fails. |
 | Source-read accounting can be one-sided | Confirmed benchmark reproducibility risk. | Instrument the same logical requests, portable source-I/O categories, and downstream processing categories for native and Satori adaptive/composed arms. |
 | Final identity observation proves race-free delivery | False. External mutation can occur immediately after any observation. | Define the final successful root-bound identity observation as the validation linearization point and construct the immutable response snapshot without intervening asynchronous work. |
-| Descriptor bytes are physical disk I/O | False. Page cache and platform buffering make that unobservable from ordinary reads. | Gate bytes obtained from root-bound descriptors/streams and read operations; report downstream processing and physical I/O separately. |
+| Descriptor bytes are physical disk I/O | False. Page cache and platform buffering make that unobservable from ordinary reads. | Gate bytes obtained at the single ledgered acquisition boundary, including honestly classified path reads; report downstream processing and physical I/O separately. |
 | `target_only` publication policy is implicit | Confirmed adapter ambiguity. | Permit both `strong` and `target_only` for final-file publication with different claims; reject `unsupported`. |
 | Root escape is ordinary stale identity | False safety classification. | Preserve `root_binding_invalid` as a distinct internal failure even if the public source projection remains unavailable. |
 | Phase 0 requires future behavior to pass | Confirmed phase-boundary defect. | Phase 0 freezes baseline artifacts and acceptance specifications only; Phases 1–5 make the specifications executable and Phase 6 requires the complete matrix to pass. |
@@ -124,7 +124,7 @@ evidence falls back to provider-backed search.
 | Phase 0 has one baseline identity | Confirmed comparison gap once measurement instrumentation is required. | Preserve a pristine historical product identity, then prove measurement-only invariance and use the instrumented adaptive identity for latency/source-cost comparison and both arms. |
 | Relationship cursors need no validation because they are outside the fingerprint | False. Cursor position is separate from traversal identity but still scoped and validated. | Bind or validate target/direction/kind/depth/ordering membership, resume strictly after the cursor, expose terminal state, and reject malformed/cross-scope cursors. |
 | Current span resolution needs no derivation identity | False for structurally re-resolved current source. | Bind the span-resolution policy, extractor/language implementation version, and derivation; snapshot-matched spans instead bind their manifest and source identity. |
-| Descriptor and wrapping stream are separate acquisitions | False. They are alternative observation boundaries over the same bytes. | Select exactly one acquisition basis per observation and aggregate unique non-overlapping byte ranges; processing never contributes to portable I/O. |
+| Descriptor and wrapping stream are separate acquisitions | False. They are alternative observation boundaries over the same bytes. | Select exactly one acquisition basis per observation; count every actual read once by unique read identity, and report unique range coverage separately without erasing reread cost. Processing never contributes to portable I/O. |
 | `not_applicable_identity_match` proves current structural coordinates | False. Identity equality is `index_snapshot_matched`; differing current bytes still require structural proof. | Limit `current_symbol_validated` to registry-rebuild or language structural re-resolution derivations. |
 | Current structural identity may switch representation implicitly | Confirmed fingerprint ambiguity. | Use a tagged, canonically serialized identity variant fixed by derivation. |
 | Cursor payloads need no transport cap | False. Even rejected cursor input is an abuse and response-echo surface. | Freeze cursor format version, byte cap, canonical/MAC validation, and no-echo error policy. |
@@ -1156,10 +1156,12 @@ are not a substitute for bytes obtained from source.
 Apply that accounting symmetrically to both arms and all internal owners:
 exact-open validation, outline preparation, graph-site validation, search
 evidence verification, continuation scans, hashing, parsers, and extractors.
-Record logical source bytes requested, bytes obtained from root-bound
-descriptors or streams, read-operation count, complete-file scans, partial scans,
-and files opened. Operating-system cache hits do not erase bytes obtained from
-the portable source-I/O ledger.
+Record logical source bytes requested, bytes obtained through ledgered
+descriptor, stream, or path-read acquisition events, read-operation count,
+complete-file scans, partial scans, and files opened. `filesOpened` counts only
+observations whose acquisition completed or obtained partial source; a failed
+observation with no acquired source does not increment it. Operating-system
+cache hits do not erase bytes obtained from the portable source-I/O ledger.
 Physical storage I/O is a separate optional platform measurement with an
 explicit source such as `proc_io`, `platform_api`, or `unavailable`; it is not
 used as a portable release gate.
@@ -1173,7 +1175,9 @@ is processing volume only and never enters the portable 20% I/O gate.
 
 Each observation has exactly one acquisition boundary and one portable I/O
 basis. A stream backed by a descriptor is recorded at the descriptor boundary
-or the stream boundary, never both. Each `SourceIoMetric` represents one actual
+or the stream boundary, never both. Path convenience reads are classified as
+`path_read`; that basis measures acquisition cost but makes no descriptor-bound
+authority claim. Each `SourceIoMetric` represents one actual
 acquisition event and carries a read ID unique within its source observation
 plus a zero-based, half-open byte range. Duplicate emission of the same
 `(observationId, readId)` is counted once only when every other event field is
@@ -1186,6 +1190,14 @@ Processing owners never open source directly or perform unledgered acquisition.
 Any source access goes through an acquisition owner and propagates its
 `observationId` to downstream processing.
 
+Every started observation has exactly one terminal acquisition outcome:
+`completed`, `partial`, or `failed`. A complete-file scan counts only when its
+outcome is `completed` and its unique byte coverage equals the requested byte
+length. Failed, short, or growth-detected reads remain measured work but never
+count as completed scans. Every attempted processing event records `success`,
+`failed`, or `rejected`, including parser/extractor exceptions and selectors
+that reject a range after consuming their input.
+
 ```ts
 type SourceIoOwner =
   | "validation"
@@ -1193,6 +1205,11 @@ type SourceIoOwner =
   | "graph_site"
   | "search_evidence"
   | "continuation";
+
+interface SourceObservationOutcome {
+  observationId: string;
+  status: "completed" | "partial" | "failed";
+}
 
 interface SourceIoMetric {
   observationId: string;
@@ -1203,13 +1220,17 @@ interface SourceIoMetric {
   endByte: number;
   bytesObtained: number;
   scanKind: "complete" | "partial";
-  basis: "descriptor_read" | "stream_chunk";
+  basis: "descriptor_read" | "stream_chunk" | "path_read";
 }
 
 interface SourceIoSummary {
   portableBytesObtained: number;
   uniqueBytesCovered: number;
   readOperations: number;
+  byBasis: Partial<Record<
+    "descriptor_read" | "stream_chunk" | "path_read",
+    { portableBytesObtained: number; readOperations: number }
+  >>;
 }
 
 interface SourceProcessingMetric {
@@ -1228,6 +1249,7 @@ interface SourceProcessingMetric {
     | "parser_input"
     | "extractor_input"
     | "mmap_estimate";
+  outcome: "success" | "failed" | "rejected";
 }
 ```
 

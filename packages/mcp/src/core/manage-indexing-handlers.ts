@@ -1332,6 +1332,7 @@ export class ManageIndexingHandlers {
         let candidateAuthorityForRollback: ReturnType<Context['captureDurableIndexAuthority']> | null = null;
         let expectedCandidateAuthority: Awaited<ReturnType<Context['proveVectorGeneration']>> = null;
         let candidateMarkerRunId: string | undefined;
+        let candidateMarkerPublicationStarted = false;
         let writingReceiptPublished = false;
         let fullIndexCheckpoint: import("@zokizuan/satori-core").PreparedFileChangeSet | undefined;
         let fullIndexSynchronizer: import("@zokizuan/satori-core").FileSynchronizer | undefined;
@@ -1612,6 +1613,9 @@ export class ManageIndexingHandlers {
                 );
                 candidatePolicyPublished = true;
                 candidateAuthorityForRollback = this.host.context.captureDurableIndexAuthority(absolutePath);
+                // From this point a lost acknowledgement can leave a remote marker,
+                // so failure cleanup must attempt withdrawal even if publication throws.
+                candidateMarkerPublicationStarted = true;
                 await this.host.context.publishCompletedIndexMarker(
                     absolutePath,
                     stats.indexedFiles,
@@ -1831,17 +1835,22 @@ export class ManageIndexingHandlers {
                 errorMessage = await this.host.buildCollectionLimitMessage(absolutePath);
             }
 
-            let candidateMarkerWithdrawn = false;
-            try {
-                await this.host.clearIndexCompletionMarker(
-                    absolutePath,
-                    mutationLease
-                        ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
-                        : undefined,
-                );
-                candidateMarkerWithdrawn = true;
-            } catch (clearError) {
-                console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
+            // If publication never started, there is no candidate marker to withdraw
+            // and checkpoint cleanup is already safe. Once it starts, require a
+            // successful withdrawal before deleting candidate checkpoint evidence.
+            let candidateMarkerWithdrawn = !candidateMarkerPublicationStarted;
+            if (candidateMarkerPublicationStarted) {
+                try {
+                    await this.host.clearIndexCompletionMarker(
+                        absolutePath,
+                        mutationLease
+                            ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
+                            : undefined,
+                    );
+                    candidateMarkerWithdrawn = true;
+                } catch (clearError) {
+                    console.warn(`[BACKGROUND-INDEX] Failed to clear completion marker after indexing error for '${absolutePath}': ${formatUnknownError(clearError)}`);
+                }
             }
             if (candidateMarkerWithdrawn && fullIndexCheckpointCommitted && fullIndexSynchronizer) {
                 try {

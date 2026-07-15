@@ -101,6 +101,10 @@ export const INDEX_COMPLETION_MARKER_DOC_ID = '__satori_index_completion_marker_
 export const INDEX_COMPLETION_MARKER_FILE_EXTENSION = '.satori_meta';
 export const INDEX_COMPLETION_MARKER_RELATIVE_PATH = '.__satori__/index_completion_marker.json';
 
+export type CollectionCreateOptions = {
+    deferIndexBuild?: boolean;
+};
+
 export interface VectorDatabase {
     /**
      * Create collection
@@ -116,7 +120,18 @@ export interface VectorDatabase {
      * @param dimension Dense vector dimension
      * @param description Collection description
      */
-    createHybridCollection(collectionName: string, dimension: number, description?: string): Promise<void>;
+    createHybridCollection(
+        collectionName: string,
+        dimension: number,
+        description?: string,
+        options?: CollectionCreateOptions,
+    ): Promise<void>;
+
+    /**
+     * Build deferred indexes and make a newly populated collection searchable.
+     * Full indexing calls this before publishing its authoritative marker.
+     */
+    finalizeCollectionForSearch?(collectionName: string): Promise<void>;
 
     /**
      * Drop collection

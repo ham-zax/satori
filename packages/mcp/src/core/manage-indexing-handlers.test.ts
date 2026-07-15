@@ -339,6 +339,7 @@ function createFailedIndexingHarness(
     let writeCollectionOverride: string | null = null;
     let indexedSnapshots = 0;
     let registeredSynchronizers = 0;
+    let completionMarkerClearCalls = 0;
     let publishedPolicyCollection: string | null = null;
     let publishedPolicyHash: string | null = null;
     let publishedPolicyDocumentDigest: string | null = null;
@@ -649,7 +650,9 @@ function createFailedIndexingHarness(
         rebuildCallGraphForIndex: options.rebuildCallGraphForIndex ?? (async () => undefined),
         touchWatchedCodebase: options.touchWatchedCodebase ?? (async () => undefined),
         saveSnapshotIfSupported: () => undefined,
-        clearIndexCompletionMarker: async () => undefined,
+        clearIndexCompletionMarker: async () => {
+            completionMarkerClearCalls += 1;
+        },
         getSnapshotIndexingProgress: () => 42,
         buildCollectionLimitMessage: async () => "collection limit",
         mutationLeaseCoordinator: options.mutationLeaseCoordinator,
@@ -663,6 +666,9 @@ function createFailedIndexingHarness(
         },
         get registeredSynchronizers() {
             return registeredSynchronizers;
+        },
+        get completionMarkerClearCalls() {
+            return completionMarkerClearCalls;
         },
         get publishedMarker() {
             return publishedMarker;
@@ -1849,14 +1855,15 @@ test("startBackgroundIndexing deletes failed staged collection", async () => {
     await withTempRepo(async (repoPath) => {
         const stagedCollection = `${resolveCollectionName(repoPath)}__gen_run_failed`;
         const existingCollections = new Set<string>([stagedCollection]);
-        const { handler, droppedCollections, failedSnapshots } = createFailedIndexingHarness(existingCollections);
+        const harness = createFailedIndexingHarness(existingCollections);
 
-        await handler.startBackgroundIndexing(repoPath, false, stagedCollection);
+        await harness.handler.startBackgroundIndexing(repoPath, false, stagedCollection);
 
-        assert.deepEqual(droppedCollections, [stagedCollection]);
+        assert.deepEqual(harness.droppedCollections, [stagedCollection]);
         assert.equal(existingCollections.has(stagedCollection), false);
-        assert.equal(failedSnapshots.length, 1);
-        assert.match(failedSnapshots[0].errorMessage, /boom after staged collection create/);
+        assert.equal(harness.failedSnapshots.length, 1);
+        assert.match(harness.failedSnapshots[0].errorMessage, /boom after staged collection create/);
+        assert.equal(harness.completionMarkerClearCalls, 0);
     });
 });
 

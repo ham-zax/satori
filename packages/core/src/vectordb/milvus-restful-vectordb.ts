@@ -603,7 +603,6 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
 
     async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
         await this.ensureInitialized();
-        await this.ensureLoaded(collectionName);
 
         try {
             const restfulConfig = this.config as MilvusRestfulConfig;
@@ -747,7 +746,12 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         return count;
     }
 
-    async createHybridCollection(collectionName: string, dimension: number, _description?: string): Promise<void> {
+    async createHybridCollection(
+        collectionName: string,
+        dimension: number,
+        _description?: string,
+        options?: { deferIndexBuild?: boolean },
+    ): Promise<void> {
         try {
             const restfulConfig = this.config as MilvusRestfulConfig;
 
@@ -830,16 +834,19 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
             // Step 1: Create collection with schema and functions
             await createCollectionWithLimitCheck(this.makeRequest.bind(this), collectionSchema);
 
-            // Step 2: Create indexes for both vector fields
-            await this.createHybridIndexes(collectionName);
-
-            // Step 3: Load collection to memory for searching
-            await this.loadCollection(collectionName);
+            if (!options?.deferIndexBuild) {
+                await this.finalizeCollectionForSearch(collectionName);
+            }
 
         } catch (error) {
             console.error(`[MilvusRestfulDB] ❌ Failed to create hybrid collection '${collectionName}':`, error);
             throw error;
         }
+    }
+
+    async finalizeCollectionForSearch(collectionName: string): Promise<void> {
+        await this.createHybridIndexes(collectionName);
+        await this.loadCollection(collectionName);
     }
 
     private async createHybridIndexes(collectionName: string): Promise<void> {
@@ -884,7 +891,6 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
 
     async insertHybrid(collectionName: string, documents: VectorDocument[]): Promise<void> {
         await this.ensureInitialized();
-        await this.ensureLoaded(collectionName);
 
         try {
             const restfulConfig = this.config as MilvusRestfulConfig;

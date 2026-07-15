@@ -341,6 +341,48 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 }
 
+class DeferredIndexVectorDatabase extends InMemoryVectorDatabase {
+    readonly lifecycleEvents: string[] = [];
+    private finalized = false;
+
+    async createHybridCollection(
+        collectionName: string,
+        _dimension?: number,
+        _description?: string,
+        options?: { deferIndexBuild?: boolean },
+    ): Promise<void> {
+        this.finalized = false;
+        this.lifecycleEvents.push(`create:${options?.deferIndexBuild === true ? 'deferred' : 'immediate'}`);
+        await super.createHybridCollection(collectionName);
+    }
+
+    async finalizeCollectionForSearch(): Promise<void> {
+        this.finalized = true;
+        this.lifecycleEvents.push('finalize');
+    }
+
+    async query(
+        collectionName: string,
+        filter: string,
+        outputFields: string[],
+        limit?: number,
+    ): Promise<Record<string, unknown>[]> {
+        if (!this.finalized) {
+            throw new Error('deferred collection must not be queried before finalization');
+        }
+        return super.query(collectionName, filter, outputFields, limit);
+    }
+
+    async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
+        this.lifecycleEvents.push(
+            documents.every((document) => document.id === INDEX_COMPLETION_MARKER_DOC_ID)
+                ? 'marker_insert'
+                : 'payload_insert',
+        );
+        await super.insert(collectionName, documents);
+    }
+}
+
 class MarkerObservingVectorDatabase extends InMemoryVectorDatabase {
     readonly payloadMutationMarkerPresence: boolean[] = [];
 
@@ -644,6 +686,36 @@ test('Context.indexCodebase replaces stale payload for deleted and zero-file rep
         const afterZeroFiles = Array.from(vectorDatabase.collections.get(collectionName)?.values() ?? [])
             .filter((document) => document.fileExtension !== COMPLETION_MARKER_EXTENSION);
         assert.deepEqual(afterZeroFiles, []);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.indexCodebase finalizes deferred indexes after payload writes and before authority publication', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-deferred-index-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'owner.ts'), 'export const owner = true;\n', 'utf8');
+        const vectorDatabase = new DeferredIndexVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        await context.indexCodebase(codebasePath);
+
+        assert.equal(vectorDatabase.lifecycleEvents[0], 'create:deferred');
+        const finalizationIndex = vectorDatabase.lifecycleEvents.indexOf('finalize');
+        const markerIndex = vectorDatabase.lifecycleEvents.indexOf('marker_insert');
+        const payloadIndexes = vectorDatabase.lifecycleEvents
+            .map((event, index) => event === 'payload_insert' ? index : -1)
+            .filter((index) => index >= 0);
+        assert.ok(payloadIndexes.length > 0);
+        assert.ok(finalizationIndex > Math.max(...payloadIndexes));
+        assert.ok(markerIndex > finalizationIndex);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

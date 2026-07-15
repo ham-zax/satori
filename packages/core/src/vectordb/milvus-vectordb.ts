@@ -7,6 +7,7 @@ import {
     hybridtsToUnixtime,
     type HybridSearchReq,
     type QueryReq,
+    type RowData,
     type SearchSimpleReq,
 } from '@zilliz/milvus2-sdk-node';
 import {
@@ -22,6 +23,7 @@ import {
     VectorStoreBackendInfo,
     VectorDocumentMetadata,
     VectorRecord,
+    CollectionCreateOptions,
 } from './types';
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
@@ -50,6 +52,12 @@ type MilvusCollectionListPayload = {
 // this idempotent remote mutation; verification remains owned by
 // deleteCollectionWithVerification.
 const REMOTE_COLLECTION_DELETE_TIMEOUT_MS = 120_000;
+// Embedding batches remain provider-efficient at 100 chunks. Bound only the
+// database mutation so one mixed-vector gRPC request cannot monopolize or lose
+// the entire provider batch when a managed proxy resets the channel.
+const MILVUS_WRITE_BATCH_SIZE = 25;
+const MILVUS_WRITE_MAX_ATTEMPTS = 3;
+const MILVUS_WRITE_RETRY_DELAY_MS = 250;
 
 type MilvusHybridSearchSingleRequest = {
     data: number[] | string;
@@ -84,6 +92,23 @@ const COLLECTION_LIMIT_PATTERNS = [
 
 function isRecord(value: unknown): value is VectorRecord {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isRetryableMilvusWriteError(error: unknown): boolean {
+    const code = isRecord(error) ? error.code : undefined;
+    if (code === 14 || code === '14') {
+        return true;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+        /\bUNAVAILABLE\b/i.test(message)
+        || /connection dropped|connection reset|ECONNRESET|EPIPE|broken pipe/i.test(message)
+        || /RST_STREAM|GOAWAY/i.test(message)
+    );
+}
+
+function delay(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function stringValue(value: unknown, fallback: string = ''): string {
@@ -279,6 +304,7 @@ export interface MilvusConfig {
 export class MilvusVectorDatabase implements VectorDatabase {
     protected config: MilvusConfig;
     private client: MilvusClient | null = null;
+    private writeClient: MilvusClient | null = null;
     protected initializationPromise: Promise<void>;
     private resolvedAddress: string | null = null;
     private resolvedFromToken: boolean = false;
@@ -305,6 +331,74 @@ export class MilvusVectorDatabase implements VectorDatabase {
             token: milvusConfig.token,
             ssl: milvusConfig.ssl || false,
         });
+    }
+
+    private createWriteClient(): MilvusClient {
+        if (!this.resolvedAddress) {
+            throw new Error('Cannot initialize Milvus write client before resolving the database address.');
+        }
+        const milvusConfig = this.config as MilvusConfig;
+        return new MilvusClient({
+            address: this.resolvedAddress,
+            username: milvusConfig.username,
+            password: milvusConfig.password,
+            token: milvusConfig.token,
+            ssl: milvusConfig.ssl || false,
+            // The SDK retries a failed write on the same gRPC call/channel. A
+            // fresh client is required after proxy resets and is safe because
+            // Satori chunk identities are deterministic and writes use upsert.
+            maxRetries: 0,
+            pool: { min: 1, max: 1 },
+        });
+    }
+
+    private async discardWriteClient(client: MilvusClient): Promise<void> {
+        if (this.writeClient !== client) {
+            return;
+        }
+        this.writeClient = null;
+        try {
+            await client.closeConnection();
+        } catch (error) {
+            console.warn('[MilvusDB] Failed to close a stale write connection:', error);
+        }
+    }
+
+    private async upsertDocuments(
+        collectionName: string,
+        data: RowData[],
+    ): Promise<void> {
+        await this.ensureInitialized();
+
+        for (let offset = 0; offset < data.length; offset += MILVUS_WRITE_BATCH_SIZE) {
+            const batch = data.slice(offset, offset + MILVUS_WRITE_BATCH_SIZE);
+
+            for (let attempt = 1; attempt <= MILVUS_WRITE_MAX_ATTEMPTS; attempt += 1) {
+                const client = this.writeClient ?? this.createWriteClient();
+                this.writeClient = client;
+                try {
+                    await client.upsert({
+                        collection_name: collectionName,
+                        data: batch,
+                    });
+                    break;
+                } catch (error) {
+                    const retryable = isRetryableMilvusWriteError(error);
+                    if (retryable) {
+                        // Never retain a channel after a transport failure, including
+                        // the last attempt; a later index operation shares this instance.
+                        await this.discardWriteClient(client);
+                    }
+                    if (!retryable || attempt === MILVUS_WRITE_MAX_ATTEMPTS) {
+                        throw error;
+                    }
+                    console.warn(
+                        `[MilvusDB] Retrying idempotent write on a fresh connection (${attempt}/${MILVUS_WRITE_MAX_ATTEMPTS - 1}).`,
+                    );
+                    await delay(MILVUS_WRITE_RETRY_DELAY_MS * attempt);
+                }
+            }
+        }
     }
 
     /**
@@ -652,13 +746,6 @@ export class MilvusVectorDatabase implements VectorDatabase {
     }
 
     async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
-        await this.ensureInitialized();
-        await this.ensureLoaded(collectionName);
-
-        if (!this.client) {
-            throw new Error('MilvusClient is not initialized after ensureInitialized().');
-        }
-
         console.log('Inserting documents into collection:', collectionName);
         const data = documents.map(doc => ({
             id: doc.id,
@@ -671,10 +758,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             metadata: JSON.stringify(doc.metadata),
         }));
 
-        await this.client.insert({
-            collection_name: collectionName,
-            data: data,
-        });
+        await this.upsertDocuments(collectionName, data);
     }
 
     async search(collectionName: string, queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
@@ -771,7 +855,12 @@ export class MilvusVectorDatabase implements VectorDatabase {
         return count;
     }
 
-    async createHybridCollection(collectionName: string, dimension: number, description?: string): Promise<void> {
+    async createHybridCollection(
+        collectionName: string,
+        dimension: number,
+        description?: string,
+        options?: CollectionCreateOptions,
+    ): Promise<void> {
         await this.ensureInitialized();
 
         console.log('Beginning hybrid collection creation:', collectionName);
@@ -858,6 +947,21 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
         await this.client.createCollection(createCollectionParams);
 
+        if (options?.deferIndexBuild) {
+            // Zilliz supports schema-only, unloaded collections. Full rebuilds use that
+            // state only for ingestion; search and marker reads must wait for finalization.
+            return;
+        }
+
+        await this.finalizeCollectionForSearch(collectionName);
+    }
+
+    async finalizeCollectionForSearch(collectionName: string): Promise<void> {
+        await this.ensureInitialized();
+        if (!this.client) {
+            throw new Error('MilvusClient is not initialized after ensureInitialized().');
+        }
+
         // Create indexes for both vector fields
         // Index for dense vector
         const denseIndexParams = {
@@ -898,13 +1002,6 @@ export class MilvusVectorDatabase implements VectorDatabase {
     }
 
     async insertHybrid(collectionName: string, documents: VectorDocument[]): Promise<void> {
-        await this.ensureInitialized();
-        await this.ensureLoaded(collectionName);
-
-        if (!this.client) {
-            throw new Error('MilvusClient is not initialized after ensureInitialized().');
-        }
-
         const data = documents.map(doc => ({
             id: doc.id,
             content: doc.content,
@@ -916,10 +1013,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             metadata: JSON.stringify(doc.metadata),
         }));
 
-        await this.client.insert({
-            collection_name: collectionName,
-            data: data,
-        });
+        await this.upsertDocuments(collectionName, data);
     }
 
     async hybridSearch(collectionName: string, searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]> {

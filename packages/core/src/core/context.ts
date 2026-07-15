@@ -1875,8 +1875,10 @@ export class Context {
         console.log(`Debug2: Preparing vector collection for codebase${forceReindex ? ' (FORCE REINDEX)' : ''}`);
         // indexCodebase is a full rebuild. Reusing an existing collection would retain
         // remote rows for deleted files or changed chunk boundaries.
+        // Forced preparation replaces the collection, so the new schema cannot contain
+        // an old completion marker. Do not query it to clear one: hybrid rebuilds keep
+        // this collection deliberately indexless until all payload writes are complete.
         await this.prepareCollection(codebasePath, true, options.assertMutationCurrent);
-        await this.clearIndexCompletionMarker(codebasePath, options.assertMutationCurrent);
 
         // 3. Recursively traverse codebase to get all supported files
         progressCallback?.({ phase: 'Scanning files...', current: 5, total: 100, percentage: 5 });
@@ -1884,6 +1886,7 @@ export class Context {
         console.log(`[Context] 📁 Found ${codeFiles.length} code files`);
 
         if (codeFiles.length === 0) {
+            await this.finalizePreparedCollection(codebasePath, options.assertMutationCurrent);
             const navigationCandidate = await this.writeSymbolRegistryForCompletedIndex(
                 codebasePath,
                 [],
@@ -1947,6 +1950,8 @@ export class Context {
             options.assertMutationCurrent,
             indexPolicy,
         );
+
+        await this.finalizePreparedCollection(codebasePath, options.assertMutationCurrent);
 
         console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
 
@@ -3968,13 +3973,31 @@ export class Context {
 
         if (isHybrid === true) {
             assertMutationCurrent?.();
-            await this.vectorDatabase.createHybridCollection(collectionName, dimension, `Hybrid Index for ${dirName}`);
+            await this.vectorDatabase.createHybridCollection(
+                collectionName,
+                dimension,
+                `Hybrid Index for ${dirName}`,
+                { deferIndexBuild: this.vectorDatabase.finalizeCollectionForSearch !== undefined },
+            );
         } else {
             assertMutationCurrent?.();
             await this.vectorDatabase.createCollection(collectionName, dimension, `Index for ${dirName}`);
         }
 
         console.log(`[Context] ✅ Collection ${collectionName} created successfully (dimension: ${dimension})`);
+    }
+
+    private async finalizePreparedCollection(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+    ): Promise<void> {
+        if (!this.getIsHybrid() || !this.vectorDatabase.finalizeCollectionForSearch) {
+            return;
+        }
+        // Authority publication must remain after this boundary. Before finalization the
+        // collection accepts writes but is intentionally neither indexed nor searchable.
+        assertMutationCurrent?.();
+        await this.vectorDatabase.finalizeCollectionForSearch(this.getWriteCollectionName(codebasePath));
     }
 
     /**

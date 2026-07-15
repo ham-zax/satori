@@ -5,10 +5,16 @@ path, and single-owner staged-collection preparation are accepted
 operationally. Generation `2822` proved the selected 117-row/4-MiB policy;
 generation `2823` proved that 126 rows removes requests without improving wall
 time; generation `2824` removed the redundant staged create/drop/create cycle
-with zero retries and complete authority. The write-limit search is complete.
-The remaining synchronous collection-limit probe and Voyage packing are the
-next measured opportunities. Live discovery checks remain authority and
-transport smoke evidence rather than a semantic answer-quality benchmark.
+with zero retries and complete authority. The one-shot prepared-collection
+receipt is implemented and repository-validated, and reduced accepted-to-
+scanning latency from 43.415 seconds to 2.141-3.390 seconds in live runs.
+It is not yet accepted operationally: generations `2826` and `2827` both
+exhausted fresh-client recovery on their first Zilliz write at 117 and 100 rows
+respectively. Both candidates were cleaned and the previous proven generation
+remained authoritative. A terminal live rebuild and its downstream no-change
+and quality gates remain pending current-backend write stability. Live
+discovery checks remain authority and transport smoke evidence rather than a
+semantic answer-quality benchmark.
 
 ## Scope and invariants
 
@@ -612,26 +618,91 @@ retries, and complete final authority all passed.
 
 ## Next measured opportunities
 
-### 1. Replace the dummy collection-limit probe only with the actual staged collection
+### 1. Prepared staged-collection receipt result
 
-The accepted run still spent 43.415 seconds between the operation's accepted
-and scanning receipts. The log attributes most of that interval to
-`checkCollectionLimit()`, which creates and synchronously deletes a dummy
-collection before the background worker creates the real staged collection.
-The dummy cannot simply be removed: existing behavior promises an immediate,
-deterministic collection-limit error before background indexing is reported as
-started.
+The implementation now prepares the real staged collection synchronously,
+returns a process-local one-shot receipt bound to canonical root, staged
+collection, mutation generation, and operation ID, and requires
+`Context.indexCodebase()` to consume that exact receipt before skipping its own
+preparation. Weak identity prevents a caller from forging matching receipt
+fields. Consumption also proves that the collection still exists. Missing,
+stale, mismatched, forged, deleted, or reused receipts fail closed.
 
-The smallest justified experiment is to prepare the real staged collection
-synchronously, return a one-shot generation-bound receipt, and require
-`Context.indexCodebase()` to validate and consume that receipt before skipping
-its own preparation. A forged, stale, mismatched, missing, or already-consumed
-receipt must fail closed. Failure before background handoff must clean the
-unproven staged collection without changing prior authority. Freeze the live
-gate before testing: at least 30 seconds lower accepted-to-scanning latency and
-at least 15% lower accepted-to-completed operator wall time, with zero retries,
-no Context phase regression above 10 seconds, and all mutation, cleanup,
-checkpoint, marker, navigation, and publication contracts green.
+The foreground owner discards the receipt and deletes the unproven staged
+collection if failure occurs before worker handoff. The background owner does
+the same after handoff. This cleanup gap was found during final diff review and
+is covered by the watcher-launch failure test; prior proven authority remains
+unchanged.
+
+Repository validation is green:
+
+- focused Core receipt tests: 5/5;
+- full Core suite: 423/423;
+- focused MCP indexing suites: 76/76 before the final fixture audit;
+- final MCP suite: 887/887;
+- focused foreground-cleanup suite: 49/49;
+- Core and MCP typecheck, targeted lint, runtime builds, and
+  `git diff --check`: green.
+
+The live timing benefit is established, but end-to-end acceptance is not:
+
+| Metric | Generation 2824 baseline | Generation 2826 | Generation 2827 |
+| --- | ---: | ---: | ---: |
+| Effective write ceiling | 117 rows | 117 rows | 100 rows |
+| Operation | `0945b7f6-1cdf-417e-9136-ce6016807327` | `e759cf18-5859-4b45-90b5-5adda9c2921d` | `e3b470d3-6dee-4036-bf38-1c86b267e646` |
+| Accepted-to-scanning | 43.415s | 3.390s | 2.141s |
+| Accepted-to-terminal receipt | 236.986s completed | 129.176s failed | 114.599s failed |
+| First failed request | none | 117 rows / 1,821,903 bytes | 100 rows / 1,555,817 bytes |
+| Fresh-client attempts | no retry | 3/3 failed | 3/3 failed |
+| Candidate publication | completed | none | none |
+| Staged cleanup | not applicable | completed | completed |
+| Previous authority | replaced successfully | preserved | preserved |
+
+Generation `2826` crossed the frozen latency gate by reducing accepted-to-
+scanning latency by 40.025 seconds. It then failed its first Zilliz write with
+`14 UNAVAILABLE: Connection dropped`. Generation `2827` was a falsification
+run at the last lower-risk 100-row ceiling; it failed identically on its first
+smaller write. Therefore the evidence does not isolate row size as the cause
+and does not justify changing the accepted 117-row default. It does show that
+the current backend condition cannot validate any candidate against the frozen
+zero-retry and terminal-success gates.
+
+No no-change sync or deterministic quality run is attributed to these failed
+candidates because neither published a generation. The next action is one
+default-policy live rebuild after Zilliz write stability returns, followed by
+the already-frozen no-change, authority, and quality gates. Do not retry until
+the backend can accept a bounded first write; repeated full rebuilds would add
+cost without discriminating the implementation.
+
+#### Managed free-cluster evidence
+
+The July 15 Zilliz Cloud documentation and dashboard observations do not
+support quota or collection pressure as the cause of the failed writes:
+
+- the Free plan allows 5 GB of storage, 2.5 million vCUs per month, and up to
+  five collections;
+- the dashboard showed at most two collections during staged rebuilds, then
+  returned to one after cleanup;
+- the proven collection contained 8,835 entities with both vector indexes
+  finished, far below the documented storage scale;
+- observed server-side write latency was roughly 15-30 ms, recorded write
+  failures were 0%, and write QPS was low.
+
+These observations rule against the leading quota, collection-count, and slow
+server-processing explanations. They do not prove that a response-lost upsert
+committed: aggregate server dashboards do not expose the client-side gRPC
+channel or establish per-request acknowledgement. The remaining interpretation
+is therefore a transport/channel hypothesis, not a confirmed Zilliz backend
+defect.
+
+The referenced serving-cluster bulk-import sequence is specifically a Zilliz
+BYOC workflow that imports prepared files from external object storage. This
+repository uses an ordinary managed Free cluster and stable-primary-key SDK
+upserts, so adopting that sequence would change deployment, ingestion, and
+failure-recovery contracts. The Zilliz Skill, Plugin, MCP server, and AI prompts
+are operator/agent interfaces around Cloud operations; they do not alter the
+runtime reliability of the Node SDK write path. Neither source justifies an
+implementation change here.
 
 ### 2. Re-evaluate Voyage packing with explicit token headroom
 
@@ -674,16 +745,16 @@ must remain green before any evidence is removed.
 | Exclude all docs or all evaluations | Rejected | Executable harness and product docs are useful evidence. |
 | Exclude generated evaluation JSON | Implemented and accepted | Narrow ignore policy reduced indexed noise without deleting evidence files or changing quality. |
 | Keep 25-row Zilliz writes permanently | Superseded | The 100-row run completed with zero retries and materially lower time. |
-| Restore 100-row Zilliz writes | Superseded | Generation 2801 proved the first safe increase; the completed binary search selected 117 rows. |
+| Restore 100-row Zilliz writes | Rejected as explanation for current failure | Generation 2827 failed its first 100-row write identically to the 117-row failure, so the current evidence does not isolate the accepted row ceiling. |
 | Remove class/container chunks | Hypothesis only | Duplication is measured; quality impact is not. |
 | Write-distribution and boundary metrics | Implemented and accepted | Generations 2822 and 2823 captured complete row/byte distributions and exact flush reasons without retaining payloads. |
 | 1,000 rows / 8 MiB | Rejected for safety | Generation 2818 failed near 37%; the failed staged collection was removed. |
 | 1,000 rows / 4 MiB | Rejected for safety | A 170-row, 2,652,205-byte request exhausted all attempts, proving bytes alone were not controlling reliability. |
 | 135 rows / 4 MiB | Rejected for safety | A 135-row, 2,104,562-byte request exhausted all attempts. |
-| 117 rows / 4 MiB | Implemented and accepted operationally | Generation 2822 completed in 227.933s with 89 writes, zero retries, complete authority, and unchanged source checkpoint. Final repository validation is pending. |
+| 117 rows / 4 MiB | Implemented; historically accepted operationally | Generation 2822 completed in 227.933s with 89 writes, zero retries, complete authority, and unchanged source checkpoint. Generation 2826 later failed its first write under a backend condition that also failed at 100 rows. |
 | 126 rows / 4 MiB | Rejected economically | It completed safely but was 61ms slower end to end and only 309ms faster in provider writes, while sitting closer to the 135-row failure cliff. |
 | Remove duplicate collection preparation | Implemented and accepted | Generation 2824 reduced preparation from 41.550s to 0.401s and Context wall time from 227.933s to 186.065s with zero retries, complete authority, and a zero-change sync. |
-| Replace dummy limit probe with the actual staged collection | Next measured implementation candidate | The accepted operation still spent 43.415s before scanning. Any replacement must preserve immediate collection-limit failure through a one-shot generation-bound prepared receipt. |
+| Replace dummy limit probe with the actual staged collection | Implemented and repository-validated; live acceptance pending | The one-shot receipt reduced accepted-to-scanning latency to 2.141-3.390s and preserved cleanup/authority, but generations 2826 and 2827 both failed their first bounded Zilliz write before publication. |
 | Increase Voyage target above 100k estimated tokens | Deferred measurement | Voyage is now the largest provider phase, but token headroom must be frozen before a live candidate. |
 | Coalesce writes across embedding boundaries | Rejected as an isolated optimization | Removing 12 writes at 126 rows produced no material time gain. |
 | Add concurrency or caches | Deferred | Sequential duplicate preparation and provider-token tuning remain smaller independent experiments. |

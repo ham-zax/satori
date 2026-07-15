@@ -1,11 +1,12 @@
 # Satori indexing-throughput investigation
 
-Status: throughput implementation accepted operationally. Generation `2801`
-completed authoritatively, repository validation is green, and a frozen paired
-hermetic comparison now proves unchanged search-quality results. The live
-discovery checks remain authority and transport smoke evidence rather than a
-semantic answer-quality benchmark. Further vector-write tuning is a separate
-measured follow-up.
+Status: provider batching and the sequential row-and-byte-bounded Milvus write
+path are accepted operationally. Generation `2822` proved the selected
+117-row/4-MiB policy with zero retries and complete authority; generation
+`2823` proved that 126 rows removes requests without improving wall time. The
+write-limit search is complete. Repository validation for the final default is
+in progress. The live discovery checks remain authority and transport smoke
+evidence rather than a semantic answer-quality benchmark.
 
 ## Scope and invariants
 
@@ -336,7 +337,9 @@ does not change authority or publication semantics:
   Structural adapters that do not inherit the base class keep the generic
   100-item policy and emit null provider metrics.
 - Milvus writes remain sequential and idempotent, retain fresh-client transport
-  recovery, and use the live-proven 100-row ceiling.
+  recovery, and use independently enforced 117-row and 4-MiB request ceilings.
+  Environment overrides are bounded and intended for controlled experiments;
+  they do not assert that larger requests are provider-safe.
 - `.satoriignore` excludes only the measured generated JSON evidence while
   retaining executable evaluation sources and product documentation.
 
@@ -485,59 +488,129 @@ correction uses optional capability detection for both calls. The five focused
 fixtures then passed, followed by the full MCP gate. This is a compatibility
 fix, not a ranking or authority change.
 
-## Next measured throughput experiment
+## Aggressive sequential write-limit search
 
-Do not increase the fixed Milvus row ceiling blindly. Generation `2801`
-recorded total serialized bytes but not individual request sizes or boundary
-reasons, and mixed dense/sparse/text rows vary materially. Maximums alone
-cannot describe that distribution.
+The follow-up used deterministic row-and-byte packing while preserving stable
+input order, sequential stable-ID upserts, fresh-client recovery, deferred
+index creation, staged publication, and every authority/freshness fence. No
+concurrent write experiment was mixed into the search. The decision rule was
+fixed before the final comparison: a candidate had to complete with zero
+retries, and settings within 5% end-to-end performance would prefer the smaller
+payload because the provider had already demonstrated a sharp failure cliff.
 
-The review correction adds a bounded 4,096-attempt scalar window at the Milvus
-provider boundary. Each sample contains only a monotonic sequence, row count,
-serialized byte count, and one of `row_limit`, `logical_write_end`, or `retry`.
-The operation summary reports min, p50, p90, p95, and max rows/bytes; flush
-reason counts; the theoretical global minimum; fragmentation overhead; and
-whether every attempt in the operation was captured. Source, vectors, paths,
-IDs, credentials, and payloads are never retained. The production row ceiling
-remains 100 until this evidence is collected.
+All live candidates used VoyageAI `voyage-code-3` at 1,024 dimensions,
+Milvus/Zilliz `hybrid_v3`, and `@zilliz/milvus2-sdk-node@2.6.17`. The final two
+runs used the identical 400-file/8,831-chunk corpus and 1,804,076 provider
+tokens. Their tested runtime artifacts are immutable under these SHA-256
+identities:
 
-The controlled experiment order is:
+- source base HEAD: `e0a0cecc0cbe9b25c283464cfa04a6c7c3a4740f`;
+- source base tree: `be7ff2ec650ce4eb148122e5c034109e073c0677`;
+- Core Milvus runtime:
+  `085937af159f48acec29ff6ef8e35cdfaaeab4e7079c6fc2ec2b9e35ec4eebb1`;
+- Core context runtime:
+  `88abff1a1a97ec12df535450dcbd0e0ffce3c8656acd35f33b7277f1242e6f67`;
+- MCP entry runtime:
+  `b8e2b0e549838ecc6bc39d2a50fbefb2f5d5380fd374991e564af2f8a6eafa95`.
 
-1. run an instrumented fresh-runtime 100-row cold control on the final tree;
-2. capture request distribution, logical-write boundaries, maximum resident
-   memory from the external harness, normalized phase rates, authority, and the
-   exact paired quality artifact;
-3. before running the candidate, freeze a byte ceiling from the control
-   distribution and the smallest explicit provider/transport constraint; never
-   exceed 200 rows;
-4. run the candidate on the same source tree, provider, model, dimension,
-   cluster, region, and fresh-runtime lifecycle;
-5. accept only if every frozen gate below passes;
-6. if two candidates whose byte or row ceilings differ by at least 25% fail,
-   restore 100 rows and move to one-batch embedding/write overlap.
+The row limit was supplied explicitly to each fresh runtime, so the later
+source-default change does not alter the tested artifact or candidate identity.
 
-Frozen acceptance gates:
+| Candidate | Operation / generation | Result | Direct evidence | Disposition |
+| --- | --- | --- | --- | --- |
+| 100 rows, original row-only policy | `19044432-b39b-4ac8-b839-15958c69fd04` / `2801` | Completed, zero retries | 98 writes, 491.873s provider-write time, 654.046s total | Prior accepted control; corpus differs slightly from the final pair. |
+| 1,000 rows / 8 MiB | `076981c3-7f12-4f60-b72d-7193571230db` / `2818` | Failed near 37% | A 598-chunk logical write exhausted fresh-client recovery. Exact failed request size was not yet logged. | Safety rejection; staged collection cleaned. |
+| 1,000 rows / 4 MiB | `2d241e9e-1b1d-440e-b889-17bbcba6d64c` / `2819` | Failed | 170 rows, 2,652,205 bytes, 3/3 attempts, `14 UNAVAILABLE: Connection dropped` | Safety rejection; proves 4 MiB alone does not control the failure. |
+| 135 rows / 4 MiB | `42c27523-4925-4620-ada4-255534ddaf8b` / `2820` | Failed | 135 rows, 2,104,562 bytes, 3/3 attempts, same transport error | Safety rejection; staged collection cleaned. |
+| 117 rows / 4 MiB | `9537786a-35f9-4d11-aa08-bb8c27f837c8` / `2822` | Completed, zero retries | 89 writes, 72.705s provider-write time, 227.933s total, authority `ok` | Accepted operating point. |
+| 126 rows / 4 MiB | `e796bc4f-f435-4b7e-b16f-0c1867e3d2de` / `2823` | Completed, zero retries | 77 writes, 72.396s provider-write time, 227.994s total, authority `ok` | Economic rejection: no end-to-end gain and less failure margin. |
 
-- zero Zilliz and Voyage retries, transport failures, or silent truncation;
-- completed vector authority, matching source checkpoint, navigation seal,
-  fresh-runtime `status=ok`, and no-change sync;
-- exact equality for all 95 normalized hermetic workload/limit observations;
-- candidate p95 request bytes at or below the predeclared byte ceiling;
-- at least 20% lower cumulative vector-write duration than the same-tree
-  100-row control;
-- at least 10% lower total cold-rebuild wall time;
-- no more than 10% higher fresh-process peak resident memory;
-- no more than 10 seconds absolute regression in finalization/index-build
-  duration.
+The failed staged generations were removed, and the previous proven collection
+remained authoritative throughout. Generation `2821` was a successful
+four-file incremental sync after the 135-row failure; it was not a cold-rebuild
+candidate.
 
-A candidate is an economic failure if it is reliable but misses both latency
-gates. It is a safety failure if it retries, loses authority, exceeds the byte
-or memory gate, changes paired quality, or violates deterministic failure
-behavior. These classifications are fixed before observing the candidate.
+### Same-corpus 117-versus-126 comparison
 
-Container-chunk deletion, caches, and broad concurrency remain out of this
-accepted slice. Provider quota is ample, container removal has retrieval risk,
-and the measured sequential write bottleneck should be exhausted first.
+| Metric | 117 rows | 126 rows | 126 minus 117 |
+| --- | ---: | ---: | ---: |
+| Total wall time | 227.933s | 227.994s | +0.061s (+0.03%) |
+| Prepare collection | 41.550s | 41.825s | +0.275s |
+| Payload pipeline | 177.185s | 178.586s | +1.401s |
+| Voyage provider time | 99.852s | 101.505s | +1.653s |
+| Vector provider time | 72.705s | 72.396s | -0.309s (-0.43%) |
+| Finalize collection | 7.766s | 6.144s | -1.622s |
+| Provider writes | 89 | 77 | -12 |
+| Theoretical minimum writes | 76 | 71 | -5 |
+| Fragmentation overhead | 13 | 6 | -7 |
+| p95 request rows | 117 | 126 | +9 |
+| p95 request bytes | 1,828,298 | 1,979,257 | +150,959 |
+| Maximum request bytes | 1,848,749 | 1,984,514 | +135,765 |
+| Retries | 0 | 0 | 0 |
+
+The 126-row setting removes 12 provider calls but saves only 309ms of provider
+write time and is 61ms slower end to end. That directly disproves the idea that
+request count is still the dominant limiter in this range. Because 135 rows
+reliably failed, 117 rows is the smaller equally fast setting and therefore the
+accepted default. The 4-MiB byte ceiling remains as deterministic protection
+against future payload-size drift even though no accepted request approached
+it in this corpus.
+
+Generation `2822` is 65.1% faster than generation `2801` end to end and its
+provider-write time is 85.2% lower. That comparison is operational rather than
+a same-tree causal A/B because the corpus and instrumentation evolved. The
+117-versus-126 comparison above is the controlled same-corpus decision.
+
+## Next measured opportunities
+
+### 1. Remove duplicate collection preparation if the runtime path proves it
+
+Both successful final runs spent approximately 41.5 seconds in
+`prepareCollection`. Their logs show the staged collection being created,
+followed by the indexing owner dropping and recreating the same collection for
+force reindex. This is direct evidence of duplicated remote work, but not yet
+proof that the first create is non-gating: it may own the capability check or a
+failure-cleanup invariant.
+
+Trace the create caller, the background-index handoff, the force-reindex
+branch, and the focused lifecycle tests. Accept a change only if one collection
+creation remains, unsupported-creation failures are still detected before
+publication, failed staging cleanup remains deterministic, and all mutation,
+authority, and navigation contracts stay green. Freeze the live performance
+gate before testing: at least 20 seconds lower preparation time and at least
+10% lower total cold-rebuild time on the same corpus, with zero retries and no
+finalization regression above 10 seconds.
+
+### 2. Re-evaluate Voyage packing with explicit token headroom
+
+Voyage is now the largest provider phase at about 100 seconds. The current
+100,000-estimated-token target produces 22 requests under the documented
+120,000-token hard limit. A higher target is justified only after computing the
+full-corpus actual/estimated distribution, freezing headroom for tokenizer and
+corpus drift, and retaining `truncation=false`. A provider limit error must fail
+or split deterministically; it may never silently truncate evidence.
+
+### 3. Do not optimize write-boundary fragmentation in isolation
+
+The 126-row experiment reduced fragmentation overhead from 13 requests to 6
+and total writes from 89 to 77 without improving provider or wall time. That is
+direct evidence that cross-embedding-batch write coalescing has little isolated
+economic value on this workload. Reconsider it only as part of a separately
+measured one-batch embedding/write pipeline, not as a standalone abstraction.
+
+### 4. Keep concurrency and caching behind the sequential work
+
+One-batch overlap could theoretically hide part of the approximately 73-second
+write phase behind the approximately 100-second embedding phase, but it changes
+cancellation, mutation fencing, progress, and error ownership. Broad write
+concurrency is especially risky because the live service has a demonstrated
+request-size failure cliff. Embedding caches remain deferred until repeated
+unchanged cold rebuilds are a measured product workload and cache authority can
+bind content, model, dimension, preprocessing, and generation identities.
+
+Container-chunk removal remains a search-quality experiment, not a throughput
+shortcut. The duplication is measured, but owner and supporting-evidence recall
+must remain green before any evidence is removed.
 
 ## Current disposition
 
@@ -549,8 +622,15 @@ and the measured sequential write bottleneck should be exhausted first.
 | Exclude all docs or all evaluations | Rejected | Executable harness and product docs are useful evidence. |
 | Exclude generated evaluation JSON | Implemented and accepted | Narrow ignore policy reduced indexed noise without deleting evidence files or changing quality. |
 | Keep 25-row Zilliz writes permanently | Superseded | The 100-row run completed with zero retries and materially lower time. |
-| Restore 100-row Zilliz writes | Implemented and accepted | Generation 2801 used 98 writes with zero retries; vector persistence is now measured. |
+| Restore 100-row Zilliz writes | Superseded | Generation 2801 proved the first safe increase; the completed binary search selected 117 rows. |
 | Remove class/container chunks | Hypothesis only | Duplication is measured; quality impact is not. |
-| Write-distribution and boundary metrics | Implemented; focused validation green | The review correctly identified that maxima cannot explain 98 writes or support a controlled larger-batch experiment. The instrumented cold control remains pending. |
-| Larger byte-bounded Zilliz writes | Deferred with measured justification | Write time is dominant, but the instrumented 100-row control and a predeclared byte ceiling are required first. |
-| Add concurrency or caches | Deferred | Sequential byte-bounded batching remains the smaller independent experiment. |
+| Write-distribution and boundary metrics | Implemented and accepted | Generations 2822 and 2823 captured complete row/byte distributions and exact flush reasons without retaining payloads. |
+| 1,000 rows / 8 MiB | Rejected for safety | Generation 2818 failed near 37%; the failed staged collection was removed. |
+| 1,000 rows / 4 MiB | Rejected for safety | A 170-row, 2,652,205-byte request exhausted all attempts, proving bytes alone were not controlling reliability. |
+| 135 rows / 4 MiB | Rejected for safety | A 135-row, 2,104,562-byte request exhausted all attempts. |
+| 117 rows / 4 MiB | Implemented and accepted operationally | Generation 2822 completed in 227.933s with 89 writes, zero retries, complete authority, and unchanged source checkpoint. Final repository validation is pending. |
+| 126 rows / 4 MiB | Rejected economically | It completed safely but was 61ms slower end to end and only 309ms faster in provider writes, while sitting closer to the 135-row failure cliff. |
+| Remove duplicate collection preparation | Next measured implementation candidate | Successful runs spent about 41.5s preparing and visibly created, dropped, and recreated the same staged collection. Runtime ownership must be proven before editing. |
+| Increase Voyage target above 100k estimated tokens | Deferred measurement | Voyage is now the largest provider phase, but token headroom must be frozen before a live candidate. |
+| Coalesce writes across embedding boundaries | Rejected as an isolated optimization | Removing 12 writes at 126 rows produced no material time gain. |
+| Add concurrency or caches | Deferred | Sequential duplicate preparation and provider-token tuning remain smaller independent experiments. |

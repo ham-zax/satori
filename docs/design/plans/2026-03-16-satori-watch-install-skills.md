@@ -159,10 +159,9 @@
 
 **Files:**
 - Create: `packages/mcp/assets/skills/satori/SKILL.md`
-- Read: `examples/pi-extension/satori-bridge/skills/satori-cli/SKILL.md`
 - Read: `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md`
 
-- [ ] **Step 1: Condense the bridge workflow into one focused skill**
+- [ ] **Step 1: Define one focused first-party workflow skill**
   Define one skill with internal sections for semantic search defaults, symbol navigation (`file_outline`, `call_graph`, `read_file`), and index lifecycle/remediation (`manage_index`, `list_codebases`).
 
 - [ ] **Step 2: Keep the skill contract-bound**

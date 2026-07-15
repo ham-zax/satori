@@ -89,5 +89,8 @@ package-lock.json
 # Generated local metrics (regenerate via pnpm benchmark)
 build-benchmark.json
 
+# Private commercial strategy; keep local and out of published repository docs.
+docs/product/SATORI_MONETIZATION_AND_LICENSING_STRATEGY.md
+
 # Local example runtime configs (use config.example.json)
 examples/**/config.json

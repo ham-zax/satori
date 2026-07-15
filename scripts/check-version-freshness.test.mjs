@@ -41,14 +41,13 @@ test('parsePackageVersions returns publishable package versions', () => {
   });
 });
 
-test('checkVersionFreshness scans generated and bridge version references', () => {
+test('checkVersionFreshness scans generated package version references', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-version-freshness-'));
   try {
     for (const dir of [
       'packages/core',
       'packages/mcp/src',
       'packages/cli',
-      'examples/pi-extension/satori-bridge',
     ]) {
       fs.mkdirSync(path.join(cwd, dir), { recursive: true });
     }
@@ -60,22 +59,12 @@ test('checkVersionFreshness scans generated and bridge version references', () =
     fs.writeFileSync(path.join(cwd, 'packages/cli/README.md'), '');
     fs.writeFileSync(path.join(cwd, 'packages/mcp/src/config.ts'), '');
     fs.writeFileSync(path.join(cwd, 'server.json'), '@zokizuan/satori-mcp@4.7.0');
-    fs.writeFileSync(path.join(cwd, 'examples/pi-extension/satori-bridge/index.ts'), '@zokizuan/satori-cli@0.1.0');
-    fs.writeFileSync(path.join(cwd, 'examples/pi-extension/satori-bridge/README.md'), '');
-    fs.writeFileSync(path.join(cwd, 'examples/pi-extension/satori-bridge/config.example.json'), '');
-
     assert.deepEqual(checkVersionFreshness({ cwd }), [
       {
         filePath: 'server.json',
         packageName: '@zokizuan/satori-mcp',
         foundVersion: '4.7.0',
         expectedVersion: '4.8.0',
-      },
-      {
-        filePath: 'examples/pi-extension/satori-bridge/index.ts',
-        packageName: '@zokizuan/satori-cli',
-        foundVersion: '0.1.0',
-        expectedVersion: '0.2.0',
       },
     ]);
   } finally {

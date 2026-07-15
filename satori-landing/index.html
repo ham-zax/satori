@@ -1653,8 +1653,8 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
         <article class="card">
           <h4>Symbol-aware navigation</h4>
           <p>
-            Move from search hits to functions, classes, outlines, and
-            implementation spans.
+            Open symbols and outlines for TypeScript, JavaScript, Python, C++,
+            C#, Go, Java, Rust, and Scala from compatible navigation sidecars.
           </p>
         </article>
         <article class="card">
@@ -1739,7 +1739,10 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
         <div class="steps demo-steps">
           <div class="step">
             <strong>1. Build the map</strong>
-            <p>Create or refresh Satori's indexed view of the project.</p>
+            <p>
+              Start a create or reindex operation, then poll index status until
+              the operation is completed and the repo is searchable.
+            </p>
           </div>
           <div class="step">
             <strong>2. Ask by intent</strong>
@@ -1818,8 +1821,8 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
         Satori is self-hosted today, with Ollama available for local embeddings
         and Milvus-compatible vector storage required for indexing. Next work
         focuses on making setup lighter: embedded vector storage such as Zvec,
-        stronger retrieval quality, broader language coverage, and shared repo
-        context for teams.
+        stronger retrieval quality, broader relationship-backed navigation, and
+        shared repo context for teams.
       </p>
       <div class="section-actions">
         <a class="btn primary" href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer">Follow GitHub</a>

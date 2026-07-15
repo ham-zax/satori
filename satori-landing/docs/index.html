@@ -931,7 +931,10 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               Run
               <code>manage_index action="create" path="/absolute/path/to/repo"</code>.
               Use the repository root for the first index unless you have a
-              specific subdirectory workflow.
+              specific subdirectory workflow. Create returns after accepting
+              the operation; poll <code>manage_index action="status"</code>
+              until its durable operation reaches <code>completed</code>,
+              <code>failed</code>, or <code>blocked</code>.
             </p>
           </div>
           <div class="step">
@@ -995,8 +998,9 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               Use <code>read_file</code> with <code>open_symbol</code> or the
               returned navigation fallback. Use result fallbacks when graph
-              context is unsupported. Reads are bounded and return continuation
-              hints when truncated.
+              context is unsupported. Ordinary file reads use the configured
+              line bound and return continuation hints; an exact symbol request
+              returns the exact span resolved by <code>file_outline</code>.
             </p>
           </div>
         </div>
@@ -1056,11 +1060,11 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               syntax are intentionally skipped.
             </p>
             <p>
-              TypeScript, JavaScript, and Python are the only production-ready
-              <code>call_graph</code> languages. Go and Rust are
-              <code>symbol_only</code>: they can expose outlines through
-              compatible sidecars, but graph traversal returns
-              <code>unsupported_language</code>.
+              TypeScript, JavaScript, and Python provide production-ready
+              <code>CALLS v0</code> navigation. C++, C#, Go, Java, Rust, and
+              Scala are <code>symbol_only</code>: compatible sidecars provide
+              ownership, outlines, and exact symbol opens, while graph traversal
+              returns <code>unsupported_language</code>.
             </p>
           </div>
           <div class="panel">
@@ -1097,7 +1101,9 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <p>
               Creates, syncs, checks status, reindexes, repairs local readiness
               when vector payload and fingerprint proof match, or clears indexes.
-              Status includes health diagnostics when available.
+              Create and reindex return a kickoff response; poll status for the
+              persisted operation phase and terminal result. Status includes
+              health diagnostics when available.
             </p>
           </div>
           <div class="panel">
@@ -1129,8 +1135,9 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
           <div class="panel">
             <h3>read_file</h3>
             <p>
-              Reads plain text or annotated content. Exact symbol opening
-              delegates to outline resolution.
+              Reads bounded plain or annotated file windows. Exact symbol
+              opening delegates to outline resolution and returns the resolved
+              symbol span rather than applying the ordinary file-window cap.
             </p>
           </div>
         </div>
@@ -1183,7 +1190,8 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
             <h3>Status</h3>
             <p>
               <code>manage_index action="status"</code> answers why a repo is
-              or is not usable right now.
+              or is not usable right now. It is also the observation path after
+              create or reindex accepts an asynchronous operation.
             </p>
             <ul>
               <li>Index state and remediation reason.</li>

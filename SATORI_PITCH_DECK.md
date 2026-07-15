@@ -293,13 +293,12 @@ Satori's architecture maps cleanly onto Azure services. Today it runs on Milvus/
 - First-party skills: `satori`, `satori-search`, `satori-navigation`, `satori-indexing` — `packages/mcp/assets/skills/`
 - Comparison eval harness (Satori vs codebase-memory-mcp) — `evals/code-intelligence-vs/`
 - Snapshot v3 lock/merge hardening — `CHANGELOG.md:431,679`
-- Indexing lock, snapshot, bridge, and search-side ignore hardening — current
+- Indexing lock, snapshot, and search-side ignore hardening — current
   contracts are in `ARCHITECTURE.md` and
   `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md`
 - Search query-intent routing and lexical rescue —
   `packages/mcp/src/core/search-query-planning.ts` and
   `packages/mcp/src/core/search-lexical-scoring.ts`
-- PI extension bridge example — `examples/pi-extension/satori-bridge/`
 - Server manifest for installer catalogs — `server.json`
 
 ### In Progress

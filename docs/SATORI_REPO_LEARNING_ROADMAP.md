@@ -130,7 +130,6 @@ CLI owns installation and shell invocation.
 |       |-- src/args.ts
 |       `-- assets/skills/
 |-- tests/integration/
-|-- examples/pi-extension/satori-bridge/
 |-- scripts/
 `-- satori-landing/
 ```

@@ -1307,7 +1307,7 @@
             <div class="tool-list">
               <div class="tool-card">
                 <h3><code>manage_index</code></h3>
-                <p>Creates, syncs, reindexes, checks status, repairs local readiness when proof matches, clears, and handles force-reindex recovery paths.</p>
+                <p>Creates, syncs, reindexes, checks status, repairs local readiness when proof matches, clears, and handles force-reindex recovery paths. Create and reindex return after kickoff; status exposes the durable operation phase through completion.</p>
                 <p class="refusal">Refuses destructive ambiguity: clear is explicit, repair does not invent proof, backend timeouts preserve local state, and mixed live runtime owners block mutation.</p>
               </div>
             </div>
@@ -1485,7 +1485,8 @@
             <p>
               <code
                 >{ embeddingProvider, embeddingModel, embeddingDimension,
-                vectorStoreProvider, schemaVersion
+                vectorStoreProvider, schemaVersion, parserVersion,
+                extractorVersion, relationshipVersion
                 }</code
               >
             </p>
@@ -1537,11 +1538,11 @@
           <article class="card">
             <h3>Language Capabilities</h3>
             <p>
-              TypeScript, JavaScript, and Python are the only production-ready
-              <code>call_graph</code> languages. Go and Rust are
-              <code>symbol_only</code>: compatible registries can power
-              outlines, while graph traversal returns
-              <code>unsupported_language</code>.
+              TypeScript, JavaScript, and Python provide production-ready
+              <code>CALLS v0</code> navigation. C++, C#, Go, Java, Rust, and
+              Scala are <code>symbol_only</code>: compatible registries power
+              ownership, outlines, and exact opens, while graph traversal
+              returns <code>unsupported_language</code>.
             </p>
           </article>
           <article class="card">

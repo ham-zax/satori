@@ -26,6 +26,7 @@ import {
 const PROTOCOL_VERSION = "satori-agent-discovery-v3";
 const DEFAULT_MODEL = "opencode/deepseek-v4-flash-free";
 const DEFAULT_REPETITIONS = 3;
+const PHASE0_ACCEPTANCE_REPETITIONS = 10;
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_CALL_TIMEOUT_MS = 300_000;
@@ -56,9 +57,10 @@ function usage() {
         "",
         "Options:",
         "  --repo <directory>            Clean production worktree to measure; records its exact revision",
+        "  --acceptance-baseline         Enforce the frozen Phase 0 acceptance profile",
         `  --model <provider/model>       Default: ${DEFAULT_MODEL}`,
         "  --task <id>                    Repeat to select tasks; default: all tasks",
-        `  --repetitions <count>           Default: ${DEFAULT_REPETITIONS}`,
+        `  --repetitions <count>           Default: ${DEFAULT_REPETITIONS}; acceptance fixes ${PHASE0_ACCEPTANCE_REPETITIONS}`,
         "  --mode <natural|coverage>       Default: natural",
         "  --prepare <sync|status>         Default: sync; setup is not measured",
         "  --output-dir <directory>        Default: .satori/benchmarks/agent-discovery",
@@ -79,11 +81,16 @@ function positiveInteger(value, label) {
 }
 
 export function parseArgs(argv, environment = process.env) {
+    const acceptanceBaseline = argv.includes("--acceptance-baseline");
     const options = {
         repoRoot: null,
-        model: environment.SATORI_AGENT_DISCOVERY_MODEL ?? DEFAULT_MODEL,
+        model: acceptanceBaseline
+            ? DEFAULT_MODEL
+            : environment.SATORI_AGENT_DISCOVERY_MODEL ?? DEFAULT_MODEL,
         taskIds: [],
-        repetitions: DEFAULT_REPETITIONS,
+        repetitions: acceptanceBaseline
+            ? PHASE0_ACCEPTANCE_REPETITIONS
+            : DEFAULT_REPETITIONS,
         mode: "natural",
         prepare: "sync",
         outputDir: null,
@@ -91,6 +98,7 @@ export function parseArgs(argv, environment = process.env) {
         timeoutMs: DEFAULT_TIMEOUT_MS,
         opencodeCommand: "opencode",
         tasksFile: DEFAULT_TASKS_FILE,
+        acceptanceBaseline,
         dryRun: false,
         help: false,
     };
@@ -106,6 +114,8 @@ export function parseArgs(argv, environment = process.env) {
             continue;
         } else if (argument === "--repo") {
             options.repoRoot = path.resolve(next());
+        } else if (argument === "--acceptance-baseline") {
+            options.acceptanceBaseline = true;
         } else if (argument === "--model") {
             options.model = next();
         } else if (argument === "--task") {
@@ -142,6 +152,33 @@ export function parseArgs(argv, environment = process.env) {
     if (!options.model.includes("/")) {
         throw new Error("--model must use provider/model syntax.");
     }
+    if (options.acceptanceBaseline && !options.help) {
+        const violations = [];
+        if (options.repoRoot === null) violations.push("an explicit --repo");
+        if (options.taskIds.length > 0) violations.push("all frozen tasks (no --task)");
+        if (options.tasksFile !== DEFAULT_TASKS_FILE) {
+            violations.push("the frozen evaluator-tasks.json manifest");
+        }
+        if (options.repetitions !== PHASE0_ACCEPTANCE_REPETITIONS) {
+            violations.push(`exactly ${PHASE0_ACCEPTANCE_REPETITIONS} repetitions`);
+        }
+        if (options.mode !== "natural") violations.push("natural mode");
+        if (options.prepare !== "sync") violations.push("sync preparation");
+        if (options.model !== DEFAULT_MODEL) violations.push(`the frozen model ${DEFAULT_MODEL}`);
+        if (options.variant !== null) violations.push("the default model variant");
+        if (options.timeoutMs !== DEFAULT_TIMEOUT_MS) {
+            violations.push(`the frozen ${DEFAULT_TIMEOUT_MS}ms per-arm timeout`);
+        }
+        if (options.opencodeCommand !== "opencode") {
+            violations.push("the default opencode executable");
+        }
+        if (violations.length > 0) {
+            throw new Error(
+                `--acceptance-baseline requires ${violations.join(", ")}.`,
+            );
+        }
+    }
+    options.runClass = options.acceptanceBaseline ? "phase0_acceptance" : "exploratory";
     return options;
 }
 
@@ -1439,6 +1476,7 @@ async function runOpenCodeArm({
         repetition: scheduleEntry.repetition,
         taskId: task.id,
         arm,
+        runClass: options.runClass,
         mode: options.mode,
         environment: {
             ...immutableEnvironment,
@@ -1553,6 +1591,43 @@ export function summarizeRuns(runs) {
     ]));
 }
 
+const INVALID_MEASUREMENT_REASON_PREFIXES = Object.freeze([
+    "harness_error:",
+    "missing_tool_definitions:",
+    "model_mismatch:",
+    "session_reused:",
+]);
+
+export function assessMeasurementValidity(runs, expectedRunCount) {
+    const failureReasons = [];
+    if (runs.length !== expectedRunCount) {
+        failureReasons.push(`run_count:${runs.length}/${expectedRunCount}`);
+    }
+    for (const run of runs) {
+        const runLabel = `${run.taskId}:${run.repetition}:${run.arm}`;
+        if (typeof run.harness?.sessionId !== "string" || run.harness.sessionId.length === 0) {
+            failureReasons.push(`missing_session:${runLabel}`);
+        }
+        const expectedSourceStatus = run.arm === "satori" ? "measured" : "unavailable";
+        if (run.harness?.sourceMeasurement?.status !== expectedSourceStatus) {
+            failureReasons.push(`source_measurement:${runLabel}`);
+        }
+        for (const reason of run.grade?.failureReasons ?? []) {
+            if (INVALID_MEASUREMENT_REASON_PREFIXES.some((prefix) => reason.startsWith(prefix))) {
+                failureReasons.push(`${runLabel}:${reason}`);
+            }
+        }
+    }
+    const uniqueFailureReasons = [...new Set(failureReasons)];
+    return {
+        status: uniqueFailureReasons.length === 0 ? "valid" : "invalid",
+        valid: uniqueFailureReasons.length === 0,
+        expectedRunCount,
+        observedRunCount: runs.length,
+        failureReasons: uniqueFailureReasons,
+    };
+}
+
 function displayMetric(stats, digits = 0) {
     if (!stats || stats.median === null) return "n/a";
     const render = (value) => Number(value).toFixed(digits);
@@ -1581,6 +1656,7 @@ export function formatMarkdownReport(summary, metadata) {
         `- Revision: \`${metadata.gitRevision}\``,
         `- OpenCode: \`${metadata.openCodeVersion}\``,
         `- Model: \`${metadata.model}\``,
+        `- Run class: \`${metadata.runClass}\``,
         `- Mode: \`${metadata.mode}\``,
         `- Repetitions: ${metadata.repetitions} per task and arm`,
         "- Values are median [range]. Timing is milliseconds; bytes are UTF-8 bytes.",
@@ -1778,6 +1854,7 @@ export async function main(argv = process.argv.slice(2)) {
     const { gitRevision } = repositoryIdentity;
     const dryRun = {
         protocolVersion: PROTOCOL_VERSION,
+        runClass: options.runClass,
         repoRoot: options.repoRoot,
         repositoryIdentity,
         model: options.model,
@@ -1898,6 +1975,7 @@ export async function main(argv = process.argv.slice(2)) {
                     repetition: entry.repetition,
                     taskId: task.id,
                     arm: entry.arm,
+                    runClass: options.runClass,
                     mode: options.mode,
                     environment: immutableEnvironment,
                     model: null,
@@ -1924,6 +2002,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
 
     rejectReusedSessions(runs);
+    const measurementValidity = assessMeasurementValidity(runs, schedule.length);
 
     await requireCleanWorktree(options.repoRoot);
     const finalRepositoryIdentity = await getRepositoryIdentity(options.repoRoot);
@@ -1953,6 +2032,7 @@ export async function main(argv = process.argv.slice(2)) {
         gitRevision,
         openCodeVersion,
         model: options.model,
+        runClass: options.runClass,
         mode: options.mode,
         repetitions: options.repetitions,
     };
@@ -1961,6 +2041,7 @@ export async function main(argv = process.argv.slice(2)) {
         protocolVersion: PROTOCOL_VERSION,
         ...reportMetadata,
         generatedAt: new Date().toISOString(),
+        measurementValidity,
         summary,
         runs,
     };
@@ -1970,7 +2051,9 @@ export async function main(argv = process.argv.slice(2)) {
     );
     fs.writeFileSync(path.join(outputDir, "summary.md"), report);
     process.stdout.write(`\n${report}\nArtifacts: ${outputDir}\n`);
-    const exitCode = runs.every((run) => run.grade.passed) ? 0 : 1;
+    const exitCode = options.acceptanceBaseline
+        ? (measurementValidity.valid ? 0 : 1)
+        : (runs.every((run) => run.grade.passed) ? 0 : 1);
     return { exitCode, outputDir, aggregate };
 }
 

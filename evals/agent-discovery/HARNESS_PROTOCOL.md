@@ -33,7 +33,10 @@ the model never reads evaluator instructions as a measured tool step.
    zero is unavailable. Record the actual setting.
 9. Count tool schemas and all repeated conversation context in API input-token
    usage. This is part of the real agent overhead.
-10. Run at least three paired repetitions. Alternate order:
+10. Exploratory runs use at least three paired repetitions. The Phase 0
+    acceptance run uses exactly ten paired repetitions per task and arm through
+    `pnpm eval:agent-discovery:baseline -- --repo <clean-worktree>`. Alternate
+    arm order for every configured repetition:
 
    ```text
    repetition 1: native, satori
@@ -48,8 +51,9 @@ the model never reads evaluator instructions as a measured tool step.
     Canonicalize the allowed arm definitions and record their SHA-256 and UTF-8
     byte count. A difference in tool-schema input is part of the measured arm
     overhead.
-13. Report median and range for three samples. Do not report percentile claims
-    from three samples.
+13. Report median and range for the configured sample count. Do not report
+    percentile claims from agent runs; the separate controlled-local latency
+    protocol requires at least 30 recorded samples for percentile reporting.
 14. Enforce a 24-tool runaway safety ceiling in the guard and configure OpenCode
     for 26 model steps. OpenCode turns the configured terminal step into a
     max-steps response, so the two-step reserve provides one ordinary post-tool

@@ -8,6 +8,7 @@ import {
     materializeFixture,
     validatePhase0Contract,
 } from "./bounded-symbol-context-corpus.mjs";
+import { parseArgs as parseAgentDiscoveryArgs } from "./run-opencode.mjs";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CONTRACT_FILE = path.join(TEST_DIR, "bounded-symbol-context-phase-0.json");
@@ -79,6 +80,22 @@ test("Phase 0 records historical identity separately from the pending instrument
         false,
     );
     assert.equal(baseline.instrumentedMeasurementBaseline.intendedComparisonBaseline, true);
+});
+
+test("Phase 0 acceptance runner enforces the frozen paired-agent sample count", () => {
+    const contract = loadPhase0Contract(CONTRACT_FILE);
+    const options = parseAgentDiscoveryArgs([
+        "--acceptance-baseline",
+        "--repo",
+        "/repo",
+    ]);
+
+    assert.equal(
+        options.repetitions,
+        contract.evaluation.pairedAgent.minimumRunsPerTaskAndArm,
+    );
+    assert.equal(options.runClass, "phase0_acceptance");
+    assert.equal(options.mode, "natural");
 });
 
 test("large fixtures preserve beginning, middle, end, repeated-branch, and Python evidence", () => {

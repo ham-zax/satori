@@ -1041,6 +1041,18 @@ does not require V2 transport, streaming inspection, continuation, or
 composed-response behavior to exist or pass. Latency and portable source-I/O
 comparisons use `instrumentedMeasurementBaseline`, never the pristine identity.
 
+The executable agent harness has two explicit run classes. The ordinary
+`eval:agent-discovery` command is exploratory and defaults to three paired
+repetitions. Phase 0 acceptance uses
+`pnpm eval:agent-discovery:baseline -- --repo <clean-worktree>`, which enforces
+all frozen tasks, natural mode, the pinned model and runtime settings, and
+exactly ten paired repetitions per task and arm. A smaller or overridden run
+cannot be accepted as the instrumented measurement baseline. Agent answer
+failures remain baseline observations; acceptance validity is determined by
+complete scheduling, immutable repository/runtime identity, valid ledgers and
+tool definitions, unique sessions, and instrumentation invariance rather than
+discarding incorrect attempts.
+
 #### Frozen acceptance specifications
 
 Record the following as non-executable contract vectors, pending tests, or

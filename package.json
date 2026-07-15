@@ -35,6 +35,7 @@
     "eval:useful-context:fixtures": "node scripts/satori-useful-context-fixture-record.mjs",
     "eval:search-quality": "pnpm --filter @zokizuan/satori-mcp exec tsx ../../evals/search-quality/run.ts",
     "eval:agent-discovery": "node --no-warnings evals/agent-discovery/run-opencode.mjs",
+    "eval:agent-discovery:baseline": "node --no-warnings evals/agent-discovery/run-opencode.mjs --acceptance-baseline",
     "benchmark": "node scripts/build-benchmark.js",
     "vs:code-intelligence": "node scripts/code-intelligence-vs.mjs"
   },

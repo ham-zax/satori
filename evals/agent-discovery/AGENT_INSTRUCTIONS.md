@@ -29,19 +29,33 @@ From the Satori repository root:
 pnpm eval:agent-discovery
 ```
 
-That command automatically runs every versioned task in both arms, with three
-fresh paired repetitions and alternating arm order. The pinned default model is
-`opencode/deepseek-v4-flash-free`. Override it without an interactive exchange:
+That exploratory command automatically runs every versioned task in both arms,
+with three fresh paired repetitions and alternating arm order. The pinned
+default model is `opencode/deepseek-v4-flash-free`. Override it without an
+interactive exchange:
 
 ```bash
 pnpm eval:agent-discovery -- --model provider/model
 ```
+
+The authoritative Phase 0 baseline has a separate enforced command:
+
+```bash
+pnpm eval:agent-discovery:baseline -- --repo /absolute/clean/worktree
+```
+
+It runs every frozen task in natural mode with exactly ten paired repetitions
+per task and arm. It rejects task selection, smaller sample counts, alternate
+models, coverage mode, non-default variants, and uncommitted worktrees.
 
 Useful controls:
 
 ```bash
 # Validate the corpus, current source spans, and run schedule without model calls
 pnpm eval:agent-discovery -- --dry-run
+
+# Validate the enforced 40-session Phase 0 acceptance schedule
+pnpm eval:agent-discovery:baseline -- --repo /absolute/clean/worktree --dry-run
 
 # Force the Satori search -> exact open -> outline -> graph coverage sequence
 pnpm eval:agent-discovery -- --mode coverage
@@ -80,7 +94,8 @@ result.
 
 ## Isolation and arm order
 
-Each task uses this order:
+Each task alternates order for the configured number of repetitions. The first
+three are:
 
 ```text
 repetition 1: native, satori

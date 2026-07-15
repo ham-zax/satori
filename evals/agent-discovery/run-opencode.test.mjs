@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
     aggregateSessionData,
+    assessMeasurementValidity,
     buildAgentPrompt,
     buildIsolatedOpenCodeConfig,
     buildOpenCodeRunArguments,
@@ -61,6 +62,48 @@ test("OpenCode runner defaults to automatic all-task paired execution", () => {
     assert.equal(options.repetitions, 3);
     assert.equal(options.mode, "natural");
     assert.equal(options.prepare, "sync");
+    assert.equal(options.runClass, "exploratory");
+});
+
+test("Phase 0 acceptance baseline enforces the frozen run profile", () => {
+    const options = parseArgs(
+        ["--acceptance-baseline", "--repo", "/repo"],
+        { SATORI_AGENT_DISCOVERY_MODEL: "other/model" },
+    );
+
+    assert.equal(options.repoRoot, "/repo");
+    assert.equal(options.model, "opencode/deepseek-v4-flash-free");
+    assert.deepEqual(options.taskIds, []);
+    assert.equal(options.repetitions, 10);
+    assert.equal(options.mode, "natural");
+    assert.equal(options.prepare, "sync");
+    assert.equal(options.runClass, "phase0_acceptance");
+});
+
+test("Phase 0 acceptance baseline rejects incomplete or overridden profiles", () => {
+    const incompatibleArguments = [
+        ["--acceptance-baseline"],
+        ["--acceptance-baseline", "--repo", "/repo", "--task", "known-exact-target"],
+        ["--acceptance-baseline", "--repo", "/repo", "--repetitions", "9"],
+        ["--acceptance-baseline", "--repo", "/repo", "--mode", "coverage"],
+        ["--acceptance-baseline", "--repo", "/repo", "--prepare", "status"],
+        ["--acceptance-baseline", "--repo", "/repo", "--model", "other/model"],
+        ["--acceptance-baseline", "--repo", "/repo", "--tasks-file", "/tmp/tasks.json"],
+        ["--acceptance-baseline", "--repo", "/repo", "--variant", "high"],
+        ["--acceptance-baseline", "--repo", "/repo", "--timeout-ms", "1"],
+        ["--acceptance-baseline", "--repo", "/repo", "--opencode", "/tmp/opencode"],
+    ];
+
+    for (const arguments_ of incompatibleArguments) {
+        assert.throws(() => parseArgs(arguments_), /--acceptance-baseline requires/);
+    }
+});
+
+test("Phase 0 acceptance command exposes help without requiring a repository", () => {
+    const options = parseArgs(["--acceptance-baseline", "--help"]);
+
+    assert.equal(options.help, true);
+    assert.equal(options.runClass, "phase0_acceptance");
 });
 
 test("argument parsing accepts pnpm's option separator", () => {
@@ -68,6 +111,37 @@ test("argument parsing accepts pnpm's option separator", () => {
 
     assert.equal(options.mode, "coverage");
     assert.equal(options.repetitions, 1);
+});
+
+test("acceptance measurement validity separates harness integrity from agent correctness", () => {
+    const run = (arm, overrides = {}) => ({
+        taskId: "task",
+        repetition: 1,
+        arm,
+        grade: { passed: false, failureReasons: ["incorrect_ownerSymbol"] },
+        harness: {
+            sessionId: `${arm}-session`,
+            sourceMeasurement: { status: arm === "satori" ? "measured" : "unavailable" },
+        },
+        ...overrides,
+    });
+    const valid = assessMeasurementValidity([run("native"), run("satori")], 2);
+
+    assert.equal(valid.valid, true);
+    assert.equal(valid.status, "valid");
+    assert.deepEqual(valid.failureReasons, []);
+
+    const invalid = assessMeasurementValidity([
+        run("native"),
+        run("satori", {
+            grade: { passed: false, failureReasons: ["model_mismatch:other/model"] },
+            harness: { sessionId: null, sourceMeasurement: { status: "unavailable" } },
+        }),
+    ], 2);
+    assert.equal(invalid.valid, false);
+    assert.match(invalid.failureReasons.join("\n"), /missing_session/);
+    assert.match(invalid.failureReasons.join("\n"), /source_measurement/);
+    assert.match(invalid.failureReasons.join("\n"), /model_mismatch/);
 });
 
 test("run schedule alternates arm order in fresh paired repetitions", () => {
@@ -779,6 +853,7 @@ test("reporting separates retrieval, evidence route, and final agent cost", () =
         gitRevision: "abc",
         openCodeVersion: "1.17.20",
         model: "opencode/model",
+        runClass: "exploratory",
         mode: "natural",
         repetitions: 2,
     });

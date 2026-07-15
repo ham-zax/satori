@@ -985,6 +985,9 @@ export function aggregateSessionData({
         evidenceOrdinals.push(evidence?.index ?? null);
     }
     const completeEvidence = evidenceOrdinals.every(Number.isSafeInteger);
+    const stepsToVerifiedAnswer = completeEvidence
+        ? Math.max(...evidenceOrdinals)
+        : null;
     const modelDurations = assistantMessages.map((message) => {
         const started = message.data.time?.created ?? message.time_created;
         const ended = message.data.time?.completed ?? message.time_updated;
@@ -1093,8 +1096,11 @@ export function aggregateSessionData({
             toolCalls: tools.length,
             stepsToFirstCorrectTarget: firstTarget?.index ?? null,
             stepsToFirstOwnerSource: firstOwnerSource?.index ?? null,
-            stepsToVerifiedAnswer: completeEvidence
-                ? Math.max(...evidenceOrdinals)
+            stepsToVerifiedAnswer,
+            // Final cost must retain overinvestigation, while the evidence route
+            // identifies how many calls happened after the answer was provable.
+            investigationTailToolCalls: Number.isSafeInteger(stepsToVerifiedAnswer)
+                ? tools.length - stepsToVerifiedAnswer
                 : null,
             finalResponseBytes: byteLength(finalResponse),
         },
@@ -1496,7 +1502,19 @@ export function observationalStats(runs, field) {
     };
 }
 
-const REPORT_METRICS = Object.freeze([
+const RETRIEVAL_REPORT_METRICS = Object.freeze([
+    "timeToFirstCorrectTargetMs",
+    "timeToFirstOwnerSourceMs",
+    "stepsToFirstCorrectTarget",
+    "stepsToFirstOwnerSource",
+]);
+
+const EVIDENCE_REPORT_METRICS = Object.freeze([
+    "stepsToVerifiedAnswer",
+    "investigationTailToolCalls",
+]);
+
+const AGENT_COST_REPORT_METRICS = Object.freeze([
     "taskWallTimeMs",
     "toolLatencyMs",
     "apiInputTokens",
@@ -1506,7 +1524,12 @@ const REPORT_METRICS = Object.freeze([
     "visibleToolResultBytes",
     "toolCalls",
     "modelTurns",
-    "stepsToVerifiedAnswer",
+]);
+
+const REPORT_METRICS = Object.freeze([
+    ...RETRIEVAL_REPORT_METRICS,
+    ...EVIDENCE_REPORT_METRICS,
+    ...AGENT_COST_REPORT_METRICS,
 ]);
 
 export function summarizeRuns(runs) {
@@ -1536,6 +1559,10 @@ function displayMetric(stats, digits = 0) {
     return `${render(stats.median)} [${render(stats.min)}-${render(stats.max)}]`;
 }
 
+function displayObservationRate(stats, total) {
+    return `${stats?.samples ?? 0}/${total}`;
+}
+
 function signedDelta(satori, native) {
     if (satori?.median === null || native?.median === null) return "n/a";
     const delta = satori.median - native.median;
@@ -1558,9 +1585,66 @@ export function formatMarkdownReport(summary, metadata) {
         `- Repetitions: ${metadata.repetitions} per task and arm`,
         "- Values are median [range]. Timing is milliseconds; bytes are UTF-8 bytes.",
         "",
-        "| Task | Arm | Correct | Wall ms | Tool ms | Input tokens | Output tokens | Tool calls | Steps to verified answer | Visible tool bytes |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "## 1. Retrieval quality - all attempts",
+        "",
+        "A milestone is counted from visible tool evidence even when the final answer is wrong. Observed counts expose missed milestones instead of silently dropping them from the median.",
+        "",
+        "| Task | Arm | Correct | Target observed | First target ms | Target call | Source observed | First source ms | Source call |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ];
+    for (const [taskId, task] of Object.entries(summary)) {
+        for (const arm of ["native", "satori"]) {
+            const entry = task[arm];
+            lines.push([
+                `| ${taskId}`,
+                arm,
+                `${entry.passed}/${entry.total}`,
+                displayObservationRate(
+                    entry.allMetrics.stepsToFirstCorrectTarget,
+                    entry.total,
+                ),
+                displayMetric(entry.allMetrics.timeToFirstCorrectTargetMs),
+                displayMetric(entry.allMetrics.stepsToFirstCorrectTarget),
+                displayObservationRate(
+                    entry.allMetrics.stepsToFirstOwnerSource,
+                    entry.total,
+                ),
+                displayMetric(entry.allMetrics.timeToFirstOwnerSourceMs),
+                `${displayMetric(entry.allMetrics.stepsToFirstOwnerSource)} |`,
+            ].join(" | "));
+        }
+    }
+    lines.push(
+        "",
+        "## 2. Evidence route - all attempts",
+        "",
+        "The verified-answer call is the last tool call needed to establish the owner source and every required relationship. Investigation tail counts later calls; it is `n/a` when mandatory evidence never became complete.",
+        "",
+        "| Task | Arm | Correct | Evidence complete | Verified-answer call | Investigation-tail calls |",
+        "|---|---:|---:|---:|---:|---:|",
+    );
+    for (const [taskId, task] of Object.entries(summary)) {
+        for (const arm of ["native", "satori"]) {
+            const entry = task[arm];
+            lines.push([
+                `| ${taskId}`,
+                arm,
+                `${entry.passed}/${entry.total}`,
+                displayObservationRate(entry.allMetrics.stepsToVerifiedAnswer, entry.total),
+                displayMetric(entry.allMetrics.stepsToVerifiedAnswer),
+                `${displayMetric(entry.allMetrics.investigationTailToolCalls)} |`,
+            ].join(" | "));
+        }
+    }
+    lines.push(
+        "",
+        "## 3. Full autonomous-agent cost - correct runs only",
+        "",
+        "Final session totals include any investigation tail. Only correct runs contribute to this paired performance comparison.",
+        "",
+        "| Task | Arm | Correct | Wall ms | Tool ms | Input tokens | Output tokens | Reasoning tokens | Cached input tokens | Tool calls | Model turns | Visible tool bytes |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    );
     for (const [taskId, task] of Object.entries(summary)) {
         for (const arm of ["native", "satori"]) {
             const entry = task[arm];
@@ -1572,13 +1656,15 @@ export function formatMarkdownReport(summary, metadata) {
                 displayMetric(entry.metrics.toolLatencyMs),
                 displayMetric(entry.metrics.apiInputTokens),
                 displayMetric(entry.metrics.apiOutputTokens),
+                displayMetric(entry.metrics.reasoningTokens),
+                displayMetric(entry.metrics.cachedInputTokens),
                 displayMetric(entry.metrics.toolCalls),
-                displayMetric(entry.metrics.stepsToVerifiedAnswer),
+                displayMetric(entry.metrics.modelTurns),
                 `${displayMetric(entry.metrics.visibleToolResultBytes)} |`,
             ].join(" | "));
         }
     }
-    lines.push("", "## Satori minus native median", "");
+    lines.push("", "### Correct-run Satori minus native median", "");
     lines.push("| Task | Wall ms | Input tokens | Tool calls | Visible tool bytes |", "|---|---:|---:|---:|---:|");
     for (const [taskId, task] of Object.entries(summary)) {
         lines.push([
@@ -1590,8 +1676,6 @@ export function formatMarkdownReport(summary, metadata) {
         ].join(" | "));
     }
     lines.push(
-        "",
-        "Only correct runs contribute to the comparison above.",
         "",
         "## Raw cost of all attempts",
         "",

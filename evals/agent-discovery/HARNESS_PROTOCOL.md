@@ -101,7 +101,23 @@ Capture these values from actual events; model claims are not authoritative:
 - `stepsToFirstOwnerSource`: 1-based tool-call ordinal for the first owner body.
 - `stepsToVerifiedAnswer`: last tool-call ordinal required to establish all
   mandatory evidence.
+- `investigationTailToolCalls`: final tool-call count minus
+  `stepsToVerifiedAnswer`; use `null` when mandatory evidence never became
+  complete.
 - `finalResponseBytes`: UTF-8 bytes in the final model response.
+
+The Markdown report keeps three measurement layers separate:
+
+1. Retrieval quality uses first-target and first-source milestones from all
+   attempts, including runs whose final answer was wrong. It reports milestone
+   observation counts so missing retrieval is not hidden by nullable medians.
+2. Evidence route reports when mandatory evidence became complete and how many
+   later tool calls formed the investigation tail. A missing completion is
+   `null`, not zero.
+3. Full autonomous-agent cost uses final wall time, provider tokens, tool calls,
+   model turns, and visible bytes. Correct-run totals support paired performance
+   comparison; all-attempt totals retain the cost of failed runs. Final totals
+   always include the investigation tail.
 
 Source acquisition and downstream processing use a separate JSONL ledger. A
 Satori tool operation owns each source observation, and every actual acquisition
@@ -244,6 +260,7 @@ portable result exchanged between harnesses:
     "stepsToFirstCorrectTarget": 0,
     "stepsToFirstOwnerSource": 0,
     "stepsToVerifiedAnswer": 0,
+    "investigationTailToolCalls": 0,
     "finalResponseBytes": 0,
     "sourceIo": null,
     "sourceWorkload": null,

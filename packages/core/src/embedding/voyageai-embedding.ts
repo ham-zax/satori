@@ -1,5 +1,41 @@
-import { VoyageAIClient } from 'voyageai';
-import { Embedding, EmbeddingVector } from './base-embedding';
+import {
+    VoyageAIClient,
+    VoyageAIError,
+    VoyageAITimeoutError,
+} from 'voyageai';
+import {
+    Embedding,
+    type EmbeddingBatchPolicy,
+    type EmbeddingOperationMetricsSnapshot,
+    type EmbeddingVector,
+} from './base-embedding';
+
+const VOYAGE_CODE_3_MAX_BATCH_ITEMS = 1_000;
+const VOYAGE_CODE_3_HARD_BATCH_TOKENS = 120_000;
+const VOYAGE_CODE_3_TARGET_ESTIMATED_TOKENS = 100_000;
+const VOYAGE_INDEXING_REQUEST_TIMEOUT_SECONDS = 180;
+const VOYAGE_REQUEST_MAX_ATTEMPTS = 3;
+const VOYAGE_RETRY_BASE_DELAY_MS = 1_000;
+
+function isRetryableVoyageError(error: unknown): boolean {
+    if (error instanceof VoyageAITimeoutError) return true;
+    if (error instanceof VoyageAIError) {
+        const statusCode = error.statusCode;
+        if (statusCode === 408 || statusCode === 429 || (statusCode !== undefined && statusCode >= 500)) {
+            return true;
+        }
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return /ECONNRESET|ETIMEDOUT|fetch failed|network|socket|connection/i.test(message);
+}
+
+function isExplicitVoyageBatchLimitError(error: unknown): boolean {
+    if (error instanceof VoyageAIError) {
+        if (![400, 413, 422].includes(error.statusCode ?? 0)) return false;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return /too many|maximum.*(?:input|text|token)|token.*limit|input.*limit|request.*large/i.test(message);
+}
 
 export type VoyageOutputDimension = 256 | 512 | 1024 | 2048;
 export type VoyageOutputDtype = 'float' | 'int8' | 'uint8' | 'binary' | 'ubinary';
@@ -17,6 +53,14 @@ export class VoyageAIEmbedding extends Embedding {
     private dimension: number = 1024; // Default dimension for voyage-4 series
     private inputType: 'document' | 'query' = 'document';
     protected maxTokens: number = 32000; // Default max tokens
+    private operationMetrics: EmbeddingOperationMetricsSnapshot = {
+        providerRequestCount: 0,
+        retryCount: 0,
+        submittedItems: 0,
+        submittedBytes: 0,
+        providerTokens: 0,
+        durationMs: 0,
+    };
 
     constructor(config: VoyageAIEmbeddingConfig) {
         super();
@@ -78,52 +122,125 @@ export class VoyageAIEmbedding extends Embedding {
     }
 
     async embed(text: string): Promise<EmbeddingVector> {
-        const processedText = this.preprocessText(text);
-        const model = this.config.model || 'voyage-4';
-
-        const response = await this.client.embed({
-            input: processedText,
-            model: model,
-            inputType: this.inputType,
-            ...(this.config.outputDimension && { outputDimension: this.config.outputDimension }),
-            ...(this.config.outputDtype && { outputDtype: this.config.outputDtype }),
-        });
-
-        if (!response.data || !response.data[0] || !response.data[0].embedding) {
+        const [embedding] = await this.embedBatch([text]);
+        if (!embedding) {
             throw new Error('VoyageAI API returned invalid response');
         }
-
-        return {
-            vector: response.data[0].embedding,
-            dimension: this.dimension
-        };
+        return embedding;
     }
 
     async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
         const processedTexts = this.preprocessTexts(texts);
-        const model = this.config.model || 'voyage-4';
+        if (processedTexts.length === 0) return [];
 
-        const response = await this.client.embed({
-            input: processedTexts,
-            model: model,
-            inputType: this.inputType,
-            ...(this.config.outputDimension && { outputDimension: this.config.outputDimension }),
-            ...(this.config.outputDtype && { outputDtype: this.config.outputDtype }),
-        });
-
-        if (!response.data) {
-            throw new Error('VoyageAI API returned invalid response');
+        const policy = this.getBatchPolicy();
+        if (policy && processedTexts.length > policy.hardMaxItems) {
+            const embeddings: EmbeddingVector[] = [];
+            for (let offset = 0; offset < processedTexts.length; offset += policy.hardMaxItems) {
+                embeddings.push(...await this.embedProcessedBatch(
+                    processedTexts.slice(offset, offset + policy.hardMaxItems),
+                ));
+            }
+            return embeddings;
         }
 
-        return response.data.map((item) => {
-            if (!item.embedding) {
-                throw new Error('VoyageAI API returned invalid embedding data');
+        return this.embedProcessedBatch(processedTexts);
+    }
+
+    private async embedProcessedBatch(processedTexts: string[]): Promise<EmbeddingVector[]> {
+        try {
+            const response = await this.requestEmbeddingBatch(processedTexts);
+
+            if (!response.data || response.data.length !== processedTexts.length) {
+                throw new Error(
+                    `VoyageAI API returned ${response.data?.length ?? 'no'} embeddings for ${processedTexts.length} inputs`,
+                );
             }
-            return {
-                vector: item.embedding,
-                dimension: this.dimension
+
+            return response.data.map((item) => {
+                if (!item.embedding) {
+                    throw new Error('VoyageAI API returned invalid embedding data');
+                }
+                return {
+                    vector: item.embedding,
+                    dimension: this.dimension,
+                };
+            });
+        } catch (error) {
+            if (!isExplicitVoyageBatchLimitError(error) || processedTexts.length <= 1) {
+                throw error;
+            }
+
+            // A provider tokenizer or model limit can drift independently of our
+            // estimate. Split in stable input order instead of enabling silent
+            // truncation and weakening the resulting index.
+            const midpoint = Math.ceil(processedTexts.length / 2);
+            const left = await this.embedProcessedBatch(processedTexts.slice(0, midpoint));
+            const right = await this.embedProcessedBatch(processedTexts.slice(midpoint));
+            return [...left, ...right];
+        }
+    }
+
+    private async requestEmbeddingBatch(processedTexts: string[]) {
+        const model = this.config.model || 'voyage-4';
+        const submittedBytes = processedTexts.reduce(
+            (total, text) => total + Buffer.byteLength(text, 'utf8'),
+            0,
+        );
+        let lastError: unknown;
+
+        for (let attempt = 1; attempt <= VOYAGE_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+            const startedAt = Date.now();
+            this.operationMetrics = {
+                ...this.operationMetrics,
+                providerRequestCount: this.operationMetrics.providerRequestCount + 1,
+                submittedItems: this.operationMetrics.submittedItems + processedTexts.length,
+                submittedBytes: this.operationMetrics.submittedBytes + submittedBytes,
             };
-        });
+            try {
+                // Disable SDK retries so every provider attempt is visible in
+                // operation metrics. Application retries below preserve the same
+                // bounded retry count while making timeout and cost evidence exact.
+                const response = await this.client.embed({
+                    input: processedTexts,
+                    model,
+                    inputType: this.inputType,
+                    truncation: false,
+                    ...(this.config.outputDimension && { outputDimension: this.config.outputDimension }),
+                    ...(this.config.outputDtype && { outputDtype: this.config.outputDtype }),
+                }, {
+                    timeoutInSeconds: VOYAGE_INDEXING_REQUEST_TIMEOUT_SECONDS,
+                    maxRetries: 0,
+                });
+                this.operationMetrics = {
+                    ...this.operationMetrics,
+                    providerTokens: this.operationMetrics.providerTokens + (response.usage?.totalTokens ?? 0),
+                };
+                return response;
+            } catch (error) {
+                lastError = error;
+                if (!isRetryableVoyageError(error) || attempt === VOYAGE_REQUEST_MAX_ATTEMPTS) {
+                    throw error;
+                }
+                this.operationMetrics = {
+                    ...this.operationMetrics,
+                    retryCount: this.operationMetrics.retryCount + 1,
+                };
+                console.warn(`[VoyageAI] Retrying embedding request (${attempt}/${VOYAGE_REQUEST_MAX_ATTEMPTS - 1}).`);
+                await this.waitBeforeRetry(attempt);
+            } finally {
+                this.operationMetrics = {
+                    ...this.operationMetrics,
+                    durationMs: this.operationMetrics.durationMs + (Date.now() - startedAt),
+                };
+            }
+        }
+
+        throw lastError;
+    }
+
+    protected async waitBeforeRetry(attempt: number): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, VOYAGE_RETRY_BASE_DELAY_MS * attempt));
     }
 
     getDimension(): number {
@@ -132,6 +249,20 @@ export class VoyageAIEmbedding extends Embedding {
 
     getProvider(): string {
         return 'VoyageAI';
+    }
+
+    getBatchPolicy(): EmbeddingBatchPolicy | null {
+        if ((this.config.model || 'voyage-4') !== 'voyage-code-3') return null;
+        return {
+            preferredMaxItems: VOYAGE_CODE_3_MAX_BATCH_ITEMS,
+            hardMaxItems: VOYAGE_CODE_3_MAX_BATCH_ITEMS,
+            targetEstimatedTokens: VOYAGE_CODE_3_TARGET_ESTIMATED_TOKENS,
+            hardTokenLimit: VOYAGE_CODE_3_HARD_BATCH_TOKENS,
+        };
+    }
+
+    getOperationMetricsSnapshot(): EmbeddingOperationMetricsSnapshot {
+        return { ...this.operationMetrics };
     }
 
     /**
@@ -291,4 +422,4 @@ export class VoyageAIEmbedding extends Embedding {
             }
         };
     }
-} 
+}

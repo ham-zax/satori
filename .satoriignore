@@ -1,0 +1,4 @@
+# Generated evaluation evidence is retained in git but should not consume
+# embedding or search-result budget. Keep executable harness sources indexed.
+docs/release/artifacts/*.json
+evals/agent-discovery/bounded-symbol-context-phase-0.json

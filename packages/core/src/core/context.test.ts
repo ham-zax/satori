@@ -13,7 +13,7 @@ import { clearSymbolRegistrySidecar, readRelationshipSidecar, readSymbolRegistry
 import { resolveNavigationSidecarRoot } from '../symbols/sidecar';
 import type { SymbolRecord, SymbolRegistryManifestFile } from '../symbols';
 import { Embedding } from '../embedding';
-import type { EmbeddingVector } from '../embedding';
+import type { EmbeddingBatchPolicy, EmbeddingVector } from '../embedding';
 import {
     createLanguageAnalysisService,
     LANGUAGE_PARSER_VERSION,
@@ -953,6 +953,64 @@ test('Context bounds invalid and oversized embedding batch sizes', async () => {
 
             assert.deepEqual(observedBatchSizes, testCase.expected, testCase.raw);
         }
+    } finally {
+        if (previousBatchSize === undefined) delete process.env.EMBEDDING_BATCH_SIZE;
+        else process.env.EMBEDDING_BATCH_SIZE = previousBatchSize;
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context packs provider-owned embedding batches by deterministic token estimate', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-token-batch-'));
+    const sourcePath = path.join(tempRoot, 'many.ts');
+    const previousBatchSize = process.env.EMBEDDING_BATCH_SIZE;
+    const observedBatchSizes: number[] = [];
+    class TokenAwareEmbedding extends TestEmbedding {
+        getBatchPolicy(): EmbeddingBatchPolicy {
+            return {
+                preferredMaxItems: 1_000,
+                hardMaxItems: 1_000,
+                targetEstimatedTokens: 10,
+                hardTokenLimit: 12,
+            };
+        }
+
+        async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
+            observedBatchSizes.push(texts.length);
+            return super.embedBatch(texts);
+        }
+    }
+    const analyzer: LanguageAnalysisPort = {
+        analyze: async () => ({
+            chunks: Array.from({ length: 5 }, (_, index) => ({
+                content: `${index}`.padEnd(16, 'x'),
+                metadata: { startLine: 1, endLine: 1, language: 'typescript', filePath: 'many.ts' },
+            })),
+            symbols: [],
+            moduleBindings: [],
+            callSites: [],
+            backend: 'bounded_text',
+            structuralStatus: 'recovered',
+            structuralReason: 'unsupported_language',
+        }),
+        getDescription: () => 'token-aware chunks',
+        getStrategyForLanguage: () => ({ backend: 'bounded_text', structural: false }),
+    };
+
+    try {
+        delete process.env.EMBEDDING_BATCH_SIZE;
+        fs.writeFileSync(sourcePath, 'source', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        await vectorDatabase.createHybridCollection('chunks');
+        const context = new Context({
+            embedding: new TokenAwareEmbedding(),
+            vectorDatabase,
+            languageAnalyzer: analyzer,
+        }) as unknown as ContextWithProcessFileList;
+
+        await context.processFileList([sourcePath], tempRoot, undefined, 'chunks');
+
+        assert.deepEqual(observedBatchSizes, [2, 2, 1]);
     } finally {
         if (previousBatchSize === undefined) delete process.env.EMBEDDING_BATCH_SIZE;
         else process.env.EMBEDDING_BATCH_SIZE = previousBatchSize;

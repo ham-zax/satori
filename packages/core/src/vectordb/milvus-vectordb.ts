@@ -24,6 +24,7 @@ import {
     VectorDocumentMetadata,
     VectorRecord,
     CollectionCreateOptions,
+    VectorWriteMetricsSnapshot,
 } from './types';
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
@@ -52,10 +53,10 @@ type MilvusCollectionListPayload = {
 // this idempotent remote mutation; verification remains owned by
 // deleteCollectionWithVerification.
 const REMOTE_COLLECTION_DELETE_TIMEOUT_MS = 120_000;
-// Embedding batches remain provider-efficient at 100 chunks. Bound only the
-// database mutation so one mixed-vector gRPC request cannot monopolize or lose
-// the entire provider batch when a managed proxy resets the channel.
-const MILVUS_WRITE_BATCH_SIZE = 25;
+// Bound the database mutation independently from embedding batches so a large
+// provider-efficient embedding request does not become one oversized gRPC
+// write. This ceiling is intentionally measured and tuned at the write owner.
+const MILVUS_WRITE_BATCH_SIZE = 100;
 const MILVUS_WRITE_MAX_ATTEMPTS = 3;
 const MILVUS_WRITE_RETRY_DELAY_MS = 250;
 
@@ -308,6 +309,13 @@ export class MilvusVectorDatabase implements VectorDatabase {
     protected initializationPromise: Promise<void>;
     private resolvedAddress: string | null = null;
     private resolvedFromToken: boolean = false;
+    private writeMetrics: VectorWriteMetricsSnapshot = {
+        providerRequestCount: 0,
+        retryCount: 0,
+        submittedRows: 0,
+        submittedBytes: 0,
+        durationMs: 0,
+    };
 
     constructor(config: MilvusConfig) {
         this.config = config;
@@ -372,10 +380,25 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
         for (let offset = 0; offset < data.length; offset += MILVUS_WRITE_BATCH_SIZE) {
             const batch = data.slice(offset, offset + MILVUS_WRITE_BATCH_SIZE);
+            const submittedBytes = Buffer.byteLength(JSON.stringify(batch), 'utf8');
 
             for (let attempt = 1; attempt <= MILVUS_WRITE_MAX_ATTEMPTS; attempt += 1) {
                 const client = this.writeClient ?? this.createWriteClient();
                 this.writeClient = client;
+                const startedAt = Date.now();
+                this.writeMetrics = {
+                    ...(this.writeMetrics ?? {
+                        providerRequestCount: 0,
+                        retryCount: 0,
+                        submittedRows: 0,
+                        submittedBytes: 0,
+                        durationMs: 0,
+                    }),
+                    providerRequestCount: (this.writeMetrics?.providerRequestCount ?? 0) + 1,
+                    retryCount: (this.writeMetrics?.retryCount ?? 0) + (attempt > 1 ? 1 : 0),
+                    submittedRows: (this.writeMetrics?.submittedRows ?? 0) + batch.length,
+                    submittedBytes: (this.writeMetrics?.submittedBytes ?? 0) + submittedBytes,
+                };
                 try {
                     await client.upsert({
                         collection_name: collectionName,
@@ -396,6 +419,11 @@ export class MilvusVectorDatabase implements VectorDatabase {
                         `[MilvusDB] Retrying idempotent write on a fresh connection (${attempt}/${MILVUS_WRITE_MAX_ATTEMPTS - 1}).`,
                     );
                     await delay(MILVUS_WRITE_RETRY_DELAY_MS * attempt);
+                } finally {
+                    this.writeMetrics = {
+                        ...this.writeMetrics,
+                        durationMs: this.writeMetrics.durationMs + (Date.now() - startedAt),
+                    };
                 }
             }
         }
@@ -743,6 +771,10 @@ export class MilvusVectorDatabase implements VectorDatabase {
             transport: 'grpc',
             address,
         };
+    }
+
+    getWriteMetricsSnapshot(): VectorWriteMetricsSnapshot {
+        return { ...this.writeMetrics };
     }
 
     async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {

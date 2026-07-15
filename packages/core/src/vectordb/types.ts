@@ -105,6 +105,14 @@ export type CollectionCreateOptions = {
     deferIndexBuild?: boolean;
 };
 
+export type VectorWriteMetricsSnapshot = {
+    providerRequestCount: number;
+    retryCount: number;
+    submittedRows: number;
+    submittedBytes: number;
+    durationMs: number;
+};
+
 export interface VectorDatabase {
     /**
      * Create collection
@@ -159,6 +167,12 @@ export interface VectorDatabase {
      * Backend metadata for provider-specific behaviors (e.g. Zilliz guidance)
      */
     getBackendInfo?(): VectorStoreBackendInfo;
+
+    /**
+     * Cumulative adapter-boundary write metrics. Implementations that expose
+     * this contract must count real provider attempts, including retries.
+     */
+    getWriteMetricsSnapshot?(): VectorWriteMetricsSnapshot;
 
     /**
      * Insert vector documents

@@ -6,6 +6,7 @@ export {
     VectorDatabase,
     CollectionDetails,
     VectorStoreBackendInfo,
+    VectorWriteMetricsSnapshot,
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,

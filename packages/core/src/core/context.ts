@@ -1,7 +1,8 @@
 import {
     Embedding,
     EmbeddingVector,
-    OpenAIEmbedding
+    OpenAIEmbedding,
+    type EmbeddingOperationMetricsSnapshot,
 } from '../embedding';
 import {
     VectorDatabase,
@@ -16,7 +17,8 @@ import {
     INDEX_COMPLETION_MARKER_DOC_ID,
     INDEX_COMPLETION_MARKER_FILE_EXTENSION,
     INDEX_COMPLETION_MARKER_RELATIVE_PATH,
-    deleteCollectionWithVerification
+    deleteCollectionWithVerification,
+    type VectorWriteMetricsSnapshot,
 } from '../vectordb';
 import { buildMilvusIdInFilter, escapeMilvusStringLiteral } from '../vectordb/filters';
 import { SemanticSearchRequest, SemanticSearchResult } from '../types';
@@ -178,11 +180,58 @@ function parseIndexPolicyMutationLockMetadata(raw: string): IndexPolicyMutationL
     }
 }
 
-function resolveEmbeddingBatchSize(rawValue: string | undefined): number {
-    if (!rawValue) return DEFAULT_EMBEDDING_BATCH_SIZE;
+function resolveEmbeddingBatchSize(
+    rawValue: string | undefined,
+    preferredSize: number = DEFAULT_EMBEDDING_BATCH_SIZE,
+    hardMaxSize: number = MAX_EMBEDDING_BATCH_SIZE,
+): number {
+    const boundedPreferredSize = Math.min(preferredSize, hardMaxSize, MAX_EMBEDDING_BATCH_SIZE);
+    if (!rawValue) return boundedPreferredSize;
     const parsed = Number(rawValue);
-    if (!Number.isSafeInteger(parsed) || parsed <= 0) return DEFAULT_EMBEDDING_BATCH_SIZE;
-    return Math.min(parsed, MAX_EMBEDDING_BATCH_SIZE);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) return boundedPreferredSize;
+    return Math.min(parsed, hardMaxSize, MAX_EMBEDDING_BATCH_SIZE);
+}
+
+function estimateEmbeddingTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+}
+
+type IndexingPipelineMetrics = {
+    analysisMs: number;
+    embeddedInputBytes: number;
+    logicalEmbeddingRequests: number;
+    logicalEmbeddingDurationMs: number;
+    logicalVectorWriteRequests: number;
+    logicalVectorWriteDurationMs: number;
+};
+
+function subtractEmbeddingMetrics(
+    after: EmbeddingOperationMetricsSnapshot | null,
+    before: EmbeddingOperationMetricsSnapshot | null,
+): EmbeddingOperationMetricsSnapshot | null {
+    if (!after || !before) return null;
+    return {
+        providerRequestCount: after.providerRequestCount - before.providerRequestCount,
+        retryCount: after.retryCount - before.retryCount,
+        submittedItems: after.submittedItems - before.submittedItems,
+        submittedBytes: after.submittedBytes - before.submittedBytes,
+        providerTokens: after.providerTokens - before.providerTokens,
+        durationMs: after.durationMs - before.durationMs,
+    };
+}
+
+function subtractVectorWriteMetrics(
+    after: VectorWriteMetricsSnapshot | null,
+    before: VectorWriteMetricsSnapshot | null,
+): VectorWriteMetricsSnapshot | null {
+    if (!after || !before) return null;
+    return {
+        providerRequestCount: after.providerRequestCount - before.providerRequestCount,
+        retryCount: after.retryCount - before.retryCount,
+        submittedRows: after.submittedRows - before.submittedRows,
+        submittedBytes: after.submittedBytes - before.submittedBytes,
+        durationMs: after.durationMs - before.durationMs,
+    };
 }
 
 export type DurableAuthorityMutationOwner = {
@@ -1858,6 +1907,17 @@ export class Context {
         forceReindex: boolean = false,
         options: MutationGuardOptions = {},
     ): Promise<IndexCodebaseResult> {
+        const operationStartedAt = Date.now();
+        // Batch policy and metrics are optional capabilities: structural embedding
+        // adapters may implement indexing without inheriting the base defaults.
+        const embeddingMetricsBefore = this.embedding.getOperationMetricsSnapshot?.() ?? null;
+        const vectorWriteMetricsBefore = this.vectorDatabase.getWriteMetricsSnapshot?.() ?? null;
+        let prepareCollectionMs = 0;
+        let scanFilesMs = 0;
+        let payloadPipelineMs = 0;
+        let finalizeCollectionMs = 0;
+        let navigationMs = 0;
+        let publicationMs = 0;
         assertDescriptorBoundIndexingSupported();
         if (options.indexPolicy) {
             this.assertResolvedIndexPolicyRoot(codebasePath, options.indexPolicy);
@@ -1878,11 +1938,15 @@ export class Context {
         // Forced preparation replaces the collection, so the new schema cannot contain
         // an old completion marker. Do not query it to clear one: hybrid rebuilds keep
         // this collection deliberately indexless until all payload writes are complete.
+        const prepareStartedAt = Date.now();
         await this.prepareCollection(codebasePath, true, options.assertMutationCurrent);
+        prepareCollectionMs = Date.now() - prepareStartedAt;
 
         // 3. Recursively traverse codebase to get all supported files
         progressCallback?.({ phase: 'Scanning files...', current: 5, total: 100, percentage: 5 });
+        const scanStartedAt = Date.now();
         const codeFiles = await this.getCodeFiles(codebasePath, indexPolicy);
+        scanFilesMs = Date.now() - scanStartedAt;
         console.log(`[Context] 📁 Found ${codeFiles.length} code files`);
 
         if (codeFiles.length === 0) {
@@ -1931,6 +1995,7 @@ export class Context {
         const indexingEndPercentage = 100;
         const indexingRange = indexingEndPercentage - indexingStartPercentage;
 
+        const payloadStartedAt = Date.now();
         const result = await this.processFileList(
             codeFiles,
             codebasePath,
@@ -1950,13 +2015,17 @@ export class Context {
             options.assertMutationCurrent,
             indexPolicy,
         );
+        payloadPipelineMs = Date.now() - payloadStartedAt;
 
+        const finalizeStartedAt = Date.now();
         await this.finalizePreparedCollection(codebasePath, options.assertMutationCurrent);
+        finalizeCollectionMs = Date.now() - finalizeStartedAt;
 
         console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
 
         let navigationCandidate: StagedNavigationSidecarGeneration | undefined;
         if (result.status === 'completed') {
+            const navigationStartedAt = Date.now();
             navigationCandidate = await this.writeSymbolRegistryForCompletedIndex(
                 codebasePath,
                 result.symbolRecords,
@@ -1967,7 +2036,9 @@ export class Context {
                 options.deferFullIndexPublication === true,
                 indexPolicy,
             );
+            navigationMs = Date.now() - navigationStartedAt;
             if (!options.deferFullIndexPublication) {
+                const publicationStartedAt = Date.now();
                 await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'completed', options.assertMutationCurrent, navigationCandidate, indexPolicy.policyHash);
                 const marker = await this.resolveCompletionMarkerForCollection(
                     codebasePath,
@@ -1984,6 +2055,7 @@ export class Context {
                         sealHash: navigationCandidate.navigationSealHash,
                     } : { status: 'not_bound' },
                 }, marker, options.publishMutation);
+                publicationMs = Date.now() - publicationStartedAt;
             }
         } else {
             // limit_reached: do not publish complete navigation sidecars, but seal partial vector
@@ -1991,6 +2063,7 @@ export class Context {
             // indexStatus must stay on the marker so interrupted-index recovery does not promote as fully completed.
             console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
             if (!options.deferFullIndexPublication) {
+                const publicationStartedAt = Date.now();
                 await this.writeCompletedIndexMarker(codebasePath, result.processedFiles, result.totalChunks, undefined, 'limit_reached', options.assertMutationCurrent, undefined, indexPolicy.policyHash);
                 const marker = await this.resolveCompletionMarkerForCollection(
                     codebasePath,
@@ -2004,6 +2077,7 @@ export class Context {
                     navigation: { status: 'not_bound' },
                 }, marker, options.publishMutation);
                 console.warn('[Context] ⚠️  Wrote completion marker for limit_reached partial index (navigation remains unpublished).');
+                publicationMs = Date.now() - publicationStartedAt;
             }
         }
 
@@ -2013,6 +2087,52 @@ export class Context {
             total: codeFiles.length,
             percentage: 100
         });
+
+        const embeddingMetrics = subtractEmbeddingMetrics(
+            this.embedding.getOperationMetricsSnapshot?.() ?? null,
+            embeddingMetricsBefore,
+        );
+        const vectorWriteMetrics = subtractVectorWriteMetrics(
+            this.vectorDatabase.getWriteMetricsSnapshot?.() ?? null,
+            vectorWriteMetricsBefore,
+        );
+        const pipelinePerformance = result.performance ?? {
+            analysisMs: 0,
+            embeddedInputBytes: 0,
+            logicalEmbeddingRequests: 0,
+            logicalEmbeddingDurationMs: 0,
+            logicalVectorWriteRequests: 0,
+            logicalVectorWriteDurationMs: 0,
+        };
+        // This single bounded record intentionally contains counts and timings,
+        // never source text, paths, provider credentials, or request payloads.
+        console.log(`[Context] 📊 Indexing performance: ${JSON.stringify({
+            totalMs: Date.now() - operationStartedAt,
+            phaseMs: {
+                prepareCollection: prepareCollectionMs,
+                scanFiles: scanFilesMs,
+                payloadPipeline: payloadPipelineMs,
+                analysis: pipelinePerformance.analysisMs,
+                finalizeCollection: finalizeCollectionMs,
+                navigation: navigationMs,
+                publication: publicationMs,
+            },
+            payload: {
+                files: result.processedFiles,
+                chunks: result.totalChunks,
+                embeddedInputBytes: pipelinePerformance.embeddedInputBytes,
+            },
+            embedding: {
+                logicalRequests: pipelinePerformance.logicalEmbeddingRequests,
+                logicalDurationMs: pipelinePerformance.logicalEmbeddingDurationMs,
+                provider: embeddingMetrics,
+            },
+            vectorWrites: {
+                logicalRequests: pipelinePerformance.logicalVectorWriteRequests,
+                logicalDurationMs: pipelinePerformance.logicalVectorWriteDurationMs,
+                provider: vectorWriteMetrics,
+            },
+        })}`);
 
         return {
             indexedFiles: result.processedFiles,
@@ -4137,11 +4257,21 @@ export class Context {
         symbolManifestFiles: SymbolRegistryManifestFile[];
         analysisByFile: Map<string, RelationshipAnalysisEvidence>;
         indexedFileHashes: ReadonlyMap<string, string>;
+        performance: IndexingPipelineMetrics;
     }> {
         const isHybrid = this.getIsHybrid();
-        const EMBEDDING_BATCH_SIZE = resolveEmbeddingBatchSize(envManager.get('EMBEDDING_BATCH_SIZE'));
+        const batchPolicy = this.embedding.getBatchPolicy?.() ?? null;
+        const EMBEDDING_BATCH_SIZE = resolveEmbeddingBatchSize(
+            envManager.get('EMBEDDING_BATCH_SIZE'),
+            batchPolicy?.preferredMaxItems ?? DEFAULT_EMBEDDING_BATCH_SIZE,
+            batchPolicy?.hardMaxItems ?? MAX_EMBEDDING_BATCH_SIZE,
+        );
+        const targetEstimatedTokens = batchPolicy?.targetEstimatedTokens;
         const CHUNK_LIMIT = 450000;
-        console.log(`[Context] 🔧 Using EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE}`);
+        console.log(
+            `[Context] 🔧 Embedding batch policy: max_items=${EMBEDDING_BATCH_SIZE}`
+            + `${targetEstimatedTokens ? `, target_estimated_tokens=${targetEstimatedTokens}` : ''}`,
+        );
 
         let chunkBuffer: Array<{
             chunk: CodeChunk;
@@ -4149,6 +4279,7 @@ export class Context {
             relativePath: string;
             fileChunkIndex: number;
         }> = [];
+        let chunkBufferEstimatedTokens = 0;
         let processedFiles = 0;
         let totalChunks = 0;
         let limitReached = false;
@@ -4157,11 +4288,41 @@ export class Context {
         const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
         const indexedFileHashes = new Map<string, string>();
         const describeError = (error: unknown): string => error instanceof Error ? error.message : String(error);
+        const performance: IndexingPipelineMetrics = {
+            analysisMs: 0,
+            embeddedInputBytes: 0,
+            logicalEmbeddingRequests: 0,
+            logicalEmbeddingDurationMs: 0,
+            logicalVectorWriteRequests: 0,
+            logicalVectorWriteDurationMs: 0,
+        };
+        const flushChunkBuffer = async (failureContext: string): Promise<void> => {
+            if (chunkBuffer.length === 0) return;
+            const searchType = isHybrid === true ? 'hybrid' : 'regular';
+            try {
+                await this.processChunkBuffer(
+                    chunkBuffer,
+                    collectionName,
+                    assertMutationCurrent,
+                    performance,
+                );
+            } catch (error) {
+                console.error(`[Context] ❌ Failed to process ${failureContext} for ${searchType}:`, error);
+                if (error instanceof Error) {
+                    console.error('[Context] Stack trace:', error.stack);
+                }
+                throw new Error(`Failed to persist ${failureContext} for ${searchType}: ${describeError(error)}`);
+            } finally {
+                chunkBuffer = [];
+                chunkBufferEstimatedTokens = 0;
+            }
+        };
 
         for (let i = 0; i < filePaths.length; i++) {
             const filePath = filePaths[i];
 
             try {
+                const analysisStartedAt = Date.now();
                 const sourceObservation = await this.readIndexableFileObservationInsideRoot(filePath, codebasePath, indexPolicy);
                 if (sourceObservation === null) continue;
                 const { content } = sourceObservation;
@@ -4200,6 +4361,7 @@ export class Context {
                     language,
                     symbolCount: fileSymbols.length,
                 });
+                performance.analysisMs += Date.now() - analysisStartedAt;
 
                 // Log files with many chunks or large content
                 if (chunks.length > 50) {
@@ -4212,23 +4374,21 @@ export class Context {
                 // Add chunks to buffer
                 for (let fileChunkIndex = 0; fileChunkIndex < chunks.length; fileChunkIndex++) {
                     const chunk = chunks[fileChunkIndex];
+                    const chunkEstimatedTokens = estimateEmbeddingTokens(chunk.content);
+                    if (
+                        chunkBuffer.length > 0
+                        && targetEstimatedTokens !== undefined
+                        && chunkBufferEstimatedTokens + chunkEstimatedTokens > targetEstimatedTokens
+                    ) {
+                        await flushChunkBuffer(`chunk batch while indexing ${filePath}`);
+                    }
                     chunkBuffer.push({ chunk, codebasePath, relativePath, fileChunkIndex });
+                    chunkBufferEstimatedTokens += chunkEstimatedTokens;
                     totalChunks++;
 
                     // Process batch when buffer reaches EMBEDDING_BATCH_SIZE
                     if (chunkBuffer.length >= EMBEDDING_BATCH_SIZE) {
-                        try {
-                            await this.processChunkBuffer(chunkBuffer, collectionName, assertMutationCurrent);
-                        } catch (error) {
-                            const searchType = isHybrid === true ? 'hybrid' : 'regular';
-                            console.error(`[Context] ❌ Failed to process chunk batch for ${searchType}:`, error);
-                            if (error instanceof Error) {
-                                console.error('[Context] Stack trace:', error.stack);
-                            }
-                            throw new Error(`Failed to persist ${searchType} chunks while indexing ${filePath}: ${describeError(error)}`);
-                        } finally {
-                            chunkBuffer = []; // Always clear buffer, even on failure
-                        }
+                        await flushChunkBuffer(`chunk batch while indexing ${filePath}`);
                     }
 
                     // Check if chunk limit is reached
@@ -4259,15 +4419,7 @@ export class Context {
         if (chunkBuffer.length > 0) {
             const searchType = isHybrid === true ? 'hybrid' : 'regular';
             console.log(`📝 Processing final batch of ${chunkBuffer.length} chunks for ${searchType}`);
-            try {
-                await this.processChunkBuffer(chunkBuffer, collectionName, assertMutationCurrent);
-            } catch (error) {
-                console.error(`[Context] ❌ Failed to process final chunk batch for ${searchType}:`, error);
-                if (error instanceof Error) {
-                    console.error('[Context] Stack trace:', error.stack);
-                }
-                throw new Error(`Failed to persist final ${searchType} chunk batch: ${describeError(error)}`);
-            }
+            await flushChunkBuffer('final chunk batch');
         }
 
         if (!limitReached && indexedFileHashes.size !== processedFiles) {
@@ -4284,6 +4436,7 @@ export class Context {
             symbolManifestFiles,
             analysisByFile,
             indexedFileHashes,
+            performance,
         };
     }
 
@@ -5468,6 +5621,7 @@ export class Context {
         }>,
         collectionName: string,
         assertMutationCurrent?: () => void,
+        performance?: IndexingPipelineMetrics,
     ): Promise<void> {
         if (chunkBuffer.length === 0) return;
 
@@ -5481,7 +5635,13 @@ export class Context {
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid' : 'regular';
         console.log(`[Context] 🔄 Processing batch of ${chunks.length} chunks (~${estimatedTokens} tokens) for ${searchType}`);
-        await this.processChunkBatch(chunkBuffer, codebasePath, collectionName, assertMutationCurrent);
+        await this.processChunkBatch(
+            chunkBuffer,
+            codebasePath,
+            collectionName,
+            assertMutationCurrent,
+            performance,
+        );
     }
 
     /**
@@ -5492,6 +5652,7 @@ export class Context {
         codebasePath: string,
         collectionName: string,
         assertMutationCurrent?: () => void,
+        performance?: IndexingPipelineMetrics,
     ): Promise<void> {
         const isHybrid = this.getIsHybrid();
         const indexedAt = new Date().toISOString();
@@ -5499,7 +5660,22 @@ export class Context {
 
         // Generate embedding vectors
         const chunkContents = chunks.map(chunk => chunk.content);
-        const embeddings = await this.embedding.embedBatch(chunkContents);
+        if (performance) {
+            performance.embeddedInputBytes += chunkContents.reduce(
+                (total, content) => total + Buffer.byteLength(content, 'utf8'),
+                0,
+            );
+            performance.logicalEmbeddingRequests += 1;
+        }
+        const embeddingStartedAt = Date.now();
+        let embeddings: EmbeddingVector[];
+        try {
+            embeddings = await this.embedding.embedBatch(chunkContents);
+        } finally {
+            if (performance) {
+                performance.logicalEmbeddingDurationMs += Date.now() - embeddingStartedAt;
+            }
+        }
         const expectedDimension = this.embedding.getDimension();
         if (!Array.isArray(embeddings) || embeddings.length !== chunks.length) {
             throw new Error(`Embedding batch returned ${Array.isArray(embeddings) ? embeddings.length : 'a non-array result'} for ${chunks.length} chunks.`);
@@ -5526,6 +5702,22 @@ export class Context {
         if (new Set(documentIds).size !== documentIds.length) {
             throw new Error(`Duplicate chunk identities generated for collection '${collectionName}'.`);
         }
+        const persistDocuments = async (documents: VectorDocument[]): Promise<void> => {
+            assertMutationCurrent?.();
+            if (performance) performance.logicalVectorWriteRequests += 1;
+            const writeStartedAt = Date.now();
+            try {
+                if (isHybrid === true) {
+                    await this.vectorDatabase.insertHybrid(collectionName, documents);
+                } else {
+                    await this.vectorDatabase.insert(collectionName, documents);
+                }
+            } finally {
+                if (performance) {
+                    performance.logicalVectorWriteDurationMs += Date.now() - writeStartedAt;
+                }
+            }
+        };
 
         if (isHybrid === true) {
             // Create hybrid vector documents
@@ -5555,9 +5747,7 @@ export class Context {
                 };
             });
 
-            // Store to vector database
-            assertMutationCurrent?.();
-            await this.vectorDatabase.insertHybrid(collectionName, documents);
+            await persistDocuments(documents);
         } else {
             // Create regular vector documents
             const documents: VectorDocument[] = chunks.map((chunk, index) => {
@@ -5586,9 +5776,7 @@ export class Context {
                 };
             });
 
-            // Store to vector database
-            assertMutationCurrent?.();
-            await this.vectorDatabase.insert(collectionName, documents);
+            await persistDocuments(documents);
         }
     }
 

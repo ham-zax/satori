@@ -121,12 +121,21 @@ test('Milvus gRPC bounds database writes without replaying completed sub-batches
             ): Promise<void>;
         }
     ).upsertDocuments;
-    const rows = Array.from({ length: 60 }, (_, index) => ({ id: `chunk-${index}` }));
+    const rows = Array.from({ length: 220 }, (_, index) => ({ id: `chunk-${index}` }));
 
     await upsertDocuments.call(target, 'collection-v1', rows);
 
-    assert.deepEqual(writtenIds.map((ids) => ids.length), [25, 25, 10]);
+    assert.deepEqual(writtenIds.map((ids) => ids.length), [100, 100, 20]);
     assert.deepEqual(writtenIds.flat(), rows.map((row) => row.id));
+    const metrics = MilvusVectorDatabase.prototype.getWriteMetricsSnapshot.call(
+        target as unknown as MilvusVectorDatabase,
+    );
+    assert.equal(metrics.providerRequestCount, 3);
+    assert.equal(metrics.retryCount, 0);
+    assert.equal(metrics.submittedRows, 220);
+    assert.equal(metrics.submittedBytes, [rows.slice(0, 100), rows.slice(100, 200), rows.slice(200)]
+        .reduce((total, batch) => total + Buffer.byteLength(JSON.stringify(batch), 'utf8'), 0));
+    assert.ok(metrics.durationMs >= 0);
 });
 
 test('Milvus gRPC does not retain a failed client after retry exhaustion', async () => {

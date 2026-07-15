@@ -4,6 +4,22 @@ export interface EmbeddingVector {
     dimension: number;
 }
 
+export interface EmbeddingBatchPolicy {
+    preferredMaxItems: number;
+    hardMaxItems: number;
+    targetEstimatedTokens?: number;
+    hardTokenLimit?: number;
+}
+
+export interface EmbeddingOperationMetricsSnapshot {
+    providerRequestCount: number;
+    retryCount: number;
+    submittedItems: number;
+    submittedBytes: number;
+    providerTokens: number;
+    durationMs: number;
+}
+
 /**
  * Abstract base class for embedding implementations
  */
@@ -73,4 +89,21 @@ export abstract class Embedding {
      * @returns Provider name
      */
     abstract getProvider(): string;
-} 
+
+    /**
+     * Providers may declare a larger safe indexing batch than the generic
+     * default. The caller may reduce these limits, but must never raise them.
+     */
+    getBatchPolicy(): EmbeddingBatchPolicy | null {
+        return null;
+    }
+
+    /**
+     * Cumulative snapshots avoid destructive resets between operations. Delta
+     * attribution is exact only when no other request uses this provider during
+     * the measured window.
+     */
+    getOperationMetricsSnapshot(): EmbeddingOperationMetricsSnapshot | null {
+        return null;
+    }
+}

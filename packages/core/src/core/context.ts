@@ -225,12 +225,83 @@ function subtractVectorWriteMetrics(
     before: VectorWriteMetricsSnapshot | null,
 ): VectorWriteMetricsSnapshot | null {
     if (!after || !before) return null;
+    const providerRequestCount = after.providerRequestCount - before.providerRequestCount;
+    if (providerRequestCount < 0) return null;
+    const recentAttempts = Array.isArray(after.recentAttempts)
+        ? after.recentAttempts.filter((attempt) => (
+            attempt.sequence > before.providerRequestCount
+            && attempt.sequence <= after.providerRequestCount
+        ))
+        : [];
     return {
-        providerRequestCount: after.providerRequestCount - before.providerRequestCount,
+        providerRequestCount,
         retryCount: after.retryCount - before.retryCount,
         submittedRows: after.submittedRows - before.submittedRows,
         submittedBytes: after.submittedBytes - before.submittedBytes,
         durationMs: after.durationMs - before.durationMs,
+        rowLimit: after.rowLimit,
+        recentAttempts,
+    };
+}
+
+function percentile(values: readonly number[], fraction: number): number | null {
+    if (values.length === 0) return null;
+    const sorted = [...values].sort((left, right) => left - right);
+    const index = Math.max(0, Math.ceil(fraction * sorted.length) - 1);
+    return sorted[index] ?? null;
+}
+
+function summarizeVectorWriteMetrics(
+    metrics: VectorWriteMetricsSnapshot | null,
+    logicalRows: number,
+): Record<string, unknown> | null {
+    if (!metrics) return null;
+    const samplesComplete = metrics.recentAttempts.length === metrics.providerRequestCount;
+    const rowValues = metrics.recentAttempts.map((attempt) => attempt.rows);
+    const byteValues = metrics.recentAttempts.map((attempt) => attempt.bytes);
+    const flushReasons = metrics.recentAttempts.reduce((counts, attempt) => ({
+        ...counts,
+        [attempt.flushReason]: counts[attempt.flushReason] + 1,
+    }), {
+        row_limit: 0,
+        logical_write_end: 0,
+        retry: 0,
+    });
+    const initialProviderRequests = metrics.providerRequestCount - metrics.retryCount;
+    const theoreticalMinimumRequests = metrics.rowLimit > 0
+        ? Math.ceil(logicalRows / metrics.rowLimit)
+        : null;
+
+    return {
+        providerRequestCount: metrics.providerRequestCount,
+        retryCount: metrics.retryCount,
+        submittedRows: metrics.submittedRows,
+        submittedBytes: metrics.submittedBytes,
+        durationMs: metrics.durationMs,
+        rowLimit: metrics.rowLimit,
+        samples: {
+            complete: samplesComplete,
+            captured: metrics.recentAttempts.length,
+        },
+        requestRows: {
+            min: percentile(rowValues, 0),
+            p50: percentile(rowValues, 0.5),
+            p90: percentile(rowValues, 0.9),
+            p95: percentile(rowValues, 0.95),
+            max: percentile(rowValues, 1),
+        },
+        requestBytes: {
+            min: percentile(byteValues, 0),
+            p50: percentile(byteValues, 0.5),
+            p90: percentile(byteValues, 0.9),
+            p95: percentile(byteValues, 0.95),
+            max: percentile(byteValues, 1),
+        },
+        flushReasons,
+        theoreticalMinimumRequests,
+        fragmentationOverheadRequests: theoreticalMinimumRequests === null
+            ? null
+            : initialProviderRequests - theoreticalMinimumRequests,
     };
 }
 
@@ -2096,6 +2167,10 @@ export class Context {
             this.vectorDatabase.getWriteMetricsSnapshot?.() ?? null,
             vectorWriteMetricsBefore,
         );
+        const vectorWriteSummary = summarizeVectorWriteMetrics(
+            vectorWriteMetrics,
+            result.totalChunks,
+        );
         const pipelinePerformance = result.performance ?? {
             analysisMs: 0,
             embeddedInputBytes: 0,
@@ -2130,7 +2205,7 @@ export class Context {
             vectorWrites: {
                 logicalRequests: pipelinePerformance.logicalVectorWriteRequests,
                 logicalDurationMs: pipelinePerformance.logicalVectorWriteDurationMs,
-                provider: vectorWriteMetrics,
+                provider: vectorWriteSummary,
             },
         })}`);
 

@@ -24,6 +24,7 @@ import {
     VectorDocumentMetadata,
     VectorRecord,
     CollectionCreateOptions,
+    VectorWriteFlushReason,
     VectorWriteMetricsSnapshot,
 } from './types';
 import { ClusterManager } from './zilliz-utils';
@@ -59,6 +60,11 @@ const REMOTE_COLLECTION_DELETE_TIMEOUT_MS = 120_000;
 const MILVUS_WRITE_BATCH_SIZE = 100;
 const MILVUS_WRITE_MAX_ATTEMPTS = 3;
 const MILVUS_WRITE_RETRY_DELAY_MS = 250;
+// Retain enough scalar-only attempt samples to derive exact request-size
+// quantiles for normal rebuilds without allowing a long-lived runtime to grow
+// an unbounded telemetry buffer. A summary reports when this window is too
+// small for an operation, so truncated evidence cannot be mistaken for exact.
+const MILVUS_WRITE_ATTEMPT_SAMPLE_LIMIT = 4_096;
 
 type MilvusHybridSearchSingleRequest = {
     data: number[] | string;
@@ -315,6 +321,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
         submittedRows: 0,
         submittedBytes: 0,
         durationMs: 0,
+        rowLimit: MILVUS_WRITE_BATCH_SIZE,
+        recentAttempts: [],
     };
 
     constructor(config: MilvusConfig) {
@@ -386,18 +394,31 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 const client = this.writeClient ?? this.createWriteClient();
                 this.writeClient = client;
                 const startedAt = Date.now();
+                const previousMetrics = this.writeMetrics ?? {
+                    providerRequestCount: 0,
+                    retryCount: 0,
+                    submittedRows: 0,
+                    submittedBytes: 0,
+                    durationMs: 0,
+                    rowLimit: MILVUS_WRITE_BATCH_SIZE,
+                    recentAttempts: [],
+                };
+                const sequence = previousMetrics.providerRequestCount + 1;
+                const flushReason: VectorWriteFlushReason = attempt > 1
+                    ? 'retry'
+                    : offset + batch.length < data.length
+                        ? 'row_limit'
+                        : 'logical_write_end';
                 this.writeMetrics = {
-                    ...(this.writeMetrics ?? {
-                        providerRequestCount: 0,
-                        retryCount: 0,
-                        submittedRows: 0,
-                        submittedBytes: 0,
-                        durationMs: 0,
-                    }),
-                    providerRequestCount: (this.writeMetrics?.providerRequestCount ?? 0) + 1,
-                    retryCount: (this.writeMetrics?.retryCount ?? 0) + (attempt > 1 ? 1 : 0),
-                    submittedRows: (this.writeMetrics?.submittedRows ?? 0) + batch.length,
-                    submittedBytes: (this.writeMetrics?.submittedBytes ?? 0) + submittedBytes,
+                    ...previousMetrics,
+                    providerRequestCount: sequence,
+                    retryCount: previousMetrics.retryCount + (attempt > 1 ? 1 : 0),
+                    submittedRows: previousMetrics.submittedRows + batch.length,
+                    submittedBytes: previousMetrics.submittedBytes + submittedBytes,
+                    recentAttempts: [
+                        ...previousMetrics.recentAttempts,
+                        { sequence, rows: batch.length, bytes: submittedBytes, flushReason },
+                    ].slice(-MILVUS_WRITE_ATTEMPT_SAMPLE_LIMIT),
                 };
                 try {
                     await client.upsert({
@@ -774,7 +795,10 @@ export class MilvusVectorDatabase implements VectorDatabase {
     }
 
     getWriteMetricsSnapshot(): VectorWriteMetricsSnapshot {
-        return { ...this.writeMetrics };
+        return {
+            ...this.writeMetrics,
+            recentAttempts: this.writeMetrics.recentAttempts.map((attempt) => ({ ...attempt })),
+        };
     }
 
     async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {

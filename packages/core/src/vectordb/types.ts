@@ -105,12 +105,23 @@ export type CollectionCreateOptions = {
     deferIndexBuild?: boolean;
 };
 
+export type VectorWriteFlushReason = 'row_limit' | 'logical_write_end' | 'retry';
+
+export type VectorWriteAttemptSample = {
+    sequence: number;
+    rows: number;
+    bytes: number;
+    flushReason: VectorWriteFlushReason;
+};
+
 export type VectorWriteMetricsSnapshot = {
     providerRequestCount: number;
     retryCount: number;
     submittedRows: number;
     submittedBytes: number;
     durationMs: number;
+    rowLimit: number;
+    recentAttempts: readonly VectorWriteAttemptSample[];
 };
 
 export interface VectorDatabase {

@@ -95,6 +95,15 @@ test('Milvus gRPC idempotent write retries a dropped connection with a fresh cli
 
     assert.deepEqual(calls, ['stale_upsert', 'stale_close', 'fresh_upsert']);
     assert.equal(target.writeClient, freshClient);
+    const metrics = MilvusVectorDatabase.prototype.getWriteMetricsSnapshot.call(
+        target as unknown as MilvusVectorDatabase,
+    );
+    assert.equal(metrics.providerRequestCount, 2);
+    assert.equal(metrics.retryCount, 1);
+    assert.deepEqual(metrics.recentAttempts.map((attempt) => attempt.flushReason), [
+        'logical_write_end',
+        'retry',
+    ]);
 });
 
 test('Milvus gRPC bounds database writes without replaying completed sub-batches', async () => {
@@ -135,6 +144,21 @@ test('Milvus gRPC bounds database writes without replaying completed sub-batches
     assert.equal(metrics.submittedRows, 220);
     assert.equal(metrics.submittedBytes, [rows.slice(0, 100), rows.slice(100, 200), rows.slice(200)]
         .reduce((total, batch) => total + Buffer.byteLength(JSON.stringify(batch), 'utf8'), 0));
+    assert.equal(metrics.rowLimit, 100);
+    assert.deepEqual(metrics.recentAttempts.map((attempt) => ({
+        sequence: attempt.sequence,
+        rows: attempt.rows,
+        flushReason: attempt.flushReason,
+    })), [
+        { sequence: 1, rows: 100, flushReason: 'row_limit' },
+        { sequence: 2, rows: 100, flushReason: 'row_limit' },
+        { sequence: 3, rows: 20, flushReason: 'logical_write_end' },
+    ]);
+    assert.deepEqual(metrics.recentAttempts.map((attempt) => attempt.bytes), [
+        Buffer.byteLength(JSON.stringify(rows.slice(0, 100)), 'utf8'),
+        Buffer.byteLength(JSON.stringify(rows.slice(100, 200)), 'utf8'),
+        Buffer.byteLength(JSON.stringify(rows.slice(200)), 'utf8'),
+    ]);
     assert.ok(metrics.durationMs >= 0);
 });
 

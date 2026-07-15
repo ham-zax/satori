@@ -157,7 +157,7 @@ Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for 
 
 ### `search_codebase`
 
-Unified semantic search with a runtime-first scope="runtime" default, grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Grouped formatVersion 2 results publish one canonical target, bounded source-only preview, quality evidence, and compact graph readiness; use the envelope-level recommendedNextAction first. A target with symbolId opens through read_file(open_symbol) and can be passed directly to call_graph only when navigation.graph="ready"; a target without symbolId opens through its 1-based inclusive span. Every graph-ready result carries navigation.inbound="verify"; callerSearchTerm is an optional identifier for a separate must:<term> <term> inbound-reference verification search. Follow structured warning actions and remediation hints; use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debugMode=summary|ranking|freshness|full for bounded diagnostics; debug:true remains a backward-compatible alias for full.
+Unified semantic search with a runtime-first scope="runtime" default, grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Grouped formatVersion 2 results publish one canonical target, bounded source-only preview, quality evidence, and compact graph readiness; use the envelope-level recommendedNextAction first. A concrete target opens through the returned canonical read_file request, which includes mode, open_symbol contractVersion 2, one identity, and one bounded context operation; a target without symbolId opens through its 1-based inclusive span. Pass a target directly to call_graph only when navigation.graph="ready". Every graph-ready result carries navigation.inbound="verify"; callerSearchTerm is an optional identifier for a separate must:<term> <term> inbound-reference verification search. Follow structured warning actions and remediation hints; use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debugMode=summary|ranking|freshness|full for bounded diagnostics; debug:true remains a backward-compatible alias for full.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -200,15 +200,15 @@ Return a sidecar-backed symbol outline for one file, including call_graph jump h
 
 ### `read_file`
 
-Read file content under an indexed/searchable Satori codebase root only (not a general host filesystem reader). For a grouped search target, resolve target.file under codebaseRoot; when target.symbolId exists, pass it as open_symbol.symbolId, otherwise pass target.span as the 1-based inclusive start_line/end_line window. The canonical real file path must stay inside a tracked root with status indexed or sync_completed.
+Read source only under an indexed/searchable Satori root. Ordinary reads and unversioned open_symbol startLine/endLine requests return source text. Exact symbolId/symbolLabel requests require mode plus open_symbol contractVersion 2 and exactly one context or continuation operation; they return one bounded structured symbol_context package in both modes. The canonical real path must remain inside a tracked indexed or sync_completed root.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `path` | string | yes |  | ABSOLUTE path to the file under an indexed/searchable codebase root (relative paths are rejected). |
 | `start_line` | integer | no |  | Optional start line (1-based, inclusive). |
 | `end_line` | integer | no |  | Optional end line (1-based, inclusive). |
-| `mode` | enum("plain", "annotated") | no | `"plain"` | Output mode. plain returns text only; annotated returns content plus sidecar-backed outline metadata. |
-| `open_symbol` | object | no |  | Optional deterministic symbol jump request for this file path. Uses exact symbol resolution within `path` when symbolId/symbolLabel is provided, and only uses direct span opens when no symbol identity fields are supplied. On symbol-owned flows, symbolId should carry the symbolInstanceId. |
+| `mode` | enum("plain", "annotated") | no |  | Output mode. Required for exact-symbol context requests. Other reads default to plain. |
+| `open_symbol` | object | no |  | Strict exact-symbol context or direct-span request. Exact symbols require contractVersion 2 and exactly one context or continuation operation; direct spans use one-based inclusive startLine/endLine. |
 
 ### `list_codebases`
 
@@ -221,7 +221,7 @@ No parameters.
 
 ## Notes
 
-- `open_symbol` resolves exact symbols inside the same file passed to `read_file.path`. On symbol-owned flows, `symbolId`/`symbolIdExact` should carry `symbolInstanceId`.
+- Exact `open_symbol` requires `mode` plus `contractVersion: 2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`; success is one bounded structured `symbol_context` package in both modes. Direct spans remain unversioned `startLine`/`endLine` source reads. On symbol-owned flows, `symbolId` should carry `symbolInstanceId`.
 - `MILVUS_TOKEN` is optional auth; local unauthenticated Milvus only needs `MILVUS_ADDRESS`.
 - MCP startup does not require provider credentials or a live Milvus backend. Provider-backed calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 - `MISSING_PROVIDER_CONFIG` is an active setup failure only when it appears as a tool response `code` or `reason`.

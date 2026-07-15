@@ -26,7 +26,7 @@ Satori exposes exactly six MCP tools:
 4. Prefer the envelope `recommendedNextAction` when present; it is Satori's ranked next proof step.
 5. Use `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)` to lock exact symbol spans when identity is available.
 6. If a grouped result has `navigation.graph="ready"`, call `call_graph(path=codebaseRoot, symbolRef=target, direction="both", depth=1)`.
-7. Use `read_file(path=..., open_symbol=...)` or deterministic line spans for final evidence before editing.
+7. Use the canonical `read_file` symbol-context request or deterministic line spans for final evidence before editing.
 
 ## Search Rules
 
@@ -45,11 +45,11 @@ Satori exposes exactly six MCP tools:
 ## Navigation Rules
 
 - Treat the envelope `recommendedNextAction` as the default next move unless the user requested a different proof path.
-- For a grouped target with `symbolId`, open the absolute `codebaseRoot + target.file` path with `read_file(open_symbol={symbolId})`; without `symbolId`, read the 1-based inclusive `target.span`. Do not invent spans.
+- Prefer the envelope `recommendedNextAction`. For a grouped target with `symbolId`, the canonical request is `read_file(path=..., mode="plain", open_symbol={contractVersion:2,symbolId,context:{preset:"implementation"}})`; without `symbolId`, read the 1-based inclusive `target.span`. Do not invent spans.
 - Pass `target` directly to `call_graph` only when `navigation.graph="ready"`. That state always requires inbound verification; if `callerSearchTerm` exists, use it in a separate `must:<term> <term>` search.
-- `open_symbol` must resolve deterministically. Do not guess on ambiguity.
+- Exact `open_symbol` requires `contractVersion: 2`, exactly one identity, and exactly one context or continuation operation. It returns structured bounded `symbol_context` in both modes and must resolve deterministically.
 - Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with `rg`, tests, or direct references.
-- Prefer `read_file(mode="annotated")` when outline metadata helps.
+- Use `file_outline` when outline metadata is specifically required; exact `read_file` returns the same structured symbol-context transport in both modes.
 - Follow continuation hints when plain reads are truncated.
 - Read the relevant implementation and call sites before editing behavior.
 

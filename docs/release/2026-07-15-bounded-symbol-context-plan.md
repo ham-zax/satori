@@ -1147,8 +1147,9 @@ not a Phase 0 runtime gate.
 - prove the input schema rejects missing, `1`, and unsupported exact-symbol
   contract versions before tool execution, v2 success has `formatVersion: 2`
   and `kind: symbol_context` in both modes, every accepted-v2 tool error carries
-  the same identity, and ordinary plus direct-span non-symbol reads remain
-  unchanged;
+  the same identity, ordinary non-symbol reads remain unchanged, and the
+  unversioned direct-span variant uses only the frozen canonical
+  `startLine`/`endLine` spelling;
 - prove a very large multi-line source returns bounded success below the hard
   response cap;
 - force the minimum safe package over the hard ceiling and prove plain and
@@ -1579,6 +1580,19 @@ Publish the complete accepted-V2 outcome matrix and common bounded error
 transport, including the resource-limit and root-binding safety errors defined
 above.
 
+Implementation status (2026-07-16): the canonical public exact-symbol
+replacement is implemented. Accepted requests require the literal contract
+version and an explicit mode, plain and annotated requests share one structured
+transport, the historical full-span exact branch is unreachable, and
+first-party callers, agent instructions, authoritative docs, generated MCP
+documentation, and the published manifest are synchronized. Direct spans
+remain unversioned under the frozen camel-case shape; the prior snake-case
+shape is rejected rather than retained as a compatibility path. Deterministic
+contract suites, MCP type checking and lint, and generated documentation and
+manifest checks are green. This closes Phase 5 implementation only: Phase 6
+evaluation remains pending, the Phase 0 performance baseline remains deferred,
+and no release-grade performance claim is made.
+
 ### Phase 6 — Evaluation and retention decision
 
 Compare the composed path with the current adaptive multi-tool workflow using
@@ -1639,7 +1653,7 @@ useful metadata/status improvements.
 | Version boundary | Exact-symbol requests require the literal `open_symbol.contractVersion: 2`; MCP input validation rejects missing/old/unsupported values before execution, and all accepted-v2 outcomes carry `formatVersion: 2` plus `kind: symbol_context`. |
 | V2 outcomes | Successful unavailable/degraded sections and structured tool errors follow the frozen matrix; every accepted-V2 error has the common bounded prefix and stable code without unbounded caller-controlled echo. |
 | Input discrimination | Exact-symbol, direct-span, and ordinary read variants are strict and disjoint; mixed and unknown fields fail schema validation. |
-| Exact-open replacement | Plain and annotated v2 exact-symbol requests return the same structured complete-or-bounded transport; the obsolete full-span branch is unreachable while ordinary and direct-span non-symbol reads are unchanged. |
+| Exact-open replacement | Plain and annotated v2 exact-symbol requests return the same structured complete-or-bounded transport; the obsolete full-span branch is unreachable, ordinary non-symbol reads are unchanged, and direct spans remain unversioned under the frozen `startLine`/`endLine` shape. |
 | Mode semantics | V2 echoes `requestedMode`, but `plain` and `annotated` do not change the structured response representation. |
 | Migration evidence | The prior response remains as a historical golden fixture, while tests prove it cannot be served by v2. |
 | Resource limit | Very large source returns bounded success; only `minimumRequiredResponseBytes > hardResponseLimitBytes` returns the same structured MCP error in both modes, with no partial source content. |
@@ -1710,14 +1724,14 @@ surface as already implemented.
 
 ## Continuation checkpoint
 
-The current implementation session continues with Phase 3 under the recorded
+The current implementation session proceeds to Phase 6 under the recorded
 2026-07-15 directional-sample decision:
 
 1. Keep `instrumentedMeasurementBaseline` deferred and ineligible until it
    becomes blocking for a release-grade statistical claim.
-2. Keep the completed internal relationship evidence projection separate from
-   the unchanged public call-graph and sidecar schemas.
-3. Implement Phase 3 as pure source-selection and descriptor-evidence owners
-   before integrating either into a request-local composer.
-4. Keep grouped-search and public call-graph envelopes compact unless measured
+2. Evaluate only the canonical Phase 5 exact-symbol transport; do not revive
+   the historical full-span branch or add a parallel compatibility contract.
+3. Keep grouped-search and public call-graph envelopes compact unless measured
    utility justifies their enrichment.
+4. Do not claim bounded symbol context complete until the Phase 6 retention
+   gates and required baseline comparisons are satisfied.

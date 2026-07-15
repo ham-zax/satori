@@ -6,6 +6,7 @@ All notable changes to this repository are documented in this file.
 
 ### Changed
 - Removed the optional Pi extension bridge example and its independent dependency/configuration surface; maintained clients use the MCP server or standalone CLI directly.
+- **Breaking:** exact-symbol `read_file` requests now require top-level `mode`, `open_symbol.contractVersion: 2`, exactly one symbol identity, and exactly one bounded context or continuation operation. Both modes return the same structured `symbol_context` transport; legacy unversioned full-span exact opens are rejected. Ordinary reads are unchanged. Direct-span opens remain unversioned but use the frozen canonical `startLine`/`endLine` field spelling; the former `start_line`/`end_line` direct-span shape is rejected.
 - **Breaking:** `@zokizuan/satori-mcp` 6.0.0 replaces the grouped `search_codebase` result shape with compact `formatVersion: 2` results. Each group now publishes one canonical `target`, display/quality facts, a bounded source-only preview, and compact graph readiness with explicit inbound verification; executable recommendations exist only at the envelope level.
 - Removed repeated per-result action, fallback, capability, recovery, and call-graph-hint trees from grouped search. Graph-ready targets are accepted directly by `call_graph`, while `read_file` calls derive from `codebaseRoot` plus the target file and symbol or span.
 - Raw search result objects remain unchanged. This is a presentation-only wire change and requires no reindex or index migration.

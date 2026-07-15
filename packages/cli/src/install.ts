@@ -80,7 +80,7 @@ This project uses Satori MCP for semantic-first code exploration, freshness-awar
 1. \`search_codebase\` - Start with plain-English behavior or ownership queries; narrow with \`lang:\`, \`path:\`, \`must:\`, and \`exclude:\`
 2. \`file_outline\` - lock exact symbol spans before reading or editing
 3. \`call_graph\` - inspect outbound relationships and available caller/callee context when supported
-4. \`read_file\` - open exact symbols or bounded line windows for final evidence
+4. \`read_file\` - open canonical bounded symbol context or bounded line windows for final evidence
 5. \`manage_index\` - check status, create, sync, reindex, or clear only when explicitly needed
 
 ## When To Use Satori
@@ -91,7 +91,7 @@ This project uses Satori MCP for semantic-first code exploration, freshness-awar
 ## Verification Rules
 - Treat the envelope \`recommendedNextAction\` as the default next move unless the user requested a different proof path.
 - Read every \`warnings[].action\`; warnings are degraded, not fatal, unless \`blocksUse=true\`.
-- Grouped \`formatVersion: 2\` results expose one canonical \`target\`. Use \`codebaseRoot + target.file\` with \`read_file(open_symbol)\` when \`target.symbolId\` exists, or read the 1-based inclusive \`target.span\` otherwise.
+- Grouped \`formatVersion: 2\` results expose one canonical \`target\`. Prefer the returned \`recommendedNextAction\`. For a concrete symbol, the canonical read uses \`mode="plain"\` and \`open_symbol={contractVersion:2,symbolId,context:{preset:"implementation"}}\`; otherwise read the 1-based inclusive \`target.span\`.
 - Pass \`target\` directly to \`call_graph\` only when \`navigation.graph="ready"\`; that state always carries \`navigation.inbound="verify"\`. Use optional \`callerSearchTerm\` in a separate \`must:<term> <term>\` search to verify inbound references.
 - If any tool returns \`requires_reindex\` or \`hints.reindex\`, stop and run \`manage_index(action="reindex")\`; do not substitute \`sync\`.
 - Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with rg, tests, or direct references.
@@ -105,14 +105,14 @@ This project uses Satori MCP for plain-English semantic code discovery, determin
 1. \`search_codebase\` - start with behavior/concept queries; use exact identifiers or constants when known
 2. \`file_outline\` - lock exact symbol spans before reading or editing
 3. \`call_graph\` - inspect callers and callees when supported
-4. \`read_file\` - open exact spans or fallback windows
+4. \`read_file\` - open canonical bounded symbol context or fallback windows
 5. \`manage_index\` - create, sync, reindex, or inspect index status
 
 ## Rules
 - Prefer Satori for semantic code discovery before grep/glob.
 - Start with plain-English behavior questions; switch to exact ids, constants, and operators for proof.
 - Prefer the envelope \`recommendedNextAction\` and inspect every \`warnings[].action\`.
-- In grouped \`formatVersion: 2\` output, derive reads from \`codebaseRoot\` plus \`target\`; pass \`target\` to \`call_graph\` only when \`navigation.graph="ready"\`.
+- In grouped \`formatVersion: 2\` output, use \`recommendedNextAction\`; exact-symbol reads require \`mode\`, \`contractVersion: 2\`, one identity, and one context or continuation operation. Pass \`target\` to \`call_graph\` only when \`navigation.graph="ready"\`.
 - Treat graph-ready \`navigation.inbound="verify"\` as mandatory caller verification. Use optional \`callerSearchTerm\` with a separate \`must:<term> <term>\` search before treating inbound graph results as complete.
 - If a tool returns \`requires_reindex\`, run \`manage_index(action="reindex")\` and retry the original call.
 - Read the relevant implementation and call sites before editing behavior.

@@ -31,7 +31,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Grouping supports `symbol` and `file`; symbol grouping prefers owner metadata when present, repairs missing owner identity from a compatible registry, and uses deterministic hashed fallback groups when symbol identity is unavailable.
 - Grouped `formatVersion: 2` results expose one canonical `target`, display and quality facts, bounded preview evidence, and reasoned `navigation.graph` state. The envelope carries the only `recommendedNextAction`; consumers derive reads and graph calls from `codebaseRoot` plus `target` without repeated per-result tool arguments.
 - `file_outline` supports `resolveMode=outline|exact` with exact outcomes `ok|ambiguous|not_found`.
-- `read_file` supports `plain|annotated`; annotated mode returns `outlineStatus`, `outline`, `hasMore`, warnings/hints; `open_symbol` resolves deterministically via `file_outline exact`. Content is served only when the requested absolute path's canonical real path is inside a tracked searchable root (`indexed` or `sync_completed`); relative paths, sibling repos, symlink escapes, and `..` escapes are denied with structured `outside_indexed_root` before any content is read.
+- `read_file` supports `plain|annotated`. Ordinary line-range and unversioned direct-span `open_symbol` requests return source text (annotated mode adds `outlineStatus`, `outline`, `hasMore`, warnings/hints). Exact symbol opens require `mode` plus the one canonical request shape: `open_symbol.contractVersion=2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`; success is one bounded structured `symbol_context` package in both modes, and accepted exact failures use bounded structured errors. Content is served only when the requested absolute path's canonical real path is inside a tracked searchable root (`indexed` or `sync_completed`). Relative paths are rejected before exact-request acceptance. Ordinary absolute paths outside a searchable root use `outside_indexed_root`; an otherwise schema-accepted exact request whose root authority cannot be established uses the bounded `NAVIGATION_UNAVAILABLE` envelope without returning the path or source.
 - Reindex-compatibility gates propagate `requires_reindex` envelopes with deterministic `hints.reindex` across search/navigation tools.
 - Freshness behavior: sync-on-read for `search_codebase` via `ensureFreshness`; other tools do not run sync-on-read.
 - Subdirectory search requests resolve to an indexed parent `effectiveRoot` when needed; fallback navigation paths stay runnable from that resolved root while keeping returned `path` as requested input.
@@ -67,7 +67,7 @@ North-star workflow:
 - `search_codebase` finds candidate symbol/file groups.
 - `file_outline` locks deterministic symbol spans in-file.
 - `call_graph` traverses callers/callees for that symbol.
-- `read_file(open_symbol)` opens deterministic symbol span for editing context.
+- `read_file(open_symbol)` with contractVersion 2 opens one bounded structured symbol context package (not a full unversioned span dump).
 - If call graph is unavailable for a group, `navigation.graph` carries the reason and the same canonical target remains readable through its concrete symbol ID or validated span.
 
 Language capability contract:
@@ -250,7 +250,7 @@ Common recipes:
 
 Verification routing:
 - Find behavioral ownership with grouped semantic search; resolve a known identifier with the exact-registry path.
-- Read implementations through `read_file(open_symbol)` or the published bounded span. Use the source-backed exact preview only for quick orientation.
+- Read implementations through the canonical exact `read_file(open_symbol)` contractVersion 2 context package, or an unversioned published bounded span when no symbol identity is available. Use the source-backed exact preview only for quick orientation.
 - Use `call_graph` for advisory caller/callee context, then verify inbound impact with a scoped literal search, direct references, or tests.
 - Verify known literal/line claims with bounded source reads or lexical search. Batch independent claims locally rather than issuing one semantic query per claim.
 - Use `debugMode="ranking"` for selection diagnosis, `debugMode="freshness"` for readiness/sync diagnosis, and status `detail="capabilities"|"diagnostics"|"full"` only when the summary is insufficient.
@@ -360,35 +360,41 @@ Behavior:
 - Performance: query-side traversal only; no sync-on-read.
 
 ### 6) `read_file`
-Purpose: file content retrieval with optional deterministic symbol-open and annotated outline envelope.
+Purpose: file content retrieval with optional deterministic exact-symbol context package, unversioned direct spans, and annotated outline envelope for ordinary reads.
 
 Inputs/defaults:
 - Required: `path`.
-- Optional: `start_line`, `end_line`, `mode` (`plain` default), `open_symbol`.
+- Required for exact symbol open: `mode` (`plain` or `annotated`) plus `open_symbol` with `contractVersion: 2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`.
+- Optional ordinary read: `start_line`, `end_line`, `mode` (`plain` default).
+- Optional unversioned direct span: `open_symbol` with only `startLine`/`endLine` (no contractVersion / identity / context).
 
 Outputs:
-- `plain`: text content (+ truncation continuation hint).
-- `annotated`: JSON `{path, mode, content, outlineStatus, outline, hasMore, warnings?, hints?}`.
+- Ordinary / direct-span `plain`: text content (+ truncation continuation hint).
+- Ordinary / direct-span `annotated`: JSON `{path, mode, content, outlineStatus, outline, hasMore, warnings?, hints?}`.
+- Exact success (both modes): one bounded structured `symbol_context` JSON package (`formatVersion: 2`).
+- Accepted exact failures: bounded structured `symbol_context` error envelopes (`SYMBOL_NOT_FOUND`, `NAVIGATION_UNAVAILABLE`, and related codes).
 
 Warnings/hints:
-- `open_symbol` unresolved root returns structured `requires_reindex` with `hints.nextSteps`.
-- Annotated mode propagates outline warnings/hints.
+- Exact opens with unavailable prepared navigation authority return structured `NAVIGATION_UNAVAILABLE`.
+- Missing identity under valid authority returns structured `SYMBOL_NOT_FOUND`.
+- Ordinary unresolved root / outside-root paths keep their non-exact structured denials.
+- Annotated ordinary mode propagates outline warnings/hints.
 
 Determinism:
-- line clamping deterministic.
-- `open_symbol` delegates exact resolver and does not guess on ambiguity.
+- line clamping deterministic for ordinary and direct-span reads.
+- exact open does not guess on ambiguity; invalid shapes are schema-rejected before execution.
 
 Common recipes:
-1. Read bounded span around result.
-2. Open exact symbol by `symbolId` or `symbolLabel`.
-3. Use annotated mode to inspect sidecar readiness for the same file.
+1. Read bounded ordinary span around a result (`start_line`/`end_line` or direct-span `open_symbol`).
+2. Open exact symbol context with `mode` + `contractVersion: 2` + one identity + one context/continuation.
+3. Use annotated ordinary mode to inspect sidecar readiness for the same file.
 
 Behavior:
 - Trigger: read call.
-- Effect: reads file text and optionally resolves symbol span.
-- Observability: plain text or annotated JSON.
-- Determinism: explicit range math and exact-resolution semantics.
-- Performance: local file IO; outline lookup only in annotated/open_symbol flows.
+- Effect: ordinary/direct-span paths return source text; exact symbol paths return one bounded structured symbol-context package (or structured exact error).
+- Observability: plain text, annotated ordinary JSON, or exact `symbol_context` JSON.
+- Determinism: explicit range math for spans; prepared-authority exact resolution without identity guessing.
+- Performance: local file IO for ordinary/direct-span; exact open uses prepared navigation + bounded composition.
 
 **Evidence:**
 - [list_codebases.ts](/home/hamza/repo/satori/packages/mcp/src/tools/list_codebases.ts) (`listCodebasesTool`).
@@ -414,7 +420,7 @@ Behavior:
 - Trigger: `resultMode` and `groupBy`.
 - Effect: `raw` returns chunks; `grouped` returns collapsed groups by symbol/file. For `groupBy=symbol`, grouping prefers `ownerSymbolKey` plus `ownerSymbolInstanceId` when present, repairs missing owner identity from a compatible symbol registry by file/span containment, then falls back to deterministic file/proximity grouping.
 - Observability: envelope `formatVersion`, `resultMode`, `codebaseRoot`, top-level `recommendedNextAction`, and grouped `target`, `displayLabel`, `symbolKind`, `score`, `quality`, optional `evidenceChunks`, capped source-only `preview`, optional distinct `evidenceSpan`, `navigation.graph`, graph-ready `navigation.inbound="verify"`, optional `callerSearchTerm`, and `debug.symbolAggregation.ownerSource` (`owner_metadata|registry_repair|fallback`) when `debug:true`.
-- Oversized symbols: when the authoritative target span is large (at least 200 lines), top `recommendedNextAction` prefers a plain `read_file` using `evidenceSpan` first. Ordinary groups use the matched evidence span; exact-registry groups publish a same-file 40-line declaration window. `target.span` and `target.symbolId` remain the full concrete symbol identity; exact `open_symbol` always expands to the resolved symbol span.
+- Oversized symbols: when the authoritative target span is large (at least 200 lines), top `recommendedNextAction` prefers a plain `read_file` using `evidenceSpan` first. Ordinary groups use the matched evidence span; exact-registry groups publish a same-file 40-line declaration window. `target.span` and `target.symbolId` remain the full concrete symbol identity; exact `open_symbol` uses contractVersion 2 and returns one bounded structured `symbol_context` package rather than dumping the full symbol span as plain text.
 - Determinism: group key construction, saturated support boost, and sorted representative selection.
 - Performance: grouped mode removes repeated action/fallback/capability trees and caps previews at five lines and 768 UTF-8 bytes; raw mode preserves chunk detail. The checked 12 KB target covers the standard 20-result fixture, while structural-overhead tests exclude unbounded canonical path and symbol-identity strings and a separate realistic-long-identity fixture guards practical monorepo payloads.
 
@@ -552,7 +558,7 @@ Recent vs legacy:
 
 2) Deterministic read mapping
 - Trigger: opening any grouped result.
-- Effect: resolve `target.file` under the envelope `codebaseRoot`. When `target.symbolId` exists, call `read_file` on that absolute file path with `open_symbol.symbolId`; otherwise call it with `target.span.startLine/endLine`. The target span is 1-based inclusive. `evidenceSpan`, when present, is a bounded same-file evidence or declaration window and is not a second target identity.
+- Effect: resolve `target.file` under the envelope `codebaseRoot`. When `target.symbolId` exists, call `read_file` on that absolute file path with required `mode` and the canonical exact open: `open_symbol.contractVersion=2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`. Otherwise call it with unversioned direct span `open_symbol.startLine/endLine` (or top-level `start_line`/`end_line`). The target span is 1-based inclusive. `evidenceSpan`, when present, is a bounded same-file evidence or declaration window and is not a second target identity.
 - Observability: the top-level `recommendedNextAction` applies the same mapping, except an oversized target may recommend its bounded `evidenceSpan` first.
 - Determinism: target paths are normalized repo-relative paths, spans are positive ordered safe integers, executable recommendations repeat the containment check, and malformed candidates are omitted with one `SEARCH_INVALID_GROUP_TARGET_OMITTED` warning. The envelope serializer explicitly projects every v2 field; newly added internal fields cannot escape through object spread.
 - Performance: consumers derive calls locally from canonical facts; no per-result executable fallback tree is serialized.
@@ -566,17 +572,17 @@ Recent vs legacy:
 
 4) `read_file open_symbol`
 - Trigger: `open_symbol` in read request.
-- Effect: direct span open when `start_line` provided; else exact symbol resolve via `file_outline`; ambiguous/not_found become explicit error payload. Exact identity always clamps content to the **resolved symbol span** (request `start_line`/`end_line` cannot widen it).
-- Observability: error JSON with `status`, `message`, optional `matches`/`warnings`/`hints`. Annotated exact open reuses the resolved symbol only (no windowed re-outline that reintroduces overlapping siblings).
-- Determinism: does not guess symbol on ambiguity.
-- Performance: single exact resolver call for exact open; annotated exact open avoids a second windowed outline query.
+- Effect: unversioned direct-span open when only `startLine`/`endLine` are provided (source text). Exact identity requires `contractVersion: 2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`; success is one bounded structured `symbol_context` package in both plain and annotated modes. Missing identity under valid prepared authority is `SYMBOL_NOT_FOUND`; unavailable prepared authority is `NAVIGATION_UNAVAILABLE`; invalid shapes are schema-rejected.
+- Observability: exact success/error use bounded `symbol_context` JSON; ordinary/direct-span paths keep text or annotated ordinary envelopes.
+- Determinism: does not guess symbol on ambiguity; no alternate contract-version branches.
+- Performance: prepared-authority composition for exact open; direct span is local file IO only.
 
 5) Annotated read mode
 - Trigger: `mode="annotated"`.
-- Effect: returns content plus outline metadata (`outlineStatus`, `outline`, `hasMore`, optional hints/warnings).
-- Observability: JSON annotated envelope with the exact outline status and any relationship/span warnings.
-- Determinism: stable status coercion (`ok|requires_reindex|unsupported|ambiguous`).
-- Performance: optional outline lookup; plain mode remains cheaper.
+- Effect: ordinary/direct-span annotated returns content plus outline metadata (`outlineStatus`, `outline`, `hasMore`, optional hints/warnings). Exact annotated open still returns the same structured `symbol_context` transport as plain exact open (not a second full-span outline dump).
+- Observability: ordinary annotated JSON envelope, or exact `symbol_context` package.
+- Determinism: stable ordinary outline status coercion (`ok|requires_reindex|unsupported|ambiguous`).
+- Performance: optional outline lookup on ordinary annotated; plain ordinary remains cheaper.
 
 **Evidence:**
 - [search-types.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-types.ts) (`SearchGroupedResultV2`, target/navigation contracts, file outline statuses).

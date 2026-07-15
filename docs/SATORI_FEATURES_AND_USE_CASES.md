@@ -121,7 +121,7 @@ Once a candidate file is known, use `file_outline` to resolve the exact symbol a
 }
 ```
 
-For grouped `formatVersion: 2` results, build reads from the envelope `codebaseRoot` plus `target.file`: use `open_symbol.symbolId` when present, otherwise use the 1-based inclusive `target.span`. Do not rebuild spans from prose.
+For grouped `formatVersion: 2` results, build reads from the envelope `codebaseRoot` plus `target.file`. When `target.symbolId` is present, call `read_file` with required `mode` and the one canonical exact open: `open_symbol.contractVersion=2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`. Success is one bounded structured `symbol_context` JSON package in both plain and annotated modes; accepted exact failures use bounded structured errors. When no symbol identity is present, use an unversioned direct span (`open_symbol.startLine/endLine` or top-level line range). Do not rebuild spans from prose, and do not treat exact open as a full unversioned symbol-span dump.
 
 ### Inspect Relationships
 
@@ -129,7 +129,7 @@ When a grouped result has `navigation.graph="ready"`, pass its `target` directly
 
 ### Read The Proof
 
-Use `read_file` with `open_symbol` for one exact unambiguous symbol, or a bounded line window when symbol evidence is unavailable. Reads are restricted to tracked searchable roots and deny `..` or symlink escapes.
+Use `read_file` with the canonical exact `open_symbol` request for one unambiguous symbol context package, or an unversioned bounded line window when symbol evidence is unavailable. Reads are restricted to tracked searchable roots and deny `..` or symlink escapes.
 
 After ownership and the exact path are known, `rg` and bounded native reads are appropriate for fast literal confirmation. Satori is strongest at behavioral discovery, freshness decisions, and evidence-aware navigation.
 

@@ -10,6 +10,13 @@ const END_MARKER = '<!-- TOOLS_END -->';
 
 function getTypeLabel(schema: any): string {
     if (!schema) return 'unknown';
+    let alternatives: any[] | null = null;
+    if (Array.isArray(schema.anyOf)) alternatives = schema.anyOf;
+    else if (Array.isArray(schema.oneOf)) alternatives = schema.oneOf;
+    if (alternatives) {
+        return [...new Set(alternatives.map((alternative: any) => getTypeLabel(alternative)))]
+            .join(' | ');
+    }
     if (Array.isArray(schema.enum)) {
         return `enum(${schema.enum.map((v: any) => JSON.stringify(v)).join(', ')})`;
     }

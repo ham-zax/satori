@@ -94,13 +94,16 @@ For Codex, `satori-cli install --client codex --install-guidance-hook` also inst
 1. Run the CLI installer and `doctor`.
 2. Restart your MCP client.
 3. Index one absolute repository path.
-4. Search with plain-English intent, then outline, graph, and read exact spans before edits.
+4. Search with plain-English intent, then outline, graph, and open exact symbols (or direct spans) before edits.
 
 ```text
 manage_index action="create" path="/absolute/path/to/repo"
 search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
 file_outline path="/absolute/path/to/repo" file="src/auth.ts"
 call_graph path="/absolute/path/to/repo" symbolRef={...} direction="both"
+# Exact symbol open (mode required; contractVersion 2; one identity; one context or continuation):
+read_file path="/absolute/path/to/repo/src/auth.ts" mode="plain" open_symbol={contractVersion:2,symbolId:"...",context:{preset:"implementation"}}
+# Direct span remains an unversioned source read:
 read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
 ```
 
@@ -218,7 +221,7 @@ Language capability is explicit. TypeScript, JavaScript, and Python are the only
 
 Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish across small edits, but it is candidate lookup only and is not exact identity.
 
-Grouped search responses use `formatVersion: 2`. Each result carries one canonical `target` with a repo-relative file, a 1-based inclusive span, and an optional registry-proven concrete `symbolId`; display data, quality, source-only preview evidence, and navigation state are separate facts. Pass a graph-ready `target` directly to `call_graph` with the envelope `codebaseRoot`, and treat its required `navigation.inbound="verify"` as the caller-confidence contract. For reads, resolve `target.file` under `codebaseRoot`, use `open_symbol.symbolId` when present, and otherwise read `target.span`. Raw result objects are unchanged.
+Grouped search responses use `formatVersion: 2`. Each result carries one canonical `target` with a repo-relative file, a 1-based inclusive span, and an optional registry-proven concrete `symbolId`; display data, quality, source-only preview evidence, and navigation state are separate facts. Pass a graph-ready `target` directly to `call_graph` with the envelope `codebaseRoot`, and treat its required `navigation.inbound="verify"` as the caller-confidence contract. For reads, resolve `target.file` under `codebaseRoot`. When `target.symbolId` exists, call `read_file` with required `mode` and the one canonical exact open: `open_symbol.contractVersion=2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`. Success is one bounded structured `symbol_context` JSON package in both plain and annotated modes; accepted exact failures use bounded structured errors. Direct `startLine`/`endLine` (or top-level line range) opens remain unversioned source reads and do not expand to a full symbol span. Raw result objects are unchanged.
 
 `call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and avoid re-embedding or rewriting unchanged vector chunks. Current source may still be reparsed to recompute deterministic cross-file relationship evidence against the merged registry. If changed-file indexing stops early, recovery fails, or a partial full index hits a limit, Satori clears or withholds navigation state instead of publishing a mixed generation. Public reasons prefer precise values such as `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `stale_symbol_ref`, `navigation_recovery_failed`, and `partial_index_navigation_unavailable`.
 
@@ -231,7 +234,7 @@ Grouped search responses use `formatVersion: 2`. Each result carries one canonic
 | `search_codebase` | Runtime-first plain-English discovery with exact operators, compact v2 symbol groups, freshness, warnings, one `recommendedNextAction`, explicit inbound verification, and optional `callerSearchTerm` evidence |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing (`ok` / `ambiguous` / `not_found`) |
 | `call_graph` | Bounded advisory caller/callee context from a search `symbolRef` when relationship-backed navigation is ready (TS/JS/Python; not sole blast-radius authority) |
-| `read_file` | Bounded reads under indexed/searchable roots only (absolute paths; not a general host FS reader), with ranges, annotations, or exact `open_symbol` spans |
+| `read_file` | Bounded reads under indexed/searchable roots only (absolute paths; not a general host FS reader): line ranges and annotated plain source, unversioned direct-span opens, or exact `open_symbol` contractVersion 2 context packages |
 
 ## What Satori Is Not
 

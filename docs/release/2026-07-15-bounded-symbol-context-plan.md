@@ -855,24 +855,37 @@ size are not fingerprint inputs; changing page size must not make unchanged
 traversal identity appear stale. Caller and callee pages receive separate
 handles and fingerprints even when they came from one composed response.
 
-A relationship cursor is either a canonical key under the frozen edge ordering
-or an opaque server-produced encoding. Validate that it belongs to the
-fingerprinted target symbol, relationship kind, direction, depth, relationship
-manifest generation, projection policy, and ordering policy. Resume strictly
-after it. A plain key requires membership, scope, and ordering validation; an
-opaque cursor must decode and authenticate the same traversal scope. Malformed,
-unknown, cross-target, cross-direction, cross-kind, non-member, older-policy,
-and beyond-end cursors return `INVALID_RELATIONSHIP_CONTINUATION`.
+A v1 relationship cursor is a canonical key under the frozen edge ordering.
+Validate that it belongs to the fingerprinted target symbol, relationship kind,
+direction, depth, relationship manifest generation, projection policy, and
+ordering policy. Resume strictly after it. The key requires membership, scope,
+and ordering validation. Malformed, unknown, cross-target, cross-direction,
+cross-kind, non-member, older-policy, and beyond-end cursors return
+`INVALID_RELATIONSHIP_CONTINUATION`.
 End-of-traversal is explicit. Consecutive valid pages under unchanged traversal
 identity contain no duplicate or missing edges. A caller cursor is invalid for
 callees even if other identity inputs happen to match. Changing page size is
 allowed. The next cursor is derived from the final returned edge under the
 frozen ordering.
 
-Cursor format version 1 is capped at 1,024 serialized UTF-8 bytes. Opaque
-cursors authenticate their encoded traversal scope with HMAC-SHA-256. Plain
-ordering-key cursors use canonical JSON v1 and reject non-canonical equivalents.
-No error or diagnostic echoes a caller-supplied cursor value.
+Cursor format version 1 is capped at 1,024 serialized UTF-8 bytes. Ordering-key
+cursors use canonical JSON v1 and reject non-canonical equivalents. No error or
+diagnostic echoes a caller-supplied cursor value. Opaque authenticated cursors
+are deferred until after v1; v1 rejects that encoding as
+`INVALID_RELATIONSHIP_CONTINUATION`.
+
+```ts
+interface RelationshipCursorV1 {
+  formatVersion: 1;
+  traversalFingerprint: string;
+  lastEdgeKey: string;
+}
+```
+
+Those are the only v1 cursor fields. The embedded traversal fingerprint must
+exactly match the supplied continuation handle, but is not trusted as proof:
+the server still validates the edge key's traversal scope, membership, and
+ordering before resuming.
 
 Stored static graph paging does not require current-source identity by default.
 If the projection revalidates any returned site against current source, add a
@@ -1129,8 +1142,9 @@ not a Phase 0 runtime gate.
   common bounded error prefixes, stable codes, safety errors, and zero unbounded
   caller-controlled echo; and
 - prove one acquisition basis per source observation, no descriptor/stream
-  double recording, unique ranged reads under one observation ID, retry-range
-  deduplication, and zero direct source opens by processing owners.
+  double recording, duplicate-event deduplication, repeated-range accounting,
+  unique-range coverage reporting, and zero direct source opens by processing
+  owners.
 
 The baseline and all later candidate runs record omitted-range correctness and
 determinism across repeated pure-component runs. Source-context workloads also
@@ -1159,10 +1173,15 @@ is processing volume only and never enters the portable 20% I/O gate.
 
 Each observation has exactly one acquisition boundary and one portable I/O
 basis. A stream backed by a descriptor is recorded at the descriptor boundary
-or the stream boundary, never both. Multiple partial reads carry unique read IDs
-and zero-based, half-open byte ranges. Portable aggregation sums unique
-non-overlapping ranges per `observationId`; overlapping retries cannot inflate
-the result, and each record's `bytesObtained` equals `endByte - startByte`.
+or the stream boundary, never both. Each `SourceIoMetric` represents one actual
+acquisition event and carries a read ID unique within its source observation
+plus a zero-based, half-open byte range. Duplicate emission of the same
+`(observationId, readId)` is counted once only when every other event field is
+identical. Reusing that composite key with a different file, owner, range,
+basis, scan kind, or byte count fails the measurement run as ledger corruption.
+An actual retry or reread receives a new `readId` and counts again even when its
+range overlaps an earlier read. Each record's `bytesObtained` equals `endByte -
+startByte`.
 Processing owners never open source directly or perform unledgered acquisition.
 Any source access goes through an acquisition owner and propagates its
 `observationId` to downstream processing.
@@ -1183,9 +1202,14 @@ interface SourceIoMetric {
   startByte: number;
   endByte: number;
   bytesObtained: number;
-  readOperations: number;
   scanKind: "complete" | "partial";
   basis: "descriptor_read" | "stream_chunk";
+}
+
+interface SourceIoSummary {
+  portableBytesObtained: number;
+  uniqueBytesCovered: number;
+  readOperations: number;
 }
 
 interface SourceProcessingMetric {
@@ -1207,10 +1231,15 @@ interface SourceProcessingMetric {
 }
 ```
 
-The release gate applies only to total portable
-`SourceIoMetric.bytesObtained` per completed task after that within-observation
-range deduplication. Processing volume is reported separately. The candidate
-and instrumented adaptive arms use the same ledger code and measurement bases.
+`SourceIoSummary.portableBytesObtained` sums `bytesObtained` over unique
+`(observationId, readId)` values. `uniqueBytesCovered` is the union length of
+observed byte ranges within one source observation; it is diagnostic and does
+not erase reread cost. A task-level coverage rollup retains relative-file and
+observation identity and never unions raw numeric ranges from unrelated files
+or observations. `readOperations` counts unique composite read IDs. The release
+gate applies only to total portable `SourceIoSummary.portableBytesObtained` per
+completed task. Processing volume is reported separately. The candidate and
+instrumented adaptive arms use the same ledger code and measurement bases.
 
 Freeze this adjudication rubric before instrumentation, then carry it unchanged
 into the instrumented measurement-baseline artifact:
@@ -1256,9 +1285,9 @@ into the instrumented measurement-baseline artifact before Phase 1:
   workload adds more than one unnecessary call, and no large-symbol workload
   regresses in median steps or calls;
 - median model-visible UTF-8 bytes reduced by at least 20%;
-- total portable `SourceIoMetric.bytesObtained` per completed task no more than
-  20% above the instrumented adaptive baseline, with paired per-task deltas and
-  complete-file scan counts reported;
+- total portable `SourceIoSummary.portableBytesObtained` per completed task no
+  more than 20% above the instrumented adaptive baseline, with paired per-task
+  deltas, unique byte coverage, and complete-file scan counts reported;
 - zero provider-call increase for structural tasks;
 - median end-to-end latency no more than 10% above the instrumented adaptive
   baseline;
@@ -1476,7 +1505,7 @@ useful metadata/status improvements.
 | Resource limit | Very large source returns bounded success; only `minimumRequiredResponseBytes > hardResponseLimitBytes` returns the same structured MCP error in both modes, with no partial source content. |
 | Emergency transport | The compact fixed-field error projection has a separately frozen canonical byte ceiling that always fits the MCP transport limit. |
 | Streaming source | One root-bound descriptor is stable across metadata, hashing, inspection, and excerpt extraction; current path identity is observed at the source-validation linearization point; capability loss and source availability remain separate. |
-| Continuation economy | Portable bytes obtained, read operations, processing volume, hashing/selection time, latency, and scan counts are recorded; total `SourceIoMetric.bytesObtained` per completed task remains within the frozen 20% allowance against the instrumented baseline. |
+| Continuation economy | Portable bytes obtained, unique byte coverage, read operations, processing volume, hashing/selection time, latency, and scan counts are recorded; total `SourceIoSummary.portableBytesObtained` per completed task remains within the frozen 20% allowance against the instrumented baseline. |
 | Baseline identity | The pristine historical identity preserves old output; the instrumented adaptive identity proves measurement invariance and is the only latency/source-cost comparison baseline; both arms share its ledger implementation. |
 | Relationship sites | Edge generation authority does not make site coordinates current; sites carry separate current-source status and dynamic source-backed edges are suppressed after failed observations. |
 | Completeness honesty | No path returns partial source marked or implied as a complete symbol. |
@@ -1520,8 +1549,9 @@ Return `BOUNDED SYMBOL CONTEXT COMPLETE` only when:
   unbounded caller-controlled content;
 - quality, latency, provider work, response bytes/tokens, tool calls, and agent
   steps are measured against the instrumented adaptive baseline, together with
-  `SourceIoMetric.bytesObtained`, separately reported processing volume,
-  hashing/selection time, read operations, and complete-file scans;
+  `SourceIoSummary.portableBytesObtained`, unique byte coverage, separately
+  reported processing volume, hashing/selection time, read operations, and
+  complete-file scans;
 - the pinned smaller-model comparison has no deterministic correctness or
   safety regression, reduces primary median agent steps by at least 1 absolute
   or 20% relative, does not increase median tool calls, reduces median
@@ -1530,8 +1560,8 @@ Return `BOUNDED SYMBOL CONTEXT COMPLETE` only when:
   20% of the instrumented adaptive baseline over at least 30 repetitions per
   workload under the frozen warm-up, outlier, identity, and interleaving policy,
   while total
-  portable `SourceIoMetric.bytesObtained` per completed task remains within 20%
-  of the instrumented adaptive baseline;
+  portable `SourceIoSummary.portableBytesObtained` per completed task remains
+  within 20% of the instrumented adaptive baseline;
 - the tested tree and diff have immutable identities.
 
 Until those conditions are met, this remains a measured follow-on plan. The

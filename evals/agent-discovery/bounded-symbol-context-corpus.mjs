@@ -249,14 +249,18 @@ export function validatePhase0Contract(contract) {
     if (!contract.fileIdentityContract.internalSafetyFailures.includes("root_binding_invalid")) {
         throw new Error("Root-binding failures must retain a distinct internal classification.");
     }
-    const sourceIoMetrics = new Set(contract.evaluation.sourceIoMetrics);
+    const sourceIoEventFields = new Set(contract.evaluation.sourceIoEventFields);
+    const sourceIoSummaryMetrics = new Set(contract.evaluation.sourceIoSummaryMetrics);
     const sourceProcessingMetrics = new Set(contract.evaluation.sourceProcessingMetrics);
     const sourceAccounting = contract.evaluation.symmetricSourceAccounting;
     if (
-        !sourceIoMetrics.has("bytesObtained")
-        || !sourceIoMetrics.has("readOperationCount")
+        !sourceIoEventFields.has("bytesObtained")
+        || !sourceIoEventFields.has("readId")
+        || !sourceIoSummaryMetrics.has("portableBytesObtained")
+        || !sourceIoSummaryMetrics.has("uniqueBytesCovered")
+        || !sourceIoSummaryMetrics.has("readOperations")
         || !sourceProcessingMetrics.has("inputBytesProcessed")
-        || sourceIoMetrics.has("inputBytesProcessed")
+        || sourceIoEventFields.has("inputBytesProcessed")
         || sourceProcessingMetrics.has("bytesObtained")
     ) {
         throw new Error("Source I/O and downstream processing metrics must remain separate.");
@@ -267,16 +271,28 @@ export function validatePhase0Contract(contract) {
         || sourceAccounting.measurementBasisRequired !== true
         || sourceAccounting.observationIdRequired !== true
         || sourceAccounting.readIdRequired !== true
+        || sourceAccounting.readIdUniquenessScope !== "observation"
         || sourceAccounting.oneAcquisitionBasisPerObservation !== true
         || sourceAccounting.bytesObtainedEqualsRangeLength !== true
         || sourceAccounting.descriptorAndWrappingStreamDoubleRecordingAllowed !== false
-        || sourceAccounting.portableIoAggregation
-            !== "unique_non_overlapping_ranges_per_observationId"
-        || sourceAccounting.overlappingRetriesInflatePortableIo !== false
+        || sourceAccounting.sourceIoMetricRepresentsSingleAcquisitionEvent !== true
+        || JSON.stringify(sourceAccounting.duplicateEventDeduplicationKey)
+            !== JSON.stringify(["observationId", "readId"])
+        || sourceAccounting.duplicateEventRequiresIdenticalFields !== true
+        || sourceAccounting.conflictingCompositeKeyResult
+            !== "measurement_run_failure_ledger_corruption"
+        || sourceAccounting.actualRepeatedReadsUseNewReadId !== true
+        || sourceAccounting.repeatedRangeReadsCountAgain !== true
+        || sourceAccounting.portableBytesObtainedAggregation
+            !== "sum_bytesObtained_over_unique_observationId_readId"
+        || sourceAccounting.uniqueBytesCoveredAggregation
+            !== "union_length_of_ranges_per_observationId"
+        || sourceAccounting.taskCoverageRollup
+            !== "retain_relativeFile_and_observationId_without_cross_observation_range_union"
         || sourceAccounting.processingBytesExcludedFromPortableIoGate !== true
         || sourceAccounting.mmapEstimateExcludedFromPortableIoGate !== true
         || sourceAccounting.portableIoGateMetric
-            !== "total_SourceIoMetric.bytesObtained_per_completed_task"
+            !== "SourceIoSummary.portableBytesObtained_per_completed_task"
         || sourceAccounting.ioMeasurementBases.includes("mmap_estimate")
         || sourceAccounting.processingOwnersMayOpenSourceDirectly !== false
         || sourceAccounting.processingOwnersRequireExistingObservationId !== true
@@ -300,9 +316,21 @@ export function validatePhase0Contract(contract) {
         || !continuationHandles.relationshipPaging.cursorScope.includes("projectionPolicyVersion")
         || continuationHandles.relationshipPaging.cursorFormatVersion !== 1
         || continuationHandles.relationshipPaging.maximumSerializedCursorBytes !== 1024
-        || continuationHandles.relationshipPaging.opaqueCursorAuthentication !== "hmac_sha256"
-        || continuationHandles.relationshipPaging.plainCursorCanonicalSerialization
+        || JSON.stringify(continuationHandles.relationshipPaging.cursorRepresentations)
+            !== JSON.stringify(["canonical_edge_ordering_key"])
+        || continuationHandles.relationshipPaging.opaqueCursorSupport !== "deferred_post_v1"
+        || continuationHandles.relationshipPaging.cursorValidation
+            !== "membership_scope_and_ordering"
+        || continuationHandles.relationshipPaging.cursorCanonicalSerialization
             !== "canonical_json_v1"
+        || JSON.stringify(continuationHandles.relationshipPaging.cursorObjectV1?.requiredFields)
+            !== JSON.stringify(["formatVersion", "traversalFingerprint", "lastEdgeKey"])
+        || continuationHandles.relationshipPaging.cursorObjectV1?.additionalProperties !== false
+        || continuationHandles.relationshipPaging.cursorObjectV1?.formatVersion !== 1
+        || continuationHandles.relationshipPaging.cursorObjectV1?.traversalFingerprintValidation
+            !== "exact_match_supplied_continuation_handle"
+        || continuationHandles.relationshipPaging.cursorObjectV1?.lastEdgeKeyValidation
+            !== "membership_scope_and_ordering"
         || continuationHandles.relationshipPaging.echoCursorInErrorsOrDiagnostics !== false
         || contract.continuationDomains.staticRelationships.includes("effectiveEdgeLimit")
     ) {
@@ -392,7 +420,10 @@ export function validatePhase0Contract(contract) {
         [entry.case, entry.expected]
     )));
     if (
-        cursorCases.get("malformed_cursor") !== "INVALID_RELATIONSHIP_CONTINUATION"
+        JSON.stringify(Object.keys(cursorValidation?.canonicalCursorV1 ?? {}))
+            !== JSON.stringify(["formatVersion", "traversalFingerprint", "lastEdgeKey"])
+        || cursorValidation.canonicalCursorV1.formatVersion !== 1
+        || cursorCases.get("malformed_cursor") !== "INVALID_RELATIONSHIP_CONTINUATION"
         || cursorCases.get("caller_cursor_used_for_callees")
             !== "INVALID_RELATIONSHIP_CONTINUATION"
         || cursorCases.get("cursor_from_another_relationship_kind")
@@ -406,9 +437,9 @@ export function validatePhase0Contract(contract) {
         || cursorCases.get("oversized_cursor") !== "INVALID_RELATIONSHIP_CONTINUATION"
         || cursorCases.get("unsupported_cursor_format_version")
             !== "INVALID_RELATIONSHIP_CONTINUATION"
-        || cursorCases.get("non_canonical_plain_cursor")
+        || cursorCases.get("non_canonical_cursor")
             !== "INVALID_RELATIONSHIP_CONTINUATION"
-        || cursorCases.get("opaque_cursor_authentication_failure")
+        || cursorCases.get("unsupported_opaque_cursor_encoding")
             !== "INVALID_RELATIONSHIP_CONTINUATION"
         || cursorCases.get("end_of_traversal") !== "explicit_terminal_state"
     ) {
@@ -462,9 +493,57 @@ export function validatePhase0Contract(contract) {
     const exactlyOnceIo = contract.fixtures.find((fixture) => (
         fixture.id === "source-io-exactly-once"
     ));
+    const emittedReads = (exactlyOnceIo?.emissions ?? []).map((entry) => entry.metric);
+    const uniqueReads = new Map(emittedReads.map((entry) => (
+        [`${entry.observationId}\u0000${entry.readId}`, entry]
+    )));
+    const portableBytesObtained = [...uniqueReads.values()].reduce((sum, entry) => (
+        sum + entry.bytesObtained
+    ), 0);
+    const uniqueRanges = [...new Map(emittedReads.map((entry) => (
+        [`${entry.observationId}\u0000${entry.startByte}\u0000${entry.endByte}`, entry]
+    ))).values()].sort((left, right) => (
+        left.observationId.localeCompare(right.observationId)
+        || left.startByte - right.startByte
+        || left.endByte - right.endByte
+    ));
+    let uniqueBytesCovered = 0;
+    let coveredObservation;
+    let coveredStart = 0;
+    let coveredEnd = 0;
+    for (const range of uniqueRanges) {
+        if (range.observationId !== coveredObservation || range.startByte > coveredEnd) {
+            uniqueBytesCovered += coveredEnd - coveredStart;
+            coveredObservation = range.observationId;
+            coveredStart = range.startByte;
+            coveredEnd = range.endByte;
+            continue;
+        }
+        coveredEnd = Math.max(coveredEnd, range.endByte);
+    }
+    uniqueBytesCovered += coveredEnd - coveredStart;
+    const corruptionCase = exactlyOnceIo?.conflictingCompositeKey;
+    const sameCorruptCompositeKey = corruptionCase?.original?.observationId
+        === corruptionCase?.conflict?.observationId
+        && corruptionCase?.original?.readId === corruptionCase?.conflict?.readId;
+    const differingCorruptFields = JSON.stringify(corruptionCase?.original)
+        !== JSON.stringify(corruptionCase?.conflict);
     if (
         exactlyOnceIo?.expected?.acquisitionBasesPerObservation !== 1
         || exactlyOnceIo.expected.descriptorAndWrappingStreamBothCounted !== false
+        || JSON.stringify(exactlyOnceIo.expected.duplicateEventDeduplicationKey)
+            !== JSON.stringify(["observationId", "readId"])
+        || exactlyOnceIo.conflictingCompositeKey?.expected
+            !== "measurement_run_failure_ledger_corruption"
+        || sameCorruptCompositeKey !== true
+        || differingCorruptFields !== true
+        || exactlyOnceIo.expected.sameReadIdEmittedTwicePortableBytesObtained !== 4096
+        || exactlyOnceIo.expected.sameRangeDifferentReadIdsPortableBytesObtained !== 8192
+        || exactlyOnceIo.expected.sameRangeDifferentReadIdsUniqueBytesCovered !== 4096
+        || exactlyOnceIo.expected.sameRangeDifferentReadIdsReadOperations !== 2
+        || portableBytesObtained !== exactlyOnceIo.expected.sameRangeDifferentReadIdsPortableBytesObtained
+        || uniqueBytesCovered !== exactlyOnceIo.expected.sameRangeDifferentReadIdsUniqueBytesCovered
+        || uniqueReads.size !== exactlyOnceIo.expected.sameRangeDifferentReadIdsReadOperations
         || exactlyOnceIo.expected.processingContributesToPortableIo !== false
         || exactlyOnceIo.expected.processingOwnersOpenSourceDirectly !== false
     ) {

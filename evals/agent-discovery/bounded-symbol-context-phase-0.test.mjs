@@ -215,7 +215,19 @@ test("continuation handles, source authority, and accepted V2 outcomes are indep
     );
     assert.equal(handles.relationshipPaging.cursorFormatVersion, 1);
     assert.equal(handles.relationshipPaging.maximumSerializedCursorBytes, 1024);
-    assert.equal(handles.relationshipPaging.opaqueCursorAuthentication, "hmac_sha256");
+    assert.deepEqual(handles.relationshipPaging.cursorRepresentations, [
+        "canonical_edge_ordering_key",
+    ]);
+    assert.equal(handles.relationshipPaging.opaqueCursorSupport, "deferred_post_v1");
+    assert.equal(handles.relationshipPaging.cursorValidation, "membership_scope_and_ordering");
+    assert.equal(handles.relationshipPaging.cursorCanonicalSerialization, "canonical_json_v1");
+    assert.deepEqual(handles.relationshipPaging.cursorObjectV1, {
+        requiredFields: ["formatVersion", "traversalFingerprint", "lastEdgeKey"],
+        additionalProperties: false,
+        formatVersion: 1,
+        traversalFingerprintValidation: "exact_match_supplied_continuation_handle",
+        lastEdgeKeyValidation: "membership_scope_and_ordering",
+    });
     assert.equal(handles.relationshipPaging.echoCursorInErrorsOrDiagnostics, false);
     assert.equal(contract.continuationDomains.staticRelationships.includes("effectiveEdgeLimit"), false);
 
@@ -253,6 +265,11 @@ test("continuation handles, source authority, and accepted V2 outcomes are indep
     const cursorCases = new Map(byId.get("relationship-cursor-validation").cases.map((entry) => (
         [entry.case, entry.expected]
     )));
+    assert.deepEqual(byId.get("relationship-cursor-validation").canonicalCursorV1, {
+        formatVersion: 1,
+        traversalFingerprint: "sha256_callers_fixture",
+        lastEdgeKey: "edge_key_020",
+    });
     assert.equal(
         cursorCases.get("caller_cursor_used_for_callees"),
         "INVALID_RELATIONSHIP_CONTINUATION",
@@ -270,7 +287,7 @@ test("continuation handles, source authority, and accepted V2 outcomes are indep
     );
     assert.equal(cursorCases.get("oversized_cursor"), "INVALID_RELATIONSHIP_CONTINUATION");
     assert.equal(
-        cursorCases.get("non_canonical_plain_cursor"),
+        cursorCases.get("non_canonical_cursor"),
         "INVALID_RELATIONSHIP_CONTINUATION",
     );
     assert.equal(
@@ -297,9 +314,12 @@ test("source I/O and downstream processing accounting cannot double-count bytes"
         contract.evaluation.releaseGates.maximumPortableSourceBytesObtainedIncrease,
         0.2,
     );
-    assert.equal(contract.evaluation.sourceIoMetrics.includes("bytesObtained"), true);
-    assert.equal(contract.evaluation.sourceIoMetrics.includes("readOperationCount"), true);
-    assert.equal(contract.evaluation.sourceIoMetrics.includes("inputBytesProcessed"), false);
+    assert.equal(contract.evaluation.sourceIoEventFields.includes("bytesObtained"), true);
+    assert.equal(contract.evaluation.sourceIoEventFields.includes("readId"), true);
+    assert.equal(contract.evaluation.sourceIoSummaryMetrics.includes("portableBytesObtained"), true);
+    assert.equal(contract.evaluation.sourceIoSummaryMetrics.includes("uniqueBytesCovered"), true);
+    assert.equal(contract.evaluation.sourceIoSummaryMetrics.includes("readOperations"), true);
+    assert.equal(contract.evaluation.sourceIoEventFields.includes("inputBytesProcessed"), false);
     assert.equal(contract.evaluation.sourceProcessingMetrics.includes("inputBytesProcessed"), true);
     assert.equal(contract.evaluation.sourceProcessingMetrics.includes("bytesObtained"), false);
     assert.deepEqual(accounting.ioOwners, [
@@ -319,21 +339,38 @@ test("source I/O and downstream processing accounting cannot double-count bytes"
     ]);
     assert.equal(accounting.observationIdRequired, true);
     assert.equal(accounting.readIdRequired, true);
+    assert.equal(accounting.readIdUniquenessScope, "observation");
     assert.equal(accounting.oneAcquisitionBasisPerObservation, true);
     assert.equal(accounting.bytesObtainedEqualsRangeLength, true);
     assert.equal(accounting.descriptorAndWrappingStreamDoubleRecordingAllowed, false);
+    assert.equal(accounting.sourceIoMetricRepresentsSingleAcquisitionEvent, true);
+    assert.deepEqual(accounting.duplicateEventDeduplicationKey, ["observationId", "readId"]);
+    assert.equal(accounting.duplicateEventRequiresIdenticalFields, true);
     assert.equal(
-        accounting.portableIoAggregation,
-        "unique_non_overlapping_ranges_per_observationId",
+        accounting.conflictingCompositeKeyResult,
+        "measurement_run_failure_ledger_corruption",
     );
-    assert.equal(accounting.overlappingRetriesInflatePortableIo, false);
+    assert.equal(accounting.actualRepeatedReadsUseNewReadId, true);
+    assert.equal(accounting.repeatedRangeReadsCountAgain, true);
+    assert.equal(
+        accounting.portableBytesObtainedAggregation,
+        "sum_bytesObtained_over_unique_observationId_readId",
+    );
+    assert.equal(
+        accounting.uniqueBytesCoveredAggregation,
+        "union_length_of_ranges_per_observationId",
+    );
+    assert.equal(
+        accounting.taskCoverageRollup,
+        "retain_relativeFile_and_observationId_without_cross_observation_range_union",
+    );
     assert.equal(accounting.measurementBasisRequired, true);
     assert.equal(accounting.alternateFileHelperBypassAllowed, false);
     assert.equal(accounting.processingBytesExcludedFromPortableIoGate, true);
     assert.equal(accounting.mmapEstimateExcludedFromPortableIoGate, true);
     assert.equal(
         accounting.portableIoGateMetric,
-        "total_SourceIoMetric.bytesObtained_per_completed_task",
+        "SourceIoSummary.portableBytesObtained_per_completed_task",
     );
     assert.equal(accounting.ioMeasurementBases.includes("mmap_estimate"), false);
     assert.equal(accounting.processingOwnersMayOpenSourceDirectly, false);
@@ -342,5 +379,25 @@ test("source I/O and downstream processing accounting cannot double-count bytes"
     assert.equal(
         byId.get("source-io-exactly-once").expected.descriptorAndWrappingStreamBothCounted,
         false,
+    );
+    const ioEmissions = byId.get("source-io-exactly-once").emissions;
+    assert.deepEqual(ioEmissions[1].metric, ioEmissions[0].metric);
+    assert.equal(ioEmissions[2].metric.observationId, ioEmissions[0].metric.observationId);
+    assert.notEqual(ioEmissions[2].metric.readId, ioEmissions[0].metric.readId);
+    assert.equal(
+        byId.get("source-io-exactly-once").expected.sameReadIdEmittedTwicePortableBytesObtained,
+        4096,
+    );
+    assert.equal(
+        byId.get("source-io-exactly-once").expected.sameRangeDifferentReadIdsPortableBytesObtained,
+        8192,
+    );
+    assert.equal(
+        byId.get("source-io-exactly-once").expected.sameRangeDifferentReadIdsUniqueBytesCovered,
+        4096,
+    );
+    assert.equal(
+        byId.get("source-io-exactly-once").conflictingCompositeKey.expected,
+        "measurement_run_failure_ledger_corruption",
     );
 });

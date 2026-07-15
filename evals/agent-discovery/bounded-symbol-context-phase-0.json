@@ -612,8 +612,7 @@
     "relationshipPaging": {
       "fingerprintBinds": "stable_traversal_identity",
       "cursorRepresentations": [
-        "canonical_edge_ordering_key",
-        "opaque_server_produced_encoding"
+        "canonical_edge_ordering_key"
       ],
       "cursorScope": [
         "target",
@@ -630,16 +629,26 @@
       "requestedPageSize": "caller_supplied_and_server_clamped",
       "effectivePageSize": "echoed_in_response",
       "resumePosition": "strictly_after_cursor",
-      "plainCursorValidation": "membership_scope_and_ordering",
-      "opaqueCursorValidation": "decode_and_authenticate_traversal_scope",
+      "cursorValidation": "membership_scope_and_ordering",
       "invalidCursorCode": "INVALID_RELATIONSHIP_CONTINUATION",
       "terminalState": "end_of_traversal",
       "consecutivePageInvariant": "no_duplicate_or_missing_edges",
       "nextCursorDerivation": "final_returned_edge_under_frozen_ordering",
       "cursorFormatVersion": 1,
       "maximumSerializedCursorBytes": 1024,
-      "opaqueCursorAuthentication": "hmac_sha256",
-      "plainCursorCanonicalSerialization": "canonical_json_v1",
+      "opaqueCursorSupport": "deferred_post_v1",
+      "cursorCanonicalSerialization": "canonical_json_v1",
+      "cursorObjectV1": {
+        "requiredFields": [
+          "formatVersion",
+          "traversalFingerprint",
+          "lastEdgeKey"
+        ],
+        "additionalProperties": false,
+        "formatVersion": 1,
+        "traversalFingerprintValidation": "exact_match_supplied_continuation_handle",
+        "lastEdgeKeyValidation": "membership_scope_and_ordering"
+      },
       "echoCursorInErrorsOrDiagnostics": false
     }
   },
@@ -668,14 +677,24 @@
       "maximumControlledP95LatencyRegression": 0.2,
       "maximumUnnecessaryCallsAddedPerDeterministicWorkload": 1
     },
-    "sourceIoMetrics": [
-      "logicalSourceBytesRequested",
+    "sourceIoEventFields": [
       "observationId",
       "readId",
+      "owner",
+      "relativeFile",
       "startByte",
       "endByte",
       "bytesObtained",
-      "readOperationCount",
+      "scanKind",
+      "basis"
+    ],
+    "sourceIoSummaryMetrics": [
+      "portableBytesObtained",
+      "uniqueBytesCovered",
+      "readOperations"
+    ],
+    "sourceWorkloadMetrics": [
+      "logicalSourceBytesRequested",
       "completeFileScanCount",
       "partialScanCount",
       "filesOpened",
@@ -717,19 +736,27 @@
       ],
       "observationIdRequired": true,
       "readIdRequired": true,
+      "readIdUniquenessScope": "observation",
       "byteRangeConvention": "zero_based_half_open",
       "bytesObtainedEqualsRangeLength": true,
       "oneAcquisitionBasisPerObservation": true,
       "descriptorAndWrappingStreamDoubleRecordingAllowed": false,
-      "portableIoAggregation": "unique_non_overlapping_ranges_per_observationId",
-      "overlappingRetriesInflatePortableIo": false,
+      "sourceIoMetricRepresentsSingleAcquisitionEvent": true,
+      "duplicateEventDeduplicationKey": ["observationId", "readId"],
+      "duplicateEventRequiresIdenticalFields": true,
+      "conflictingCompositeKeyResult": "measurement_run_failure_ledger_corruption",
+      "actualRepeatedReadsUseNewReadId": true,
+      "repeatedRangeReadsCountAgain": true,
+      "portableBytesObtainedAggregation": "sum_bytesObtained_over_unique_observationId_readId",
+      "uniqueBytesCoveredAggregation": "union_length_of_ranges_per_observationId",
+      "taskCoverageRollup": "retain_relativeFile_and_observationId_without_cross_observation_range_union",
       "measurementBasisRequired": true,
       "alternateFileHelperBypassAllowed": false,
       "processingOwnersMayOpenSourceDirectly": false,
       "processingOwnersRequireExistingObservationId": true,
       "processingBytesExcludedFromPortableIoGate": true,
       "mmapEstimateExcludedFromPortableIoGate": true,
-      "portableIoGateMetric": "total_SourceIoMetric.bytesObtained_per_completed_task",
+      "portableIoGateMetric": "SourceIoSummary.portableBytesObtained_per_completed_task",
       "sourceIoIncludesCacheHits": true,
       "osPhysicalReadBytesOptional": true,
       "osPhysicalReadMeasurementSources": [
@@ -1085,6 +1112,11 @@
     {
       "id": "relationship-cursor-validation",
       "kind": "continuity_state",
+      "canonicalCursorV1": {
+        "formatVersion": 1,
+        "traversalFingerprint": "sha256_callers_fixture",
+        "lastEdgeKey": "edge_key_020"
+      },
       "cases": [
         {
           "case": "malformed_cursor",
@@ -1135,11 +1167,11 @@
           "expected": "INVALID_RELATIONSHIP_CONTINUATION"
         },
         {
-          "case": "non_canonical_plain_cursor",
+          "case": "non_canonical_cursor",
           "expected": "INVALID_RELATIONSHIP_CONTINUATION"
         },
         {
-          "case": "opaque_cursor_authentication_failure",
+          "case": "unsupported_opaque_cursor_encoding",
           "expected": "INVALID_RELATIONSHIP_CONTINUATION"
         },
         {
@@ -1290,10 +1322,81 @@
     {
       "id": "source-io-exactly-once",
       "kind": "measurement_state",
+      "emissions": [
+        {
+          "emissionKind": "initial_read",
+          "metric": {
+            "observationId": "observation_1",
+            "readId": "read_1",
+            "owner": "validation",
+            "relativeFile": "src/example.ts",
+            "startByte": 0,
+            "endByte": 4096,
+            "bytesObtained": 4096,
+            "scanKind": "partial",
+            "basis": "descriptor_read"
+          }
+        },
+        {
+          "emissionKind": "duplicate_ledger_emission",
+          "metric": {
+            "observationId": "observation_1",
+            "readId": "read_1",
+            "owner": "validation",
+            "relativeFile": "src/example.ts",
+            "startByte": 0,
+            "endByte": 4096,
+            "bytesObtained": 4096,
+            "scanKind": "partial",
+            "basis": "descriptor_read"
+          }
+        },
+        {
+          "emissionKind": "actual_retry",
+          "metric": {
+            "observationId": "observation_1",
+            "readId": "read_2",
+            "owner": "validation",
+            "relativeFile": "src/example.ts",
+            "startByte": 0,
+            "endByte": 4096,
+            "bytesObtained": 4096,
+            "scanKind": "partial",
+            "basis": "descriptor_read"
+          }
+        }
+      ],
+      "conflictingCompositeKey": {
+        "original": {
+          "observationId": "observation_1",
+          "readId": "read_1",
+          "relativeFile": "src/example.ts",
+          "startByte": 0,
+          "endByte": 4096,
+          "bytesObtained": 4096,
+          "owner": "validation",
+          "basis": "descriptor_read"
+        },
+        "conflict": {
+          "observationId": "observation_1",
+          "readId": "read_1",
+          "relativeFile": "src/example.ts",
+          "startByte": 0,
+          "endByte": 2048,
+          "bytesObtained": 2048,
+          "owner": "validation",
+          "basis": "descriptor_read"
+        },
+        "expected": "measurement_run_failure_ledger_corruption"
+      },
       "expected": {
         "acquisitionBasesPerObservation": 1,
         "descriptorAndWrappingStreamBothCounted": false,
-        "portableAggregation": "unique_non_overlapping_ranges_per_observationId",
+        "duplicateEventDeduplicationKey": ["observationId", "readId"],
+        "sameReadIdEmittedTwicePortableBytesObtained": 4096,
+        "sameRangeDifferentReadIdsPortableBytesObtained": 8192,
+        "sameRangeDifferentReadIdsUniqueBytesCovered": 4096,
+        "sameRangeDifferentReadIdsReadOperations": 2,
         "processingContributesToPortableIo": false,
         "processingOwnersOpenSourceDirectly": false
       }

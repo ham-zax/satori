@@ -94,7 +94,11 @@
             "args": {
               "path": "$REPO_ROOT/packages/mcp/src/core/prepared-read-cache.ts",
               "mode": "annotated",
-              "open_symbol": { "symbolLabel": "lookupCandidate" }
+              "open_symbol": {
+                "contractVersion": 2,
+                "symbolLabel": "lookupCandidate",
+                "context": { "preset": "implementation" }
+              }
             }
           }
         ],

@@ -899,6 +899,8 @@ test("committed tasks.json validates as a repeatable multi-class corpus without 
             assert.equal(invocation.tool, "read_file");
             assert.equal(invocation.args.mode, "annotated");
             assert.ok(invocation.args.open_symbol);
+            assert.equal(invocation.args.open_symbol.contractVersion, 2);
+            assert.equal(invocation.args.open_symbol.context?.preset, "implementation");
             const target = path.join(REPO_ROOT, task.expected.ownerFile);
             assert.ok(fs.statSync(target).size <= 256 * 1024, `${task.id} exact-open target exceeds the current-source proof limit`);
         }

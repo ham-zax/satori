@@ -55,7 +55,11 @@ function taskSuite(repoRoot) {
                         args: {
                             path: "$REPO_ROOT/src/owner.ts",
                             mode: "annotated",
-                            open_symbol: { symbolLabel: "handleOwner" },
+                            open_symbol: {
+                                contractVersion: 2,
+                                symbolLabel: "handleOwner",
+                                context: { preset: "implementation" },
+                            },
                         },
                     }],
                     phaseProtocol: { cold: "fresh runtime", warm: "same runtime" },
@@ -142,10 +146,19 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   } else if (name === "read_file") {
     payload = {
       runtimeId: process.pid,
-      path: message.params.arguments.path,
-      content: "function handleOwner() {\\n  return owner;\\n}",
-      outlineStatus: "ok",
-      outline: { symbols: [{ file: "src/owner.ts", symbolLabel: "function handleOwner()", span: { startLine: 7, endLine: ${endLine} } }] }
+      formatVersion: 2,
+      kind: "symbol_context",
+      status: "ok",
+      symbol: {
+        file: "src/owner.ts",
+        name: "handleOwner",
+        label: "function handleOwner()",
+        span: { startLine: 7, endLine: ${endLine} }
+      },
+      source: {
+        status: "available",
+        excerpts: [{ content: "function handleOwner() {\\n  return owner;\\n}" }]
+      }
     };
   } else {
     payload = { status: "ok" };
@@ -217,7 +230,10 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
         });
         assert.equal(openCold.status, "ok");
         assert.ok(Number.isInteger(openCold.latencyMs) && openCold.latencyMs >= 0);
-        assert.equal(openCold.contextBytes, Buffer.byteLength(openCold.response.content, "utf8"));
+        assert.equal(
+            openCold.contextBytes,
+            Buffer.byteLength(openCold.response.source.excerpts[0].content, "utf8"),
+        );
         assert.ok(ownerCold.responseBytes > ownerCold.contextBytes);
         assert.deepEqual(ownerCold.readiness.map((entry) => entry.proofMode), ["cold"]);
         assert.deepEqual(ownerWarm.readiness.map((entry) => entry.proofMode), ["warm"]);
@@ -236,7 +252,7 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
     }
 });
 
-test("recorder refuses an unready status and exact-open span drift", () => {
+test("recorder accepts plain exact reads and rejects unready, missing-mode, and span-drift observations", () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), "satori-useful-context-refusal-"));
     try {
         const repoRoot = path.join(temp, "repo");
@@ -255,7 +271,7 @@ test("recorder refuses an unready status and exact-open span drift", () => {
 
         const plainSuite = taskSuite(repoRoot);
         plainSuite.tasks = [plainSuite.tasks[1]];
-        delete plainSuite.tasks[0].workload.invocations[0].args.mode;
+        plainSuite.tasks[0].workload.invocations[0].args.mode = "plain";
         writeJson(tasksFile, plainSuite);
         const plainMcp = path.join(temp, "plain.mjs");
         writeFakeMcp(plainMcp);
@@ -263,8 +279,18 @@ test("recorder refuses an unready status and exact-open span drift", () => {
             SCRIPT_PATH, "--tasks", tasksFile, "--repo", repoRoot,
             "--command", process.execPath, "--command-arg", plainMcp,
         ], { encoding: "utf8" });
-        assert.equal(plain.status, 1);
-        assert.match(plain.stderr, /mode='annotated'.*span/i);
+        assert.equal(plain.status, 0, plain.stderr);
+
+        const missingModeSuite = taskSuite(repoRoot);
+        missingModeSuite.tasks = [missingModeSuite.tasks[1]];
+        delete missingModeSuite.tasks[0].workload.invocations[0].args.mode;
+        writeJson(tasksFile, missingModeSuite);
+        const missingMode = spawnSync(process.execPath, [
+            SCRIPT_PATH, "--tasks", tasksFile, "--repo", repoRoot,
+            "--command", process.execPath, "--command-arg", plainMcp,
+        ], { encoding: "utf8" });
+        assert.equal(missingMode.status, 1);
+        assert.match(missingMode.stderr, /requires mode='plain' or mode='annotated'/i);
 
         writeJson(tasksFile, taskSuite(repoRoot));
         const driftMcp = path.join(temp, "drift.mjs");

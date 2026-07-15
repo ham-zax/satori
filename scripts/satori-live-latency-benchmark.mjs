@@ -375,7 +375,11 @@ async function runDiagnostic(session, options) {
     const openSymbol = target
         ? await timedTool(session, "read_file", {
             path: path.join(options.repoRoot, target.file),
-            open_symbol: { symbolId: target.symbolId },
+            open_symbol: {
+                contractVersion: 2,
+                symbolId: target.symbolId,
+                context: { preset: "implementation" },
+            },
             mode: "annotated",
         })
         : null;
@@ -475,7 +479,11 @@ async function runComparison(session, options) {
     const outline = await timedTool(session, "file_outline", args.outline);
     const openSymbol = await timedTool(session, "read_file", {
         path: path.join(options.repoRoot, exactTarget.file),
-        open_symbol: { symbolId: exactTarget.symbolId },
+        open_symbol: {
+            contractVersion: 2,
+            symbolId: exactTarget.symbolId,
+            context: { preset: "implementation" },
+        },
         mode: "annotated",
     });
     const readFile = await timedTool(session, "read_file", args.readFile);

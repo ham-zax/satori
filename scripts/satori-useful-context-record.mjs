@@ -467,14 +467,20 @@ function observationStatus(payload, result, results, task) {
     if (task.queryClass !== "exact_open" && Array.isArray(payload?.results) && results.length === 0) {
         return "zero_result";
     }
-    if (task.queryClass === "exact_open") return payload?.outlineStatus === "ok" ? "ok" : "error";
+    if (task.queryClass === "exact_open") {
+        return payload?.formatVersion === 2
+            && payload?.kind === "symbol_context"
+            && payload?.status === "ok"
+            ? "ok"
+            : "error";
+    }
     return payload?.status === "zero_result" ? "zero_result" : "ok";
 }
 
 function extractOpenedSymbol(payload, task, repoRoot) {
-    const symbol = payload?.outline?.symbols?.[0];
+    const symbol = payload?.symbol;
     if (!isRecord(symbol) || !isRecord(symbol.span)) return undefined;
-    const file = normalizeRelativeFile(symbol.file || payload.path, repoRoot);
+    const file = normalizeRelativeFile(symbol.file, repoRoot);
     const name = normalizeSymbol(symbol, task.expected.ownerSymbol);
     if (!file || !name || !Number.isInteger(symbol.span.startLine) || !Number.isInteger(symbol.span.endLine)) {
         return undefined;
@@ -614,8 +620,9 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
         if (task.queryClass === "exact_open"
             && invocation.tool === "read_file"
             && invocation.args.open_symbol
+            && invocation.args.mode !== "plain"
             && invocation.args.mode !== "annotated") {
-            throw new Error(`Task '${task.id}' must use read_file mode='annotated' so the exact-open span can be verified.`);
+            throw new Error(`Task '${task.id}' exact read_file invocation requires mode='plain' or mode='annotated'.`);
         }
         const called = await callAndDecode(session, invocation);
         responseBytes += responseUtf8Bytes(called.result);

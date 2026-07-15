@@ -1,7 +1,10 @@
 # Satori indexing-throughput investigation
 
-Status: throughput implementation accepted and validated. Generation `2801`
-completed authoritatively; further vector-write tuning remains a separate
+Status: throughput implementation accepted operationally. Generation `2801`
+completed authoritatively, repository validation is green, and a frozen paired
+hermetic comparison now proves unchanged search-quality results. The live
+discovery checks remain authority and transport smoke evidence rather than a
+semantic answer-quality benchmark. Further vector-write tuning is a separate
 measured follow-up.
 
 ## Scope and invariants
@@ -18,10 +21,11 @@ This work starts from the reliability fix committed as `60b54c1`
 - deterministic ordering and failure behavior.
 
 The goal is to reduce cold-rebuild wall time without trading away search
-quality or the now-proven ingestion reliability. Provider tokens are not a
-binding cost constraint for the experiments because the current Voyage tier
-has more than 100 million free tokens. Provider calls still matter because
-they consume latency and rate-limit capacity.
+quality or the now-proven ingestion reliability. As observed on July 15, 2026,
+the available Voyage quota exceeded 100 million tokens and was not a binding
+constraint for these runs. That account observation is not a durable design
+assumption. Provider calls still matter because they consume latency and
+rate-limit capacity.
 
 Generated benchmark outputs must not be committed as results of this work.
 The existing user-owned bounded-context doc and corpus changes remain outside
@@ -143,16 +147,18 @@ The proposed change is a narrow repo-local indexing exclusion, not deletion.
 
 ## Voyage authority and live probes
 
-Current Voyage documentation states that `voyage-code-3` accepts at most 1,000
-texts and 120,000 total tokens per embedding request. Larger batches are
-recommended for throughput. The embeddings endpoint defaults `truncation` to
-true. The TypeScript client accepts per-request `timeoutInSeconds` and
-`maxRetries`.
+Voyage documentation retrieved on July 15, 2026 states that `voyage-code-3`
+accepts at most 1,000 texts and 120,000 total tokens per embedding request.
+Larger batches are recommended for throughput. The embeddings endpoint
+defaults `truncation` to true. The TypeScript client accepts per-request
+`timeoutInSeconds` and `maxRetries`.
 
-The installed `voyageai@0.3.1` generated type comments still describe an old
-128-item limit. Its runtime serializer does not enforce that old limit. This
-documentation mismatch is why larger batches were tested against the live
-service before being proposed.
+The tested runtime used `voyageai@0.3.1`, `voyage-code-3`, document input, and
+1,024 output dimensions. Its generated type comments still describe an old
+128-item limit, while its runtime serializer does not enforce that old limit.
+This documentation mismatch is why larger batches were tested against the live
+service before being proposed. The Zilliz path used
+`@zilliz/milvus2-sdk-node@2.6.17` over gRPC.
 
 All probes used `voyage-code-3`, `inputType=document`, output dimension 1,024,
 `truncation=false`, a 180-second deadline, and the current corpus after the
@@ -339,6 +345,13 @@ does not change authority or publication semantics:
 The accepted cold rebuild used operation
 `19044432-b39b-4ac8-b839-15958c69fd04`, generation `2801`:
 
+Generation `2801` completed 72.2% faster end to end on its final accepted
+corpus. This is not an isolated same-tree batching A/B: the run combines
+batching, narrow artifact exclusion, instrumentation, and intervening tree
+changes. The phase measurements establish the new operational result and the
+remaining bottleneck, but do not attribute the entire 72.2% delta to one
+change.
+
 | Metric | Generation 2799 baseline | Generation 2801 | Change |
 | --- | ---: | ---: | ---: |
 | Total wall time | 39m 13s | 10m 54.046s | -72.2% |
@@ -355,6 +368,24 @@ The accepted cold rebuild used operation
 | Zilliz write duration | not recorded | 491.873s | measured |
 | Zilliz retries | 0 observed | 0 | unchanged |
 
+Normalized generation `2801` rates, using decimal MB for the byte rate:
+
+| Normalized metric | Generation 2801 |
+| --- | ---: |
+| Embedding seconds per million provider tokens | 60.364s |
+| Write seconds per thousand submitted rows | 55.876s |
+| Write seconds per 100 MB serialized | 391.285s |
+| Total seconds per thousand chunks | 74.298s |
+
+The current pipeline ends each logical vector write at an embedding-batch
+boundary, then the Milvus adapter independently splits that logical write at
+100 rows. Generation `2801` had 22 embedding requests and 98 provider writes;
+a globally perfect 100-row packing of 8,803 rows would require 89 writes. The
+nine-request fragmentation overhead is therefore consistent with logical-write
+boundaries, but generation `2801` did not record per-attempt rows, bytes, or
+flush reasons. The review instrumentation below is required to prove the exact
+distribution before changing the ceiling.
+
 Phase evidence for generation `2801`:
 
 - prepare collection: 42.211s;
@@ -370,8 +401,10 @@ Phase evidence for generation `2801`:
 The fresh-runtime status reported `status=ok`, matching runtime/indexed
 fingerprints, and `symbolQuality=symbol_rich`. A fresh-runtime sync then passed
 with `added=0`, `removed=0`, and `modified=0`. Live semantic, mutation, exact,
-call-graph, outline, open-symbol, bounded-read, and architecture workloads all
-returned successfully.
+call-graph, outline, open-symbol, bounded-read, and architecture requests all
+returned successfully. Those checks prove transport, authority, and envelope
+health. Their outputs were not captured with expected-owner, symbol-ID, edge,
+or span assertions, so they are not claimed as semantic answer validation.
 
 The 10-minute stretch target was missed by 54.046 seconds, but the run was
 below the 15-minute diagnosis threshold. The measurements make the next owner
@@ -390,6 +423,61 @@ Final repository validation:
 - hermetic search quality across 19 workloads: owner@1 `0.947368`, owner@3
   `0.989474`, MRR `0.968421`, role coverage `0.929474`.
 
+### Frozen paired quality comparison
+
+The pre-throughput quality reference is the accepted structural-route artifact,
+not the older 17-workload program baseline. It has the same 19 workloads, five
+limits, schema, fixture manifest, and provider contract as the post-throughput
+run. The candidate was rerun after commits `f361339` and `5ca9f32`; deleting
+only the repository-identity object from both JSON documents produced an exact
+byte comparison (`cmp` exit `0`). All 95 paired workload/limit observations,
+including result IDs, ranks, roles, provider counters, response bytes, routes,
+warnings, and budget checks, are identical.
+
+| Metric | Frozen pre-throughput | Accepted throughput | Delta | Gate |
+| --- | ---: | ---: | ---: | --- |
+| Owner at rank 1 | 0.947368 | 0.947368 | 0 | non-regressing |
+| Owner within top 3 | 0.989474 | 0.989474 | 0 | non-regressing |
+| Macro reciprocal rank | 0.968421 | 0.968421 | 0 | non-regressing |
+| Mean required-role coverage | 0.929474 | 0.929474 | 0 | non-regressing |
+| Deterministic result mismatches | 0 | 0 | 0 | zero |
+
+Frozen identities:
+
+- pre-throughput artifact SHA-256:
+  `a3d2dca2736aeced28f871b89685f14b5a8e7e6855927cb63075f286de27fb0c`;
+- pre-throughput repository identity: HEAD
+  `5d75c3728c844f45b32a0635886c7c5c39a8cd26`, index tree
+  `826a106068ca977d4015c7796094064e916290d5`, unstaged diff
+  `b991f481548fed03001e857c5dde08e3f51818087a8e10dabaac35ded090b065`,
+  staged diff
+  `7bc99f15f166bd10f8fb16e2e24479c00917f642facdb1c562c544b6b65ac7b8`,
+  working content
+  `c1473e0448b3388d42ee3c3aec950c5eb6e8891ae0a610ddf7e2225a6ca99d7d`;
+- candidate artifact SHA-256:
+  `3982964f4140f85660003098af6c56edff0d806714b7b8bba4cbf8ae96d3b9e6`;
+- candidate repository identity: HEAD
+  `5ca9f32b5131cd9fab046a512802eecf8faf83c5`, index tree
+  `10d351aa81108bad6d7116231e115abeaa6344e8`, empty unstaged diff
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
+  staged diff
+  `fdfe744ef9895e54b2e7877eb286d21bdf88f96474c9863665b75e4996759b2d`,
+  working content
+  `b0cf556f0d9d86d4072f3f278da6907fa8033a5c041ebcc364564fcaa4763670`;
+- accepted throughput HEAD tree:
+  `6c3bb0f6ccb17e53ecf430bd15ae61a57207c85c`;
+- task-set and fixture-manifest SHA-256:
+  `7bd2f30fb2b279d5f1d220051bdec6abac9565ecf3863d6ed0d71ee8ba58b965`;
+- evaluator SHA-256:
+  `1ea33b7655d2112f3ff5baa90a0c64d093fcaa6517465a1b87643dc176893c6d`;
+- runner SHA-256:
+  `b75b5e7e5b77cdae226da398b49afbcfe5c38f989499df699d114ddf34aa3250`.
+
+The candidate artifact was intentionally written to `/tmp` and not committed,
+in accordance with the generated-artifact policy. Its hash and complete
+repository identity are recorded above; the retained frozen reference remains
+`docs/release/artifacts/2026-07-15-search-quality-after-structural-routes.json`.
+
 The first broad MCP run exposed five lifecycle fixtures whose structural
 embedding doubles do not inherit `Embedding`. The new policy and metrics calls
 therefore threw even though those capabilities are observational. The accepted
@@ -400,18 +488,52 @@ fix, not a ranking or authority change.
 ## Next measured throughput experiment
 
 Do not increase the fixed Milvus row ceiling blindly. Generation `2801`
-recorded total serialized bytes but not the maximum individual request size,
-and mixed dense/sparse/text rows vary materially. The smallest justified next
-experiment is:
+recorded total serialized bytes but not individual request sizes or boundary
+reasons, and mixed dense/sparse/text rows vary materially. Maximums alone
+cannot describe that distribution.
 
-1. add bounded `maxSubmittedRows` and `maxSubmittedBytes` attempt metrics;
-2. derive the live 100-row request-size distribution without logging payloads;
-3. test a deterministic row-and-byte-bounded ceiling near 200 rows while
-   retaining sequential writes and fresh-client retries;
-4. accept only after another cold rebuild has zero retries, complete authority,
-   a no-change sync, unchanged quality, and a material wall-time reduction;
-5. if two materially different larger ceilings fail, revert and test one-batch
-   embedding/write overlap rather than continuing constant tuning.
+The review correction adds a bounded 4,096-attempt scalar window at the Milvus
+provider boundary. Each sample contains only a monotonic sequence, row count,
+serialized byte count, and one of `row_limit`, `logical_write_end`, or `retry`.
+The operation summary reports min, p50, p90, p95, and max rows/bytes; flush
+reason counts; the theoretical global minimum; fragmentation overhead; and
+whether every attempt in the operation was captured. Source, vectors, paths,
+IDs, credentials, and payloads are never retained. The production row ceiling
+remains 100 until this evidence is collected.
+
+The controlled experiment order is:
+
+1. run an instrumented fresh-runtime 100-row cold control on the final tree;
+2. capture request distribution, logical-write boundaries, maximum resident
+   memory from the external harness, normalized phase rates, authority, and the
+   exact paired quality artifact;
+3. before running the candidate, freeze a byte ceiling from the control
+   distribution and the smallest explicit provider/transport constraint; never
+   exceed 200 rows;
+4. run the candidate on the same source tree, provider, model, dimension,
+   cluster, region, and fresh-runtime lifecycle;
+5. accept only if every frozen gate below passes;
+6. if two candidates whose byte or row ceilings differ by at least 25% fail,
+   restore 100 rows and move to one-batch embedding/write overlap.
+
+Frozen acceptance gates:
+
+- zero Zilliz and Voyage retries, transport failures, or silent truncation;
+- completed vector authority, matching source checkpoint, navigation seal,
+  fresh-runtime `status=ok`, and no-change sync;
+- exact equality for all 95 normalized hermetic workload/limit observations;
+- candidate p95 request bytes at or below the predeclared byte ceiling;
+- at least 20% lower cumulative vector-write duration than the same-tree
+  100-row control;
+- at least 10% lower total cold-rebuild wall time;
+- no more than 10% higher fresh-process peak resident memory;
+- no more than 10 seconds absolute regression in finalization/index-build
+  duration.
+
+A candidate is an economic failure if it is reliable but misses both latency
+gates. It is a safety failure if it retries, loses authority, exceeds the byte
+or memory gate, changes paired quality, or violates deterministic failure
+behavior. These classifications are fixed before observing the candidate.
 
 Container-chunk deletion, caches, and broad concurrency remain out of this
 accepted slice. Provider quota is ample, container removal has retrieval risk,
@@ -429,5 +551,6 @@ and the measured sequential write bottleneck should be exhausted first.
 | Keep 25-row Zilliz writes permanently | Superseded | The 100-row run completed with zero retries and materially lower time. |
 | Restore 100-row Zilliz writes | Implemented and accepted | Generation 2801 used 98 writes with zero retries; vector persistence is now measured. |
 | Remove class/container chunks | Hypothesis only | Duplication is measured; quality impact is not. |
-| Larger byte-bounded Zilliz writes | Deferred with measured justification | Write time is dominant, but maximum request bytes must be observed before raising the ceiling safely. |
+| Write-distribution and boundary metrics | Implemented; focused validation green | The review correctly identified that maxima cannot explain 98 writes or support a controlled larger-batch experiment. The instrumented cold control remains pending. |
+| Larger byte-bounded Zilliz writes | Deferred with measured justification | Write time is dominant, but the instrumented 100-row control and a predeclared byte ceiling are required first. |
 | Add concurrency or caches | Deferred | Sequential byte-bounded batching remains the smaller independent experiment. |

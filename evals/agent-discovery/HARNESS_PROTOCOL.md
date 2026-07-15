@@ -143,6 +143,9 @@ portable result exchanged between harnesses:
   "arm": "native",
   "environment": {
     "gitRevision": "40-character commit",
+    "gitTree": "40-character tree",
+    "gitDiffSha256": "hex",
+    "gitCachedDiffSha256": "hex",
     "worktreeCleanBefore": true,
     "worktreeCleanAfter": true,
     "instructionsSha256": "hex",
@@ -206,6 +209,10 @@ Use `null`, not zero, for a measurement that could not be observed. For a
 Satori arm, record the proven setup operation identity, generation, and runtime
 fingerprint when the status contract exposes them. These provenance values do
 not count as measured calls.
+
+The runner compares revision, tree, staged-diff hash, and unstaged-diff hash
+again after all arms finish. A clean checkout that changes to another commit
+during measurement is rejected; worktree cleanliness alone is not sufficient.
 
 ## Grading
 

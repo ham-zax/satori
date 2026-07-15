@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRecordsForFile,
@@ -36,6 +37,23 @@ const CAPABILITIES = new CapabilityResolver({
     encoderProvider: 'VoyageAI',
     encoderModel: 'voyage-4-large',
 });
+
+const PHASE_0_CONTRACT = JSON.parse(fs.readFileSync(path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../../../evals/agent-discovery/bounded-symbol-context-phase-0.json',
+), 'utf8')) as {
+    historicalExactOpen: {
+        source: string;
+        symbol: {
+            file: string;
+            name: string;
+            startLine: number;
+            endLine: number;
+            label: string;
+        };
+        normalizedResponse: unknown;
+    };
+};
 
 type GoldenContext = {
     repoPath: string;
@@ -1110,15 +1128,16 @@ test('golden MCP call_graph incompatible relationship sidecar shape', async () =
 
 test('golden MCP read_file open_symbol success shape', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
-        const filePath = path.join(repoPath, 'src/runtime.ts');
-        fs.writeFileSync(filePath, 'export function run() {\n  return true;\n}\n', 'utf8');
+        const historical = PHASE_0_CONTRACT.historicalExactOpen;
+        const filePath = path.join(repoPath, historical.symbol.file);
+        fs.writeFileSync(filePath, historical.source, 'utf8');
         const run = createFunctionSymbol({
-            file: 'src/runtime.ts',
-            name: 'run',
-            startLine: 1,
-            endLine: 3,
+            file: historical.symbol.file,
+            name: historical.symbol.name,
+            startLine: historical.symbol.startLine,
+            endLine: historical.symbol.endLine,
             fileHash: 'hash-runtime',
-            label: 'function run()',
+            label: historical.symbol.label,
         });
         await writeNavigationSidecars({ stateRoot, repoPath, symbols: [run] });
         const { handlers, snapshotManager, syncManager } = createHandlers(repoPath);
@@ -1133,12 +1152,7 @@ test('golden MCP read_file open_symbol success shape', async () => {
         }));
 
         const payload = scrubGolden(response, { repoPath, stateRoot, symbols: [run] });
-        assert.deepEqual(payload, {
-            content: [{
-                type: 'text',
-                text: 'export function run() {\n  return true;\n}',
-            }],
-        });
+        assert.deepEqual(payload, historical.normalizedResponse);
     }));
 });
 

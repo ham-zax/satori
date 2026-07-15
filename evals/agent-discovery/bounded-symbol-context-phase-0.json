@@ -1,0 +1,1302 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "satori-bounded-symbol-context-phase-0-v1",
+  "status": "frozen_before_implementation",
+  "publicToolNames": [
+    "list_codebases",
+    "manage_index",
+    "search_codebase",
+    "file_outline",
+    "call_graph",
+    "read_file"
+  ],
+  "wireContract": {
+    "requestFormatVersion": 2,
+    "responseFormatVersion": 2,
+    "responseKind": "symbol_context",
+    "modePolicy": {
+      "accepted": ["plain", "annotated"],
+      "echoField": "requestedMode",
+      "changesStructuredTransport": false
+    },
+    "exactSymbol": {
+      "required": ["contractVersion"],
+      "exactlyOneIdentity": ["symbolId", "symbolLabel"],
+      "exactlyOneOperation": ["context", "continuation"],
+      "allowed": [
+        "contractVersion",
+        "symbolId",
+        "symbolLabel",
+        "context",
+        "continuation"
+      ],
+      "rejectUnknownFields": true
+    },
+    "directSpan": {
+      "required": ["startLine", "endLine"],
+      "allowed": ["startLine", "endLine"],
+      "rejectUnknownFields": true
+    },
+    "schemaCases": [
+      {
+        "id": "exact-context-by-id",
+        "acceptedVariant": "exact_symbol_v2",
+        "openSymbol": {
+          "contractVersion": 2,
+          "symbolId": "syminst_fixture",
+          "context": { "preset": "implementation" }
+        }
+      },
+      {
+        "id": "exact-continuation-by-label",
+        "acceptedVariant": "exact_symbol_v2",
+        "openSymbol": {
+          "contractVersion": 2,
+          "symbolLabel": "processPayment",
+          "continuation": {
+            "kind": "source_range",
+            "fingerprint": "sha256_fixture",
+            "startLine": 180,
+            "endLine": 220
+          }
+        }
+      },
+      {
+        "id": "direct-span",
+        "acceptedVariant": "direct_span",
+        "openSymbol": { "startLine": 10, "endLine": 20 }
+      },
+      {
+        "id": "mixed-exact-and-span",
+        "acceptedVariant": null,
+        "openSymbol": {
+          "contractVersion": 2,
+          "symbolId": "syminst_fixture",
+          "context": { "preset": "implementation" },
+          "startLine": 10,
+          "endLine": 20
+        }
+      },
+      {
+        "id": "missing-version",
+        "acceptedVariant": null,
+        "openSymbol": {
+          "symbolId": "syminst_fixture",
+          "context": { "preset": "implementation" }
+        }
+      },
+      {
+        "id": "unsupported-version",
+        "acceptedVariant": null,
+        "openSymbol": {
+          "contractVersion": 1,
+          "symbolId": "syminst_fixture",
+          "context": { "preset": "implementation" }
+        }
+      },
+      {
+        "id": "two-identities",
+        "acceptedVariant": null,
+        "openSymbol": {
+          "contractVersion": 2,
+          "symbolId": "syminst_fixture",
+          "symbolLabel": "processPayment",
+          "context": { "preset": "implementation" }
+        }
+      },
+      {
+        "id": "two-operations",
+        "acceptedVariant": null,
+        "openSymbol": {
+          "contractVersion": 2,
+          "symbolId": "syminst_fixture",
+          "context": { "preset": "implementation" },
+          "continuation": {
+            "kind": "source_range",
+            "fingerprint": "sha256_fixture",
+            "startLine": 180,
+            "endLine": 220
+          }
+        }
+      },
+      {
+        "id": "unknown-field",
+        "acceptedVariant": null,
+        "openSymbol": {
+          "contractVersion": 2,
+          "symbolId": "syminst_fixture",
+          "context": { "preset": "implementation" },
+          "fullSymbol": true
+        }
+      }
+    ]
+  },
+  "limits": {
+    "defaultSourceBytes": 12288,
+    "maxSourceBytes": 16384,
+    "defaultSourceLines": 200,
+    "maxSourceLines": 250,
+    "defaultExcerpts": 5,
+    "maxExcerpts": 6,
+    "maxExcerptBytes": 8192,
+    "defaultSiblings": 12,
+    "maxSiblings": 20,
+    "defaultEdgesPerDirection": 20,
+    "maxEdgesPerDirection": 20,
+    "defaultTotalResponseBytes": 24576,
+    "hardResponseLimitBytes": 32768,
+    "maxInspectableSourceBytes": 4194304,
+    "emergencyErrorLimitBytes": 1024,
+    "v2ErrorLimitBytes": 4096,
+    "modelVisibleToolResultBytes": 32768
+  },
+  "phase0": {
+    "boundedContextProductChangesAllowed": false,
+    "measurementInstrumentationChangesAllowed": true,
+    "baselineDeliverables": [
+      "frozen_corpus_and_expected_answers",
+      "current_adaptive_workflow_capture",
+      "historical_exact_open_golden",
+      "thresholds_schemas_adjudication_metrics_and_machine_identity"
+    ],
+    "baselineSequence": [
+      "record_historical_product_baseline_identity_and_golden",
+      "add_measurement_only_ledger_and_harness_infrastructure",
+      "prove_instrumentation_behavioral_invariance",
+      "record_instrumented_adaptive_measurement_baseline",
+      "reuse_identical_instrumentation_for_candidate_arm"
+    ],
+    "acceptanceSpecifications": {
+      "requiredStateInPhase0": "frozen_not_green",
+      "allowedInitialStates": [
+        "non_executable_contract_vector",
+        "pending",
+        "skipped_with_tracking_reason"
+      ],
+      "progressivelyImplementedInPhases": [1, 2, 3, 4, 5],
+      "completeMatrixRequiredInPhase": 6,
+      "runtimeAssertionsRequiredInPhase0": false
+    }
+  },
+  "baselineIdentityContract": {
+    "historicalProductBaseline": {
+      "purpose": "pristine_product_identity_and_historical_output",
+      "eligibleForLatencyAndSourceCostComparison": false
+    },
+    "instrumentedMeasurementBaseline": {
+      "purpose": "adaptive_comparison_with_shared_measurement_ledger",
+      "eligibleForLatencyAndSourceCostComparison": true
+    },
+    "instrumentationInvariance": [
+      "tool_output",
+      "ranking",
+      "authority",
+      "provider_calls",
+      "task_behavior"
+    ],
+    "candidateMustUseSameInstrumentationImplementation": true
+  },
+  "sourceStatuses": [
+    "available",
+    "partially_available",
+    "unavailable",
+    "stale"
+  ],
+  "sourceFailureReasons": [
+    "line_exceeds_excerpt_limit",
+    "source_exceeds_inspection_limit",
+    "source_changed_during_inspection",
+    "path_identity_changed_during_inspection",
+    "path_identity_unavailable",
+    "source_descriptor_unavailable"
+  ],
+  "sourceStatusReasonMapping": [
+    {
+      "condition": "all_selected_source_returned",
+      "status": "available",
+      "emptyReason": null,
+      "limitation": null
+    },
+    {
+      "condition": "oversized_line_omitted_with_other_excerpts",
+      "status": "partially_available",
+      "emptyReason": null,
+      "limitation": "line_exceeds_excerpt_limit"
+    },
+    {
+      "condition": "only_line_exceeds_excerpt_limit",
+      "status": "unavailable",
+      "emptyReason": "line_exceeds_excerpt_limit",
+      "limitation": null
+    },
+    {
+      "condition": "source_exceeds_inspection_limit",
+      "status": "unavailable",
+      "emptyReason": "source_exceeds_inspection_limit",
+      "limitation": null
+    },
+    {
+      "condition": "source_descriptor_unavailable",
+      "status": "unavailable",
+      "emptyReason": "source_descriptor_unavailable",
+      "limitation": null
+    },
+    {
+      "condition": "path_identity_unavailable",
+      "status": "unavailable",
+      "emptyReason": "path_identity_unavailable",
+      "limitation": null
+    },
+    {
+      "condition": "source_changed_during_inspection",
+      "status": "stale",
+      "emptyReason": "source_changed_during_inspection",
+      "limitation": null
+    },
+    {
+      "condition": "path_identity_changed_during_inspection",
+      "status": "stale",
+      "emptyReason": "path_identity_changed_during_inspection",
+      "limitation": null
+    }
+  ],
+  "coordinateConvention": {
+    "lines": "one_based_inclusive",
+    "bytes": "zero_based_half_open",
+    "byteEncoding": "utf8_source_before_json_escaping"
+  },
+  "selectionCapabilities": [
+    "localLexical",
+    "lineWindows",
+    "syntaxBoundaries",
+    "controlFlowAnchors",
+    "stateWriteAnchors"
+  ],
+  "sourceAuthorityContract": {
+    "freshnessStates": [
+      "current_at_final_observation",
+      "unavailable",
+      "stale",
+      "not_requested"
+    ],
+    "spanResolutionStates": [
+      "current_symbol_validated",
+      "index_snapshot_matched",
+      "not_applicable",
+      "unavailable",
+      "ambiguous"
+    ],
+    "excerptRequirements": {
+      "freshness": "current_at_final_observation",
+      "allowedSpanResolution": [
+        "current_symbol_validated",
+        "index_snapshot_matched"
+      ]
+    },
+    "changedSourceWithoutStructuralReresolution": {
+      "sourceExcerpts": 0,
+      "sourceContinuation": "unavailable",
+      "spanResolution": "unavailable"
+    }
+  },
+  "requiredFixtureIds": [
+    "small-complete-typescript",
+    "small-source-many-callers",
+    "large-relevant-beginning-typescript",
+    "large-relevant-middle-typescript",
+    "large-relevant-end-typescript",
+    "repeated-branches-remote-call-typescript",
+    "multi-exit-exception-python",
+    "huge-single-line-typescript",
+    "large-below-inspection-limit-typescript",
+    "ambiguous-same-name-owner",
+    "unresolved-parent-key",
+    "streaming-capability-loss",
+    "source-failure-reasons",
+    "source-status-reason-mapping",
+    "unsupported-language-capabilities",
+    "graph-empty",
+    "graph-unavailable",
+    "graph-suppressed-and-truncated",
+    "graph-dynamic-ineligible",
+    "graph-unsupported-kind",
+    "unchanged-source-continuation",
+    "source-mutation-continuation",
+    "relationship-only-mutation",
+    "independent-continuation-handles",
+    "relationship-cursor-validation",
+    "changed-source-unresolved-symbol-span",
+    "current-span-resolution-policy-mutation",
+    "descriptor-mutation-during-inspection",
+    "atomic-path-replacement-during-inspection",
+    "mutation-after-source-linearization",
+    "unsupported-path-identity",
+    "root-binding-invalid",
+    "stale-relationship-sites",
+    "failed-dynamic-edge-source",
+    "oversized-continuation",
+    "evidence-span-identity-mismatches",
+    "minimum-envelope-resource-limit",
+    "v2-outcome-matrix",
+    "source-io-exactly-once"
+  ],
+  "streamingPolicy": {
+    "sourceDescriptorOpens": 1,
+    "pathIdentityRebindOperations": 1,
+    "reopenPathForSourceExtraction": false,
+    "initialDescriptorMetadataRequired": true,
+    "finalDescriptorMetadataRequired": true,
+    "hashAndExtractFromSameDescriptor": true,
+    "finalSourceIdentityObservationRequired": true,
+    "rejectPathIdentityChange": true,
+    "sourceValidationOrder": [
+      "inspect_descriptor",
+      "validate_descriptor_stability",
+      "validate_navigation_and_mutation_authority",
+      "observe_final_root_confined_path_to_descriptor_identity",
+      "construct_immutable_response_snapshot"
+    ],
+    "sourceValidationLinearizationPoint": "final_successful_root_bound_path_identity_observation",
+    "sourceAuthority": "current_at_final_observation",
+    "responseAtomicityClaim": "per_domain_authority_only",
+    "asyncOperationsBetweenFinalObservationAndSnapshot": 0,
+    "recheckMutationAuthorityBeforeSnapshot": true,
+    "recheckNavigationAuthorityBeforeSnapshot": true,
+    "unavailableCapabilities": [
+      "syntaxBoundaries",
+      "controlFlowAnchors",
+      "stateWriteAnchors"
+    ]
+  },
+  "fileIdentityContract": {
+    "fields": [
+      "platform",
+      "stableIdentity",
+      "canonicalRelativePath",
+      "traversalIdentity",
+      "strength"
+    ],
+    "strengths": ["strong", "target_only", "unsupported"],
+    "requiredForSourcePublication": ["strong", "target_only"],
+    "strengthPolicy": {
+      "strong": {
+        "publishInspectedSource": true,
+        "claim": "same_final_file_identity_with_traversal_only_when_explicitly_proven"
+      },
+      "target_only": {
+        "publishInspectedSource": true,
+        "claim": "root_confined_same_final_file_identity_without_traversal_continuity"
+      },
+      "unsupported": {
+        "publishInspectedSource": false,
+        "claim": "path_identity_unavailable"
+      }
+    },
+    "unsupportedReason": "path_identity_unavailable",
+    "internalSafetyFailures": ["root_binding_invalid"],
+    "rootBindingInvalidPolicy": {
+      "failClosed": true,
+      "sourceExcerpts": 0,
+      "sourceContinuation": "unavailable",
+      "dedicatedDiagnostic": true,
+      "separateSafetyTelemetry": true,
+      "echoUnsafePath": false
+    },
+    "portableImplementations": {
+      "unix": "device_and_inode_when_stable",
+      "windows": "platform_native_file_id",
+      "weak_or_virtual_filesystem": "unsupported"
+    },
+    "guarantee": "root_confined_same_final_file_identity",
+    "traversalContinuityClaimedWithoutTraversalIdentity": false
+  },
+  "relationshipSiteAuthority": {
+    "edgeAuthority": [
+      "remote_generation_proven",
+      "local_navigation_validated",
+      "degraded",
+      "unavailable"
+    ],
+    "siteStatuses": [
+      "current_source_validated",
+      "not_current_source_validated",
+      "stale",
+      "omitted"
+    ],
+    "dynamicEdgeOnFailedSourceObservation": "suppress"
+  },
+  "emergencyError": {
+    "mandatoryFields": [
+      "formatVersion",
+      "kind",
+      "status",
+      "code",
+      "reason",
+      "symbolId",
+      "minimumRequiredResponseBytes",
+      "hardResponseLimitBytes"
+    ],
+    "optionalFields": ["message", "recommendedNextAction"],
+    "forbiddenFields": [
+      "path",
+      "source",
+      "span",
+      "relationships",
+      "continuationFingerprint",
+      "continuations",
+      "cursor",
+      "debug"
+    ]
+  },
+  "v2OutcomeContract": {
+    "commonErrorPrefix": {
+      "formatVersion": 2,
+      "kind": "symbol_context",
+      "status": "error"
+    },
+    "maximumSerializedErrorBytes": 4096,
+    "boundedCallerEchoBytes": 0,
+    "forbiddenCallerEchoFields": [
+      "symbolLabel",
+      "path",
+      "query",
+      "cursor",
+      "exceptionMessage"
+    ],
+    "outcomes": [
+      {
+        "outcome": "source_unavailable_identity_valid",
+        "isError": false,
+        "transport": "successful_package",
+        "code": null
+      },
+      {
+        "outcome": "empty_or_degraded_graph",
+        "isError": false,
+        "transport": "successful_package",
+        "code": null
+      },
+      {
+        "outcome": "source_observation_failed_identity_valid",
+        "isError": false,
+        "transport": "successful_package",
+        "code": null
+      },
+      {
+        "outcome": "stale_continuation",
+        "isError": true,
+        "transport": "structured_v2_error",
+        "code": "STALE_CONTINUATION"
+      },
+      {
+        "outcome": "ambiguous_symbol",
+        "isError": true,
+        "transport": "structured_v2_error",
+        "code": "AMBIGUOUS_SYMBOL"
+      },
+      {
+        "outcome": "symbol_not_found",
+        "isError": true,
+        "transport": "structured_v2_error",
+        "code": "SYMBOL_NOT_FOUND"
+      },
+      {
+        "outcome": "navigation_unavailable",
+        "isError": true,
+        "transport": "structured_v2_error",
+        "code": "NAVIGATION_UNAVAILABLE"
+      },
+      {
+        "outcome": "invalid_relationship_continuation",
+        "isError": true,
+        "transport": "structured_v2_error",
+        "code": "INVALID_RELATIONSHIP_CONTINUATION"
+      },
+      {
+        "outcome": "unsupported_continuation_kind",
+        "isError": true,
+        "transport": "structured_v2_error",
+        "code": "UNSUPPORTED_CONTINUATION_KIND"
+      },
+      {
+        "outcome": "root_binding_invalid",
+        "isError": true,
+        "transport": "structured_v2_safety_error",
+        "code": "ROOT_BINDING_INVALID"
+      },
+      {
+        "outcome": "minimum_package_cannot_fit",
+        "isError": true,
+        "transport": "resource_limit",
+        "code": "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT"
+      }
+    ]
+  },
+  "continuationDomains": {
+    "sourceCommon": [
+      "canonicalRoot",
+      "selectionPolicyVersion",
+      "spanResolutionState"
+    ],
+    "sourceBySpanResolution": {
+      "current_symbol_validated": [
+        "currentSourceHash",
+        "currentSpanIdentity",
+        "resolvedSpan",
+        "spanResolutionPolicyVersion",
+        "extractorLanguageImplementationVersion",
+        "resolutionDerivation"
+      ],
+      "index_snapshot_matched": [
+        "symbolRegistryManifest",
+        "indexedSourceIdentity",
+        "symbolInstance",
+        "indexedSpan"
+      ]
+    },
+    "allowedCurrentSpanResolutionDerivations": [
+      "exact_registry_rebuild_match",
+      "language_structural_reresolution"
+    ],
+    "currentSpanIdentityVariants": {
+      "tagField": "kind",
+      "canonicalSerialization": "canonical_json_v1",
+      "resolved_symbol_instance": ["symbolInstanceId"],
+      "canonical_structural_identity": [
+        "language",
+        "qualifiedName",
+        "kindName",
+        "parentPath"
+      ]
+    },
+    "derivationIdentityVariant": {
+      "exact_registry_rebuild_match": "resolved_symbol_instance",
+      "language_structural_reresolution": "canonical_structural_identity"
+    },
+    "staticRelationships": [
+      "canonicalRoot",
+      "symbolInstance",
+      "symbolRegistryManifest",
+      "relationshipManifest",
+      "relationshipKind",
+      "direction",
+      "depth",
+      "projectionPolicyVersion",
+      "edgeOrderingPolicyVersion"
+    ],
+    "dynamicRelationships": [
+      "fallbackPolicyVersion",
+      "sortedObservedSourceHashes"
+    ]
+  },
+  "continuationHandles": {
+    "responseField": "continuations",
+    "topLevelFingerprintAllowed": false,
+    "oneFingerprintPerHandle": true,
+    "kinds": {
+      "source_range": {
+        "domains": ["symbol", "source"],
+        "requiredPosition": ["startLine", "endLine"]
+      },
+      "caller_page": {
+        "domains": ["symbol", "relationships"],
+        "requiredPosition": ["cursor"],
+        "cursor": "deterministic_last_edge_key"
+      },
+      "callee_page": {
+        "domains": ["symbol", "relationships"],
+        "requiredPosition": ["cursor"],
+        "cursor": "deterministic_last_edge_key"
+      }
+    },
+    "relationshipPaging": {
+      "fingerprintBinds": "stable_traversal_identity",
+      "cursorRepresentations": [
+        "canonical_edge_ordering_key",
+        "opaque_server_produced_encoding"
+      ],
+      "cursorScope": [
+        "target",
+        "direction",
+        "relationshipKind",
+        "depth",
+        "relationshipManifest",
+        "projectionPolicyVersion",
+        "edgeOrderingPolicyVersion"
+      ],
+      "cursorIncludedInFingerprint": false,
+      "requestedPageSizeIncludedInFingerprint": false,
+      "effectivePageSizeIncludedInFingerprint": false,
+      "requestedPageSize": "caller_supplied_and_server_clamped",
+      "effectivePageSize": "echoed_in_response",
+      "resumePosition": "strictly_after_cursor",
+      "plainCursorValidation": "membership_scope_and_ordering",
+      "opaqueCursorValidation": "decode_and_authenticate_traversal_scope",
+      "invalidCursorCode": "INVALID_RELATIONSHIP_CONTINUATION",
+      "terminalState": "end_of_traversal",
+      "consecutivePageInvariant": "no_duplicate_or_missing_edges",
+      "nextCursorDerivation": "final_returned_edge_under_frozen_ordering",
+      "cursorFormatVersion": 1,
+      "maximumSerializedCursorBytes": 1024,
+      "opaqueCursorAuthentication": "hmac_sha256",
+      "plainCursorCanonicalSerialization": "canonical_json_v1",
+      "echoCursorInErrorsOrDiagnostics": false
+    }
+  },
+  "evaluation": {
+    "controlledLatency": {
+      "warmups": 5,
+      "recordedRuns": 30,
+      "percentileMethod": "nearest_rank",
+      "p95Rank": 29,
+      "outlierDeletion": false,
+      "interleaving": "seeded_ab_ba"
+    },
+    "pairedAgent": {
+      "minimumRunsPerTaskAndArm": 10,
+      "primaryMetric": "agentSteps",
+      "secondaryMetric": "toolCalls"
+    },
+    "releaseGates": {
+      "minimumAbsoluteMedianAgentStepReduction": 1,
+      "minimumRelativeMedianAgentStepReduction": 0.2,
+      "maximumMedianToolCallIncrease": 0,
+      "minimumMedianVisibleByteReduction": 0.2,
+      "maximumPortableSourceBytesObtainedIncrease": 0.2,
+      "maximumProviderCallIncrease": 0,
+      "maximumMedianLatencyRegression": 0.1,
+      "maximumControlledP95LatencyRegression": 0.2,
+      "maximumUnnecessaryCallsAddedPerDeterministicWorkload": 1
+    },
+    "sourceIoMetrics": [
+      "logicalSourceBytesRequested",
+      "observationId",
+      "readId",
+      "startByte",
+      "endByte",
+      "bytesObtained",
+      "readOperationCount",
+      "completeFileScanCount",
+      "partialScanCount",
+      "filesOpened",
+      "osPhysicalReadBytes"
+    ],
+    "sourceProcessingMetrics": [
+      "observationId",
+      "inputBytesProcessed",
+      "hashingTimeMs",
+      "excerptSelectionTimeMs",
+      "continuationLatencyMs"
+    ],
+    "symmetricSourceAccounting": {
+      "arms": ["native", "satori_adaptive", "satori_composed"],
+      "ioOwners": [
+        "validation",
+        "outline",
+        "graph_site",
+        "search_evidence",
+        "continuation"
+      ],
+      "processingOwners": [
+        "hashing",
+        "selector",
+        "parser",
+        "extractor",
+        "graph_site",
+        "search_evidence"
+      ],
+      "ioMeasurementBases": [
+        "descriptor_read",
+        "stream_chunk"
+      ],
+      "processingMeasurementBases": [
+        "shared_buffer",
+        "parser_input",
+        "extractor_input",
+        "mmap_estimate"
+      ],
+      "observationIdRequired": true,
+      "readIdRequired": true,
+      "byteRangeConvention": "zero_based_half_open",
+      "bytesObtainedEqualsRangeLength": true,
+      "oneAcquisitionBasisPerObservation": true,
+      "descriptorAndWrappingStreamDoubleRecordingAllowed": false,
+      "portableIoAggregation": "unique_non_overlapping_ranges_per_observationId",
+      "overlappingRetriesInflatePortableIo": false,
+      "measurementBasisRequired": true,
+      "alternateFileHelperBypassAllowed": false,
+      "processingOwnersMayOpenSourceDirectly": false,
+      "processingOwnersRequireExistingObservationId": true,
+      "processingBytesExcludedFromPortableIoGate": true,
+      "mmapEstimateExcludedFromPortableIoGate": true,
+      "portableIoGateMetric": "total_SourceIoMetric.bytesObtained_per_completed_task",
+      "sourceIoIncludesCacheHits": true,
+      "osPhysicalReadBytesOptional": true,
+      "osPhysicalReadMeasurementSources": [
+        "proc_io",
+        "platform_api",
+        "unavailable"
+      ],
+      "osPhysicalIoUsedAsPortableGate": false
+    },
+    "adjudication": {
+      "malformedRequest": "A tool request rejected by the published schema or using a wrong field or type that requires correction and retry.",
+      "redundantCall": "A call that repeats an earlier evidence request without changed input, authority state, or a new evidence need.",
+      "unnecessaryCall": "A call made after required evidence is available or to a section outside the frozen task rubric.",
+      "unsupportedStructuralClaim": "A caller, callee, ownership, absence, or exhaustiveness claim unsupported by returned evidence and its limitations.",
+      "requiredEvidenceRecovered": "The answer identifies the frozen owner and span and cites required implementation or relationship evidence without inferring from omitted source."
+    }
+  },
+  "historicalExactOpen": {
+    "contract": "unversioned_exact_symbol_full_span",
+    "source": "export function run() {\n  return true;\n}\n",
+    "symbol": {
+      "file": "src/runtime.ts",
+      "name": "run",
+      "startLine": 1,
+      "endLine": 3,
+      "label": "function run()"
+    },
+    "request": {
+      "mode": "plain",
+      "open_symbol": { "symbolId": "$SYMBOL_INSTANCE_ID" }
+    },
+    "normalizedResponse": {
+      "content": [
+        {
+          "type": "text",
+          "text": "export function run() {\n  return true;\n}"
+        }
+      ]
+    }
+  },
+  "materializedFixtureDigests": {
+    "small-complete-typescript": {
+      "sha256": "64f6db4374fbc1d75913c8bf5240ba64b2273fac073c028d8e0d03b9f4585d49",
+      "bytes": 537,
+      "lines": 18
+    },
+    "large-relevant-beginning-typescript": {
+      "sha256": "f2fbeeb411f3d07c9418a82b5578b9c6239bd9c8bf30c198fc02bd92b8b14398",
+      "bytes": 38468,
+      "lines": 1200
+    },
+    "large-relevant-middle-typescript": {
+      "sha256": "b8f463d9985093eb92fed40693f7f7114628e4f6064850ef5f93e0449a303948",
+      "bytes": 38464,
+      "lines": 1200
+    },
+    "large-relevant-end-typescript": {
+      "sha256": "cefe44337f1d890edaa72291409b98e14e5363d884c89c62002ca01247c91bea",
+      "bytes": 38460,
+      "lines": 1200
+    },
+    "repeated-branches-remote-call-typescript": {
+      "sha256": "fa53352fade5ab58f9045df5e1d185f1f96ba6607e45d366b2f6d8aca474f1f5",
+      "bytes": 31965,
+      "lines": 1000
+    },
+    "multi-exit-exception-python": {
+      "sha256": "3895120f9e88832aa51f2237b37ef0f4d30788fe084f05d7a6ffae9791d5ab16",
+      "bytes": 30526,
+      "lines": 900
+    },
+    "huge-single-line-typescript": {
+      "sha256": "9f75cf7f71140840db5ee771d5d9c41e002c5eb1aac909375407a9b672f3258a",
+      "bytes": 840000,
+      "lines": 1
+    },
+    "large-below-inspection-limit-typescript": {
+      "sha256": "69060002bc1db24853abf9986235a85f2e8024f82e2746b24ab11dc085e5ad4b",
+      "bytes": 131108,
+      "lines": 1353
+    }
+  },
+  "fixtures": [
+    {
+      "id": "small-complete-typescript",
+      "kind": "line_anchored_symbol",
+      "language": "typescript",
+      "symbol": "smallComplete",
+      "totalLines": 18,
+      "query": "where is the result committed",
+      "anchors": [
+        { "line": 8, "text": "  const committed = commitResult(input);", "role": "query_match" },
+        { "line": 17, "text": "  return committed;", "role": "terminal_return" }
+      ],
+      "expected": { "sourceMode": "complete", "queryAnchorLine": 8 }
+    },
+    {
+      "id": "small-source-many-callers",
+      "kind": "relationship_state",
+      "language": "typescript",
+      "symbol": "smallWithManyCallers",
+      "availableCallers": 143,
+      "expected": {
+        "sourceMode": "complete",
+        "returnedCallers": 20,
+        "relationshipsTruncated": true
+      }
+    },
+    {
+      "id": "large-relevant-beginning-typescript",
+      "kind": "line_anchored_symbol",
+      "language": "typescript",
+      "symbol": "largeRelevantBeginning",
+      "totalLines": 1200,
+      "query": "where is the transaction committed",
+      "anchors": [
+        { "line": 41, "text": "  commitTransaction(input);", "role": "query_match" },
+        { "line": 1199, "text": "  return input;", "role": "terminal_return" }
+      ],
+      "expected": { "sourceMode": "bounded", "queryAnchorLine": 41 }
+    },
+    {
+      "id": "large-relevant-middle-typescript",
+      "kind": "line_anchored_symbol",
+      "language": "typescript",
+      "symbol": "largeRelevantMiddle",
+      "totalLines": 1200,
+      "query": "where is the transaction committed",
+      "anchors": [
+        { "line": 612, "text": "  commitTransaction(input);", "role": "query_match" },
+        { "line": 1199, "text": "  return input;", "role": "terminal_return" }
+      ],
+      "expected": { "sourceMode": "bounded", "queryAnchorLine": 612 }
+    },
+    {
+      "id": "large-relevant-end-typescript",
+      "kind": "line_anchored_symbol",
+      "language": "typescript",
+      "symbol": "largeRelevantEnd",
+      "totalLines": 1200,
+      "query": "where is the transaction committed",
+      "anchors": [
+        { "line": 1162, "text": "  commitTransaction(input);", "role": "query_match" },
+        { "line": 1199, "text": "  return input;", "role": "terminal_return" }
+      ],
+      "expected": { "sourceMode": "bounded", "queryAnchorLine": 1162 }
+    },
+    {
+      "id": "repeated-branches-remote-call-typescript",
+      "kind": "line_anchored_symbol",
+      "language": "typescript",
+      "symbol": "repeatedBranches",
+      "totalLines": 1000,
+      "query": "commit transaction after provider retry",
+      "anchors": [
+        { "line": 120, "text": "  if (input === 1) { note('commit transaction retry'); }", "role": "misleading_repeat" },
+        { "line": 320, "text": "  if (input === 2) { note('commit transaction retry'); }", "role": "misleading_repeat" },
+        { "line": 520, "text": "  if (input === 3) { note('commit transaction retry'); }", "role": "misleading_repeat" },
+        { "line": 840, "text": "  if (input === 4) { commitAfterProviderRetry(input); }", "role": "required_call_site" },
+        { "line": 999, "text": "  return input;", "role": "terminal_return" }
+      ],
+      "expected": { "sourceMode": "bounded", "queryAnchorLine": 840, "targetBranchOrdinal": 4 }
+    },
+    {
+      "id": "multi-exit-exception-python",
+      "kind": "line_anchored_symbol",
+      "language": "python",
+      "symbol": "process_payment",
+      "totalLines": 900,
+      "query": "persist audit after provider failure",
+      "anchors": [
+        { "line": 210, "text": "    if input_value < 0: raise ValueError('invalid payment')", "role": "exception_path" },
+        { "line": 540, "text": "    if input_value == 0: return 'skipped'", "role": "terminal_return" },
+        { "line": 861, "text": "    persist_audit_after_provider_failure(input_value)", "role": "query_match" },
+        { "line": 899, "text": "    return 'completed'", "role": "terminal_return" }
+      ],
+      "expected": { "sourceMode": "bounded", "queryAnchorLine": 861 }
+    },
+    {
+      "id": "huge-single-line-typescript",
+      "kind": "single_line",
+      "language": "typescript",
+      "symbol": "hugeSingleLine",
+      "totalBytes": 840000,
+      "query": "commit transaction",
+      "expected": {
+        "sourceMode": "bounded",
+        "sourceStatus": "unavailable",
+        "emptyReason": "line_exceeds_excerpt_limit",
+        "resourceLimit": false
+      }
+    },
+    {
+      "id": "large-below-inspection-limit-typescript",
+      "kind": "single_line_sequence",
+      "language": "typescript",
+      "symbol": "largeBelowInspectionLimit",
+      "minimumBytes": 131072,
+      "lineBytes": 96,
+      "query": "publish final checkpoint",
+      "expected": { "sourceMode": "bounded", "resourceLimit": false }
+    },
+    {
+      "id": "streaming-capability-loss",
+      "kind": "capability_state",
+      "expected": {
+        "localLexical": "available",
+        "lineWindows": "available",
+        "syntaxBoundaries": "unavailable_streaming_source",
+        "controlFlowAnchors": "unavailable_streaming_source",
+        "stateWriteAnchors": "unavailable_streaming_source"
+      }
+    },
+    {
+      "id": "ambiguous-same-name-owner",
+      "kind": "identity_state",
+      "expected": { "status": "ambiguous", "parentSymbolId": null }
+    },
+    {
+      "id": "unresolved-parent-key",
+      "kind": "identity_state",
+      "expected": {
+        "status": "ok",
+        "parentResolution": "unresolved",
+        "parentSymbolId": null
+      }
+    },
+    {
+      "id": "source-failure-reasons",
+      "kind": "source_state",
+      "expectedReasons": [
+        "line_exceeds_excerpt_limit",
+        "source_exceeds_inspection_limit",
+        "source_changed_during_inspection",
+        "path_identity_changed_during_inspection",
+        "path_identity_unavailable",
+        "source_descriptor_unavailable"
+      ]
+    },
+    {
+      "id": "source-status-reason-mapping",
+      "kind": "source_state",
+      "expected": "matches_top_level_source_status_reason_mapping"
+    },
+    {
+      "id": "unsupported-language-capabilities",
+      "kind": "capability_state",
+      "expected": {
+        "sourceStatus": "available",
+        "localLexical": "available",
+        "lineWindows": "available",
+        "syntaxBoundaries": "unsupported_language",
+        "controlFlowAnchors": "unsupported_language",
+        "stateWriteAnchors": "unsupported_language"
+      }
+    },
+    {
+      "id": "graph-empty",
+      "kind": "relationship_state",
+      "expected": {
+        "status": "ok",
+        "completeness": "bounded_static",
+        "emptyReason": "no_validated_edge_found",
+        "limitations": ["dynamic_relationships_unknown"]
+      }
+    },
+    {
+      "id": "graph-unavailable",
+      "kind": "relationship_state",
+      "expected": { "status": "unavailable", "completeness": "bounded_static" }
+    },
+    {
+      "id": "graph-suppressed-and-truncated",
+      "kind": "relationship_state",
+      "expected": {
+        "status": "ok",
+        "completeness": "bounded_static",
+        "truncated": true,
+        "suppressedCount": 4
+      }
+    },
+    {
+      "id": "graph-dynamic-ineligible",
+      "kind": "relationship_state",
+      "expected": {
+        "status": "degraded",
+        "continuationEligible": false,
+        "limitations": ["dynamic_source_identity_incomplete"]
+      }
+    },
+    {
+      "id": "graph-unsupported-kind",
+      "kind": "relationship_state",
+      "expected": { "status": "unsupported", "relationshipKind": "data_flow" }
+    },
+    {
+      "id": "stale-relationship-sites",
+      "kind": "relationship_state",
+      "expected": {
+        "edgeAuthority": "remote_generation_proven",
+        "siteStatus": "not_current_source_validated",
+        "siteCoordinatesCurrent": false
+      }
+    },
+    {
+      "id": "failed-dynamic-edge-source",
+      "kind": "relationship_state",
+      "sourceObservation": "failed",
+      "expected": { "dynamicEdge": "suppressed" }
+    },
+    {
+      "id": "unchanged-source-continuation",
+      "kind": "continuity_state",
+      "mutation": "none",
+      "expected": {
+        "sourceContinuation": "valid",
+        "relationshipContinuation": "valid"
+      }
+    },
+    {
+      "id": "source-mutation-continuation",
+      "kind": "continuity_state",
+      "mutation": "observed_source_bytes",
+      "expected": {
+        "sourceStatus": "stale",
+        "sourceExcerpts": 0,
+        "sourceContinuation": "unavailable",
+        "continuationReason": "fresh_resolution_required",
+        "relationshipContinuation": "valid_when_sites_not_revalidated"
+      }
+    },
+    {
+      "id": "relationship-only-mutation",
+      "kind": "continuity_state",
+      "mutation": "relationship_manifest",
+      "expected": {
+        "sourceContinuation": "valid",
+        "relationshipContinuation": "stale"
+      }
+    },
+    {
+      "id": "independent-continuation-handles",
+      "kind": "continuity_state",
+      "expected": {
+        "topLevelFingerprint": false,
+        "sourceFingerprintDomains": ["symbol", "source"],
+        "callerFingerprintDomains": ["symbol", "relationships"],
+        "calleeFingerprintDomains": ["symbol", "relationships"],
+        "relationshipCursor": "deterministic_last_edge_key",
+        "pageSizeChangesTraversalIdentity": false
+      }
+    },
+    {
+      "id": "relationship-cursor-validation",
+      "kind": "continuity_state",
+      "cases": [
+        {
+          "case": "malformed_cursor",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "cursor_from_another_target",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "caller_cursor_used_for_callees",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "cursor_from_another_relationship_kind",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "non_member_cursor",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "cursor_from_older_ordering_policy",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "cursor_beyond_traversal_end",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "valid_page_size_change",
+          "expected": "accepted_same_traversal_identity"
+        },
+        {
+          "case": "consecutive_pages",
+          "expected": "no_duplicate_or_missing_edges"
+        },
+        {
+          "case": "next_cursor",
+          "expected": "derived_from_final_returned_edge_under_frozen_ordering"
+        },
+        {
+          "case": "oversized_cursor",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "unsupported_cursor_format_version",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "non_canonical_plain_cursor",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "opaque_cursor_authentication_failure",
+          "expected": "INVALID_RELATIONSHIP_CONTINUATION"
+        },
+        {
+          "case": "end_of_traversal",
+          "expected": "explicit_terminal_state"
+        }
+      ]
+    },
+    {
+      "id": "changed-source-unresolved-symbol-span",
+      "kind": "source_state",
+      "mutation": "current_source_differs_from_index_without_structural_reresolution",
+      "expected": {
+        "sourceFreshness": "current_at_final_observation",
+        "spanResolution": "unavailable",
+        "sourceExcerpts": 0,
+        "sourceContinuation": "unavailable"
+      }
+    },
+    {
+      "id": "current-span-resolution-policy-mutation",
+      "kind": "continuity_state",
+      "mutation": "span_resolution_policy_or_extractor_version",
+      "expected": {
+        "currentSymbolContinuation": "stale",
+        "indexSnapshotMatchedContinuation": "unchanged_when_manifest_and_source_identity_match",
+        "requiredIdentityFields": [
+          "currentSourceHash",
+          "currentSpanIdentity",
+          "resolvedSpan",
+          "spanResolutionPolicyVersion",
+          "extractorLanguageImplementationVersion",
+          "resolutionDerivation",
+          "selectionPolicyVersion"
+        ],
+        "allowedDerivations": [
+          "exact_registry_rebuild_match",
+          "language_structural_reresolution"
+        ]
+      }
+    },
+    {
+      "id": "descriptor-mutation-during-inspection",
+      "kind": "source_state",
+      "mutation": "descriptor_metadata",
+      "expected": {
+        "sourceStatus": "stale",
+        "emptyReason": "source_changed_during_inspection",
+        "sourceExcerpts": 0,
+        "sourceContinuation": "unavailable",
+        "continuationReason": "fresh_resolution_required",
+        "sourcePublication": "rejected"
+      }
+    },
+    {
+      "id": "atomic-path-replacement-during-inspection",
+      "kind": "source_state",
+      "mutation": "atomic_path_replacement",
+      "descriptorState": "stable_and_readable_old_inode",
+      "expected": {
+        "sourceStatus": "stale",
+        "emptyReason": "path_identity_changed_during_inspection",
+        "sourceExcerpts": 0,
+        "sourceContinuation": "unavailable",
+        "continuationReason": "fresh_resolution_required",
+        "sourcePublication": "rejected"
+      }
+    },
+    {
+      "id": "mutation-after-source-linearization",
+      "kind": "source_state",
+      "mutation": "after_final_source_identity_observation",
+      "expected": {
+        "sourceAuthority": "current_at_final_observation",
+        "responseSnapshotValidity": "preserved",
+        "globalAtomicityClaim": false,
+        "continuationRequiresFreshPreparation": true
+      }
+    },
+    {
+      "id": "unsupported-path-identity",
+      "kind": "source_state",
+      "fileIdentityStrength": "unsupported",
+      "expected": {
+        "sourceStatus": "unavailable",
+        "emptyReason": "path_identity_unavailable",
+        "sourceExcerpts": 0,
+        "sourceContinuation": "unavailable",
+        "sourcePublication": "rejected"
+      }
+    },
+    {
+      "id": "root-binding-invalid",
+      "kind": "source_state",
+      "condition": "root_escape_or_failed_root_confinement",
+      "expected": {
+        "internalFailure": "root_binding_invalid",
+        "isError": true,
+        "errorCode": "ROOT_BINDING_INVALID",
+        "failClosed": true,
+        "sourceExcerpts": 0,
+        "sourceContinuation": "unavailable",
+        "dedicatedDiagnostic": true,
+        "separateSafetyTelemetry": true,
+        "unsafePathEchoed": false
+      }
+    },
+    {
+      "id": "oversized-continuation",
+      "kind": "continuity_state",
+      "requestedRange": { "startLine": 1, "endLine": 3000 },
+      "expected": {
+        "clamped": true,
+        "completeSymbolReturned": false,
+        "remainingOmissions": true
+      }
+    },
+    {
+      "id": "evidence-span-identity-mismatches",
+      "kind": "evidence_span_state",
+      "mismatches": [
+        "canonicalRoot",
+        "fileIdentity",
+        "symbolInstance",
+        "observedSourceHash",
+        "navigationGeneration",
+        "selectionPolicyVersion",
+        "symbolContainment"
+      ],
+      "expected": { "accepted": false, "diagnosticRequired": true }
+    },
+    {
+      "id": "minimum-envelope-resource-limit",
+      "kind": "resource_state",
+      "minimumRequiredResponseBytes": 40000,
+      "expected": {
+        "status": "error",
+        "code": "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT",
+        "partialSource": false,
+        "emergencyEnvelopeWithinLimit": true
+      }
+    },
+    {
+      "id": "v2-outcome-matrix",
+      "kind": "transport_state",
+      "expected": "matches_top_level_v2_outcome_contract"
+    },
+    {
+      "id": "source-io-exactly-once",
+      "kind": "measurement_state",
+      "expected": {
+        "acquisitionBasesPerObservation": 1,
+        "descriptorAndWrappingStreamBothCounted": false,
+        "portableAggregation": "unique_non_overlapping_ranges_per_observationId",
+        "processingContributesToPortableIo": false,
+        "processingOwnersOpenSourceDirectly": false
+      }
+    }
+  ]
+}

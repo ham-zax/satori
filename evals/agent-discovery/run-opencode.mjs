@@ -534,6 +534,21 @@ async function gitOutput(repoRoot, args) {
     return result.stdout;
 }
 
+export async function getRepositoryIdentity(repoRoot) {
+    const [gitRevision, gitTree, unstaged, staged] = await Promise.all([
+        gitOutput(repoRoot, ["rev-parse", "HEAD"]),
+        gitOutput(repoRoot, ["rev-parse", "HEAD^{tree}"]),
+        gitOutput(repoRoot, ["diff", "--binary"]),
+        gitOutput(repoRoot, ["diff", "--cached", "--binary"]),
+    ]);
+    return {
+        gitRevision: gitRevision.trim(),
+        gitTree: gitTree.trim(),
+        gitDiffSha256: sha256(unstaged),
+        gitCachedDiffSha256: sha256(staged),
+    };
+}
+
 async function requireCleanWorktree(repoRoot) {
     const status = await gitOutput(repoRoot, ["status", "--porcelain", "--untracked-files=all"]);
     if (status.trim()) {
@@ -1451,11 +1466,12 @@ export async function main(argv = process.argv.slice(2)) {
     await requireCleanWorktree(options.repoRoot);
     const taskValidation = tasks.map((task) => validateTaskKey(options.repoRoot, task));
     const schedule = buildRunSchedule(tasks, options.repetitions);
-    const gitRevision = (await gitOutput(options.repoRoot, ["rev-parse", "HEAD"])).trim();
+    const repositoryIdentity = await getRepositoryIdentity(options.repoRoot);
+    const { gitRevision } = repositoryIdentity;
     const dryRun = {
         protocolVersion: PROTOCOL_VERSION,
         repoRoot: options.repoRoot,
-        gitRevision,
+        repositoryIdentity,
         model: options.model,
         variant: options.variant,
         mode: options.mode,
@@ -1497,7 +1513,7 @@ export async function main(argv = process.argv.slice(2)) {
     const instructionsText = fs.readFileSync(INSTRUCTIONS_FILE, "utf8");
     const tasksText = fs.readFileSync(options.tasksFile, "utf8");
     const immutableEnvironment = {
-        gitRevision,
+        ...repositoryIdentity,
         worktreeCleanBefore: true,
         instructionsSha256: sha256(instructionsText),
         evaluatorTasksSha256: sha256(tasksText),
@@ -1581,6 +1597,12 @@ export async function main(argv = process.argv.slice(2)) {
     rejectReusedSessions(runs);
 
     await requireCleanWorktree(options.repoRoot);
+    const finalRepositoryIdentity = await getRepositoryIdentity(options.repoRoot);
+    if (stableJson(finalRepositoryIdentity) !== stableJson(repositoryIdentity)) {
+        throw new Error(
+            "Repository revision, tree, or diff identity changed during measurement; discard this run.",
+        );
+    }
     for (const run of runs) {
         run.environment.worktreeCleanAfter = true;
         const resultFile = run.harness?.resultFile

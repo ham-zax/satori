@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
     buildRunSchedule,
     extractAgentResult,
     formatMarkdownReport,
+    getRepositoryIdentity,
     gradeRun,
     inspectNamedSymbol,
     loadTaskManifest,
@@ -155,6 +157,40 @@ test("versioned task keys match the current production source", () => {
     for (const task of manifest.tasks) {
         assert.doesNotThrow(() => validateTaskKey(repoRoot, task));
     }
+});
+
+test("repository identity binds revision, tree, staged diff, and unstaged diff", async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-agent-identity-"));
+    const git = (...args) => execFileSync("git", args, {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: "Satori Test",
+            GIT_AUTHOR_EMAIL: "satori@example.invalid",
+            GIT_COMMITTER_NAME: "Satori Test",
+            GIT_COMMITTER_EMAIL: "satori@example.invalid",
+        },
+    });
+    git("init", "--quiet");
+    fs.writeFileSync(path.join(repoRoot, "source.ts"), "export const value = 1;\n");
+    git("add", "source.ts");
+    git("commit", "--quiet", "-m", "fixture");
+
+    const clean = await getRepositoryIdentity(repoRoot);
+    assert.match(clean.gitRevision, /^[a-f0-9]{40}$/);
+    assert.match(clean.gitTree, /^[a-f0-9]{40}$/);
+    assert.equal(clean.gitDiffSha256, clean.gitCachedDiffSha256);
+
+    fs.writeFileSync(path.join(repoRoot, "source.ts"), "export const value = 2;\n");
+    const unstaged = await getRepositoryIdentity(repoRoot);
+    assert.notEqual(unstaged.gitDiffSha256, clean.gitDiffSha256);
+    assert.equal(unstaged.gitCachedDiffSha256, clean.gitCachedDiffSha256);
+
+    git("add", "source.ts");
+    const staged = await getRepositoryIdentity(repoRoot);
+    assert.equal(staged.gitDiffSha256, clean.gitDiffSha256);
+    assert.notEqual(staged.gitCachedDiffSha256, clean.gitCachedDiffSha256);
 });
 
 test("duplicate OpenCode sessions invalidate both measured arms", () => {

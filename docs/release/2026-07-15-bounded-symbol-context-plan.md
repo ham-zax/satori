@@ -67,8 +67,8 @@ evidence falls back to provider-backed search.
 | Stable parent symbol ID | Conditionally possible only. `parentKey` is not guaranteed to identify one concrete symbol instance. | Return `parentSymbolId` only after unique same-generation resolution; otherwise return the key/path with an explicit resolution state. |
 | Agent contract is required | Accepted. | Add evidence interpretation rules and evaluate them with the pinned smaller-model harness. |
 | Large symbols need progressive source disclosure | Accepted as a measured follow-on. | Return the full body only when it fits both byte and line caps; otherwise return deterministic excerpts and explicit omissions. |
-| Ordinary line reads as trusted continuation | Rejected. A path/range read is not bound to the original symbol or continuity evidence. | Use an exact-symbol continuation fingerprint and full server-side revalidation. Keep direct line reads available only as unbound source reads. |
-| Navigation observation token may be request-local | Not true in the current implementation: the token is a deterministic serialization of filesystem metadata and immutable navigation hashes, with no request ID, clock, or access time. The stability contract is still implicit and untested across fresh preparations. | Rename the public checksum to `continuationFingerprint`, include only reproducible identities, validate fresh observation separately, and add an unchanged-preparation test. |
+| Ordinary line reads as trusted continuation | Rejected. A path/range read is not bound to the original symbol or continuity evidence. | Use an exact-symbol source-continuation handle and full server-side revalidation. Keep direct line reads available only as unbound source reads. |
+| Navigation observation token may be request-local | Not true in the current implementation: the token is a deterministic serialization of filesystem metadata and immutable navigation hashes, with no request ID, clock, or access time. The stability contract is still implicit and untested across fresh preparations. | Use per-handle continuation fingerprints with only reproducible identities, validate fresh observation separately, and add an unchanged-preparation test. |
 | Legacy unlimited exact opens need a lifecycle | Superseded by the explicit product decision to remove legacy behavior. | Replace exact-symbol full-span responses in one versioned migration; delete the obsolete branch and tests that assert it remains supported. Retain migration rejection/unreachability proof and a historical golden fixture. Do not add a parallel legacy mode or `fullSymbol` escape hatch. |
 | Compare a seventh `symbol_context` tool | Rejected under the current repository contract. Six public tool names remain fixed. | Compare replacement `read_file` request shapes and instruction burden. Revisit tool count only through a separate product-contract decision. |
 | Numeric confidence may look calibrated | Accepted for the composed response. Existing edge scores are heuristic, not probabilities. | Publish a confidence class/basis and mark any raw score uncalibrated. Do not silently reinterpret the current score. |
@@ -79,13 +79,13 @@ evidence falls back to provider-backed search.
 | Relationship authority and completeness are conflated | Confirmed contract defect in the plan. | Put generation validity under authority and `bounded_static` only under relationship completeness. |
 | Complete source may overflow after mandatory metadata | Confirmed plan gap. | Full source is allowed only when mandatory metadata plus complete source fits the total response cap. |
 | Continuation range may bypass disclosure caps | Confirmed plan gap. | Clamp every continuation to symbol, source, line, and total-envelope limits and return remaining omissions. |
-| Continuation is overbound to unused evidence domains | Confirmed contract defect in the plan. | Derive one scoped fingerprint from the effective continuation domains; source-only continuation excludes relationship identity. |
+| Continuation is overbound to unused evidence domains | Confirmed contract defect in the plan. | Give every offered continuation its own scoped fingerprint; source-only continuation excludes relationship identity. |
 | `resource_limit` transport is undefined | Confirmed public-contract gap. | Use one mode-independent structured MCP error envelope for exact-symbol requests; never emit the JSON object as plain source content. |
 | Versioned migration has no version selector | Confirmed blocking contract gap. | Require the literal `open_symbol.contractVersion: 2`; MCP input validation rejects missing/other values before tool execution, and the server never silently changes an old valid request's response type. |
 | `resource_limit` example compares the wrong quantities | Confirmed blocking contract defect. | Compare minimum required response bytes with the hard response limit; total source bytes remain diagnostic only. |
 | Huge single-line excerpt policy is undefined | Confirmed selector ambiguity. | Bounded-context v1 never splits a source line. Return bounded source-unavailable metadata for an oversized line; reserve `resource_limit` for an unrepresentable minimum envelope. |
 | Successful plain exact-symbol transport is undefined | Confirmed public-contract gap. | V2 exact-symbol success is one structured JSON text content block with `isError: false`, `formatVersion: 2`, and `kind: symbol_context` in both modes. |
-| Relationship continuation identity is incomplete | Confirmed continuation gap. | Freeze the static relationship identity projection and separately bind every source-backed dynamic evidence input. |
+| Relationship continuation identity is incomplete | Confirmed continuation gap. | Freeze stable traversal identity separately from a deterministic edge cursor and page size, and separately bind every source-backed dynamic evidence input. |
 | Deleting old tests erases migration evidence | Confirmed reproducibility risk. | Delete obsolete behavior assertions, but retain the prior golden fixture plus rejection, unreachability, and direct-read non-regression tests. |
 | Evaluation gates are underspecified | Confirmed reproducibility gap in the plan. | Freeze numerical gates before Phase 1 and do not tune them after seeing feature results. |
 | Aggregate efficiency can hide per-task regressions | Confirmed reproducibility gap. | Make agent steps primary, tool calls non-regressing, record paired per-task deltas, and freeze sample/tail-latency gates. |
@@ -95,18 +95,39 @@ evidence falls back to provider-backed search.
 | One 3,000-line fixture can be overfit | Confirmed corpus gap. | Add varied positions, repeated branches, misleading lexical matches, remote call sites, exits, minified content, and two supported languages. |
 | Supplied `evidenceSpan` can be stale or cross-symbol | Confirmed contract gap. | Accept it only under matching root, file, symbol, source, generation, and selection-policy identity; otherwise ignore it with a diagnostic. |
 | Preset/include precedence is undefined | Confirmed schema ambiguity. | Presets establish defaults, explicit booleans override them, unsupported sections report status, server caps budgets, and the effective request is echoed. |
-| Full authority identities are too expensive by default | Accepted. | Return compact classifications plus one continuation fingerprint; keep hashes/tokens in opt-in debug output. |
+| Full authority identities are too expensive by default | Accepted. | Return compact classifications plus one fingerprint per offered continuation handle; keep hashes/tokens in opt-in debug output. |
 | `full_bounded_context` implies completeness | Accepted naming defect. | Remove it from bounded-context v1; reserve `maximal_bounded` for a later measured preset if one is still useful. |
 | Exact-symbol and direct-span fields can be mixed | Confirmed schema ambiguity for the future contract. | Freeze a strict disjoint input union. Reject mixed and extra fields at MCP schema validation instead of choosing a branch. |
 | V2 `mode` semantics are implicit | Confirmed public-contract ambiguity. | Retain and echo the requested mode for client migration, but specify that it does not alter v2 structured transport. |
-| Streaming inspection may reopen a changed path | Confirmed future correctness risk. | Keep one root-bound descriptor from initial metadata through hashing and excerpt extraction, verify final descriptor metadata, then recheck authority before publication. |
+| Streaming inspection may reopen a changed path | Confirmed future correctness risk. | Keep one root-bound descriptor from initial metadata through hashing and excerpt extraction, verify final descriptor metadata, then recheck authority before response-snapshot construction. |
 | Streaming can silently weaken selection | Confirmed completeness-reporting risk. | Publish per-capability availability and never present line-window fallback as syntax-aware selection. |
 | The emergency error can itself grow past transport limits | Confirmed future safety risk. | Freeze one compact mandatory error projection with its own small serialized-byte ceiling and no optional debug evidence. |
-| Stable descriptor observations prove the current path | False. An atomically replaced path can leave the old open inode stable and readable. | After descriptor inspection, re-resolve the path through the root-bound owner and prove it still names the descriptor identity before publication. |
+| Stable descriptor observations prove the current path | False. An atomically replaced path can leave the old open inode stable and readable. | After descriptor inspection, re-resolve the path through the root-bound owner and prove it still names the descriptor identity at the source-validation linearization point. |
 | Source availability and language selection are conflated | Confirmed taxonomy defect in the plan. | Keep readable source available when syntax-aware selection is unsupported; report language loss only through selection capabilities. |
 | Mutated source may receive a continuation | Confirmed future correctness risk. | Publish no excerpts or source fingerprint after a failed source observation; require a fresh exact-symbol preparation. |
-| Stateless continuation hashing cost is unmeasured | Confirmed reproducibility/economic gap. | Record bytes read, hashing and selection time, descriptor operations, continuation latency, and complete-file scans per task. |
+| Stateless continuation hashing cost is unmeasured | Confirmed reproducibility/economic gap. | Record portable source bytes obtained, hashing and selection time, read operations, processing volume, continuation latency, and complete-file scans per task. |
 | Line and byte coordinates can be interpreted inconsistently | Confirmed interoperability ambiguity. | Freeze one-based inclusive lines and zero-based half-open UTF-8 byte offsets before JSON escaping. |
+| Device/inode is the universal path identity | False and non-portable. It is one possible platform implementation and cannot prove traversal-chain continuity by itself. | Use a root-bound file-identity abstraction with explicit proof strength; require root confinement plus the same final file identity, not unproven traversal continuity. |
+| Path rebinding can precede asynchronous response work | Confirmed race window. | Make final root-bound path binding the source-validation linearization point and synchronously construct the immutable response snapshot without another await or filesystem operation. |
+| Source status/reason combinations are implicit | Confirmed contract ambiguity. | Freeze valid status/reason pairs and keep empty-source reasons separate from partial limitations. |
+| Relationship sites inherit edge authority | False when the current site source was not validated. | Project edge authority and site-currentness independently; suppress dynamic source-backed edges after their source observation fails. |
+| Source-read accounting can be one-sided | Confirmed benchmark reproducibility risk. | Instrument the same logical requests, portable source-I/O categories, and downstream processing categories for native and Satori adaptive/composed arms. |
+| Final identity observation proves race-free delivery | False. External mutation can occur immediately after any observation. | Define the final successful root-bound identity observation as the validation linearization point and construct the immutable response snapshot without intervening asynchronous work. |
+| Descriptor bytes are physical disk I/O | False. Page cache and platform buffering make that unobservable from ordinary reads. | Gate bytes obtained from root-bound descriptors/streams and read operations; report downstream processing and physical I/O separately. |
+| `target_only` publication policy is implicit | Confirmed adapter ambiguity. | Permit both `strong` and `target_only` for final-file publication with different claims; reject `unsupported`. |
+| Root escape is ordinary stale identity | False safety classification. | Preserve `root_binding_invalid` as a distinct internal failure even if the public source projection remains unavailable. |
+| Phase 0 requires future behavior to pass | Confirmed phase-boundary defect. | Phase 0 freezes baseline artifacts and acceptance specifications only; Phases 1–5 make the specifications executable and Phase 6 requires the complete matrix to pass. |
+| One top-level fingerprint can continue every domain | False. Source, static relationships, and dynamic relationships bind different evidence. | Return separate source/caller/callee continuation handles with independent fingerprints and range/cursor positions. |
+| Source freshness proves the symbol span | False. Current file bytes can coexist with stale index-time symbol coordinates. | Project freshness and span resolution separately; emit excerpts only when the current source matches the indexed identity or the symbol is structurally re-resolved against current source. |
+| Only `resource_limit` has accepted-V2 error transport | Confirmed public-contract gap. | Freeze the successful-package/error boundary, common bounded error prefix, stable codes, and caller-controlled echo limits for every accepted V2 outcome. |
+| Processing the same buffer is another descriptor read | False and benchmark-distorting. | Record source I/O once when bytes are obtained; record hashing, parsing, selection, extraction, and validation input separately under the same observation ID. Gate only portable bytes obtained. |
+| Phase 0 has one baseline identity | Confirmed comparison gap once measurement instrumentation is required. | Preserve a pristine historical product identity, then prove measurement-only invariance and use the instrumented adaptive identity for latency/source-cost comparison and both arms. |
+| Relationship cursors need no validation because they are outside the fingerprint | False. Cursor position is separate from traversal identity but still scoped and validated. | Bind or validate target/direction/kind/depth/ordering membership, resume strictly after the cursor, expose terminal state, and reject malformed/cross-scope cursors. |
+| Current span resolution needs no derivation identity | False for structurally re-resolved current source. | Bind the span-resolution policy, extractor/language implementation version, and derivation; snapshot-matched spans instead bind their manifest and source identity. |
+| Descriptor and wrapping stream are separate acquisitions | False. They are alternative observation boundaries over the same bytes. | Select exactly one acquisition basis per observation and aggregate unique non-overlapping byte ranges; processing never contributes to portable I/O. |
+| `not_applicable_identity_match` proves current structural coordinates | False. Identity equality is `index_snapshot_matched`; differing current bytes still require structural proof. | Limit `current_symbol_validated` to registry-rebuild or language structural re-resolution derivations. |
+| Current structural identity may switch representation implicitly | Confirmed fingerprint ambiguity. | Use a tagged, canonically serialized identity variant fixed by derivation. |
+| Cursor payloads need no transport cap | False. Even rejected cursor input is an abuse and response-echo surface. | Freeze cursor format version, byte cap, canonical/MAC validation, and no-echo error policy. |
 
 ## Verified current baseline
 
@@ -393,7 +414,10 @@ Project compact domain classifications by default:
   "authority": {
     "vector": "not_required",
     "navigation": "remote_generation_proven",
-    "source": "current_span_validated",
+    "source": {
+      "freshness": "current_at_final_observation",
+      "spanResolution": "current_symbol_validated"
+    },
     "relationships": "remote_generation_proven"
   },
   "relationships": {
@@ -401,7 +425,22 @@ Project compact domain classifications by default:
     "completeness": "bounded_static",
     "limitations": ["dynamic_relationships_unknown"]
   },
-  "continuationFingerprint": "sha256_..."
+  "continuations": [
+    {
+      "kind": "source_range",
+      "domains": ["symbol", "source"],
+      "fingerprint": "sha256_source_...",
+      "startLine": 1800,
+      "endLine": 1960
+    },
+    {
+      "kind": "caller_page",
+      "domains": ["symbol", "relationships"],
+      "fingerprint": "sha256_callers_...",
+      "cursor": "edge_key_...",
+      "pageSize": 20
+    }
+  ]
 }
 ```
 
@@ -411,10 +450,20 @@ valid. Its values are `not_requested`, `remote_generation_proven`,
 completeness answers what coverage was attempted and belongs only in the
 relationship section. Never publish `bounded_static` as an authority value.
 
+Source freshness and span resolution are independent. Freshness states when the
+inspected bytes last matched the root-bound path identity. Span resolution
+states whether the exact symbol coordinates are valid for those bytes. Source
+excerpts require `freshness = current_at_final_observation` and either
+`spanResolution = current_symbol_validated` or
+`spanResolution = index_snapshot_matched`. If the current source differs from
+the indexed source identity and structural re-resolution is unavailable, emit
+no excerpt or source continuation from the index-time span.
+
 Full marker, seal, manifest, observation, source-hash, and mutation identities
-belong in opt-in debug output. `continuationFingerprint` is a deterministic
-continuity checksum, not an authority receipt, context identifier, or
-authorization token.
+belong in opt-in debug output. Each continuation fingerprint is a deterministic
+continuity checksum for that handle's domains, not an authority receipt,
+context identifier, or authorization token. A response has no blanket
+top-level continuation fingerprint.
 
 The current navigation observation token is reproducible across equivalent
 preparations: `resolveNavigationObservation()` serializes `dev`, inode, mode,
@@ -425,7 +474,7 @@ However, it spans both symbol and relationship artifacts, so it is a fresh
 authority check rather than an unconditional source-continuity input. The
 fingerprint contains only identities deterministic across equivalent
 preparations and relevant to its effective domains; fresh observation validity
-is checked separately immediately before publication.
+is checked separately immediately before response-snapshot construction.
 
 Required rules:
 
@@ -442,9 +491,9 @@ Required rules:
    Source-only continuation excludes relationship identities. A continuation
    that pages relationships includes the relationship manifest identity.
 6. A newly prepared unchanged symbol must reproduce and accept the prior
-   continuation fingerprint. If any future observation field becomes
+   handle fingerprint. If any future observation field becomes
    request-local, remove it from the fingerprint without removing the fresh
-   pre-publication observation check.
+   pre-snapshot observation check.
 
 ## Relationship status and provenance
 
@@ -640,8 +689,10 @@ unavailable/stale reasons are:
 - `source_changed_during_inspection`: descriptor metadata changed between the
   initial and final observations;
 - `path_identity_changed_during_inspection`: the descriptor remained stable,
-  but a fresh root-bound path resolution no longer names the same device/inode
-  identity;
+  but a fresh root-bound path resolution no longer names the same stable final
+  file identity;
+- `path_identity_unavailable`: the platform/filesystem cannot provide a stable
+  final file identity strong enough for safe source evidence;
 - `source_descriptor_unavailable`: a root-bound descriptor could not be opened
   or retained safely.
 
@@ -656,11 +707,35 @@ matching and line windows when valid, and report parser-backed capabilities as
 `unsupported_language`. Capability loss must not be copied into
 `source.emptyReason`.
 
+Valid source status/reason combinations are fixed:
+
+| Condition | `source.status` | Reason placement |
+|---|---|---|
+| All selected source is returned | `available` | no source failure reason |
+| Valid excerpts returned while an oversized line is omitted | `partially_available` | `limitations` includes `line_exceeds_excerpt_limit`; `emptyReason` is absent |
+| The only usable line exceeds the excerpt limit | `unavailable` | `emptyReason = line_exceeds_excerpt_limit` |
+| Source exceeds the inspection ceiling | `unavailable` | `emptyReason = source_exceeds_inspection_limit` |
+| A safe descriptor cannot be opened | `unavailable` | `emptyReason = source_descriptor_unavailable` |
+| Stable path identity cannot be proven | `unavailable` | `emptyReason = path_identity_unavailable` |
+| Descriptor identity changes during inspection | `stale` | `emptyReason = source_changed_during_inspection` |
+| Current root-bound path no longer names the inspected file | `stale` | `emptyReason = path_identity_changed_during_inspection` |
+
+`emptyReason` explains why zero excerpts exist. `limitations` explains omitted
+evidence when one or more valid excerpts remain. Do not populate
+`emptyReason` on a partially available response.
+
 When source changed or the path identity no longer binds to the inspected
 descriptor, return no excerpts from that observation, set source authority and
 status to `stale` or `unavailable`, issue no source continuation fingerprint,
 and recommend a fresh exact-symbol preparation. Independently valid identity
 or relationship evidence may still be returned.
+
+Relationship edge authority and site authority are separate. A stored edge may
+remain `generation_validated` while its site projection is
+`not_current_source_validated`. Return current site coordinates only when the
+corresponding source identity passed current validation; otherwise mark the
+site collection stale/unvalidated or omit it. Suppress a dynamic source-backed
+edge entirely when any source observation required to derive it fails.
 
 A supplied `evidenceSpan` is advisory and accepted only when its attached
 metadata matches the canonical root, file, symbol instance, current source hash,
@@ -706,7 +781,8 @@ A candidate continuation request is:
     "contractVersion": 2,
     "symbolId": "syminst_...",
     "continuation": {
-      "continuationFingerprint": "sha256_...",
+      "kind": "source_range",
+      "fingerprint": "sha256_source_...",
       "startLine": 1800,
       "endLine": 1960
     }
@@ -714,13 +790,48 @@ A candidate continuation request is:
 }
 ```
 
-Compute one continuation fingerprint through canonical serialization of only
-the stable identities required by the effective continuation domains. Every
-source continuation includes canonical root, symbol instance, revalidated full
-span, the SHA-256 of the descriptor-bound current source bytes, symbol-registry
-manifest identity, and selection-policy version. It must use
-`CurrentSourceEvidence.observedHash` or equivalent freshly observed bytes, not
-the registry's index-time `SymbolRecord.fileHash` by itself.
+Return a separate handle for every offered continuation. Each handle contains
+its kind, effective domains, its own fingerprint, and its range or cursor. Do
+not return a top-level fingerprint that implicitly binds all response domains.
+Every source-continuation fingerprint binds the canonical root, selection-policy
+version, and span-resolution state, then exactly one resolution projection:
+
+- `index_snapshot_matched`: symbol-registry manifest identity, indexed source
+  identity, symbol instance, and indexed span; or
+- `current_symbol_validated`: SHA-256 of the descriptor-bound current source
+  bytes, tagged current-span identity, resolved span, span-resolution policy
+  version, extractor/language implementation version, and resolution derivation.
+
+Current source identity must use `CurrentSourceEvidence.observedHash` or
+equivalent freshly observed bytes, not the registry's index-time
+`SymbolRecord.fileHash` by itself. Allowed current-span derivations are
+`exact_registry_rebuild_match` and `language_structural_reresolution`. Current
+bytes equal to indexed source identity use `index_snapshot_matched`; unsupported
+or not-applicable structural analysis cannot establish current coordinates for
+different bytes. A change in any applicable projection input makes that
+source-continuation handle stale.
+
+The current-span identity is a tagged canonical variant:
+
+```ts
+type CurrentSpanIdentity =
+  | {
+      kind: "resolved_symbol_instance";
+      symbolInstanceId: string;
+    }
+  | {
+      kind: "canonical_structural_identity";
+      language: string;
+      qualifiedName: string;
+      kindName: string;
+      parentPath: string[];
+    };
+```
+
+`exact_registry_rebuild_match` produces `resolved_symbol_instance`;
+`language_structural_reresolution` produces `canonical_structural_identity`.
+The tag and every variant field enter canonical serialization. An implementation
+cannot switch variants without invalidating the prior handle.
 
 A source-only `definition`, `implementation`, query, or range continuation does
 not include relationship-manifest identity. A continuation that pages or
@@ -732,9 +843,36 @@ The static relationship continuation component contains exactly:
 
 - canonical root and target symbol instance;
 - symbol-registry and relationship-manifest identities;
-- relationship kind, direction, depth, and effective edge limit;
+- relationship kind, direction, and depth;
 - relationship projection/confidence policy version; and
 - deterministic edge-ordering policy version.
+
+That component is stable traversal identity. Relationship position is a
+separate deterministic cursor or last-edge key under the frozen ordering.
+Requested next-page size is caller input, the server clamps it, and the response
+echoes the effective page size. Cursor, requested page size, and effective page
+size are not fingerprint inputs; changing page size must not make unchanged
+traversal identity appear stale. Caller and callee pages receive separate
+handles and fingerprints even when they came from one composed response.
+
+A relationship cursor is either a canonical key under the frozen edge ordering
+or an opaque server-produced encoding. Validate that it belongs to the
+fingerprinted target symbol, relationship kind, direction, depth, relationship
+manifest generation, projection policy, and ordering policy. Resume strictly
+after it. A plain key requires membership, scope, and ordering validation; an
+opaque cursor must decode and authenticate the same traversal scope. Malformed,
+unknown, cross-target, cross-direction, cross-kind, non-member, older-policy,
+and beyond-end cursors return `INVALID_RELATIONSHIP_CONTINUATION`.
+End-of-traversal is explicit. Consecutive valid pages under unchanged traversal
+identity contain no duplicate or missing edges. A caller cursor is invalid for
+callees even if other identity inputs happen to match. Changing page size is
+allowed. The next cursor is derived from the final returned edge under the
+frozen ordering.
+
+Cursor format version 1 is capped at 1,024 serialized UTF-8 bytes. Opaque
+cursors authenticate their encoded traversal scope with HMAC-SHA-256. Plain
+ordering-key cursors use canonical JSON v1 and reject non-canonical equivalents.
+No error or diagnostic echoes a caller-supplied cursor value.
 
 Stored static graph paging does not require current-source identity by default.
 If the projection revalidates any returned site against current source, add a
@@ -748,11 +886,11 @@ it must not reuse the static fingerprint for them.
 The server recomputes and compares the scoped fingerprint after a new
 request-local preparation. Marker, seal, navigation observation, mutation
 generation, and every requested evidence domain are still validated freshly
-before publication; they are authority checks, not unconditional continuity
+before response-snapshot construction; they are authority checks, not unconditional continuity
 inputs. The hash itself proves nothing and needs no trust. This remains
 stateless and introduces no context cache.
 
-If any identity inside the effective fingerprint changed, return a
+If any identity inside a handle's effective fingerprint changed, return a
 stale-context outcome and require a fresh exact resolution. A relationship-only
 change does not invalidate a source-only continuation. The requested range must
 remain inside the revalidated full symbol span. Ordinary
@@ -764,7 +902,7 @@ Every continuation remains bounded. Clamp the requested range and any supplied
 budgets to the validated symbol boundary, maximum source bytes, maximum source
 lines, and maximum serialized response. When the requested range cannot fit,
 return the selected bounded portion, `completeSymbolReturned = false`, updated
-omitted ranges, and another continuation fingerprint/request. A continuation
+omitted ranges, and another source-continuation handle. A continuation
 means “show more bounded evidence,” never “disable safety limits.”
 
 ## Exact-open replacement and resource-limit transport
@@ -775,17 +913,40 @@ assert it remains supported, along with obsolete hints, documentation, and
 compatibility code. Retain the migration evidence defined below. Non-symbol
 plain file and range reads remain outside this migration.
 
-Normal large symbols return a successful bounded package. Use
-`resource_limit` only when the server cannot serialize the minimum safe
+Normal large symbols return a successful bounded package. Use the resource-limit
+error only when the server cannot serialize the minimum safe
 structured result within the hard response ceiling after all optional evidence
 has been removed or compacted. Total source size is diagnostic and never the
-deciding comparison. The mode-independent error payload is:
+deciding comparison.
+
+Accepted V2 outcomes use this fixed boundary:
+
+| Outcome | `isError` | Transport/code |
+|---|---:|---|
+| Source unavailable or observation failed while identity remains valid | false | successful package with unavailable/stale source section |
+| Empty, degraded, or unsupported relationship evidence | false | successful package with section status and limitations |
+| Stale continuation | true | `STALE_CONTINUATION` |
+| Ambiguous symbol | true | `AMBIGUOUS_SYMBOL` |
+| Symbol not found | true | `SYMBOL_NOT_FOUND` |
+| Navigation unavailable before identity can be validated | true | `NAVIGATION_UNAVAILABLE` |
+| Invalid relationship continuation | true | `INVALID_RELATIONSHIP_CONTINUATION` |
+| Unsupported continuation kind | true | `UNSUPPORTED_CONTINUATION_KIND` |
+| Root binding invalid | true | `ROOT_BINDING_INVALID` safety error |
+| Minimum package cannot fit | true | `MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT` |
+
+Every error from an otherwise accepted V2 request starts with
+`formatVersion: 2`, `kind: "symbol_context"`, `status: "error"`, and a stable
+code. Serialize it as one JSON text content block with `isError: true`. Bound
+all such envelopes independently of normal results. Do not echo caller-supplied
+labels, paths, queries, arbitrary exceptions, or unsafe resolved paths.
+
+The compact mode-independent resource-limit payload is:
 
 ```json
 {
   "formatVersion": 2,
   "kind": "symbol_context",
-  "status": "resource_limit",
+  "status": "error",
   "code": "MINIMUM_SYMBOL_CONTEXT_EXCEEDS_LIMIT",
   "reason": "minimum_safe_package_exceeds_limit",
   "message": "The exact symbol cannot be represented safely within the bounded response contract.",
@@ -807,17 +968,18 @@ response. Its mandatory fields are exactly `formatVersion`, `kind`, `status`,
 `recommendedNextAction` shown above are optional and are removed first if the
 frozen emergency-error ceiling would be exceeded. No hash, path, source span,
 relationship data, arbitrary exception text, or caller-controlled value is
-allowed in this projection. Phase 0 records the canonical serialized maximum
-and proves it fits beneath the MCP transport ceiling independently of the
-normal symbol-context cap.
+allowed in this projection. Phase 0 freezes the canonical serialized maximum
+and its acceptance vector; the later transport implementation must prove it
+fits beneath the MCP ceiling independently of the normal symbol-context cap.
 
 For both `mode="plain"` and `mode="annotated"` exact-symbol requests, transport
 that payload as an MCP tool error (`isError: true`) with one JSON text content
 block. Never return it as successful plain source content and never include a
 partial source field. Schema/types, generated contracts, CLI formatting, and
 golden tests must cover the same payload. Phase 0 freezes the hard ceiling and
-proves separately that very large source uses bounded success and only an
-unrepresentable minimum package uses this error.
+the two acceptance specifications: very large source uses bounded success, and
+only an unrepresentable minimum package uses this error. Those runtime checks
+become mandatory as their implementation phases land and for the Phase 6 gate.
 
 ## Agent evidence contract
 
@@ -839,6 +1001,40 @@ Generated tool documentation and the paired-agent instructions must state:
 ### Phase 0 — Freeze the baseline and corpus
 
 Before production changes:
+
+#### Baseline deliverables
+
+- freeze the deterministic corpus, task prompts, expected answers, schema
+  vectors, acceptance vectors, thresholds, adjudication rubric, and metric
+  definitions;
+- record the pristine current tree as `historicalProductBaseline` and capture
+  the current unversioned full-span exact-symbol output as its historical golden
+  fixture;
+- add only the shared measurement ledger and harness infrastructure, then prove
+  that instrumentation does not alter tool output, ranking, authority, provider
+  calls, or task behavior;
+- record the adaptive workflow (`search_codebase` -> exact open -> outline ->
+  graph -> bounded reference search) as `instrumentedMeasurementBaseline`, with
+  answer correctness, owner rank, calls, steps, timing, bytes/tokens,
+  adjudication labels, and source I/O/processing metrics;
+- require the candidate arm to use the same instrumentation implementation as
+  the instrumented adaptive baseline; and
+- freeze immutable repository, diff, model, harness, machine, runtime, warm-up,
+  ordering, and percentile identities for later paired comparison.
+
+Phase 0 permits measurement-only instrumentation but no bounded-context product
+behavior. It is complete when those artifacts are reviewed and accepted. It
+does not require V2 transport, streaming inspection, continuation, or
+composed-response behavior to exist or pass. Latency and portable source-I/O
+comparisons use `instrumentedMeasurementBaseline`, never the pristine identity.
+
+#### Frozen acceptance specifications
+
+Record the following as non-executable contract vectors, pending tests, or
+skipped tests with explicit tracking reasons. Phases 1–5 progressively make the
+relevant specifications executable and green. Phase 6 requires the complete
+acceptance matrix. “Prove” below describes that eventual acceptance condition,
+not a Phase 0 runtime gate.
 
 - add a small complete function fixture;
 - add a small function with enough callers to overflow the complete serialized
@@ -872,54 +1068,152 @@ Before production changes:
 - prove one root-bound descriptor supplies initial metadata, hashing, source
   inspection, and excerpt extraction, final descriptor metadata is unchanged,
   a fresh root-bound path identity still names that descriptor, and
-  mutation/navigation authority is rechecked before publication;
+  mutation/navigation authority is rechecked before response-snapshot construction;
 - atomically replace a repository path while its old descriptor remains stable
   and readable, and prove old-inode source is not published, no source
   continuation is issued, and fresh exact preparation is required;
+- cover strong, target-only, and unsupported platform file-identity outcomes;
+  only supported stable final-target identity may publish inspected source, and
+  no test infers traversal-chain continuity from final-target equality;
 - prove an unsupported language retains readable lexical/line-window evidence
   while only parser-backed selection capabilities report
   `unsupported_language`;
+- freeze every valid source status/reason placement, including the distinction
+  between `emptyReason` and partial `limitations`;
+- prove stale/unvalidated relationship sites are not presented as current and
+  dynamic source-backed edges are suppressed after source-observation failure;
 - freeze the compact emergency-error projection and prove its maximum canonical
   serialization remains beneath the MCP transport ceiling;
 - prepare an unchanged symbol twice through separate request-local preparations
-  and prove the same continuation fingerprint validates;
+  and prove each unchanged continuation-handle fingerprint validates;
 - change only the relationship manifest and prove a source-only continuation
   remains valid while relationship-bound continuation becomes stale;
-- prove static relationship continuation binds direction, depth, limit, policy,
-  and edge ordering, and dynamic continuation binds every observed source input
-  or reports itself ineligible;
+- prove source, caller, and callee continuations have independent handles and
+  fingerprints; static relationship traversal binds direction, depth, policy,
+  and edge ordering while its deterministic cursor and clamped page size remain
+  separate; and dynamic continuation binds every observed source input or
+  reports itself ineligible;
+- add cursor vectors for malformed input, another target, another relationship
+  kind, non-membership, caller-to-callee misuse, an older ordering policy,
+  beyond-end position, valid page-size change, explicit traversal end,
+  next-cursor derivation, duplicate/gap-free consecutive pages, an oversized or
+  wrong-version cursor, a non-canonical plain key, and failed opaque-cursor
+  authentication;
 - change current source bytes without relying on the registry `fileHash` and
   prove the source continuation becomes stale;
+- prove current-path freshness and current-symbol span resolution separately;
+  when source differs from the indexed identity and structural re-resolution is
+  unavailable, no index-time-span excerpt or source continuation is returned;
+- change the current span-resolution policy or extractor/language implementation
+  version and prove a structurally resolved source continuation becomes stale,
+  while a snapshot-matched continuation remains governed by its manifest and
+  observed source identity; prove each structural derivation produces its frozen
+  tagged identity variant, and reject `not_applicable` as current structural
+  proof;
 - request an oversized continuation and prove source/line/response caps plus
   remaining omissions are preserved;
 - supply evidence spans with wrong root, file, symbol, source hash, navigation
   generation, and selection-policy version and prove each is ignored with a
   diagnostic;
-- record the current adaptive workflow (`search_codebase` -> exact open ->
-  outline -> graph -> bounded reference search) in one harness session;
-- record a historical golden fixture for the current unversioned full-span
-  exact-symbol response before removing it;
 - prove the input schema rejects missing, `1`, and unsupported exact-symbol
   contract versions before tool execution, v2 success has `formatVersion: 2`
   and `kind: symbol_context` in both modes, every accepted-v2 tool error carries
   the same identity, and ordinary plus direct-span non-symbol reads remain
   unchanged;
 - prove a very large multi-line source returns bounded success below the hard
-  response cap; and
+  response cap;
 - force the minimum safe package over the hard ceiling and prove plain and
   annotated exact-symbol requests return the same structured MCP
-  `resource_limit` error with no partial source.
+  resource-limit error with no partial source;
+- cover every accepted-V2 outcome in the frozen success/error matrix, including
+  common bounded error prefixes, stable codes, safety errors, and zero unbounded
+  caller-controlled echo; and
+- prove one acquisition basis per source observation, no descriptor/stream
+  double recording, unique ranged reads under one observation ID, retry-range
+  deduplication, and zero direct source opens by processing owners.
 
-Record answer correctness, owner rank, tool calls, agent steps, provider calls,
-wall time, response bytes/tokens, model input/output tokens, malformed and
-redundant calls, unsupported structural claims, omitted-range correctness, and
-determinism across repeated runs. Source-context workloads also record actual
-source bytes read from descriptors, hashing time, excerpt-selection time, total
-descriptor operations, continuation latency, and complete-file scan count per
-request and per completed task. Response bytes are not a substitute for bytes
-read from source.
+The baseline and all later candidate runs record omitted-range correctness and
+determinism across repeated pure-component runs. Source-context workloads also
+record portable bytes obtained, hashing time, excerpt-selection time, read
+operations, continuation latency, downstream processing volume, and
+complete/partial scan counts per request and per completed task. Response bytes
+are not a substitute for bytes obtained from source.
 
-Freeze this adjudication rubric in the unchanged baseline artifact:
+Apply that accounting symmetrically to both arms and all internal owners:
+exact-open validation, outline preparation, graph-site validation, search
+evidence verification, continuation scans, hashing, parsers, and extractors.
+Record logical source bytes requested, bytes obtained from root-bound
+descriptors or streams, read-operation count, complete-file scans, partial scans,
+and files opened. Operating-system cache hits do not erase bytes obtained from
+the portable source-I/O ledger.
+Physical storage I/O is a separate optional platform measurement with an
+explicit source such as `proc_io`, `platform_api`, or `unavailable`; it is not
+used as a portable release gate.
+
+Split actual source acquisition from downstream reuse. One `observationId`
+associates processing with its underlying scan. Hashing, parsing, selection,
+extraction, graph-site validation, and search-evidence verification report input
+volume but do not add those same shared-buffer bytes to portable source I/O.
+Memory mapping and alternate helpers must not bypass the ledger; an mmap estimate
+is processing volume only and never enters the portable 20% I/O gate.
+
+Each observation has exactly one acquisition boundary and one portable I/O
+basis. A stream backed by a descriptor is recorded at the descriptor boundary
+or the stream boundary, never both. Multiple partial reads carry unique read IDs
+and zero-based, half-open byte ranges. Portable aggregation sums unique
+non-overlapping ranges per `observationId`; overlapping retries cannot inflate
+the result, and each record's `bytesObtained` equals `endByte - startByte`.
+Processing owners never open source directly or perform unledgered acquisition.
+Any source access goes through an acquisition owner and propagates its
+`observationId` to downstream processing.
+
+```ts
+type SourceIoOwner =
+  | "validation"
+  | "outline"
+  | "graph_site"
+  | "search_evidence"
+  | "continuation";
+
+interface SourceIoMetric {
+  observationId: string;
+  readId: string;
+  owner: SourceIoOwner;
+  relativeFile: string;
+  startByte: number;
+  endByte: number;
+  bytesObtained: number;
+  readOperations: number;
+  scanKind: "complete" | "partial";
+  basis: "descriptor_read" | "stream_chunk";
+}
+
+interface SourceProcessingMetric {
+  observationId: string;
+  owner:
+    | "hashing"
+    | "selector"
+    | "parser"
+    | "extractor"
+    | "graph_site"
+    | "search_evidence";
+  relativeFile: string;
+  inputBytesProcessed: number;
+  basis:
+    | "shared_buffer"
+    | "parser_input"
+    | "extractor_input"
+    | "mmap_estimate";
+}
+```
+
+The release gate applies only to total portable
+`SourceIoMetric.bytesObtained` per completed task after that within-observation
+range deduplication. Processing volume is reported separately. The candidate
+and instrumented adaptive arms use the same ledger code and measurement bases.
+
+Freeze this adjudication rubric before instrumentation, then carry it unchanged
+into the instrumented measurement-baseline artifact:
 
 - `malformed request`: a tool request rejected by the published schema or using
   the wrong field/type such that the agent must correct and retry it;
@@ -951,7 +1245,8 @@ record machine, OS, CPU, runtime, provider/model, index generation, Git tree,
 and diff identity. Interleave baseline and candidate in a frozen seeded AB/BA
 order rather than running all samples for one state first.
 
-Freeze these release gates in the unchanged baseline artifact before Phase 1:
+Freeze these release gates before instrumentation, then carry them unchanged
+into the instrumented measurement-baseline artifact before Phase 1:
 
 - no deterministic correctness, authority, safety, or required-evidence
   regression;
@@ -961,12 +1256,14 @@ Freeze these release gates in the unchanged baseline artifact before Phase 1:
   workload adds more than one unnecessary call, and no large-symbol workload
   regresses in median steps or calls;
 - median model-visible UTF-8 bytes reduced by at least 20%;
-- total source bytes read per completed task no more than 20% above the adaptive
-  baseline, with paired per-task deltas and complete-file scan counts reported;
+- total portable `SourceIoMetric.bytesObtained` per completed task no more than
+  20% above the instrumented adaptive baseline, with paired per-task deltas and
+  complete-file scan counts reported;
 - zero provider-call increase for structural tasks;
-- median end-to-end latency no more than 10% above the adaptive baseline;
-- controlled local p95 latency no more than 20% above the adaptive baseline
-  over at least 30 repetitions;
+- median end-to-end latency no more than 10% above the instrumented adaptive
+  baseline;
+- controlled local p95 latency no more than 20% above the instrumented adaptive
+  baseline over at least 30 repetitions;
 - every large-symbol response below the hard serialized-response cap;
 - malformed calls, redundant calls, and unsupported structural claims no worse
   than baseline; and
@@ -1006,17 +1303,68 @@ for files above the existing 256 KiB helper cap and below the frozen inspectable
 limit. Hash the bytes actually observed; do not raise the response budget or
 materialize unbounded source merely to support selection.
 
+Define a platform-aware identity owner rather than exposing raw POSIX fields:
+
+```ts
+interface RootBoundFileIdentity {
+  platform: string;
+  stableIdentity: string;
+  canonicalRelativePath: string;
+  traversalIdentity?: string;
+  strength: "strong" | "target_only" | "unsupported";
+}
+```
+
+Unix implementations may derive `stableIdentity` from device/inode, Windows
+may use platform-native file IDs, and weak network/virtual filesystems must
+report `unsupported` instead of inventing certainty. Bounded-context v1
+uses this fixed policy:
+
+| Identity strength | Publish inspected source? | Claim |
+|---|---:|---|
+| `strong` | yes | Same final file identity; additional traversal continuity only when an explicit `traversalIdentity` was also checked |
+| `target_only` | yes | Same final file identity and root confinement; no traversal-chain claim |
+| `unsupported` | no | Source unavailable with `path_identity_unavailable` |
+
+It does not claim unchanged symlink or directory traversal unless a future
+implementation records and compares an explicit `traversalIdentity`.
+
 Open the source once through the canonical-root-bound descriptor. Record its
 initial descriptor metadata, hash and inspect bytes from that same descriptor,
 derive excerpts without reopening the path for source extraction, then compare
 final descriptor metadata. After descriptor stability succeeds, perform a
-fresh root-bound path resolution and compare the path's current device/inode
-identity with the open descriptor. Reject disappearance, replacement, changed
-symlink/directory traversal, changed canonical-root binding, or root escape as
-`path_identity_changed_during_inspection`. This final rebinding check verifies
-identity only; it must not become a second source used for hashing or excerpt
-selection. Recheck mutation and navigation authority after descriptor and path
-identity checks and immediately before publication.
+fresh authority/mutation validation. Then, as the last source operation,
+resolve the path through the root-bound identity owner and compare its current
+stable final-target identity with the open descriptor identity. Reject
+disappearance or replacement as `path_identity_changed_during_inspection`;
+preserve failed root confinement or root escape internally as
+`root_binding_invalid`; return
+`path_identity_unavailable` when proof strength is unsupported. This final
+rebinding check verifies identity only and must not become a second source used
+for hashing or excerpt selection.
+
+The final successful root-bound path-identity observation is the
+source-validation linearization point. Source evidence is valid as of that
+observation. External mutation after the point does not retroactively invalidate
+the immutable handler response snapshot, and every continuation performs a new
+preparation and validation. Construct that snapshot synchronously after the
+linearization point: no `await`, timer, provider call, filesystem operation, or
+other asynchronous work may intervene. Network transport occurs afterward and
+is not part of the source-validity guarantee. The compact source authority is
+`current_at_final_observation`; no wall-clock timestamp is required.
+
+That linearization point applies only to source evidence. It does not make the
+composed response globally atomic. Navigation, relationships, and mutation
+fencing retain their own final observations and authority classifications. The
+response must not imply that these independently validated domains were observed
+at one indivisible repository state unless a future implementation actually
+holds a repository-wide lock.
+
+Treat `root_binding_invalid` as an operational safety failure, not routine file
+staleness. It fails closed, emits no source excerpt or continuation, carries a
+dedicated diagnostic and safety-telemetry classification, never echoes an
+unsafe path, and remains covered by the root-confinement fixture suite even when
+the public source projection is simply unavailable.
 
 Atomic-replacement coverage must keep file A's original descriptor readable,
 replace its repository path with file B, and prove that no source evidence from
@@ -1039,7 +1387,8 @@ accepted or rejected post-v1 experiment, not an automatic Phase 3 expansion.
 Compose identity, ancestry, source, outline, relationships, provenance,
 authority, and limitations from one prepared navigation snapshot. Reuse
 existing internal owners rather than invoking MCP tools recursively. Revalidate
-authority and mutation generation immediately before response publication.
+authority and mutation generation immediately before immutable response-snapshot
+construction.
 
 ### Phase 5 — Versioned public replacement
 
@@ -1057,8 +1406,9 @@ Delete the old exact-symbol full-span response branch and tests that assert it
 is still supported; do not retain a compatibility flag. Preserve the historical
 golden fixture and add tests proving the old branch is unreachable, old or
 missing versions are rejected, and direct non-symbol plain reads are unchanged.
-Publish the mode-independent structured `resource_limit` error for the unsafe
-cases defined above.
+Publish the complete accepted-V2 outcome matrix and common bounded error
+transport, including the resource-limit and root-binding safety errors defined
+above.
 
 ### Phase 6 — Evaluation and retention decision
 
@@ -1079,9 +1429,10 @@ Retain the public feature only if it meets the numerical gates frozen in Phase
 - reduces median model-visible UTF-8 bytes by at least 20%;
 - does not increase provider calls on deterministic structural cases;
 - does not hide truncation, unsupported capabilities, or degraded authority;
-- keeps median end-to-end latency within 10% of the adaptive baseline;
-- keeps controlled local p95 latency within 20% of the adaptive baseline with
-  at least 30 repetitions per workload;
+- keeps median end-to-end latency within 10% of the instrumented adaptive
+  baseline;
+- keeps controlled local p95 latency within 20% of the instrumented adaptive
+  baseline with at least 30 repetitions per workload;
 - keeps every large-symbol response under the frozen hard cap;
 - does not increase malformed/redundant calls or unsupported structural claims;
   and
@@ -1099,13 +1450,14 @@ useful metadata/status improvements.
 | Small source | Full validated body remains complete whenever mandatory metadata plus source fits; a large caller set truncates optional relationships first. |
 | Large source | Required evidence is recovered across beginning/middle/end and repeated-branch fixtures; exact omissions are disclosed; a first-N-lines strategy fails the corpus. |
 | Byte safety | Huge/minified line is never split, returns explicit bounded source-unavailable metadata, and cannot exceed the serialized response cap. |
-| Determinism | The pure selector/composer produces byte-identical excerpt order and scoped continuation fingerprints across equivalent separate preparations. |
-| Authority | Marker, seal, observation, and mutation changes fail fresh publication checks; a changed identity rejects only continuations whose effective domains include it. |
+| Determinism | The pure selector/composer produces byte-identical excerpt order and per-handle scoped continuation fingerprints across equivalent separate preparations. |
+| Authority | Marker, seal, observation, and mutation changes fail fresh pre-snapshot checks; a changed identity rejects only continuation handles whose effective domains include it. |
 | Current source identity | Continuation uses a hash of descriptor-bound currently validated bytes, not the registry's index-time file hash alone. |
-| Current path identity | Atomic replacement leaves the old descriptor readable but prevents its evidence from publication because current root-bound path identity no longer matches. |
+| Current symbol span | Source freshness and span resolution are distinct; changed current source without index identity match or current structural re-resolution yields no excerpt from index-time coordinates. |
+| Current path identity | A platform-aware root-bound identity proves the same final file with explicit strength at the source-validation linearization point; atomic replacement leaves the old descriptor readable but prevents its evidence from entering the response snapshot. |
 | Domain-scoped continuation | A relationship-only change preserves source-only continuation and rejects relationship-bound continuation. |
-| Relationship continuation | Static paging binds target, manifests, kind, direction, depth, limit, projection/confidence policy, and ordering; dynamic paging also binds every observed source input or is explicitly ineligible. |
-| Source mutation | Mutation before publication or continuation yields stale/retry behavior, never mixed-generation evidence. |
+| Relationship continuation | Static paging binds stable target, manifests, kind, direction, depth, projection/confidence policy, and ordering; cursor and clamped page size remain separate; dynamic paging also binds every observed source input or is explicitly ineligible. |
+| Source mutation | Mutation before the source linearization point or during a later continuation preparation yields stale/retry behavior, never mixed-generation evidence; mutation afterward does not retroactively invalidate the snapshot. |
 | Continuation bounds | Oversized requested ranges remain inside the symbol and all source/line/serialized caps, with remaining omissions disclosed. |
 | Evidence span | Root, file, symbol, source, generation, policy, or containment mismatch is ignored with a diagnostic. |
 | Parent identity | Unique parent gets concrete ID; ambiguous/missing parent never gets an invented ID. |
@@ -1116,14 +1468,17 @@ useful metadata/status improvements.
 | Provider economy | Every bounded-context v1 definition/implementation/call-context request uses zero embedding, vector, and rerank calls, including degraded/empty graph outcomes. |
 | Budget pressure | Mandatory identity/authority/omission facts survive before optional siblings and relationships. |
 | Version boundary | Exact-symbol requests require the literal `open_symbol.contractVersion: 2`; MCP input validation rejects missing/old/unsupported values before execution, and all accepted-v2 outcomes carry `formatVersion: 2` plus `kind: symbol_context`. |
+| V2 outcomes | Successful unavailable/degraded sections and structured tool errors follow the frozen matrix; every accepted-V2 error has the common bounded prefix and stable code without unbounded caller-controlled echo. |
 | Input discrimination | Exact-symbol, direct-span, and ordinary read variants are strict and disjoint; mixed and unknown fields fail schema validation. |
 | Exact-open replacement | Plain and annotated v2 exact-symbol requests return the same structured complete-or-bounded transport; the obsolete full-span branch is unreachable while ordinary and direct-span non-symbol reads are unchanged. |
 | Mode semantics | V2 echoes `requestedMode`, but `plain` and `annotated` do not change the structured response representation. |
 | Migration evidence | The prior response remains as a historical golden fixture, while tests prove it cannot be served by v2. |
 | Resource limit | Very large source returns bounded success; only `minimumRequiredResponseBytes > hardResponseLimitBytes` returns the same structured MCP error in both modes, with no partial source content. |
 | Emergency transport | The compact fixed-field error projection has a separately frozen canonical byte ceiling that always fits the MCP transport limit. |
-| Streaming source | One root-bound descriptor is stable across metadata, hashing, inspection, and excerpt extraction; current path identity is rebound before publication; capability loss and source availability remain separate. |
-| Continuation economy | Descriptor bytes read, hashing/selection time, operations, latency, and complete-file scans are recorded; total source bytes per completed task remain within the frozen 20% baseline allowance. |
+| Streaming source | One root-bound descriptor is stable across metadata, hashing, inspection, and excerpt extraction; current path identity is observed at the source-validation linearization point; capability loss and source availability remain separate. |
+| Continuation economy | Portable bytes obtained, read operations, processing volume, hashing/selection time, latency, and scan counts are recorded; total `SourceIoMetric.bytesObtained` per completed task remains within the frozen 20% allowance against the instrumented baseline. |
+| Baseline identity | The pristine historical identity preserves old output; the instrumented adaptive identity proves measurement invariance and is the only latency/source-cost comparison baseline; both arms share its ledger implementation. |
+| Relationship sites | Edge generation authority does not make site coordinates current; sites carry separate current-source status and dynamic source-backed edges are suppressed after failed observations. |
 | Completeness honesty | No path returns partial source marked or implied as a complete symbol. |
 
 Focused package tests must precede MCP, Core, CLI, integration, typecheck,
@@ -1138,8 +1493,12 @@ Return `BOUNDED SYMBOL CONTEXT COMPLETE` only when:
 - the deterministic corpus and frozen safety contracts pass;
 - small symbols are complete and large symbols are byte- and line-bounded;
 - omitted source and relationship limitations are explicit;
-- continuation requests are domain-scoped, current-source-bound, freshly
-  authority-validated, and mutation-fenced;
+- every offered continuation has its own domain-scoped handle, stable
+  fingerprint, and range or cursor, and is freshly authority-validated and
+  mutation-fenced;
+- source freshness and span resolution are independently valid before any
+  excerpt or source continuation is returned, and structurally resolved spans
+  bind their policy, extractor/language version, and derivation;
 - a failed descriptor or current-path identity check publishes no source
   excerpt or source continuation and requires fresh exact-symbol preparation;
 - all bounded-context v1 composer requests use no providers, including
@@ -1155,19 +1514,24 @@ Return `BOUNDED SYMBOL CONTEXT COMPLETE` only when:
   evidence without line splitting, and ordinary very large multi-line source
   returns bounded success;
 - unsafe unrepresentable exact symbols fail through the mode-independent
-  structured `resource_limit` MCP error only when the minimum required response
+  structured resource-limit MCP error only when the minimum required response
   exceeds the hard response limit, and never return partial content;
+- every accepted-V2 error uses the common bounded prefix and stable code without
+  unbounded caller-controlled content;
 - quality, latency, provider work, response bytes/tokens, tool calls, and agent
-  steps are measured against the adaptive baseline, together with descriptor
-  source bytes, hashing/selection time, operations, and complete-file scans;
+  steps are measured against the instrumented adaptive baseline, together with
+  `SourceIoMetric.bytesObtained`, separately reported processing volume,
+  hashing/selection time, read operations, and complete-file scans;
 - the pinned smaller-model comparison has no deterministic correctness or
   safety regression, reduces primary median agent steps by at least 1 absolute
   or 20% relative, does not increase median tool calls, reduces median
   model-visible bytes by at least 20%, adds no provider calls, keeps median
   latency within 10%, and keeps nearest-rank controlled local p95 latency within
-  20% of the adaptive baseline over at least 30 repetitions per workload under
-  the frozen warm-up, outlier, identity, and interleaving policy, while total
-  source bytes read per completed task remain within 20% of baseline; and
+  20% of the instrumented adaptive baseline over at least 30 repetitions per
+  workload under the frozen warm-up, outlier, identity, and interleaving policy,
+  while total
+  portable `SourceIoMetric.bytesObtained` per completed task remains within 20%
+  of the instrumented adaptive baseline;
 - the tested tree and diff have immutable identities.
 
 Until those conditions are met, this remains a measured follow-on plan. The
@@ -1181,8 +1545,10 @@ The next session should begin with Phase 0, not production schema work:
 1. Confirm the worktree and current six-tool names are unchanged.
 2. Add the deterministic small/large/minified/graph-state fixtures and adaptive
    baseline recorder.
-3. Record the unchanged baseline artifact with immutable tree/diff identity.
-4. Implement only Phase 1 after the baseline exists.
+3. Record `historicalProductBaseline`, add measurement-only instrumentation,
+   and prove its behavioral invariance.
+4. Record `instrumentedMeasurementBaseline` with immutable tree/diff identity.
+5. Implement only Phase 1 after both identities and the frozen artifacts exist.
 
 No production code was changed while writing this plan because the review did
 not prove a current correctness or reproducibility defect.

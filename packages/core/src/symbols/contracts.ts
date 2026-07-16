@@ -1,3 +1,7 @@
+import { isRepositoryRelativePath } from '../paths/repository-path';
+
+export { isRepositoryRelativePath } from '../paths/repository-path';
+
 export const SYMBOL_REGISTRY_SCHEMA_VERSION = 'symbol_registry_v1';
 export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v2';
 
@@ -167,17 +171,6 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isNonNegativeInteger(value: unknown): value is number {
     return Number.isSafeInteger(value) && Number(value) >= 0;
-}
-
-export function isRepositoryRelativePath(value: unknown): value is string {
-    if (!isNonEmptyString(value) || value.includes('\0') || value.includes('\\')) {
-        return false;
-    }
-    if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) {
-        return false;
-    }
-    const segments = value.split('/');
-    return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
 }
 
 export function isSymbolRegistryManifest(value: unknown): value is SymbolRegistryManifest {

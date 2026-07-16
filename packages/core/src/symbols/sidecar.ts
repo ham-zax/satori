@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
-    isRepositoryRelativePath,
     isRelationshipManifest,
     isSymbolKind,
     isSymbolRegistryManifest,
 } from './contracts';
+import { isRepositoryRelativePath } from '../paths/repository-path';
 import {
     buildSymbolRegistry,
     computeSymbolRegistryManifestHash,

@@ -1,5 +1,5 @@
 import type { CodeChunk } from '../language-analysis';
-import { isRepositoryRelativePath } from '../symbols/contracts';
+import { validateRepositoryRelativePath } from '../paths/repository-path';
 import type { SearchProjections } from '../vectordb/types';
 
 export const EMBEDDING_PROJECTION_VERSION = 'embedding_projection_v1' as const;
@@ -37,10 +37,8 @@ function buildAdditiveLexicalTerms(values: readonly string[]): string[] {
  * indexing path. Adapters must not reconstruct or enrich these values.
  */
 export function buildSearchProjections(input: SearchProjectionInput): SearchProjections {
-    const { chunk, relativePath } = input;
-    if (!isRepositoryRelativePath(relativePath)) {
-        throw new Error(`Search projection relativePath must be a canonical repository-relative path: ${JSON.stringify(relativePath)}`);
-    }
+    const { chunk } = input;
+    const relativePath = validateRepositoryRelativePath(input.relativePath);
     const { metadata } = chunk;
     const metadataValues = [
         relativePath,

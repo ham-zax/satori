@@ -134,6 +134,33 @@ test('FileSynchronizer snapshot JSON key order is independent of String.prototyp
     }
 });
 
+test('FileSynchronizer preserves canonical whitespace-bearing file identities', async () => {
+    const previousHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-spaced-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-spaced-repo-'));
+    const relativePath = ' source.ts';
+
+    try {
+        process.env.HOME = tempHome;
+        fs.writeFileSync(path.join(tempRepo, relativePath), 'export const value = true;\n', 'utf8');
+
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize();
+
+        assert.deepEqual(synchronizer.getTrackedRelativePaths(), [relativePath]);
+        assert.equal(synchronizer.getFileHash(relativePath)?.length, 64);
+        assert.equal(synchronizer.getFileHash(relativePath.trim()), undefined);
+    } finally {
+        if (previousHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = previousHome;
+        }
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});
+
 test('FileSynchronizer does not track files through an external directory symlink', async (t) => {
     const prevHome = process.env.HOME;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-link-home-'));

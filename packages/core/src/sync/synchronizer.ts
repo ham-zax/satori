@@ -17,6 +17,7 @@ import {
     openRegularFileInsideRoot,
     resolveInsideRoot,
 } from './root-bound-fs';
+import { canonicalizeRepositoryRelativePath } from '../paths/repository-path';
 
 interface FileStatSignature {
     size: number;
@@ -293,42 +294,7 @@ export class FileSynchronizer {
     }
 
     private normalizeRelPath(candidatePath: string): string {
-        if (typeof candidatePath !== 'string') {
-            return '';
-        }
-
-        const trimmed = candidatePath.trim();
-        if (!trimmed) {
-            return '';
-        }
-
-        let normalized = trimmed.replace(/\\/g, '/');
-        normalized = normalized.replace(/\/+/g, '/');
-        normalized = normalized.replace(/^(\.\/)+/, '');
-        normalized = normalized.replace(/^\/+/, '');
-        normalized = normalized.replace(/\/+$/, '');
-
-        if (!normalized || normalized === '.') {
-            return '';
-        }
-
-        const parts = normalized.split('/');
-        const cleanParts: string[] = [];
-        for (const part of parts) {
-            if (!part || part === '.') {
-                continue;
-            }
-            if (part === '..') {
-                return '';
-            }
-            cleanParts.push(part);
-        }
-
-        if (cleanParts.length === 0) {
-            return '';
-        }
-
-        return cleanParts.join('/');
+        return canonicalizeRepositoryRelativePath(this.rootDir, candidatePath) ?? '';
     }
 
     private isPathWithinPrefix(candidatePath: string, prefix: string): boolean {

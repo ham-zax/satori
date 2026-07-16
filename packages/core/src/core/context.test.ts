@@ -1792,6 +1792,66 @@ test('Context.pruneUnprovenStagedCollectionFamily discards interrupted payload o
     assert.equal(await vectorDatabase.hasCollection(interruptedCollectionName), false);
 });
 
+test('Context.pruneUnprovenStagedCollectionFamily treats unsearchable staged collections as unproven', async () => {
+    const vectorDatabase = new InMemoryVectorDatabase();
+    const context = new Context({
+        embedding: new TestEmbedding(),
+        vectorDatabase,
+    });
+    const codebasePath = '/repo/indexless';
+    const indexlessCollectionName = `${context.resolveCollectionName(codebasePath)}__gen_indexless`;
+    const provenCollectionName = `${context.resolveCollectionName(codebasePath)}__gen_proven`;
+
+    await vectorDatabase.createHybridCollection(indexlessCollectionName);
+    await vectorDatabase.createHybridCollection(provenCollectionName);
+    // Real current marker + matching payload so discard authority still preserves
+    // a proven staged generation while dropping only the unsearchable one.
+    await vectorDatabase.writeDocuments(provenCollectionName, [
+        buildChunkDoc('ready_chunk'),
+    ]);
+    await context.writeIndexCompletionMarker(codebasePath, {
+        kind: 'satori_index_completion_v3',
+        codebasePath,
+        fingerprint: testIndexFingerprint(),
+        indexedFiles: 1,
+        totalChunks: 1,
+        completedAt: '2026-02-27T23:57:10.000Z',
+        runId: 'run_proven',
+        indexPolicyHash: 'a'.repeat(64),
+        indexStatus: 'completed',
+        navigation: { status: 'not_bound' },
+    }, provenCollectionName);
+
+    const unsearchable = new Error(
+        'ErrorCode: IndexNotExist. Reason: index not found[collection=hybrid_code_chunks_indexless__gen_indexless]',
+    );
+    vectorDatabase.controlReadHook = async ({ collectionName }) => {
+        if (collectionName === indexlessCollectionName) {
+            throw unsearchable;
+        }
+    };
+    vectorDatabase.queryHook = async ({ collectionName }) => {
+        if (collectionName === indexlessCollectionName) {
+            throw unsearchable;
+        }
+    };
+
+    // Without exclusive discard authority, keep the unsearchable generation.
+    const preserved = await context.pruneUnprovenStagedCollectionFamily(codebasePath);
+    assert.deepEqual(preserved, []);
+    assert.equal(await vectorDatabase.hasCollection(indexlessCollectionName), true);
+    assert.equal(await vectorDatabase.hasCollection(provenCollectionName), true);
+
+    // With a current mutation lease, discard only the unsearchable unproven generation.
+    const dropped = await context.pruneUnprovenStagedCollectionFamily(codebasePath, {
+        discardUnprovenPayload: true,
+        assertMutationCurrent: () => undefined,
+    });
+    assert.deepEqual(dropped, [indexlessCollectionName]);
+    assert.equal(await vectorDatabase.hasCollection(indexlessCollectionName), false);
+    assert.equal(await vectorDatabase.hasCollection(provenCollectionName), true);
+});
+
 test('Context.indexCodebase clears stale completion marker before rebuilding navigation', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-stale-marker-'));
     try {

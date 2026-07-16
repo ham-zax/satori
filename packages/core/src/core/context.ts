@@ -617,6 +617,46 @@ type StagedCollectionPruneOptions = {
     discardUnprovenPayload?: boolean;
 };
 
+/**
+ * Staged hybrid collections are schema-only until finalize. Probing them for
+ * markers or payload can fail with backend index-missing errors instead of an
+ * empty result set. Those failures are generation state, not prune transport
+ * failures.
+ *
+ * Keep this matcher narrow: only known Milvus/Zilliz index-absence codes/phrases.
+ * Do not treat generic "not found" or collection-missing errors as unsearchable.
+ */
+function isUnsearchableStagedCollectionError(error: unknown): boolean {
+    const messages: string[] = [];
+    const seen = new Set<unknown>();
+    const collect = (value: unknown): void => {
+        if (value === null || value === undefined || seen.has(value)) {
+            return;
+        }
+        seen.add(value);
+        if (typeof value === 'string') {
+            messages.push(value);
+            return;
+        }
+        if (value instanceof Error) {
+            messages.push(value.name, value.message);
+            collect((value as Error & { cause?: unknown }).cause);
+            return;
+        }
+        if (typeof value === 'object') {
+            const record = value as Record<string, unknown>;
+            for (const key of ['message', 'reason', 'error_code', 'code', 'errorCode']) {
+                collect(record[key]);
+            }
+        }
+    };
+    collect(error);
+    const joined = messages.join(' ');
+    return /IndexNotExist/i.test(joined)
+        || /index not found\[collection=/i.test(joined)
+        || /index does not exist/i.test(joined);
+}
+
 export type PreparedIndexCollectionBinding = Readonly<{
     generation: number;
     operationId: string;
@@ -2083,15 +2123,31 @@ export class Context {
             if (!collectionName.includes('__gen_')) {
                 continue;
             }
-            const marker = await this.resolveCompletionMarkerForCollection(codebasePath, collectionName);
-            if (marker && await this.collectionHasIndexedPayload(collectionName, marker)) {
-                continue;
+            // Hybrid rebuilds intentionally leave staged collections indexless until
+            // finalization. Marker/payload probes load the collection, so an
+            // IndexNotExist-class failure means the generation is unsearchable and
+            // unproven rather than a hard prune abort. Preserve that uncertain state
+            // unless this mutation owns exclusive discard authority.
+            let marker: IndexCompletionMarkerDocument | null;
+            let hasUnprovenPayload = false;
+            try {
+                marker = await this.resolveCompletionMarkerForCollection(codebasePath, collectionName);
+                if (marker && await this.collectionHasIndexedPayload(collectionName, marker)) {
+                    continue;
+                }
+                hasUnprovenPayload = !marker
+                    && await this.collectionHasAnyIndexedPayload(collectionName);
+            } catch (error) {
+                if (!isUnsearchableStagedCollectionError(error)) {
+                    throw error;
+                }
+                if (!options.discardUnprovenPayload) {
+                    continue;
+                }
+                marker = null;
+                hasUnprovenPayload = false;
             }
-            if (
-                !marker
-                && !options.discardUnprovenPayload
-                && await this.collectionHasAnyIndexedPayload(collectionName)
-            ) {
+            if (!marker && !options.discardUnprovenPayload && hasUnprovenPayload) {
                 continue;
             }
             await deleteCollectionWithVerification(this.vectorDatabase, collectionName, {

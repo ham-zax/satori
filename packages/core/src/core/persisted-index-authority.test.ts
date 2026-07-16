@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {
     buildCanonicalIndexPolicyDocument,
+    compareIndexCompatibility,
     inspectCompletionMarker,
     inspectIndexPolicyDocument,
+    parseIndexFingerprint,
     type CanonicalCompletionMarker,
     type CanonicalIndexPolicyPayload,
 } from './persisted-index-authority';
@@ -86,6 +88,78 @@ test('completion marker inspector admits only complete canonical v3 shapes', () 
     });
 });
 
+test('fingerprint parsing and compatibility use one deterministic field contract', () => {
+    const current = fingerprint();
+    assert.deepEqual(parseIndexFingerprint(current), current);
+
+    const legacy = { ...current } as Partial<typeof current>;
+    delete legacy.embeddingProjectionVersion;
+    delete legacy.lexicalProjectionVersion;
+    assert.deepEqual(compareIndexCompatibility(legacy, current), {
+        status: 'requires_reindex',
+        differingFields: ['embeddingProjectionVersion', 'lexicalProjectionVersion'],
+    });
+
+    const oldestSupported = {
+        embeddingProvider: current.embeddingProvider,
+        embeddingModel: current.embeddingModel,
+        embeddingDimension: current.embeddingDimension,
+        vectorStoreProvider: current.vectorStoreProvider,
+        schemaVersion: current.schemaVersion,
+    };
+    assert.deepEqual(compareIndexCompatibility(oldestSupported, current), {
+        status: 'requires_reindex',
+        differingFields: [
+            'parserVersion',
+            'extractorVersion',
+            'relationshipVersion',
+            'embeddingProjectionVersion',
+            'lexicalProjectionVersion',
+        ],
+    });
+
+    assert.deepEqual(compareIndexCompatibility({ ...current, parserVersion: 'parser-v2' }, current), {
+        status: 'requires_reindex',
+        differingFields: ['parserVersion'],
+    });
+    assert.equal(parseIndexFingerprint({ ...legacy, embeddingProjectionVersion: 'partial' }), null);
+    assert.deepEqual(compareIndexCompatibility({ ...current, embeddingDimension: 0 }, current), {
+        status: 'malformed',
+        reason: 'persisted index fingerprint is malformed',
+    });
+
+    const incompleteRuntime = { ...current } as Partial<typeof current>;
+    delete incompleteRuntime.relationshipVersion;
+    assert.deepEqual(compareIndexCompatibility(
+        current,
+        incompleteRuntime as ReturnType<typeof fingerprint>,
+    ), {
+        status: 'malformed',
+        reason: 'runtime index fingerprint is malformed',
+    });
+
+    const legacyRuntime = { ...current } as Partial<typeof current>;
+    delete legacyRuntime.parserVersion;
+    delete legacyRuntime.extractorVersion;
+    delete legacyRuntime.relationshipVersion;
+    delete legacyRuntime.embeddingProjectionVersion;
+    delete legacyRuntime.lexicalProjectionVersion;
+    assert.deepEqual(compareIndexCompatibility(
+        legacyRuntime,
+        legacyRuntime as ReturnType<typeof fingerprint>,
+    ), {
+        status: 'malformed',
+        reason: 'runtime index fingerprint is malformed',
+    });
+
+    const future = { ...current, localModelDigest: 'sha256:future' };
+    assert.equal(parseIndexFingerprint(future), null);
+    assert.deepEqual(compareIndexCompatibility(future, current), {
+        status: 'malformed',
+        reason: 'persisted index fingerprint is malformed',
+    });
+});
+
 test('completion marker inspector requires reindex for every retired marker schema', () => {
     const legacyV2 = {
         ...canonicalMarker(),
@@ -99,6 +173,10 @@ test('completion marker inspector requires reindex for every retired marker sche
     assert.deepEqual(inspectCompletionMarker(legacyV2), {
         status: 'requires_reindex',
         reason: 'completion marker v2 requires reindex',
+        ownership: {
+            kind: 'satori_index_completion_v2',
+            codebasePath: '/repo',
+        },
     });
 
     const preSeal = { ...legacyV2 } as Record<string, unknown>;
@@ -106,6 +184,10 @@ test('completion marker inspector requires reindex for every retired marker sche
     assert.deepEqual(inspectCompletionMarker(preSeal), {
         status: 'requires_reindex',
         reason: 'completion marker v2 requires reindex',
+        ownership: {
+            kind: 'satori_index_completion_v2',
+            codebasePath: '/repo',
+        },
     });
 
     const missingAnalyzerIdentity = structuredClone(legacyV2) as Record<string, unknown>;
@@ -118,6 +200,24 @@ test('completion marker inspector requires reindex for every retired marker sche
     assert.deepEqual(inspectCompletionMarker({ kind: 'satori_index_completion_v1' }), {
         status: 'requires_reindex',
         reason: 'completion marker v1 requires reindex',
+    });
+
+    const legacyV1 = {
+        kind: 'satori_index_completion_v1',
+        codebasePath: '/repo',
+        fingerprint: fingerprint(),
+        indexedFiles: 1,
+        totalChunks: 2,
+        completedAt: '2026-07-10T00:00:00.000Z',
+        runId: 'legacy-v1',
+    };
+    assert.deepEqual(inspectCompletionMarker(legacyV1), {
+        status: 'requires_reindex',
+        reason: 'completion marker v1 requires reindex',
+        ownership: {
+            kind: 'satori_index_completion_v1',
+            codebasePath: '/repo',
+        },
     });
 });
 

@@ -4,19 +4,49 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const GENERATION_ID = /^[a-zA-Z0-9_-]+$/;
 const SYMBOL_MANIFEST_HASH = /^symmanifest_[a-f0-9]{32}$/;
 
-export interface CanonicalCompletionFingerprint {
+export interface IndexFingerprint {
     embeddingProvider: string;
     embeddingModel: string;
     embeddingDimension: number;
     vectorStoreProvider: string;
     schemaVersion: string;
-    parserVersion: string;
-    extractorVersion: string;
-    relationshipVersion: string;
+    /** Absent only on legacy persisted fingerprints. */
+    parserVersion?: string;
+    extractorVersion?: string;
+    relationshipVersion?: string;
     /** Absent only on indexes created before Core-owned projections. */
     embeddingProjectionVersion?: string;
     lexicalProjectionVersion?: string;
 }
+
+export interface CanonicalCompletionFingerprint extends IndexFingerprint {
+    parserVersion: string;
+    extractorVersion: string;
+    relationshipVersion: string;
+}
+
+export const INDEX_FINGERPRINT_FIELDS = [
+    'embeddingProvider',
+    'embeddingModel',
+    'embeddingDimension',
+    'vectorStoreProvider',
+    'schemaVersion',
+    'parserVersion',
+    'extractorVersion',
+    'relationshipVersion',
+    'embeddingProjectionVersion',
+    'lexicalProjectionVersion',
+] as const satisfies readonly (keyof IndexFingerprint)[];
+
+const BASE_INDEX_FINGERPRINT_FIELDS = INDEX_FINGERPRINT_FIELDS.slice(0, 5);
+const ANALYSIS_INDEX_FINGERPRINT_FIELDS = INDEX_FINGERPRINT_FIELDS.slice(0, 8);
+
+export type IndexFingerprintField = typeof INDEX_FINGERPRINT_FIELDS[number];
+
+export type IndexCompatibility =
+    | { status: 'compatible'; differingFields: [] }
+    | { status: 'requires_reindex'; differingFields: IndexFingerprintField[] }
+    | { status: 'malformed'; reason: string };
 
 export type CanonicalNavigationBinding =
     | { status: 'not_bound' }
@@ -41,9 +71,20 @@ export interface CanonicalCompletionMarker {
     navigation: CanonicalNavigationBinding;
 }
 
+export type RetiredCompletionMarkerOwnership = Readonly<{
+    kind: 'satori_index_completion_v1' | 'satori_index_completion_v2';
+    codebasePath: string;
+}>;
+
 export type CompletionMarkerInspection =
     | { status: 'current'; value: CanonicalCompletionMarker }
-    | { status: 'requires_reindex' | 'corrupt' | 'unsupported'; reason: string };
+    | {
+        status: 'requires_reindex';
+        reason: string;
+        /** Present only when the retired marker's stable ownership envelope is valid. */
+        ownership?: RetiredCompletionMarkerOwnership;
+    }
+    | { status: 'corrupt' | 'unsupported'; reason: string };
 
 export type CanonicalPolicyNavigationBinding =
     | { status: 'not_bound' }
@@ -92,6 +133,90 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
     return keys.length === expected.length && expected.every((key) => keys.includes(key));
 }
 
+export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
+    if (!isRecord(value)) return null;
+    if (
+        (!hasExactKeys(value, BASE_INDEX_FINGERPRINT_FIELDS)
+            && !hasExactKeys(value, ANALYSIS_INDEX_FINGERPRINT_FIELDS)
+            && !hasExactKeys(value, INDEX_FINGERPRINT_FIELDS))
+        || !isNonemptyString(value.embeddingProvider)
+        || !isNonemptyString(value.embeddingModel)
+        || !isNonNegativeInteger(value.embeddingDimension)
+        || value.embeddingDimension === 0
+        || !isNonemptyString(value.vectorStoreProvider)
+        || !isNonemptyString(value.schemaVersion)
+        || (value.parserVersion !== undefined && !isNonemptyString(value.parserVersion))
+        || (value.extractorVersion !== undefined && !isNonemptyString(value.extractorVersion))
+        || (value.relationshipVersion !== undefined && !isNonemptyString(value.relationshipVersion))
+        || (value.embeddingProjectionVersion !== undefined
+            && !isNonemptyString(value.embeddingProjectionVersion))
+        || (value.lexicalProjectionVersion !== undefined
+            && !isNonemptyString(value.lexicalProjectionVersion))
+        || ((value.embeddingProjectionVersion === undefined)
+            !== (value.lexicalProjectionVersion === undefined))
+    ) return null;
+    return {
+        embeddingProvider: value.embeddingProvider,
+        embeddingModel: value.embeddingModel,
+        embeddingDimension: value.embeddingDimension,
+        vectorStoreProvider: value.vectorStoreProvider,
+        schemaVersion: value.schemaVersion,
+        ...(value.parserVersion !== undefined ? { parserVersion: value.parserVersion } : {}),
+        ...(value.extractorVersion !== undefined ? { extractorVersion: value.extractorVersion } : {}),
+        ...(value.relationshipVersion !== undefined ? { relationshipVersion: value.relationshipVersion } : {}),
+        ...(value.embeddingProjectionVersion !== undefined
+            ? { embeddingProjectionVersion: value.embeddingProjectionVersion }
+            : {}),
+        ...(value.lexicalProjectionVersion !== undefined
+            ? { lexicalProjectionVersion: value.lexicalProjectionVersion }
+            : {}),
+    };
+}
+
+function parseCurrentRuntimeFingerprint(value: unknown): CanonicalCompletionFingerprint | null {
+    if (!isRecord(value) || !hasExactKeys(value, INDEX_FINGERPRINT_FIELDS)) return null;
+    const parsed = parseIndexFingerprint(value);
+    if (
+        !parsed?.parserVersion
+        || !parsed.extractorVersion
+        || !parsed.relationshipVersion
+        || !parsed.embeddingProjectionVersion
+        || !parsed.lexicalProjectionVersion
+    ) return null;
+    return {
+        ...parsed,
+        parserVersion: parsed.parserVersion,
+        extractorVersion: parsed.extractorVersion,
+        relationshipVersion: parsed.relationshipVersion,
+        embeddingProjectionVersion: parsed.embeddingProjectionVersion,
+        lexicalProjectionVersion: parsed.lexicalProjectionVersion,
+    };
+}
+
+export function compareIndexCompatibility(
+    indexed: unknown,
+    runtime: IndexFingerprint,
+): IndexCompatibility {
+    const indexedFingerprint = parseIndexFingerprint(indexed);
+    if (!indexedFingerprint) {
+        return { status: 'malformed', reason: 'persisted index fingerprint is malformed' };
+    }
+    const runtimeFingerprint = parseCurrentRuntimeFingerprint(runtime);
+    if (!runtimeFingerprint) {
+        return { status: 'malformed', reason: 'runtime index fingerprint is malformed' };
+    }
+    const differingFields = INDEX_FINGERPRINT_FIELDS.filter(
+        (field) => indexedFingerprint[field] !== runtimeFingerprint[field],
+    );
+    return differingFields.length === 0
+        ? { status: 'compatible', differingFields: [] }
+        : { status: 'requires_reindex', differingFields };
+}
+
+export function indexFingerprintsEqual(left: unknown, right: IndexFingerprint): boolean {
+    return compareIndexCompatibility(left, right).status === 'compatible';
+}
+
 function parseFingerprint(value: unknown): CanonicalCompletionFingerprint | null {
     if (!isRecord(value)) return null;
     const legacyKeys = [
@@ -109,37 +234,19 @@ function parseFingerprint(value: unknown): CanonicalCompletionFingerprint | null
         'embeddingProjectionVersion',
         'lexicalProjectionVersion',
     ];
+    const parsed = parseIndexFingerprint(value);
     if (
         (!hasExactKeys(value, legacyKeys) && !hasExactKeys(value, projectionKeys))
-        || !isNonemptyString(value.embeddingProvider)
-        || !isNonemptyString(value.embeddingModel)
-        || !isNonNegativeInteger(value.embeddingDimension)
-        || value.embeddingDimension === 0
-        || !isNonemptyString(value.vectorStoreProvider)
-        || !isNonemptyString(value.schemaVersion)
-        || !isNonemptyString(value.parserVersion)
-        || !isNonemptyString(value.extractorVersion)
-        || !isNonemptyString(value.relationshipVersion)
-        || (value.embeddingProjectionVersion !== undefined
-            && !isNonemptyString(value.embeddingProjectionVersion))
-        || (value.lexicalProjectionVersion !== undefined
-            && !isNonemptyString(value.lexicalProjectionVersion))
+        || !parsed
+        || !parsed.parserVersion
+        || !parsed.extractorVersion
+        || !parsed.relationshipVersion
     ) return null;
     return {
-        embeddingProvider: value.embeddingProvider,
-        embeddingModel: value.embeddingModel,
-        embeddingDimension: value.embeddingDimension,
-        vectorStoreProvider: value.vectorStoreProvider,
-        schemaVersion: value.schemaVersion,
-        parserVersion: value.parserVersion,
-        extractorVersion: value.extractorVersion,
-        relationshipVersion: value.relationshipVersion,
-        ...(value.embeddingProjectionVersion !== undefined
-            ? { embeddingProjectionVersion: value.embeddingProjectionVersion }
-            : {}),
-        ...(value.lexicalProjectionVersion !== undefined
-            ? { lexicalProjectionVersion: value.lexicalProjectionVersion }
-            : {}),
+        ...parsed,
+        parserVersion: parsed.parserVersion,
+        extractorVersion: parsed.extractorVersion,
+        relationshipVersion: parsed.relationshipVersion,
     };
 }
 
@@ -198,12 +305,37 @@ function hasValidMarkerEnvelope(record: Record<string, unknown>): boolean {
         && SHA256.test(record.indexPolicyHash);
 }
 
+function parseRetiredCompletionMarkerOwnership(
+    value: Record<string, unknown>,
+    kind: RetiredCompletionMarkerOwnership['kind'],
+): RetiredCompletionMarkerOwnership | null {
+    if (
+        value.kind !== kind
+        || !isNonemptyString(value.codebasePath)
+        || !parseIndexFingerprint(value.fingerprint)
+        || !isNonNegativeInteger(value.indexedFiles)
+        || !isNonNegativeInteger(value.totalChunks)
+        || typeof value.completedAt !== 'string'
+        || Number.isNaN(Date.parse(value.completedAt))
+        || !isNonemptyString(value.runId)
+        || (kind === 'satori_index_completion_v2' && !isNonemptyString(value.indexPolicyHash))
+    ) {
+        return null;
+    }
+    return { kind, codebasePath: value.codebasePath };
+}
+
 export function inspectCompletionMarker(value: unknown): CompletionMarkerInspection {
     if (!isRecord(value)) {
         return { status: 'corrupt', reason: 'completion marker is not an object' };
     }
     if (value.kind === 'satori_index_completion_v1') {
-        return { status: 'requires_reindex', reason: 'completion marker v1 requires reindex' };
+        const ownership = parseRetiredCompletionMarkerOwnership(value, value.kind);
+        return {
+            status: 'requires_reindex',
+            reason: 'completion marker v1 requires reindex',
+            ...(ownership ? { ownership } : {}),
+        };
     }
     if (value.kind === 'satori_index_completion_v3') {
         if (!hasValidMarkerEnvelope(value)) {
@@ -237,7 +369,12 @@ export function inspectCompletionMarker(value: unknown): CompletionMarkerInspect
         };
     }
     if (value.kind === 'satori_index_completion_v2') {
-        return { status: 'requires_reindex', reason: 'completion marker v2 requires reindex' };
+        const ownership = parseRetiredCompletionMarkerOwnership(value, value.kind);
+        return {
+            status: 'requires_reindex',
+            reason: 'completion marker v2 requires reindex',
+            ...(ownership ? { ownership } : {}),
+        };
     }
     const futureVersion = typeof value.kind === 'string'
         ? /^satori_index_completion_v([1-9]\d*)$/.exec(value.kind)

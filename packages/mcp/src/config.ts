@@ -3,12 +3,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import {
+    indexFingerprintsEqual as coreIndexFingerprintsEqual,
     envManager,
     EMBEDDING_PROJECTION_VERSION,
     LANGUAGE_PARSER_VERSION,
     LEXICAL_PROJECTION_VERSION,
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
+    parseIndexFingerprint as parseCoreIndexFingerprint,
+    type IndexFingerprint as CoreIndexFingerprint,
 } from "@zokizuan/satori-core";
 
 export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama';
@@ -32,51 +35,29 @@ export function resolveMcpPackageVersion(): string {
     return "0.0.0";
 }
 
-export interface IndexFingerprint {
+export type IndexFingerprint = Omit<
+    CoreIndexFingerprint,
+    'embeddingProvider' | 'vectorStoreProvider' | 'schemaVersion'
+> & {
     embeddingProvider: EmbeddingProvider;
-    embeddingModel: string;
-    embeddingDimension: number;
     vectorStoreProvider: VectorStoreProvider;
     schemaVersion: 'dense_v3' | 'hybrid_v3';
-    /** Absent only on legacy persisted fingerprints. */
-    parserVersion?: string;
-    extractorVersion?: string;
-    relationshipVersion?: string;
-    embeddingProjectionVersion?: string;
-    lexicalProjectionVersion?: string;
-}
+};
 
 export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return null;
-    }
-    const record = value as Record<string, unknown>;
+    const record = parseCoreIndexFingerprint(value);
     if (
-        !['OpenAI', 'VoyageAI', 'Gemini', 'Ollama'].includes(String(record.embeddingProvider))
-        || typeof record.embeddingModel !== 'string'
-        || record.embeddingModel.trim().length === 0
-        || !Number.isSafeInteger(record.embeddingDimension)
-        || Number(record.embeddingDimension) <= 0
+        !record
+        || !['OpenAI', 'VoyageAI', 'Gemini', 'Ollama'].includes(record.embeddingProvider)
         || record.vectorStoreProvider !== 'Milvus'
         || (record.schemaVersion !== 'dense_v3' && record.schemaVersion !== 'hybrid_v3')
-        || (record.parserVersion !== undefined && typeof record.parserVersion !== 'string')
-        || (record.extractorVersion !== undefined && typeof record.extractorVersion !== 'string')
-        || (record.relationshipVersion !== undefined && typeof record.relationshipVersion !== 'string')
-        || (record.embeddingProjectionVersion !== undefined
-            && (typeof record.embeddingProjectionVersion !== 'string'
-                || record.embeddingProjectionVersion.trim().length === 0))
-        || (record.lexicalProjectionVersion !== undefined
-            && (typeof record.lexicalProjectionVersion !== 'string'
-                || record.lexicalProjectionVersion.trim().length === 0))
-        || ((record.embeddingProjectionVersion === undefined)
-            !== (record.lexicalProjectionVersion === undefined))
     ) {
         return null;
     }
     return {
         embeddingProvider: record.embeddingProvider as EmbeddingProvider,
         embeddingModel: record.embeddingModel,
-        embeddingDimension: record.embeddingDimension as number,
+        embeddingDimension: record.embeddingDimension,
         vectorStoreProvider: record.vectorStoreProvider,
         schemaVersion: record.schemaVersion,
         ...(record.parserVersion !== undefined ? { parserVersion: record.parserVersion } : {}),
@@ -92,16 +73,7 @@ export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
 }
 
 export function indexFingerprintsEqual(left: IndexFingerprint, right: IndexFingerprint): boolean {
-    return left.embeddingProvider === right.embeddingProvider
-        && left.embeddingModel === right.embeddingModel
-        && Number(left.embeddingDimension) === Number(right.embeddingDimension)
-        && left.vectorStoreProvider === right.vectorStoreProvider
-        && left.schemaVersion === right.schemaVersion
-        && left.parserVersion === right.parserVersion
-        && left.extractorVersion === right.extractorVersion
-        && left.relationshipVersion === right.relationshipVersion
-        && left.embeddingProjectionVersion === right.embeddingProjectionVersion
-        && left.lexicalProjectionVersion === right.lexicalProjectionVersion;
+    return coreIndexFingerprintsEqual(left, right);
 }
 
 export function summarizeIndexFingerprint(fingerprint: IndexFingerprint): string {

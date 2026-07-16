@@ -50,14 +50,14 @@ Reference for how requests, indexing, and sync flow through the Satori monorepo.
   |  +--------+--------------------------+              |             |
   |  +--------v--------------------------+              |             |
   |  | VectorDatabase Adapters           |              |             |
-  |  | Milvus gRPC | Milvus REST         |              |             |
+  |  | LanceDB | Milvus gRPC | REST      |              |             |
   |  +--------+--------------------------+              |             |
   +------------+----------------------------------------+-------------+
                |                                        |
                v                                        v
-       Milvus / Zilliz                      ~/.satori/
-       (dense + hybrid                     mcp-codebase-snapshot.json
-        collections)                       merkle/<md5(path)>.json
+       LanceDB or Milvus / Zilliz           ~/.satori/
+       (dense + lexical data               mcp-codebase-snapshot.json
+        and control records)               merkle/<md5(path)>.json
 ```
 
 **Boundary:** The MCP server owns state and control flow (snapshots, sync scheduling, capability resolution). The core engine owns computation (chunking, embedding, vector operations). Core stays MCP-agnostic and can run as a standalone library.
@@ -73,7 +73,7 @@ packages/
       core/context.ts           orchestrator
       language-analysis/        Oxc + Tree-sitter WASM normalized analysis
       embedding/                 OpenAI, VoyageAI, Gemini, Ollama
-      vectordb/                  Milvus gRPC + REST adapters
+      vectordb/                  LanceDB + Milvus gRPC/REST adapters
       sync/                      FileSynchronizer (Merkle DAG)
       config/                    defaults, extensions, ignore patterns
       utils/                     shared utilities
@@ -152,6 +152,7 @@ Core search projections:
   VectorControlRecord uses separate insert/get/delete control operations
 
 VectorDatabase adapters:
+  LanceDbVectorDatabase        (embedded data + separately typed control tables)
   MilvusVectorDatabase        (gRPC)
   MilvusRestfulVectorDatabase (HTTP)
   translate neutral control records into the legacy marker-row schema internally
@@ -165,16 +166,26 @@ The normalized language analyzer writes `metadata.breadcrumbs` at index time:
 - Label extraction is signature-focused for TS/JS/PY scopes
 - Non-breadcrumbed files (Markdown, HTML) are still indexed and searchable — they omit scope annotation in results
 
-### 3.6 Dense vs Hybrid Storage
+### 3.6 Backend-neutral retrieval storage
 
 ```
-Dense collection fields:
-  id, vector, content, relativePath, startLine, endLine,
-  fileExtension, metadata
+Core indexing input:
+  VectorDocument source/result fields
+  + immutable embeddingText / lexicalText projections and versions
 
-Hybrid collection adds:
-  sparse_vector + BM25 function on content
-  dense+sparse index path with RRF rerank strategy
+LanceDB generation data table:
+  source fields + supplied FP32 vector + lexicalText
+  exact cosine and FTS candidate arms
+
+LanceDB family control table:
+  separately typed, non-searchable publication records
+
+Milvus adapters:
+  preserve their existing physical schemas and translate neutral control records
+
+Core retrieval:
+  validates the typed predicate AST, reads dense/lexical arms, and applies
+  deterministic rank-only RRF without inferring native score direction
 ```
 
 ### 3.7 Incremental Sync
@@ -187,7 +198,7 @@ FileSynchronizer:
   4. Return { added[], removed[], modified[] }
 
 reindexByChange:
-  removed/modified -> delete old chunks from Milvus
+  removed/modified -> delete old chunks from the selected vector backend
   added/modified   -> re-split, re-embed, insert
 ```
 
@@ -311,8 +322,13 @@ Rerank decision:
   embeddingProvider    "VoyageAI"
   embeddingModel       "voyage-code-3"
   embeddingDimension   1024
-  vectorStoreProvider  "Milvus"
-  schemaVersion        "dense_v3" | "hybrid_v3"
+  embeddingArtifactDigest null
+  vectorStoreProvider  "LanceDB" | "Milvus"
+  schemaVersion        "hybrid_v3"
+  embeddingProjectionVersion "embedding_projection_v1"
+  lexicalProjectionVersion   "lexical_projection_v1"
+  languageAnalysisVersion    <resolved parser identity>
+  relationshipVersion        <resolved relationship identity>
 }
 ```
 
@@ -526,7 +542,7 @@ Delta: { added[], removed[], modified[] }
           |
           +-- Delete chunks for removed + modified files
           +-- Re-split + re-embed added + modified files
-          +-- Insert new chunks into Milvus
+          +-- Insert new chunks into the selected vector backend
           +-- Persist updated Merkle DAG
           +-- Snapshot -> sync_completed
 ```

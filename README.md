@@ -29,7 +29,7 @@ Satori indexes a repo and gives MCP-compatible agents a fixed investigation path
 
 | Package | Purpose |
 |---|---|
-| `@zokizuan/satori-core` | Oxc/Tree-sitter-WASM language analysis, indexing, embeddings, Milvus/Zilliz storage, retrieval, incremental sync |
+| `@zokizuan/satori-core` | Oxc/Tree-sitter-WASM language analysis, indexing, embeddings, LanceDB and Milvus/Zilliz storage, retrieval, incremental sync |
 | `@zokizuan/satori-mcp` | MCP server with the six agent-facing tools and lifecycle gates |
 | `@zokizuan/satori-cli` | Installer, doctor command, and shell access to MCP tools |
 
@@ -113,14 +113,22 @@ If `manage_index` returns `reason="runtime_owner_conflict"`, follow the envelope
 
 ## Runtime Setup
 
-Satori needs an embedding provider and a Milvus-compatible vector store before indexing. MCP startup, `tools list`, and `doctor` do not require provider credentials; provider-backed tool calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
+The installer default is the connected `LanceDB + VoyageAI` runtime. LanceDB is
+stored under installer-owned local state and Milvus/Zilliz remains an explicit
+optional backend. MCP startup and `tools list` do not require provider
+credentials; provider-backed tool calls report `MISSING_PROVIDER_CONFIG` when
+setup is incomplete.
 
 Run `npx -y @zokizuan/satori-cli@latest doctor` after setting env values to check the local setup before indexing. Doctor also prints the installed Satori package set (`satori-cli`, `satori-mcp`, `satori-core`); those packages use independent versions by design. Install postflight proves the installed launcher and MCP protocol path; it does not replace doctor or prove provider connectivity.
 
-Installer config and runtime config are intentionally separate:
+Installer-owned runtime identity and client-owned secrets are intentionally
+separate:
 
-- The installer owns the launcher and MCP client wiring.
-- Satori runtime settings come from environment variables at MCP startup.
+- The installer owns the launcher and MCP client wiring and pins the selected
+  non-secret profile, backend, embedding model, and dimension that passed
+  preflight.
+- Provider credentials and Milvus connection values come from environment
+  variables forwarded by the MCP client at startup.
 - Supported client installs expose the Satori runtime variable names in native client config so the setup is visible and editable:
   - Codex writes active `env_vars` forwarding plus an optional commented `[mcp_servers.satori.env]` template in `~/.codex/config.toml`.
   - Claude Code writes per-server `mcpServers.satori.env` entries in `~/.claude.json` using `${VAR:-}` pass-through values.
@@ -129,13 +137,14 @@ Installer config and runtime config are intentionally separate:
 
 ```toml
 [mcp_servers.satori.env]
+SATORI_RUNTIME_PROFILE = "connected"
+VECTOR_STORE_PROVIDER = "LanceDB"
+LANCEDB_PATH = "/absolute/path/to/.satori/vector/lancedb"
 EMBEDDING_PROVIDER = "VoyageAI"
 EMBEDDING_MODEL = "voyage-code-3"
 EMBEDDING_OUTPUT_DIMENSION = "1024"
 VOYAGEAI_API_KEY = "pa-..."
 VOYAGEAI_RERANKER_MODEL = "rerank-2.5"
-MILVUS_ADDRESS = "https://your-zilliz-endpoint"
-MILVUS_TOKEN = "your-zilliz-token"
 ```
 
 Claude example:
@@ -145,8 +154,9 @@ Claude example:
   "mcpServers": {
     "satori": {
       "env": {
-        "VOYAGEAI_API_KEY": "pa-...",
-        "MILVUS_TOKEN": "your-zilliz-token"
+        "SATORI_RUNTIME_PROFILE": "connected",
+        "VECTOR_STORE_PROVIDER": "LanceDB",
+        "VOYAGEAI_API_KEY": "pa-..."
       }
     }
   }
@@ -160,8 +170,9 @@ OpenCode example:
   "mcp": {
     "satori": {
       "environment": {
-        "VOYAGEAI_API_KEY": "pa-...",
-        "MILVUS_TOKEN": "your-zilliz-token"
+        "SATORI_RUNTIME_PROFILE": "connected",
+        "VECTOR_STORE_PROVIDER": "LanceDB",
+        "VOYAGEAI_API_KEY": "pa-..."
       }
     }
   }
@@ -171,25 +182,35 @@ OpenCode example:
 Cloud quality start:
 
 ```bash
+SATORI_RUNTIME_PROFILE=connected
+VECTOR_STORE_PROVIDER=LanceDB
+LANCEDB_PATH=/absolute/path/to/.satori/vector/lancedb
 EMBEDDING_PROVIDER=VoyageAI
 EMBEDDING_MODEL=voyage-code-3
 EMBEDDING_OUTPUT_DIMENSION=1024
 VOYAGEAI_API_KEY=your-api-key
 VOYAGEAI_RERANKER_MODEL=rerank-2.5
-MILVUS_ADDRESS=your-milvus-endpoint
-MILVUS_TOKEN=your-milvus-token
 ```
 
-Get `VOYAGEAI_API_KEY` from the Voyage AI dashboard API keys page. For Zilliz Cloud, use the cluster public endpoint as `MILVUS_ADDRESS` and the API key or cluster credential as `MILVUS_TOKEN`. Local unauthenticated Milvus usually uses `MILVUS_ADDRESS=localhost:19530` and no token.
+Get `VOYAGEAI_API_KEY` from the Voyage AI dashboard API keys page. To retain a
+Milvus/Zilliz deployment in an installer-managed runtime, install with
+`--runtime voyage --vector-store milvus` and forward `MILVUS_ADDRESS`;
+`MILVUS_TOKEN` is optional for local unauthenticated Milvus. A consistent
+literal Milvus selection already stored in the selected client configurations
+is preserved on reinstall. Changing backends requires a reindex and never
+deletes or imports the other backend's collections automatically.
 
-Local-first start:
+The explicit offline installer candidate uses the same LanceDB adapter and a
+resolved local Ollama artifact:
 
 ```bash
-EMBEDDING_PROVIDER=Ollama
-EMBEDDING_MODEL=nomic-embed-text
-OLLAMA_HOST=http://127.0.0.1:11434
-MILVUS_ADDRESS=localhost:19530
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
 ```
+
+It persists only non-secret profile/model identity in the managed launcher and
+rejects non-loopback Ollama endpoints. Offline release qualification remains
+pending until the live Ollama lifecycle and paired quality matrix pass; local
+storage by itself does not make a Voyage runtime offline.
 
 Provider, model, dimension, vector store, and schema are part of the index fingerprint. If they change, Satori blocks search with `requires_reindex` until you rebuild the index.
 

@@ -2,26 +2,43 @@
 
 Date: 2026-07-15
 
-Status: proposed implementation plan; no product behavior is implemented by this document
+Status: implementation and qualification in progress
+
+As of 2026-07-17, Phases 0 through 3 are implemented in the worktree: Core owns
+versioned projections, embedding purpose is immutable per call, LanceDB provides
+the backend-neutral dense/FTS adapter, asynchronous bootstrap resolves local
+model identity before runtime ownership, and LanceDB plus Voyage is the default
+while both Milvus adapters remain supported. The Phase 5 installer/runtime code
+is also implemented, including awaited preflight, persisted non-secret runtime
+identity, local-only policy, model-digest validation, target-filesystem LanceDB
+proof against the installed MCP runtime, non-overwriting runtime upgrades,
+guarded installer writes, and profile-aware read-only doctor checks.
+
+Release qualification is not complete. The paired comparison contract and
+three-arm harness are implemented in `evals/vector-stacks/` and
+`scripts/satori-vector-stack-compare.mjs`, but authoritative live Milvus/Voyage,
+LanceDB/Voyage, and LanceDB/Ollama observations have not yet all been recorded.
+The offline profile therefore remains a qualification candidate rather than an
+advertised offline release.
 
 ## Decision
 
 Satori will use LanceDB as its installer-owned local vector and full-text store.
 VoyageAI remains the initial/default embedding provider and the existing optional
-reranker. A later offline runtime profile will keep the same LanceDB adapter,
+reranker. The offline qualification profile keeps the same LanceDB adapter,
 chunking, query planner, result contract, and local fusion policy while replacing
 VoyageAI with Ollama.
 
 The target stacks are:
 
 ```text
-Initial supported runtime
+Connected default runtime
 source -> Satori chunking/projections -> Voyage document embeddings
        -> LanceDB FP32 vectors + local FTS
 query  -> deterministic route or Voyage query embedding
        -> dense/lexical candidates -> local RRF -> existing optional reranker
 
-Later offline runtime
+Offline qualification candidate
 source -> the same Satori chunking/projections -> Ollama document embeddings
        -> the same LanceDB FP32 vectors + local FTS
 query  -> deterministic route or Ollama query embedding
@@ -33,10 +50,10 @@ existing `Embedding` implementations and writes precomputed vectors through the
 existing `VectorDatabase` port. LanceDB must not install or invoke a second
 embedding function.
 
-The initial Voyage plus LanceDB runtime is not an offline product: repository
+The Voyage plus LanceDB runtime is not an offline product: repository
 data and search storage are local, but embedding and any Voyage reranking call
 the Voyage API. Only the later LanceDB plus Ollama profile may be described as
-offline.
+offline after its full live release matrix passes.
 
 ## Scope
 
@@ -546,7 +563,7 @@ The runtime uses one backend factory and must not retain scattered
 Milvus-specific branches in configuration, diagnostics, startup hints, or
 fingerprint construction.
 
-## CLI and later offline profile
+## CLI and offline qualification profile
 
 The existing CLI uses `satori-cli install` for managed runtime configuration and
 `satori-cli doctor` for read-only verification. Do not introduce a second setup
@@ -556,6 +573,7 @@ Extend the installer with one strict runtime-profile selector and two variants:
 
 ```text
 satori-cli install --client <target> --runtime voyage
+satori-cli install --client <target> --runtime voyage --vector-store milvus
 satori-cli install --client <target> --runtime offline --ollama-model <model>
 satori-cli doctor
 ```
@@ -568,8 +586,17 @@ VECTOR_STORE_PROVIDER=LanceDB
 EMBEDDING_PROVIDER=VoyageAI
 ```
 
-It does not copy or print `VOYAGEAI_API_KEY`; existing client-specific secret
-forwarding remains authoritative.
+LanceDB is the default backend. An explicit `--vector-store milvus`, or one
+consistent literal Milvus selection across configured Satori client configs,
+retains Milvus. The managed launcher persists the selected backend and Voyage
+model identity that passed static validation/preflight so later ambient values
+cannot silently change the runtime. It does not copy or print
+`VOYAGEAI_API_KEY`; existing client-specific secret forwarding remains
+authoritative. Milvus address/token values likewise remain client-owned. The
+launcher is global to all installed clients, so an explicit backend selection
+changes their effective runtime regardless of the `--client` mutation target.
+Reinstall uses current environment values first, then existing managed
+non-secret LanceDB/Ollama locations, then installer defaults.
 
 The later `offline` profile writes/selects only non-secret local settings:
 
@@ -596,33 +623,50 @@ provider, not from the incidental presence of a Voyage key. A retained cloud key
 must neither construct a cloud client nor make a cloud path reachable in offline
 mode. Configuration validation rejects any selected remote execution path.
 
-Installer execution has one mutation boundary:
+Installer execution has one guarded mutation boundary:
 
 ```text
-create a pure, synchronous install plan from arguments and current configuration
--> await every non-mutating preflight probe
+resolve and validate the proposed runtime identity without I/O
+-> resolve or install an immutable managed-runtime candidate without replacing
+   the active launcher's runtime bytes
+-> verify the candidate's resolved package name and exact installed version
+-> start that exact candidate and prove MCP initialization plus the canonical
+   six-tool surface for every backend
+-> await the selected backend/provider probes against that exact candidate
+-> read mutable client/project files into a pure synchronous install plan
+-> revalidate every planned input immediately before managed writes
 -> apply the managed configuration through the existing bounded mutation path
 -> optionally run awaited post-apply verification
 ```
 
 `executeInstallCommand()` (or its ownership-equivalent replacement) and
 `runDoctor()` therefore return promises and are awaited by the existing
-asynchronous CLI dispatcher. Planning remains pure and synchronous. Preflight,
-application, and diagnostics receive injected dependencies so their ordering and
-failure behavior are deterministic in tests.
+asynchronous CLI dispatcher. Planning remains pure and synchronous. Dry-run
+executes only static selection and path-syntax validation: it does not inspect
+target filesystem shape and performs no package install, native load, provider
+call, or filesystem write. Preflight,
+application, and diagnostics receive injected dependencies so their ordering
+and failure behavior are deterministic in tests.
 
-Application retains the installer's ordered, atomic-per-file writes and existing
-error behavior. This plan introduces no cross-file transaction or rollback
-protocol. The no-mutation guarantee applies to rejected preflight; an
-application-stage failure must report the failing mutation without overstating
-cross-file atomicity.
+Application retains the installer's ordered, atomic-per-file writes. Mutable
+client and project files are read only after package installation and live
+preflight; each prepared mutation then carries its original file bytes and
+refuses a later overwrite race. This plan introduces no
+cross-file transaction or rollback protocol. The no-mutation guarantee applies
+to rejected preflight; an application-stage failure reports completed, failing,
+and unattempted mutations without overstating cross-file atomicity.
 
-Before changing managed client configuration, every runtime variant preflights
-its selected backend. Both LanceDB variants verify:
+Before changing managed client configuration, every runtime variant starts the
+candidate MCP package and proves its version and public tool surface. Rejected
+new candidates are removed without changing the current launcher target. Tags
+and ranges are not treated as immutable reuse identities. Both LanceDB variants
+also verify:
 
-- the LanceDB native package loads on the current Node/platform pair;
-- the installer-owned database directory can pass a bounded write/read/reopen
-  probe without touching repository indexes.
+- the LanceDB native package owned by the exact managed MCP runtime loads on the
+  current Node/platform pair;
+- a temporary database on the configured target filesystem can pass a bounded
+  write/FTS/read/reopen probe without touching repository indexes; the global
+  OS temporary filesystem is not accepted as evidence for another target.
 
 The offline variant additionally verifies:
 
@@ -640,13 +684,16 @@ managed configuration and client files byte-for-byte unchanged, with
 environment forwarding and repository indexes untouched. No post-apply check
 may substitute for a probe whose failure would reject the planned mutation.
 `--dry-run` shows the bounded mutation plan without exposing keys or source
-paths.
+paths and performs no live capability probe.
 
-`doctor` reports the selected backend/provider, LanceDB native-package support,
-database-path safety, read/write/reopen probe, FTS capability, Ollama endpoint
-and resolved model identity/dimension when selected, fingerprint compatibility,
-and an explicit offline-execution invariant result with any detected remote
-execution path. It remains read-only with respect to real Satori indexes.
+`doctor` reports the selected backend/provider, statically validates the
+configured path, and read-only loads the LanceDB subpath from the exact managed
+MCP runtime so a missing native dependency is explicit. The install preflight
+owns the temporary write/FTS/reopen proof. Doctor also reports the Ollama
+endpoint and resolved model identity/dimension when selected, fingerprint
+compatibility, and an explicit offline-execution invariant result with any
+detected remote execution path. It does not write configuration or database
+state.
 
 Switching from Voyage to Ollama, or back, always requires a full reindex because
 the embedding provider/model/dimension fingerprint changes. Search request and
@@ -692,6 +739,27 @@ response schemas do not change.
    lexical-delta design before beginning the adapter. Do not begin the LanceDB
    adapter while control-record representation, publication recovery, or
    acknowledged FTS visibility remains ambiguous.
+
+Phase 0 qualification completed on 2026-07-17 with:
+
+- `@lancedb/lancedb@0.31.0`, upstream tag `v0.31.0`, source commit
+  `3f8d76817e6020ea344fba8a66c5de9ad8c82234`, npm integrity
+  `sha512-EUEVpheKhaCNE6ybcW760OUyfeei2dKR2ZwgLWeC/ntHL4BBiBLIErh9fuEuUP3/mAx4B5UFraB2m5nDUx5XEA==`;
+- `apache-arrow@18.1.0`, npm integrity
+  `sha512-v/ShMp57iBnBp4lDgV8Jx3d3Q5/Hac25FWmQ98eMahUiHPXcvwIMKJD0hBIgclm/FCG+LwPkAKtkRO1O/W0YGg==`;
+- native packages for macOS arm64, Linux x64/arm64 with glibc or musl, and
+  Windows x64/arm64;
+- native load, exact cosine search, FTS, insert, replacement, deletion,
+  explicit optimization, close, and reopen on the supported Node floor
+  (22.13.0) and the development runtime (24.13.0); and
+- 3,000-row ordinary-FTS visibility across indexed and unindexed rows, so no
+  Satori-owned lexical delta is required for the pinned release.
+
+The adapter uses `connect(..., { readConsistencyInterval: 0 })`, explicit Arrow
+schemas and fixed-size FP32 vectors, `mergeInsert`, exhaustive cosine queries
+with `bypassVectorIndex()`, `MatchQuery` over `lexicalText`, and
+`optimize({ cleanupOlderThan: new Date(0), deleteUnverified: false })`. It never
+uses `fastSearch()`.
 
 ### Phase 1: make Core and runtime compatible
 
@@ -752,10 +820,13 @@ response schemas do not change.
 
 ### Phase 4: validate search quality and indexing economics
 
-1. Run the LanceDB/Voyage candidate against the pinned paired corpus and compare
-   it with the frozen historical product baseline. Add a live Milvus arm when
-   authoritative remote publication is available, but do not weaken the frozen
-   quality gates when it is not.
+1. Run the pinned paired corpus through three self-identifying arms when their
+   authoritative providers are available: Milvus/Voyage, LanceDB/Voyage, and
+   LanceDB/Ollama. Milvus/Voyage versus LanceDB/Voyage isolates storage;
+   LanceDB/Voyage versus LanceDB/Ollama isolates embedding; the direct
+   Milvus/Voyage versus LanceDB/Ollama delta is explicitly a full-stack result
+   and must not be attributed to either component alone. Keep the frozen
+   historical product baseline when live remote publication is unavailable.
 2. Prove deterministic exact/direct routes still issue zero embedding calls.
 3. Compare dense, lexical, hybrid, structural, and configuration-query quality
    separately.
@@ -764,6 +835,21 @@ response schemas do not change.
    latency, memory, and provider-cost acceptance; freeze `optimize()` thresholds
    from measurements.
 5. Keep exhaustive FP32 search unless it fails the frozen latency gate.
+
+The reproducible comparison boundary is implemented. It consumes immutable
+useful-context observation artifacts, rejects mismatched Git revisions, task
+hashes, Node/server identities, sample shapes, within-arm runtime fingerprints,
+published-generation receipts, or non-zero preparation syncs. Separate
+no-change preparation operations may have different operation IDs and durable
+timestamps when their canonical root, generation, runtime fingerprint,
+collection name, marker run ID, index-policy hash, and policy-document digest
+identify the same publication. The comparison reports result
+overlap/order, owner-quality metrics, cold/warm latency, actual retrieval modes,
+and logical provider work. Dense-only
+correctness remains an adapter-level exhaustive-cosine gate because the public
+query planner exposes lexical and hybrid product routes rather than an invented
+dense-only request mode. Live arm observations and indexing-economics evidence
+remain pending.
 
 ### Phase 5: add the offline installer profile
 
@@ -777,6 +863,11 @@ response schemas do not change.
    with Ollama.
 5. Advertise offline support only after the full matrix passes without Voyage,
    another cloud model, Milvus, or a cloud reranker.
+
+Items 1 through 3 are implemented. Deterministic tests prove that retained cloud
+credentials cannot construct cloud embedding, reranking, or Milvus clients in
+the explicit offline profile. Items 4 and 5 remain open until a resolved local
+Ollama artifact passes the full live lifecycle and paired-search matrix.
 
 ## Release gates
 

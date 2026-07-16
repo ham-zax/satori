@@ -142,11 +142,19 @@ LanguageAnalysisPort:
 
 Embedding providers:
   OpenAI, VoyageAI, Gemini, Ollama
-  Common contract: detectDimension(), embed(), embedBatch()
+  Common contract: detectDimension(), embedQuery(), embedDocuments()
+
+Core search projections:
+  buildSearchProjections(CodeChunk + relativePath)
+  embedding_projection_v1 + lexical_projection_v1
+  canonical repository-relative paths + canonical JSON and UTF-16-length-delimited strings
+  IndexedVectorDocument carries source/result data and immutable projections
+  VectorControlRecord uses separate insert/get/delete control operations
 
 VectorDatabase adapters:
   MilvusVectorDatabase        (gRPC)
   MilvusRestfulVectorDatabase (HTTP)
+  translate neutral control records into the legacy marker-row schema internally
 ```
 
 ### 3.5 Breadcrumb Metadata
@@ -451,7 +459,7 @@ Background:
   load ignore patterns
   init FileSynchronizer
   prepare collection (dense or hybrid)
-  scan -> split (AST/LangChain) -> embedBatch -> insert
+  scan -> split (AST/LangChain) -> buildSearchProjections -> embedDocuments -> insert
   periodic progress saves
 
 Terminal:
@@ -528,7 +536,8 @@ Delta: { added[], removed[], modified[] }
 ## 7. Data Lineage
 
 ```
-file -> CodeChunk -> EmbeddingVector -> VectorDocument -> Milvus row
+file -> CodeChunk -> SearchProjections -> EmbeddingVector
+     -> IndexedVectorDocument -> VectorDatabase adapter row
      -> search result -> MCP response snippet
 
 VectorDocument fields:

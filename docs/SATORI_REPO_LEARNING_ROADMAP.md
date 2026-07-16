@@ -1153,7 +1153,8 @@ Context.indexCodebase
   -> getCodeFiles
   -> processFileList
   -> splitter.split
-  -> embedding.embedBatch
+  -> buildSearchProjections
+  -> embedding.embedDocuments
   -> vectorDatabase.insert or insertHybrid
 ```
 

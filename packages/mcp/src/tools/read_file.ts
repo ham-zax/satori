@@ -513,8 +513,22 @@ export const readFileTool: McpTool = {
                     });
                 }
 
-                await touchResolvedCodebaseRoot(absolutePath, ctx);
-                const result = await ctx.toolHandlers.composeSymbolContext(
+                const executionContext = await resolveVectorBackedToolContext(ctx, {
+                    tool: "read_file",
+                    path: allowedRoot,
+                    file: relativeFile,
+                    messagePrefix: "Exact-symbol navigation authority could not be verified.",
+                });
+                if (!executionContext.ok) {
+                    return symbolContextErrorResponse({
+                        code: "NAVIGATION_UNAVAILABLE",
+                        reason: "navigation_unavailable",
+                        message: "Current navigation authority is unavailable; refresh the index state and retry.",
+                    });
+                }
+
+                await touchResolvedCodebaseRoot(absolutePath, executionContext.context);
+                const result = await executionContext.context.toolHandlers.composeSymbolContext(
                     composeSymbolContextRequest({
                         root: allowedRoot,
                         relativeFile,

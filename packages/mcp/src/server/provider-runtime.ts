@@ -247,6 +247,11 @@ export class ProviderRuntime {
         }
 
         if (operation === "vector_only") {
+            // Search prepares navigation authority in the embedding-capable context.
+            // Reuse that capability superset so follow-up reads observe the same cache.
+            if (this.embeddingRuntimePromise) {
+                return this.embeddingRuntimePromise;
+            }
             if (!this.vectorRuntimePromise) {
                 this.vectorRuntimePromise = this.createRuntime(false).catch((error) => {
                     this.vectorRuntimePromise = null;

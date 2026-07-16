@@ -4,6 +4,7 @@ import { CapabilityResolver } from "../core/capabilities.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import { buildRuntimeIndexFingerprint, ContextMcpConfig } from "../config.js";
+import type { ToolContext } from "../tools/types.js";
 import {
     createLocalOnlyContext,
     ProviderRuntime,
@@ -97,6 +98,30 @@ test("clear only requires vector address, not embedding provider credentials", (
     })).validate("vector_only");
 
     assert.equal(issue, null);
+});
+
+test("vector-only operations reuse an existing embedding-capable context", async () => {
+    const runtime = createRuntime(baseConfig({
+        voyageKey: "pa-test",
+        milvusEndpoint: "localhost:19530",
+    }));
+    const embeddingContext = {} as ToolContext;
+    const vectorContext = {} as ToolContext;
+    const createdCapabilities: boolean[] = [];
+    const runtimeInternals = runtime as unknown as {
+        createRuntime(requireEmbedding: boolean): Promise<ToolContext>;
+    };
+    runtimeInternals.createRuntime = async (requireEmbedding) => {
+        createdCapabilities.push(requireEmbedding);
+        return requireEmbedding ? embeddingContext : vectorContext;
+    };
+
+    const searchContext = await runtime.requireToolContext("embedding_vector");
+    const followUpReadContext = await runtime.requireToolContext("vector_only");
+
+    assert.equal(searchContext, embeddingContext);
+    assert.equal(followUpReadContext, searchContext);
+    assert.deepEqual(createdCapabilities, [true]);
 });
 
 function createSyncLifecycle(options: { watcherStartError?: Error } = {}) {

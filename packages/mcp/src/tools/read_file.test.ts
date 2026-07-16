@@ -716,7 +716,7 @@ function composedContextFixture() {
     };
 }
 
-test('read_file exact symbols return one bounded structured transport in both modes without provider access', async () => {
+test('read_file exact symbols use vector-backed authority and return one bounded transport in both modes', async () => {
     await withTempDir(async (dir) => {
         const repoPath = path.join(dir, 'repo');
         const filePath = path.join(repoPath, 'src', 'runtime.ts');
@@ -725,6 +725,16 @@ test('read_file exact symbols return one bounded structured transport in both mo
 
         for (const mode of ['plain', 'annotated'] as const) {
             let received: unknown;
+            const requestedOperations: string[] = [];
+            const providerContext = buildContext(1000, {
+                snapshotManager: indexedSnapshot(repoPath),
+                toolHandlers: {
+                    composeSymbolContext: async (input: unknown) => {
+                        received = input;
+                        return { status: 'ok', context: composedContextFixture() };
+                    },
+                } as unknown as ToolHandlersLike,
+            });
             const response = await runReadFile({
                 path: filePath,
                 mode,
@@ -742,19 +752,20 @@ test('read_file exact symbols return one bounded structured transport in both mo
             }, 1000, {
                 snapshotManager: indexedSnapshot(repoPath),
                 providerRuntime: {
-                    requireToolContext: async () => {
-                        throw new Error('exact symbol context must remain provider-free');
+                    requireToolContext: async (operation) => {
+                        requestedOperations.push(operation);
+                        return providerContext;
                     },
                 },
                 toolHandlers: {
-                    composeSymbolContext: async (input: unknown) => {
-                        received = input;
-                        return { status: 'ok', context: composedContextFixture() };
+                    composeSymbolContext: async () => {
+                        throw new Error('exact symbol context used the local-only handler');
                     },
                 } as unknown as ToolHandlersLike,
             });
 
             assert.equal(response.isError, undefined);
+            assert.deepEqual(requestedOperations, ['vector_only']);
             const payload = JSON.parse(response.content[0].text);
             assert.equal(payload.formatVersion, 2);
             assert.equal(payload.kind, 'symbol_context');

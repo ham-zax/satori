@@ -30,6 +30,14 @@ function stubEmbedClient(
     client.embed = run;
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void;
+    const promise = new Promise<void>((innerResolve) => {
+        resolve = innerResolve;
+    });
+    return { promise, resolve };
+}
+
 test('Voyage code indexing declares the live-probed provider batch limits', () => {
     const embedding = new VoyageAIEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
 
@@ -57,10 +65,11 @@ test('Voyage embedding disables truncation and records actual provider usage', a
         };
     });
 
-    const result = await embedding.embedBatch(['owner', 'support']);
+    const result = await embedding.embedDocuments(['owner', 'support']);
 
     assert.equal(result.length, 2);
     assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.request.inputType, 'document');
     assert.equal(calls[0]?.request.truncation, false);
     assert.deepEqual(calls[0]?.options, {
         timeoutInSeconds: 180,
@@ -95,12 +104,64 @@ test('Voyage embedding exposes retries instead of hiding them inside the SDK', a
         return { data: [{ embedding: [1, 2] }], usage: { totalTokens: 3 } };
     });
 
-    const result = await embedding.embedBatch(['owner']);
+    const result = await embedding.embedDocuments(['owner']);
 
     assert.equal(result.length, 1);
     assert.equal(attempts, 2);
     assert.equal(embedding.getOperationMetricsSnapshot().providerRequestCount, 2);
     assert.equal(embedding.getOperationMetricsSnapshot().retryCount, 1);
+});
+
+test('Voyage embedding keeps document and query roles isolated across overlapping retries', async () => {
+    class ImmediateRetryEmbedding extends VoyageAIEmbedding {
+        protected async waitBeforeRetry(): Promise<void> {
+            return undefined;
+        }
+    }
+
+    const embedding = new ImmediateRetryEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
+    const queryStarted = deferred();
+    const calls: Array<{ input: string; inputType: string | undefined }> = [];
+    let firstDocumentAttempt = true;
+
+    stubEmbedClient(embedding, async (request) => {
+        const input = Array.isArray(request.input) ? request.input : [request.input];
+        const text = input[0] ?? '';
+        calls.push({ input: text, inputType: request.inputType });
+
+        if (text === 'document' && firstDocumentAttempt) {
+            firstDocumentAttempt = false;
+            await queryStarted.promise;
+            throw new VoyageAIError({ statusCode: 429, message: 'rate limited' });
+        }
+        if (text === 'query') {
+            queryStarted.resolve();
+        }
+
+        return {
+            data: input.map((value) => ({ embedding: [value.length] })),
+            usage: { totalTokens: input.length },
+        };
+    });
+
+    const [documents, query] = await Promise.all([
+        embedding.embedDocuments(['document']),
+        embedding.embedQuery('query'),
+    ]);
+    await Promise.all([
+        embedding.embedQuery('query-2'),
+        embedding.embedDocuments(['document-2']),
+    ]);
+
+    assert.deepEqual(documents.map((item) => item.vector), [[8]]);
+    assert.deepEqual(query.vector, [5]);
+    assert.deepEqual(calls, [
+        { input: 'document', inputType: 'document' },
+        { input: 'query', inputType: 'query' },
+        { input: 'document', inputType: 'document' },
+        { input: 'query-2', inputType: 'query' },
+        { input: 'document-2', inputType: 'document' },
+    ]);
 });
 
 test('Voyage embedding deterministically splits an explicit provider batch-limit failure', async () => {
@@ -118,7 +179,7 @@ test('Voyage embedding deterministically splits an explicit provider batch-limit
         };
     });
 
-    const result = await embedding.embedBatch(['1', '2', '3', '4']);
+    const result = await embedding.embedDocuments(['1', '2', '3', '4']);
 
     assert.deepEqual(submitted, [
         ['1', '2', '3', '4'],

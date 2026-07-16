@@ -12,6 +12,8 @@ import {
 } from '@zilliz/milvus2-sdk-node';
 import {
     VectorDocument,
+    VectorControlRecord,
+    IndexedVectorDocument,
     SearchOptions,
     VectorSearchResult,
     VectorDatabase,
@@ -27,6 +29,11 @@ import {
     VectorWriteFlushReason,
     VectorWriteMetricsSnapshot,
 } from './types';
+import {
+    fromLegacyMilvusControlRow,
+    toLegacyMilvusControlDocument,
+    withMilvusControlExclusion,
+} from './milvus-control-record';
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
 import { buildMilvusIdInFilter } from './filters';
@@ -49,6 +56,19 @@ type MilvusCollectionListPayload = {
     collection_names?: unknown;
     collections?: unknown;
 };
+
+function toMilvusWriteRow(document: VectorDocument): RowData {
+    return {
+        id: document.id,
+        vector: document.vector,
+        content: document.content,
+        relativePath: document.relativePath,
+        startLine: document.startLine,
+        endLine: document.endLine,
+        fileExtension: document.fileExtension,
+        metadata: JSON.stringify(document.metadata),
+    };
+}
 
 // Zilliz serverless collection removal can legitimately take substantially
 // longer than the SDK's 15-second default. Keep the wider deadline scoped to
@@ -405,6 +425,8 @@ export interface MilvusConfig {
     username?: string;
     password?: string;
     ssl?: boolean;
+    /** Dimension used only for placeholder vectors required by the legacy Milvus control-row schema. */
+    vectorDimension: number;
 }
 
 
@@ -914,20 +936,32 @@ export class MilvusVectorDatabase implements VectorDatabase {
         };
     }
 
-    async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
+    async insert(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {
         console.log('Inserting documents into collection:', collectionName);
-        const data = documents.map(doc => ({
-            id: doc.id,
-            vector: doc.vector,
-            content: doc.content,
-            relativePath: doc.relativePath,
-            startLine: doc.startLine,
-            endLine: doc.endLine,
-            fileExtension: doc.fileExtension,
-            metadata: JSON.stringify(doc.metadata),
-        }));
+        // The legacy Milvus schema retains source content for result round-trips
+        // and server BM25. Dense vectors already encode the supplied projection.
+        const data = documents.map(({ document }) => toMilvusWriteRow(document));
 
         await this.upsertDocuments(collectionName, data);
+    }
+
+    async insertControl(collectionName: string, record: VectorControlRecord): Promise<void> {
+        await this.upsertDocuments(collectionName, [
+            toMilvusWriteRow(toLegacyMilvusControlDocument(record, this.config.vectorDimension)),
+        ]);
+    }
+
+    async getControl(collectionName: string, id: string): Promise<VectorControlRecord | null> {
+        const rows = await this.query(collectionName, buildMilvusIdInFilter([id]), ['id', 'metadata'], 2);
+        for (const row of rows) {
+            const record = fromLegacyMilvusControlRow(row, id);
+            if (record) return record;
+        }
+        return null;
+    }
+
+    async deleteControl(collectionName: string, id: string): Promise<void> {
+        await this.delete(collectionName, [id]);
     }
 
     async search(collectionName: string, queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
@@ -943,12 +977,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
             data: [queryVector],
             limit: options?.topK || 10,
             output_fields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
+            expr: withMilvusControlExclusion(options?.filterExpr),
         };
-
-        // Apply boolean expression filter if provided (e.g., fileExtension in [".ts",".py"]) 
-        if (options?.filterExpr && options.filterExpr.trim().length > 0) {
-            searchParams.expr = options.filterExpr;
-        }
 
         const searchResult = await this.client.search(searchParams);
 
@@ -1170,17 +1200,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
         });
     }
 
-    async insertHybrid(collectionName: string, documents: VectorDocument[]): Promise<void> {
-        const data = documents.map(doc => ({
-            id: doc.id,
-            content: doc.content,
-            vector: doc.vector,
-            relativePath: doc.relativePath,
-            startLine: doc.startLine,
-            endLine: doc.endLine,
-            fileExtension: doc.fileExtension,
-            metadata: JSON.stringify(doc.metadata),
-        }));
+    async insertHybrid(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {
+        const data = documents.map(({ document }) => toMilvusWriteRow(document));
 
         await this.upsertDocuments(collectionName, data);
     }
@@ -1241,11 +1262,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 limit: options?.limit || searchRequests[0]?.limit || 10,
                 rerank: rerank_strategy,
                 output_fields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
+                expr: withMilvusControlExclusion(options?.filterExpr),
             };
-
-            if (options?.filterExpr && options.filterExpr.trim().length > 0) {
-                searchParams.expr = options.filterExpr;
-            }
 
             console.log(`[MilvusDB] 🔍 Complete search request:`, JSON.stringify({
                 collection_name: searchParams.collection_name,
@@ -1301,10 +1319,8 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 drop_ratio_search: options?.dropRatioSearch ?? 0.2,
             },
             output_fields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
+            expr: withMilvusControlExclusion(options?.filterExpr),
         };
-        if (options?.filterExpr && options.filterExpr.trim().length > 0) {
-            searchParams.expr = options.filterExpr;
-        }
 
         const searchResult = await this.client.search(searchParams);
         if (!searchResult.results || searchResult.results.length === 0) {

@@ -63,20 +63,19 @@ export abstract class Embedding {
         return texts.map(text => this.preprocessText(text));
     }
 
-    // Abstract methods that must be implemented by subclasses
     /**
-     * Generate text embedding vector
-     * @param text Text content
+     * Generate one query embedding.
+     * @param text Query text
      * @returns Embedding vector
      */
-    abstract embed(text: string): Promise<EmbeddingVector>;
+    abstract embedQuery(text: string): Promise<EmbeddingVector>;
 
     /**
-     * Generate text embedding vectors in batch
-     * @param texts Text array
+     * Generate document embeddings in stable input order.
+     * @param texts Document texts
      * @returns Embedding vector array
      */
-    abstract embedBatch(texts: string[]): Promise<EmbeddingVector[]>;
+    abstract embedDocuments(texts: string[]): Promise<EmbeddingVector[]>;
 
     /**
      * Get embedding vector dimension

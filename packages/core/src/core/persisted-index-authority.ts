@@ -13,6 +13,9 @@ export interface CanonicalCompletionFingerprint {
     parserVersion: string;
     extractorVersion: string;
     relationshipVersion: string;
+    /** Absent only on indexes created before Core-owned projections. */
+    embeddingProjectionVersion?: string;
+    lexicalProjectionVersion?: string;
 }
 
 export type CanonicalNavigationBinding =
@@ -91,17 +94,23 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
 
 function parseFingerprint(value: unknown): CanonicalCompletionFingerprint | null {
     if (!isRecord(value)) return null;
+    const legacyKeys = [
+        'embeddingProvider',
+        'embeddingModel',
+        'embeddingDimension',
+        'vectorStoreProvider',
+        'schemaVersion',
+        'parserVersion',
+        'extractorVersion',
+        'relationshipVersion',
+    ];
+    const projectionKeys = [
+        ...legacyKeys,
+        'embeddingProjectionVersion',
+        'lexicalProjectionVersion',
+    ];
     if (
-        !hasExactKeys(value, [
-            'embeddingProvider',
-            'embeddingModel',
-            'embeddingDimension',
-            'vectorStoreProvider',
-            'schemaVersion',
-            'parserVersion',
-            'extractorVersion',
-            'relationshipVersion',
-        ])
+        (!hasExactKeys(value, legacyKeys) && !hasExactKeys(value, projectionKeys))
         || !isNonemptyString(value.embeddingProvider)
         || !isNonemptyString(value.embeddingModel)
         || !isNonNegativeInteger(value.embeddingDimension)
@@ -111,6 +120,10 @@ function parseFingerprint(value: unknown): CanonicalCompletionFingerprint | null
         || !isNonemptyString(value.parserVersion)
         || !isNonemptyString(value.extractorVersion)
         || !isNonemptyString(value.relationshipVersion)
+        || (value.embeddingProjectionVersion !== undefined
+            && !isNonemptyString(value.embeddingProjectionVersion))
+        || (value.lexicalProjectionVersion !== undefined
+            && !isNonemptyString(value.lexicalProjectionVersion))
     ) return null;
     return {
         embeddingProvider: value.embeddingProvider,
@@ -121,6 +134,12 @@ function parseFingerprint(value: unknown): CanonicalCompletionFingerprint | null
         parserVersion: value.parserVersion,
         extractorVersion: value.extractorVersion,
         relationshipVersion: value.relationshipVersion,
+        ...(value.embeddingProjectionVersion !== undefined
+            ? { embeddingProjectionVersion: value.embeddingProjectionVersion }
+            : {}),
+        ...(value.lexicalProjectionVersion !== undefined
+            ? { lexicalProjectionVersion: value.lexicalProjectionVersion }
+            : {}),
     };
 }
 

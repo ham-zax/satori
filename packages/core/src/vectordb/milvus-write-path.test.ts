@@ -2,18 +2,57 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MilvusRestfulVectorDatabase } from './milvus-restful-vectordb.js';
 import { MilvusVectorDatabase } from './milvus-vectordb.js';
-import type { VectorDocument } from './types.js';
+import { fromLegacyMilvusControlRow, toLegacyMilvusControlDocument } from './milvus-control-record.js';
+import type { IndexedVectorDocument, VectorControlRecord } from './types.js';
 
-const documents: VectorDocument[] = [{
-    id: 'chunk-1',
-    content: 'const owner = true;',
-    vector: [0.1, 0.2],
-    relativePath: 'src/owner.ts',
-    startLine: 1,
-    endLine: 1,
-    fileExtension: '.ts',
-    metadata: { language: 'typescript' },
+const documents: IndexedVectorDocument[] = [{
+    document: {
+        id: 'chunk-1',
+        content: 'const owner = true;',
+        vector: [0.1, 0.2],
+        relativePath: 'src/owner.ts',
+        startLine: 1,
+        endLine: 1,
+        fileExtension: '.ts',
+        metadata: { language: 'typescript' },
+    },
+    projections: {
+        embeddingText: 'embedding projection',
+        lexicalText: 'lexical projection',
+        embeddingVersion: 'embedding_projection_v1',
+        lexicalVersion: 'lexical_projection_v1',
+    },
 }];
+
+const controlRecord: VectorControlRecord = {
+    id: '__control__',
+    kind: 'test_control',
+    metadata: {
+        value: 'control metadata',
+    },
+};
+
+test('Milvus control-row translation round-trips generic metadata without requiring a fingerprint', () => {
+    const document = toLegacyMilvusControlDocument(controlRecord, 2);
+    const decoded = fromLegacyMilvusControlRow({
+        id: document.id,
+        metadata: JSON.stringify(document.metadata),
+    }, document.id);
+
+    assert.deepEqual(document.vector, [0, 0]);
+    assert.deepEqual(decoded, controlRecord);
+});
+
+test('Milvus control-row translation remains compatible with legacy metadata-kind rows', () => {
+    assert.deepEqual(fromLegacyMilvusControlRow({
+        id: '__legacy_control__',
+        metadata: JSON.stringify({ kind: 'legacy_control', value: 'legacy metadata' }),
+    }, '__legacy_control__'), {
+        id: '__legacy_control__',
+        kind: 'legacy_control',
+        metadata: { kind: 'legacy_control', value: 'legacy metadata' },
+    });
+});
 
 for (const method of ['insert', 'insertHybrid'] as const) {
     test(`Milvus gRPC ${method} does not perform a non-gating collection load-state check`, async () => {
@@ -48,6 +87,102 @@ for (const method of ['insert', 'insertHybrid'] as const) {
         }]);
     });
 }
+
+test('Milvus gRPC writes control records through the separate control boundary', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const target = {
+        config: { vectorDimension: 2 },
+        upsertDocuments: async (collectionName: string, data: Array<Record<string, unknown>>) => {
+            calls.push({ collection_name: collectionName, data });
+        },
+    };
+
+    await MilvusVectorDatabase.prototype.insertControl.call(
+        target as unknown as MilvusVectorDatabase,
+        'collection-v1',
+        controlRecord,
+    );
+
+    assert.equal(calls.length, 1);
+    const row = (calls[0]?.data as Array<Record<string, unknown>>)[0];
+    assert.equal(row?.id, '__control__');
+    assert.deepEqual(row?.vector, [0, 0]);
+    assert.equal(row?.fileExtension, '.satori_meta');
+    assert.match(String(row?.metadata), /"__satoriControlKind":"test_control"/);
+});
+
+test('Milvus gRPC reads and deletes control records through the separate control boundary', async () => {
+    const deleted: string[][] = [];
+    const target = {
+        query: async () => [{
+            id: '__control__',
+            metadata: '{"__satoriControlKind":"test_control","value":"control metadata"}',
+        }],
+        delete: async (_collectionName: string, ids: string[]) => {
+            deleted.push(ids);
+        },
+    };
+
+    const record = await MilvusVectorDatabase.prototype.getControl.call(
+        target as unknown as MilvusVectorDatabase,
+        'collection-v1',
+        '__control__',
+    );
+    await MilvusVectorDatabase.prototype.deleteControl.call(
+        target as unknown as MilvusVectorDatabase,
+        'collection-v1',
+        '__control__',
+    );
+
+    assert.deepEqual(record, {
+        id: '__control__',
+        kind: 'test_control',
+        metadata: { value: 'control metadata' },
+    });
+    assert.deepEqual(deleted, [['__control__']]);
+});
+
+test('Milvus gRPC excludes control rows from every retrieval operation', async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const target = {
+        ensureInitialized: async () => undefined,
+        ensureLoaded: async () => undefined,
+        client: {
+            search: async (request: Record<string, unknown>) => {
+                requests.push(request);
+                return { results: [] };
+            },
+        },
+    };
+    const hybridRequests = [
+        { data: [0.1, 0.2], anns_field: 'vector', param: {}, limit: 5 },
+        { data: 'owner', anns_field: 'sparse_vector', param: {}, limit: 5 },
+    ];
+
+    await MilvusVectorDatabase.prototype.search.call(
+        target as unknown as MilvusVectorDatabase,
+        'collection-v1',
+        [0.1, 0.2],
+    );
+    await MilvusVectorDatabase.prototype.hybridSearch.call(
+        target as unknown as MilvusVectorDatabase,
+        'collection-v1',
+        hybridRequests,
+        { filterExpr: 'language == "typescript"' },
+    );
+    await MilvusVectorDatabase.prototype.sparseSearch!.call(
+        target as unknown as MilvusVectorDatabase,
+        'collection-v1',
+        'owner',
+    );
+
+    assert.equal(requests[0]?.expr, 'fileExtension != ".satori_meta"');
+    assert.equal(
+        requests[1]?.expr,
+        '(language == "typescript") and (fileExtension != ".satori_meta")',
+    );
+    assert.equal(requests[2]?.expr, 'fileExtension != ".satori_meta"');
+});
 
 test('Milvus gRPC idempotent write retries a dropped connection with a fresh client', async () => {
     const calls: string[] = [];
@@ -349,3 +484,96 @@ for (const method of ['insert', 'insertHybrid'] as const) {
         }]);
     });
 }
+
+test('Milvus REST writes control records through the separate control boundary', async () => {
+    const calls: Array<{ endpoint: string; body: Record<string, unknown> }> = [];
+    const target = {
+        ensureInitialized: async () => undefined,
+        config: { database: 'default', vectorDimension: 2 },
+        makeRequest: async (endpoint: string, _method: string, body: Record<string, unknown>) => {
+            calls.push({ endpoint, body });
+            return { code: 0 };
+        },
+    };
+
+    await MilvusRestfulVectorDatabase.prototype.insertControl.call(
+        target as unknown as MilvusRestfulVectorDatabase,
+        'collection-v1',
+        controlRecord,
+    );
+
+    assert.equal(calls[0]?.endpoint, '/entities/insert');
+    const rows = calls[0]?.body.data as Array<Record<string, unknown>>;
+    assert.equal(rows[0]?.id, '__control__');
+    assert.deepEqual(rows[0]?.vector, [0, 0]);
+    assert.equal(rows[0]?.fileExtension, '.satori_meta');
+});
+
+test('Milvus REST reads and deletes control records through the separate control boundary', async () => {
+    const deleted: string[][] = [];
+    const target = {
+        query: async () => [{
+            id: '__control__',
+            metadata: { __satoriControlKind: 'test_control', value: 'control metadata' },
+        }],
+        delete: async (_collectionName: string, ids: string[]) => {
+            deleted.push(ids);
+        },
+    };
+
+    const record = await MilvusRestfulVectorDatabase.prototype.getControl.call(
+        target as unknown as MilvusRestfulVectorDatabase,
+        'collection-v1',
+        '__control__',
+    );
+    await MilvusRestfulVectorDatabase.prototype.deleteControl.call(
+        target as unknown as MilvusRestfulVectorDatabase,
+        'collection-v1',
+        '__control__',
+    );
+
+    assert.deepEqual(record, controlRecord);
+    assert.deepEqual(deleted, [['__control__']]);
+});
+
+test('Milvus REST excludes control rows from every retrieval operation', async () => {
+    const requests: Array<{ endpoint: string; body: Record<string, unknown> }> = [];
+    const target = {
+        ensureInitialized: async () => undefined,
+        ensureLoaded: async () => undefined,
+        config: { database: 'default' },
+        makeRequest: async (endpoint: string, _method: string, body: Record<string, unknown>) => {
+            requests.push({ endpoint, body });
+            return { code: 0, data: [] };
+        },
+    };
+    const hybridRequests = [
+        { data: [0.1, 0.2], anns_field: 'vector', param: {}, limit: 5 },
+        { data: 'owner', anns_field: 'sparse_vector', param: {}, limit: 5 },
+    ];
+
+    await MilvusRestfulVectorDatabase.prototype.search.call(
+        target as unknown as MilvusRestfulVectorDatabase,
+        'collection-v1',
+        [0.1, 0.2],
+    );
+    await MilvusRestfulVectorDatabase.prototype.hybridSearch.call(
+        target as unknown as MilvusRestfulVectorDatabase,
+        'collection-v1',
+        hybridRequests,
+        { filterExpr: 'language == "typescript"' },
+    );
+    await MilvusRestfulVectorDatabase.prototype.sparseSearch!.call(
+        target as unknown as MilvusRestfulVectorDatabase,
+        'collection-v1',
+        'owner',
+    );
+
+    assert.equal(requests[0]?.body.filter, 'fileExtension != ".satori_meta"');
+    const hybridSearches = requests[1]?.body.search as Array<Record<string, unknown>>;
+    assert.deepEqual(hybridSearches.map((request) => request.filter), [
+        '(language == "typescript") and (fileExtension != ".satori_meta")',
+        '(language == "typescript") and (fileExtension != ".satori_meta")',
+    ]);
+    assert.equal(requests[2]?.body.filter, 'fileExtension != ".satori_meta"');
+});

@@ -8,6 +8,10 @@ import {
     type CanonicalCompletionMarker,
     type CanonicalIndexPolicyPayload,
 } from './persisted-index-authority';
+import {
+    EMBEDDING_PROJECTION_VERSION,
+    LEXICAL_PROJECTION_VERSION,
+} from './search-projections';
 
 const SHA_A = 'a'.repeat(64);
 const SHA_B = 'b'.repeat(64);
@@ -24,6 +28,8 @@ function fingerprint() {
         parserVersion: 'parser-v1',
         extractorVersion: 'extractor-v1',
         relationshipVersion: 'relationship-v1',
+        embeddingProjectionVersion: EMBEDDING_PROJECTION_VERSION,
+        lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
     };
 }
 
@@ -47,6 +53,15 @@ function canonicalMarker(
 test('completion marker inspector admits only complete canonical v3 shapes', () => {
     const notBound = inspectCompletionMarker(canonicalMarker());
     assert.equal(notBound.status, 'current');
+
+    const legacyProjectionFingerprint = structuredClone(canonicalMarker());
+    delete legacyProjectionFingerprint.fingerprint.embeddingProjectionVersion;
+    delete legacyProjectionFingerprint.fingerprint.lexicalProjectionVersion;
+    assert.equal(inspectCompletionMarker(legacyProjectionFingerprint).status, 'current');
+
+    const partialProjectionFingerprint = structuredClone(canonicalMarker());
+    delete partialProjectionFingerprint.fingerprint.lexicalProjectionVersion;
+    assert.equal(inspectCompletionMarker(partialProjectionFingerprint).status, 'corrupt');
 
     const sealed = inspectCompletionMarker(canonicalMarker({
         status: 'sealed',

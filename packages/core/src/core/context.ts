@@ -6,7 +6,9 @@ import {
 } from '../embedding';
 import {
     VectorDatabase,
-    VectorDocument,
+    VectorControlRecord,
+    IndexedVectorDocument,
+    SearchProjections,
     VectorSearchResult,
     HybridSearchRequest,
     HybridSearchResult,
@@ -16,7 +18,6 @@ import {
     IndexCompletionMarkerDocument,
     INDEX_COMPLETION_MARKER_DOC_ID,
     INDEX_COMPLETION_MARKER_FILE_EXTENSION,
-    INDEX_COMPLETION_MARKER_RELATIVE_PATH,
     deleteCollectionWithVerification,
     type VectorWriteMetricsSnapshot,
 } from '../vectordb';
@@ -110,7 +111,23 @@ import {
     inspectIndexPolicyDocument,
     type CanonicalPolicyNavigationBinding,
 } from './persisted-index-authority';
+import {
+    buildSearchProjections,
+    EMBEDDING_PROJECTION_VERSION,
+    LEXICAL_PROJECTION_VERSION,
+} from './search-projections';
 import { compareContractStrings } from '../utils/compare-contract-strings';
+
+interface ProjectedChunkEntry {
+    readonly chunk: CodeChunk;
+    readonly relativePath: string;
+    readonly fileChunkIndex: number;
+    readonly projections: SearchProjections;
+}
+
+interface PendingIndexedChunk extends ProjectedChunkEntry {
+    readonly codebasePath: string;
+}
 
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
 const MAX_EMBEDDING_BATCH_SIZE = 1000;
@@ -1046,33 +1063,39 @@ export class Context {
         return { ...parsed, codebasePath: parsedCodebasePath };
     }
 
+    private parseCompletionControlRecord(
+        codebasePath: string,
+        record: VectorControlRecord,
+    ): IndexCompletionMarkerDocument | null {
+        if (!this.completionControlRecordKindMatches(record)) {
+            return null;
+        }
+        return this.parseCompletionMarker(codebasePath, record.metadata);
+    }
+
+    private completionControlRecordKindMatches(record: VectorControlRecord): boolean {
+        return typeof record.metadata.kind === 'string' && record.kind === record.metadata.kind;
+    }
+
     private async resolveCompletionMarkerForCollection(
         codebasePath: string,
         collectionName: string
     ): Promise<IndexCompletionMarkerDocument | null> {
-        const rows = await this.queryCompletionMarkerRows(collectionName);
-        for (const row of rows) {
-            const marker = this.parseCompletionMarker(codebasePath, row?.metadata);
-            if (marker) {
-                return marker;
-            }
-        }
-        return null;
+        const record = await this.vectorDatabase.getControl(collectionName, INDEX_COMPLETION_MARKER_DOC_ID);
+        return record ? this.parseCompletionControlRecord(codebasePath, record) : null;
     }
 
     private async resolveRepairCompletionMarkerForCollection(
         codebasePath: string,
         collectionName: string,
     ): Promise<RepairCompletionMarkerResolution> {
-        const rows = await this.queryCompletionMarkerRows(collectionName);
-        if (rows.length === 0) {
+        const record = await this.vectorDatabase.getControl(collectionName, INDEX_COMPLETION_MARKER_DOC_ID);
+        if (!record) {
             return { status: 'missing' };
         }
-        for (const row of rows) {
-            const marker = this.parseCompletionMarker(codebasePath, row?.metadata);
-            if (marker) {
-                return { status: 'matched', marker };
-            }
+        const marker = this.parseCompletionControlRecord(codebasePath, record);
+        if (marker) {
+            return { status: 'matched', marker };
         }
         return { status: 'malformed' };
     }
@@ -1139,6 +1162,8 @@ export class Context {
             parserVersion: LANGUAGE_PARSER_VERSION,
             extractorVersion: SYMBOL_EXTRACTOR_VERSION,
             relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
+            embeddingProjectionVersion: EMBEDDING_PROJECTION_VERSION,
+            lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
         };
     }
 
@@ -1154,7 +1179,9 @@ export class Context {
             && record.schemaVersion === right.schemaVersion
             && record.parserVersion === right.parserVersion
             && record.extractorVersion === right.extractorVersion
-            && record.relationshipVersion === right.relationshipVersion;
+            && record.relationshipVersion === right.relationshipVersion
+            && record.embeddingProjectionVersion === right.embeddingProjectionVersion
+            && record.lexicalProjectionVersion === right.lexicalProjectionVersion;
     }
 
     public indexCompletionMarkersEqual(
@@ -2964,7 +2991,7 @@ export class Context {
         if (isHybrid) {
             // 1. Generate query vector
             console.log(`[Context] 🔍 Generating query embedding: query_length=${resolvedRequest.query.length}, request_id=${requestId}`);
-            const queryEmbedding: EmbeddingVector = await this.embedding.embed(resolvedRequest.query);
+            const queryEmbedding: EmbeddingVector = await this.embedding.embedQuery(resolvedRequest.query);
             console.log(`[Context] ✅ Generated embedding vector with dimension: ${queryEmbedding.vector.length}`);
 
             // 2. Prepare hybrid search requests
@@ -3017,7 +3044,7 @@ export class Context {
         } else {
             // Regular semantic search
             // 1. Generate query vector
-            const queryEmbedding: EmbeddingVector = await this.embedding.embed(resolvedRequest.query);
+            const queryEmbedding: EmbeddingVector = await this.embedding.embedQuery(resolvedRequest.query);
             const denseThreshold = resolvedRequest.scorePolicy.kind === 'dense_similarity_min'
                 ? resolvedRequest.scorePolicy.min
                 : undefined;
@@ -3097,28 +3124,16 @@ export class Context {
         return `(${filterExpr}) and (${markerExclusion})`;
     }
 
-    private async queryCompletionMarkerRows(collectionName: string): Promise<Array<Record<string, unknown>>> {
-        return this.vectorDatabase.query(
-            collectionName,
-            `id == "${INDEX_COMPLETION_MARKER_DOC_ID}"`,
-            ['id', 'metadata'],
-            8
-        );
-    }
-
     private async clearIndexCompletionMarkerFromCollection(
         collectionName: string,
         assertMutationCurrent?: () => void,
     ): Promise<void> {
-        const rows = await this.queryCompletionMarkerRows(collectionName);
-        const markerIds = rows
-            .map((row) => row.id)
-            .filter((id): id is string => id === INDEX_COMPLETION_MARKER_DOC_ID);
-        if (markerIds.length === 0) {
+        const record = await this.vectorDatabase.getControl(collectionName, INDEX_COMPLETION_MARKER_DOC_ID);
+        if (!record) {
             return;
         }
         assertMutationCurrent?.();
-        await this.vectorDatabase.delete(collectionName, Array.from(new Set(markerIds)));
+        await this.vectorDatabase.deleteControl(collectionName, INDEX_COMPLETION_MARKER_DOC_ID);
     }
 
     async clearIndexCompletionMarker(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
@@ -3150,25 +3165,14 @@ export class Context {
 
         await this.clearIndexCompletionMarkerFromCollection(collectionName, assertMutationCurrent);
 
-        const vector = new Array<number>(this.embedding.getDimension()).fill(0);
-        const markerDoc: VectorDocument = {
+        const markerRecord: VectorControlRecord = {
             id: INDEX_COMPLETION_MARKER_DOC_ID,
-            vector,
-            content: 'satori index completion marker',
-            relativePath: INDEX_COMPLETION_MARKER_RELATIVE_PATH,
-            startLine: 0,
-            endLine: 0,
-            fileExtension: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+            kind: marker.kind,
             metadata: marker,
         };
 
-        if (this.getIsHybrid() === true) {
-            assertMutationCurrent?.();
-            await this.vectorDatabase.insertHybrid(collectionName, [markerDoc]);
-        } else {
-            assertMutationCurrent?.();
-            await this.vectorDatabase.insert(collectionName, [markerDoc]);
-        }
+        assertMutationCurrent?.();
+        await this.vectorDatabase.insertControl(collectionName, markerRecord);
     }
 
     async getIndexCompletionMarker(codebasePath: string): Promise<IndexCompletionMarkerDocument | null> {
@@ -3253,29 +3257,22 @@ export class Context {
         const readCollectionEvidence = async (
             collectionName: string,
         ): Promise<CompletionMarkerValidationEvidence> => {
-            let hasCurrentMarker = false;
-            for (const row of await this.queryCompletionMarkerRows(collectionName)) {
-                const rawMetadata = row?.metadata;
-                const parsed = (() => {
-                    if (typeof rawMetadata === 'string') {
-                        try {
-                            return JSON.parse(rawMetadata) as unknown;
-                        } catch {
-                            return null;
-                        }
-                    }
-                    return rawMetadata;
-                })();
-                const inspected = inspectCompletionMarker(parsed);
-                if (inspected.status === 'requires_reindex') {
-                    return { status: 'requires_reindex' };
-                }
-                if (inspected.status === 'unsupported') {
-                    return { status: 'unsupported_authority' };
-                }
-                if (inspected.status === 'current') hasCurrentMarker = true;
+            const record = await this.vectorDatabase.getControl(
+                collectionName,
+                INDEX_COMPLETION_MARKER_DOC_ID,
+            );
+            if (!record) return { status: 'missing' };
+            if (!this.completionControlRecordKindMatches(record)) {
+                return { status: 'invalid_v3' };
             }
-            return hasCurrentMarker ? { status: 'invalid_v3' } : { status: 'missing' };
+            const inspected = inspectCompletionMarker(record.metadata);
+            if (inspected.status === 'requires_reindex') {
+                return { status: 'requires_reindex' };
+            }
+            if (inspected.status === 'unsupported') {
+                return { status: 'unsupported_authority' };
+            }
+            return inspected.status === 'current' ? { status: 'invalid_v3' } : { status: 'missing' };
         };
         if (boundCollection) {
             if (!relatedCollections.includes(boundCollection)) {
@@ -4438,18 +4435,14 @@ export class Context {
             batchPolicy?.hardMaxItems ?? MAX_EMBEDDING_BATCH_SIZE,
         );
         const targetEstimatedTokens = batchPolicy?.targetEstimatedTokens;
+        const hardTokenLimit = batchPolicy?.hardTokenLimit;
         const CHUNK_LIMIT = 450000;
         console.log(
             `[Context] 🔧 Embedding batch policy: max_items=${EMBEDDING_BATCH_SIZE}`
             + `${targetEstimatedTokens ? `, target_estimated_tokens=${targetEstimatedTokens}` : ''}`,
         );
 
-        let chunkBuffer: Array<{
-            chunk: CodeChunk;
-            codebasePath: string;
-            relativePath: string;
-            fileChunkIndex: number;
-        }> = [];
+        let chunkBuffer: PendingIndexedChunk[] = [];
         let chunkBufferEstimatedTokens = 0;
         let processedFiles = 0;
         let totalChunks = 0;
@@ -4545,7 +4538,13 @@ export class Context {
                 // Add chunks to buffer
                 for (let fileChunkIndex = 0; fileChunkIndex < chunks.length; fileChunkIndex++) {
                     const chunk = chunks[fileChunkIndex];
-                    const chunkEstimatedTokens = estimateEmbeddingTokens(chunk.content);
+                    const projections = buildSearchProjections({ chunk, relativePath });
+                    const chunkEstimatedTokens = estimateEmbeddingTokens(projections.embeddingText);
+                    if (hardTokenLimit !== undefined && chunkEstimatedTokens > hardTokenLimit) {
+                        throw new Error(
+                            `Embedding projection for '${relativePath}' chunk ${fileChunkIndex} is estimated at ${chunkEstimatedTokens} tokens, exceeding the provider hard limit of ${hardTokenLimit}.`,
+                        );
+                    }
                     if (
                         chunkBuffer.length > 0
                         && targetEstimatedTokens !== undefined
@@ -4553,7 +4552,7 @@ export class Context {
                     ) {
                         await flushChunkBuffer(`chunk batch while indexing ${filePath}`);
                     }
-                    chunkBuffer.push({ chunk, codebasePath, relativePath, fileChunkIndex });
+                    chunkBuffer.push({ chunk, codebasePath, relativePath, fileChunkIndex, projections });
                     chunkBufferEstimatedTokens += chunkEstimatedTokens;
                     totalChunks++;
 
@@ -5784,12 +5783,7 @@ export class Context {
  * Process accumulated chunk buffer
  */
     private async processChunkBuffer(
-        chunkBuffer: Array<{
-            chunk: CodeChunk;
-            codebasePath: string;
-            relativePath: string;
-            fileChunkIndex: number;
-        }>,
+        chunkBuffer: PendingIndexedChunk[],
         collectionName: string,
         assertMutationCurrent?: () => void,
         performance?: IndexingPipelineMetrics,
@@ -5801,7 +5795,10 @@ export class Context {
         const codebasePath = chunkBuffer[0].codebasePath;
 
         // Estimate tokens (rough estimation: 1 token ≈ 4 characters)
-        const estimatedTokens = chunks.reduce((sum, chunk) => sum + Math.ceil(chunk.content.length / 4), 0);
+        const estimatedTokens = chunkBuffer.reduce(
+            (sum, { projections }) => sum + estimateEmbeddingTokens(projections.embeddingText),
+            0,
+        );
 
         const isHybrid = this.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid' : 'regular';
@@ -5819,7 +5816,7 @@ export class Context {
      * Process a batch of chunks
      */
     private async processChunkBatch(
-        chunkEntries: Array<{ chunk: CodeChunk; relativePath: string; fileChunkIndex: number }>,
+        chunkEntries: ProjectedChunkEntry[],
         codebasePath: string,
         collectionName: string,
         assertMutationCurrent?: () => void,
@@ -5828,11 +5825,37 @@ export class Context {
         const isHybrid = this.getIsHybrid();
         const indexedAt = new Date().toISOString();
         const chunks = chunkEntries.map(({ chunk }) => chunk);
+        const projections = chunkEntries.map(({ projections: entryProjections }) => entryProjections);
 
         // Generate embedding vectors
-        const chunkContents = chunks.map(chunk => chunk.content);
+        const embeddingTexts = projections.map(({ embeddingText }) => embeddingText);
+        const batchPolicy = this.embedding.getBatchPolicy?.() ?? null;
+        if (batchPolicy && chunkEntries.length > batchPolicy.hardMaxItems) {
+            throw new Error(
+                `Embedding batch contains ${chunkEntries.length} items, exceeding the provider hard limit of ${batchPolicy.hardMaxItems}.`,
+            );
+        }
+        const hardTokenLimit = batchPolicy?.hardTokenLimit;
+        if (hardTokenLimit !== undefined) {
+            const tokenEstimates = embeddingTexts.map(estimateEmbeddingTokens);
+            const oversizedIndex = tokenEstimates.findIndex((estimatedTokens) => (
+                estimatedTokens > hardTokenLimit
+            ));
+            if (oversizedIndex >= 0) {
+                const entry = chunkEntries[oversizedIndex];
+                throw new Error(
+                    `Embedding projection for '${entry.relativePath}' chunk ${entry.fileChunkIndex} is estimated at ${tokenEstimates[oversizedIndex]} tokens, exceeding the provider hard limit of ${hardTokenLimit}.`,
+                );
+            }
+            const batchEstimatedTokens = tokenEstimates.reduce((total, estimate) => total + estimate, 0);
+            if (batchEstimatedTokens > hardTokenLimit) {
+                throw new Error(
+                    `Embedding batch is estimated at ${batchEstimatedTokens} tokens, exceeding the provider hard limit of ${hardTokenLimit}.`,
+                );
+            }
+        }
         if (performance) {
-            performance.embeddedInputBytes += chunkContents.reduce(
+            performance.embeddedInputBytes += embeddingTexts.reduce(
                 (total, content) => total + Buffer.byteLength(content, 'utf8'),
                 0,
             );
@@ -5841,7 +5864,7 @@ export class Context {
         const embeddingStartedAt = Date.now();
         let embeddings: EmbeddingVector[];
         try {
-            embeddings = await this.embedding.embedBatch(chunkContents);
+            embeddings = await this.embedding.embedDocuments(embeddingTexts);
         } finally {
             if (performance) {
                 performance.logicalEmbeddingDurationMs += Date.now() - embeddingStartedAt;
@@ -5873,7 +5896,7 @@ export class Context {
         if (new Set(documentIds).size !== documentIds.length) {
             throw new Error(`Duplicate chunk identities generated for collection '${collectionName}'.`);
         }
-        const persistDocuments = async (documents: VectorDocument[]): Promise<void> => {
+        const persistDocuments = async (documents: IndexedVectorDocument[]): Promise<void> => {
             assertMutationCurrent?.();
             if (performance) performance.logicalVectorWriteRequests += 1;
             const writeStartedAt = Date.now();
@@ -5890,49 +5913,19 @@ export class Context {
             }
         };
 
-        if (isHybrid === true) {
-            // Create hybrid vector documents
-            const documents: VectorDocument[] = chunks.map((chunk, index) => {
-                const relativePath = chunkEntries[index].relativePath;
-                const fileExtension = path.extname(relativePath);
-                const { filePath: omittedFilePath, startLine: omittedStartLine, endLine: omittedEndLine, ...restMetadata } = chunk.metadata;
-                void omittedFilePath;
-                void omittedStartLine;
-                void omittedEndLine;
+        const documents: IndexedVectorDocument[] = chunks.map((chunk, index) => {
+            const relativePath = chunkEntries[index].relativePath;
+            const fileExtension = path.extname(relativePath);
+            const { filePath: omittedFilePath, startLine: omittedStartLine, endLine: omittedEndLine, ...restMetadata } = chunk.metadata;
+            void omittedFilePath;
+            void omittedStartLine;
+            void omittedEndLine;
 
-                return {
+            return {
+                document: {
                     id: documentIds[index],
-                    content: chunk.content, // Full text content for BM25 and storage
-                    vector: embeddings[index].vector, // Dense vector
-                    relativePath,
-                    startLine: chunk.metadata.startLine || 0,
-                    endLine: chunk.metadata.endLine || 0,
-                    fileExtension,
-                    metadata: {
-                        ...restMetadata,
-                        codebasePath,
-                        language: chunk.metadata.language || 'unknown',
-                        chunkIndex: chunkEntries[index].fileChunkIndex,
-                        indexedAt
-                    }
-                };
-            });
-
-            await persistDocuments(documents);
-        } else {
-            // Create regular vector documents
-            const documents: VectorDocument[] = chunks.map((chunk, index) => {
-                const relativePath = chunkEntries[index].relativePath;
-                const fileExtension = path.extname(relativePath);
-                const { filePath: omittedFilePath, startLine: omittedStartLine, endLine: omittedEndLine, ...restMetadata } = chunk.metadata;
-                void omittedFilePath;
-                void omittedStartLine;
-                void omittedEndLine;
-
-                return {
-                    id: documentIds[index],
-                    vector: embeddings[index].vector,
                     content: chunk.content,
+                    vector: embeddings[index].vector,
                     relativePath,
                     startLine: chunk.metadata.startLine || 0,
                     endLine: chunk.metadata.endLine || 0,
@@ -5942,13 +5935,14 @@ export class Context {
                         codebasePath,
                         language: chunk.metadata.language || 'unknown',
                         chunkIndex: chunkEntries[index].fileChunkIndex,
-                        indexedAt
-                    }
-                };
-            });
+                        indexedAt,
+                    },
+                },
+                projections: projections[index],
+            };
+        });
 
-            await persistDocuments(documents);
-        }
+        await persistDocuments(documents);
     }
 
     /**

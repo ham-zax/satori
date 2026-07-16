@@ -4,6 +4,7 @@ export * from './vectordb';
 export * from './types';
 export * from './context';
 export * from './core/persisted-index-authority';
+export * from './core/search-projections';
 export * from './sync/synchronizer';
 export * from './sync/root-bound-fs';
 export * from './measurement/source-ledger';

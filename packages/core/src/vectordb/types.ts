@@ -31,6 +31,26 @@ export interface VectorDocument {
     metadata: VectorDocumentMetadata;
 }
 
+export interface SearchProjections {
+    readonly embeddingText: string;
+    readonly lexicalText: string;
+    readonly embeddingVersion: string;
+    readonly lexicalVersion: string;
+}
+
+export interface IndexedVectorDocument {
+    readonly document: VectorDocument;
+    readonly projections: SearchProjections;
+}
+
+export interface VectorControlRecord {
+    readonly id: string;
+    /** Adapter routing identity; completion readers require it to match metadata.kind. */
+    readonly kind: string;
+    /** Logical payload. Adapters must round-trip it without transport-only fields. */
+    readonly metadata: VectorDocumentMetadata;
+}
+
 export type RetrievalMode = 'dense' | 'lexical' | 'hybrid';
 
 export type ScorePolicy =
@@ -191,14 +211,23 @@ export interface VectorDatabase {
      * @param collectionName Collection name
      * @param documents Document array
      */
-    insert(collectionName: string, documents: VectorDocument[]): Promise<void>;
+    insert(collectionName: string, documents: IndexedVectorDocument[]): Promise<void>;
 
     /**
      * Insert hybrid vector documents
      * @param collectionName Collection name
      * @param documents Document array
      */
-    insertHybrid(collectionName: string, documents: VectorDocument[]): Promise<void>;
+    insertHybrid(collectionName: string, documents: IndexedVectorDocument[]): Promise<void>;
+
+    /** Persist one non-searchable backend control record. */
+    insertControl(collectionName: string, record: VectorControlRecord): Promise<void>;
+
+    /** Read one non-searchable backend control record by exact ID. */
+    getControl(collectionName: string, id: string): Promise<VectorControlRecord | null>;
+
+    /** Delete one non-searchable backend control record by exact ID. */
+    deleteControl(collectionName: string, id: string): Promise<void>;
 
     /**
      * Search similar vectors

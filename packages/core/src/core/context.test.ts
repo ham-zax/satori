@@ -7,6 +7,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Context, IndexPolicyPublicationError } from './context';
 import type { RepairProof } from './repair-proof';
+import {
+    buildSearchProjections,
+    EMBEDDING_PROJECTION_VERSION,
+    LEXICAL_PROJECTION_VERSION,
+} from './search-projections';
 import type { RelationshipAnalysisEvidence } from '../relationships';
 import { resolveNavigationSqlitePath, SQLiteNavigationStore, validateNavigationStoreParity } from '../navigation';
 import { clearSymbolRegistrySidecar, readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols';
@@ -28,9 +33,12 @@ import type {
     HybridSearchOptions,
     HybridSearchRequest,
     HybridSearchResult,
+    IndexedVectorDocument,
     IndexCompletionFingerprint,
+    type SearchProjections,
     SearchOptions,
     SparseSearchOptions,
+    VectorControlRecord,
     VectorDatabase,
     VectorDocument,
     VectorSearchResult,
@@ -48,15 +56,15 @@ class TestEmbedding extends Embedding {
         return 4;
     }
 
-    async embed(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string): Promise<EmbeddingVector> {
         return {
             vector: [text.length % 3, text.length % 5, text.length % 7, 1],
             dimension: 4,
         };
     }
 
-    async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
-        return Promise.all(texts.map((text) => this.embed(text)));
+    async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+        return Promise.all(texts.map((text) => this.embedQuery(text)));
     }
 
     getDimension(): number {
@@ -149,7 +157,12 @@ type ContextWithNavigationPublisher = {
 
 type ContextWithProcessChunkBatch = {
     processChunkBatch(
-        chunks: Array<{ chunk: CodeChunk; relativePath: string; fileChunkIndex: number }>,
+        chunks: Array<{
+            chunk: CodeChunk;
+            relativePath: string;
+            fileChunkIndex: number;
+            projections: SearchProjections;
+        }>,
         codebasePath: string,
         collectionName: string,
         assertMutationCurrent?: () => void,
@@ -205,13 +218,16 @@ async function publishCurrentAuthorityCheckpoint(
 
 class InMemoryVectorDatabase implements VectorDatabase {
     readonly collections = new Map<string, Map<string, VectorDocument>>();
+    readonly indexedDocuments: IndexedVectorDocument[] = [];
     readonly queryCalls: Array<{ collectionName: string; filter: string; outputFields: string[] }> = [];
     listCollectionsCalls = 0;
+    getControlCalls = 0;
     searchCalls = 0;
     hybridSearchCalls = 0;
     readonly hybridSearchRequests: HybridSearchRequest[][] = [];
     sparseSearchCalls = 0;
     queryHook?: (call: { collectionName: string; filter: string; outputFields: string[] }) => void | Promise<void>;
+    controlReadHook?: (call: { collectionName: string; id: string }) => void | Promise<void>;
     readonly mutationCalls: Array<
         'payload_insert' | 'payload_delete' | 'marker_insert' | 'marker_delete'
     > = [];
@@ -269,9 +285,18 @@ class InMemoryVectorDatabase implements VectorDatabase {
         return Array.from(this.collections.keys()).map((name) => ({ name }));
     }
 
-    async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
+    async insert(
+        collectionName: string,
+        documents: Array<IndexedVectorDocument | VectorDocument>,
+    ): Promise<void> {
+        this.indexedDocuments.push(...documents.filter(
+            (document): document is IndexedVectorDocument => 'projections' in document,
+        ));
+        const sourceDocuments = documents.map((document) =>
+            'projections' in document ? document.document : document
+        );
         this.mutationCalls.push(
-            documents.every((document) => document.id === INDEX_COMPLETION_MARKER_DOC_ID)
+            sourceDocuments.every((document) => document.id === INDEX_COMPLETION_MARKER_DOC_ID)
                 ? 'marker_insert'
                 : 'payload_insert',
         );
@@ -279,13 +304,45 @@ class InMemoryVectorDatabase implements VectorDatabase {
         if (!collection) {
             throw new Error(`Collection not found: ${collectionName}`);
         }
-        for (const document of documents) {
+        for (const document of sourceDocuments) {
             collection.set(document.id, document);
         }
     }
 
-    async insertHybrid(collectionName: string, documents: VectorDocument[]): Promise<void> {
+    async insertHybrid(
+        collectionName: string,
+        documents: Array<IndexedVectorDocument | VectorDocument>,
+    ): Promise<void> {
         await this.insert(collectionName, documents);
+    }
+
+    async insertControl(collectionName: string, record: VectorControlRecord): Promise<void> {
+        await this.insert(collectionName, [{
+            id: record.id,
+            vector: [],
+            content: '',
+            relativePath: '.__satori__/control.json',
+            startLine: 0,
+            endLine: 0,
+            fileExtension: '.satori_meta',
+            metadata: { ...record.metadata, kind: record.kind },
+        }]);
+    }
+
+    async getControl(collectionName: string, id: string): Promise<VectorControlRecord | null> {
+        this.getControlCalls += 1;
+        const document = this.collections.get(collectionName)?.get(id);
+        const record = document ? {
+            id,
+            kind: typeof document.metadata.kind === 'string' ? document.metadata.kind : '',
+            metadata: { ...document.metadata },
+        } : null;
+        await this.controlReadHook?.({ collectionName, id });
+        return record;
+    }
+
+    async deleteControl(collectionName: string, id: string): Promise<void> {
+        await this.delete(collectionName, [id]);
     }
 
     async search(collectionName: string, _queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
@@ -373,9 +430,15 @@ class DeferredIndexVectorDatabase extends InMemoryVectorDatabase {
         return super.query(collectionName, filter, outputFields, limit);
     }
 
-    async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
+    async insert(
+        collectionName: string,
+        documents: Array<IndexedVectorDocument | VectorDocument>,
+    ): Promise<void> {
+        const sourceDocuments = documents.map((document) =>
+            'projections' in document ? document.document : document
+        );
         this.lifecycleEvents.push(
-            documents.every((document) => document.id === INDEX_COMPLETION_MARKER_DOC_ID)
+            sourceDocuments.every((document) => document.id === INDEX_COMPLETION_MARKER_DOC_ID)
                 ? 'marker_insert'
                 : 'payload_insert',
         );
@@ -399,9 +462,9 @@ class MarkerObservingVectorDatabase extends InMemoryVectorDatabase {
 class CountingTestEmbedding extends TestEmbedding {
     embedCalls = 0;
 
-    async embed(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string): Promise<EmbeddingVector> {
         this.embedCalls++;
-        return super.embed(text);
+        return super.embedQuery(text);
     }
 }
 
@@ -417,6 +480,8 @@ function testIndexFingerprint(
         parserVersion: LANGUAGE_PARSER_VERSION,
         extractorVersion: SYMBOL_EXTRACTOR_VERSION,
         relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
+        embeddingProjectionVersion: EMBEDDING_PROJECTION_VERSION,
+        lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
         ...overrides,
     };
 }
@@ -438,13 +503,93 @@ test('Context blocks vector insertion when the mutation guard fails after embedd
     };
 
     await assert.rejects(
-        () => context.processChunkBatch([{ chunk, relativePath: 'value.ts', fileChunkIndex: 0 }], '/repo', 'chunks', () => {
+        () => context.processChunkBatch([{
+            chunk,
+            relativePath: 'value.ts',
+            fileChunkIndex: 0,
+            projections: buildSearchProjections({ chunk, relativePath: 'value.ts' }),
+        }], '/repo', 'chunks', () => {
             throw new Error('mutation lease lost');
         }),
         /mutation lease lost/,
     );
 
     assert.deepEqual(vectorDatabase.mutationCalls, []);
+});
+
+test('Context embeds and persists the same Core-owned projections', async () => {
+    class RecordingEmbedding extends TestEmbedding {
+        readonly documentInputs: string[][] = [];
+
+        async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+            this.documentInputs.push([...texts]);
+            return super.embedDocuments(texts);
+        }
+    }
+
+    const embedding = new RecordingEmbedding();
+    const vectorDatabase = new InMemoryVectorDatabase();
+    await vectorDatabase.createHybridCollection('chunks');
+    const context = new Context({ embedding, vectorDatabase }) as unknown as ContextWithProcessChunkBatch;
+    const chunk: CodeChunk = {
+        content: 'export function parseHTTPResponse() { return true; }',
+        metadata: {
+            startLine: 3,
+            endLine: 3,
+            language: 'typescript',
+            symbolKind: 'function',
+            symbolLabel: 'parseHTTPResponse',
+        },
+    };
+    const expected = buildSearchProjections({ chunk, relativePath: 'src/parser.ts' });
+
+    await context.processChunkBatch(
+        [{ chunk, relativePath: 'src/parser.ts', fileChunkIndex: 0, projections: expected }],
+        '/repo',
+        'chunks',
+    );
+
+    assert.deepEqual(embedding.documentInputs, [[expected.embeddingText]]);
+    assert.equal(vectorDatabase.indexedDocuments.length, 1);
+    assert.deepEqual(vectorDatabase.indexedDocuments[0].projections, expected);
+    assert.equal(vectorDatabase.indexedDocuments[0].document.content, chunk.content);
+});
+
+test('Context enforces projected-input token limits at the final embedding boundary', async () => {
+    let embedDocumentsCalled = false;
+    class HardLimitEmbedding extends TestEmbedding {
+        getBatchPolicy(): EmbeddingBatchPolicy {
+            return {
+                preferredMaxItems: 1_000,
+                hardMaxItems: 1_000,
+                hardTokenLimit: 8,
+            };
+        }
+
+        async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+            embedDocumentsCalled = true;
+            return super.embedDocuments(texts);
+        }
+    }
+    const context = new Context({
+        embedding: new HardLimitEmbedding(),
+        vectorDatabase: new InMemoryVectorDatabase(),
+    }) as unknown as ContextWithProcessChunkBatch;
+    const chunk: CodeChunk = {
+        content: 'export const value = 1;',
+        metadata: { startLine: 1, endLine: 1, language: 'typescript' },
+    };
+
+    await assert.rejects(
+        () => context.processChunkBatch([{
+            chunk,
+            relativePath: 'src/value.ts',
+            fileChunkIndex: 0,
+            projections: buildSearchProjections({ chunk, relativePath: 'src/value.ts' }),
+        }], '/repo', 'chunks'),
+        /Embedding projection.*exceeding the provider hard limit of 8/,
+    );
+    assert.equal(embedDocumentsCalled, false);
 });
 
 test('Context blocks completion marker insertion when the mutation guard fails', async () => {
@@ -628,6 +773,8 @@ test('Context active collection resolution rejects runtime fingerprint mismatche
         ['schema version', { schemaVersion: 'dense_v3' }],
         ['parser version', { parserVersion: 'parser-mismatch' }],
         ['relationship version', { relationshipVersion: 'relationship-mismatch' }],
+        ['embedding projection version', { embeddingProjectionVersion: 'embedding_projection_mismatch' }],
+        ['lexical projection version', { lexicalProjectionVersion: 'lexical_projection_mismatch' }],
     ];
 
     for (const [label, fingerprintOverride] of mismatches) {
@@ -652,6 +799,67 @@ test('Context active collection resolution rejects runtime fingerprint mismatche
             assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
         });
     }
+});
+
+test('Context classifies a legacy projection fingerprint as requires_reindex and never admits it', async () => {
+    const vectorDatabase = new InMemoryVectorDatabase();
+    const context = new Context({ embedding: new TestEmbedding(), vectorDatabase });
+    const codebasePath = '/repo/fingerprint/legacy-projections';
+    const collectionName = context.resolveCollectionName(codebasePath);
+    await vectorDatabase.createHybridCollection(collectionName);
+    await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('payload')]);
+    await context.writeIndexCompletionMarker(codebasePath, {
+        kind: 'satori_index_completion_v2',
+        codebasePath,
+        fingerprint: testIndexFingerprint(),
+        indexedFiles: 1,
+        totalChunks: 1,
+        completedAt: '2026-07-12T00:00:00.000Z',
+        runId: 'legacy-projection-fingerprint',
+        indexStatus: 'completed',
+    }, collectionName);
+    const markerDocument = vectorDatabase.collections
+        .get(collectionName)
+        ?.get(INDEX_COMPLETION_MARKER_DOC_ID);
+    assert.ok(markerDocument);
+    const fingerprint = (markerDocument.metadata as { fingerprint: IndexCompletionFingerprint }).fingerprint;
+    delete fingerprint.embeddingProjectionVersion;
+    delete fingerprint.lexicalProjectionVersion;
+
+    assert.deepEqual(
+        await context.getIndexCompletionMarkerForValidation(codebasePath),
+        { status: 'requires_reindex' },
+    );
+    assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
+});
+
+test('Context rejects a completion control whose routing kind disagrees with its marker metadata', async () => {
+    const vectorDatabase = new InMemoryVectorDatabase();
+    const context = new Context({ embedding: new TestEmbedding(), vectorDatabase });
+    const codebasePath = '/repo/fingerprint/control-kind-mismatch';
+    const collectionName = context.resolveCollectionName(codebasePath);
+    await vectorDatabase.createHybridCollection(collectionName);
+    await context.writeIndexCompletionMarker(codebasePath, {
+        kind: 'satori_index_completion_v2',
+        codebasePath,
+        fingerprint: testIndexFingerprint(),
+        indexedFiles: 1,
+        totalChunks: 0,
+        completedAt: '2026-07-12T00:00:00.000Z',
+        runId: 'control-kind-mismatch',
+        indexStatus: 'completed',
+    }, collectionName);
+    const readControl = vectorDatabase.getControl.bind(vectorDatabase);
+    vectorDatabase.getControl = async (name, id) => {
+        const record = await readControl(name, id);
+        return record ? { ...record, kind: 'unexpected_control' } : null;
+    };
+
+    assert.equal(await context.getIndexCompletionMarker(codebasePath), null);
+    assert.notEqual(
+        (await context.getIndexCompletionMarkerForValidation(codebasePath)).status,
+        'valid_v3',
+    );
 });
 
 async function withPreparedCollectionContext(
@@ -941,15 +1149,13 @@ test('Context.reindexByChange publishes completion proof only after the synchron
 
         const updatedContent = 'export const runtime = 2;\n';
         const expectedHash = crypto.createHash('sha256').update(updatedContent, 'utf8').digest('hex');
-        const insertHybrid = vectorDatabase.insertHybrid.bind(vectorDatabase);
+        const insertControl = vectorDatabase.insertControl.bind(vectorDatabase);
         let observedMarkerPublication = false;
-        vectorDatabase.insertHybrid = async (collectionName, documents) => {
-            if (documents.some((document) => document.id === INDEX_COMPLETION_MARKER_DOC_ID)) {
-                const synchronizer = context.getActiveSynchronizers().get(context.resolveCollectionName(codebasePath));
-                assert.equal(synchronizer?.getFileHash('runtime.ts'), expectedHash);
-                observedMarkerPublication = true;
-            }
-            await insertHybrid(collectionName, documents);
+        vectorDatabase.insertControl = async (collectionName, document) => {
+            const synchronizer = context.getActiveSynchronizers().get(context.resolveCollectionName(codebasePath));
+            assert.equal(synchronizer?.getFileHash('runtime.ts'), expectedHash);
+            observedMarkerPublication = true;
+            await insertControl(collectionName, document);
         };
 
         fs.writeFileSync(sourcePath, updatedContent, 'utf8');
@@ -1062,8 +1268,18 @@ test('Context chunk identity distinguishes identical same-line chunks', async ()
     };
 
     await context.processChunkBatch([
-        { chunk: structuredClone(chunk), relativePath: 'generated.ts', fileChunkIndex: 0 },
-        { chunk: structuredClone(chunk), relativePath: 'generated.ts', fileChunkIndex: 1 },
+        {
+            chunk: structuredClone(chunk),
+            relativePath: 'generated.ts',
+            fileChunkIndex: 0,
+            projections: buildSearchProjections({ chunk, relativePath: 'generated.ts' }),
+        },
+        {
+            chunk: structuredClone(chunk),
+            relativePath: 'generated.ts',
+            fileChunkIndex: 1,
+            projections: buildSearchProjections({ chunk, relativePath: 'generated.ts' }),
+        },
     ], '/repo', 'chunks');
 
     assert.equal(vectorDatabase.collections.get('chunks')?.size, 2);
@@ -1099,9 +1315,9 @@ test('Context bounds invalid and oversized embedding batch sizes', async () => {
         ]) {
             const observedBatchSizes: number[] = [];
             class RecordingBatchEmbedding extends TestEmbedding {
-                async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
+                async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
                     observedBatchSizes.push(texts.length);
-                    return super.embedBatch(texts);
+                    return super.embedDocuments(texts);
                 }
             }
             process.env.EMBEDDING_BATCH_SIZE = testCase.raw;
@@ -1124,7 +1340,7 @@ test('Context bounds invalid and oversized embedding batch sizes', async () => {
     }
 });
 
-test('Context packs provider-owned embedding batches by deterministic token estimate', async () => {
+test('Context packs provider-owned embedding batches by embedding projection token estimate', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-token-batch-'));
     const sourcePath = path.join(tempRoot, 'many.ts');
     const previousBatchSize = process.env.EMBEDDING_BATCH_SIZE;
@@ -1134,14 +1350,15 @@ test('Context packs provider-owned embedding batches by deterministic token esti
             return {
                 preferredMaxItems: 1_000,
                 hardMaxItems: 1_000,
-                targetEstimatedTokens: 10,
-                hardTokenLimit: 12,
+                targetEstimatedTokens: 24,
+                hardTokenLimit: 28,
             };
         }
 
-        async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
+        async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+            assert.ok(texts.every((text) => Math.ceil(text.length / 4) <= 28));
             observedBatchSizes.push(texts.length);
-            return super.embedBatch(texts);
+            return super.embedDocuments(texts);
         }
     }
     const analyzer: LanguageAnalysisPort = {
@@ -1174,10 +1391,64 @@ test('Context packs provider-owned embedding batches by deterministic token esti
 
         await context.processFileList([sourcePath], tempRoot, undefined, 'chunks');
 
-        assert.deepEqual(observedBatchSizes, [2, 2, 1]);
+        assert.deepEqual(observedBatchSizes, [1, 1, 1, 1, 1]);
     } finally {
         if (previousBatchSize === undefined) delete process.env.EMBEDDING_BATCH_SIZE;
         else process.env.EMBEDDING_BATCH_SIZE = previousBatchSize;
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context rejects one embedding projection that exceeds the provider hard token limit', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-projection-limit-'));
+    const sourcePath = path.join(tempRoot, 'tiny.ts');
+    let embedDocumentsCalled = false;
+    class HardLimitEmbedding extends TestEmbedding {
+        getBatchPolicy(): EmbeddingBatchPolicy {
+            return {
+                preferredMaxItems: 1_000,
+                hardMaxItems: 1_000,
+                targetEstimatedTokens: 7,
+                hardTokenLimit: 8,
+            };
+        }
+
+        async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+            embedDocumentsCalled = true;
+            return super.embedDocuments(texts);
+        }
+    }
+    const analyzer: LanguageAnalysisPort = {
+        analyze: async () => ({
+            chunks: [{
+                content: 'tiny',
+                metadata: { startLine: 1, endLine: 1, language: 'typescript', filePath: 'tiny.ts' },
+            }],
+            symbols: [],
+            moduleBindings: [],
+            callSites: [],
+            backend: 'bounded_text',
+            structuralStatus: 'recovered',
+            structuralReason: 'unsupported_language',
+        }),
+        getDescription: () => 'oversized projected chunk',
+        getStrategyForLanguage: () => ({ backend: 'bounded_text', structural: false }),
+    };
+
+    try {
+        fs.writeFileSync(sourcePath, 'tiny', 'utf8');
+        const context = new Context({
+            embedding: new HardLimitEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            languageAnalyzer: analyzer,
+        }) as unknown as ContextWithProcessFileList;
+
+        await assert.rejects(
+            context.processFileList([sourcePath], tempRoot, undefined, 'chunks'),
+            /Embedding projection.*exceeding the provider hard limit of 8/,
+        );
+        assert.equal(embedDocumentsCalled, false);
+    } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 });
@@ -1254,13 +1525,18 @@ test('Context rejects malformed embedding batches before vector insertion', asyn
         const vectorDatabase = new InMemoryVectorDatabase();
         await vectorDatabase.createHybridCollection('chunks');
         class InvalidEmbedding extends TestEmbedding {
-            async embedBatch(): Promise<EmbeddingVector[]> {
+            async embedDocuments(): Promise<EmbeddingVector[]> {
                 return invalid.result as EmbeddingVector[];
             }
         }
         const context = new Context({ embedding: new InvalidEmbedding(), vectorDatabase }) as unknown as ContextWithProcessChunkBatch;
         await assert.rejects(
-            () => context.processChunkBatch([{ chunk, relativePath: 'value.ts', fileChunkIndex: 0 }], '/repo', 'chunks'),
+            () => context.processChunkBatch([{
+                chunk,
+                relativePath: 'value.ts',
+                fileChunkIndex: 0,
+                projections: buildSearchProjections({ chunk, relativePath: 'value.ts' }),
+            }], '/repo', 'chunks'),
             new RegExp('Embedding batch|embedding', 'i'),
             invalid.name,
         );
@@ -3696,6 +3972,7 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         await context.indexCodebase(codebasePath);
 
         vectorDatabase.listCollectionsCalls = 0;
+        vectorDatabase.getControlCalls = 0;
         vectorDatabase.queryCalls.length = 0;
         const first = await context.proveIndexedGeneration(codebasePath);
         assert.ok(first);
@@ -3704,16 +3981,14 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         assert.match(first.policyDocumentDigest, /^[a-f0-9]{64}$/);
         assert.equal(first.exactPayloadCount, first.marker.totalChunks);
         assert.equal(vectorDatabase.listCollectionsCalls, 0);
-        assert.equal(
-            vectorDatabase.queryCalls.filter((call) => call.filter.includes(`id == \"${INDEX_COMPLETION_MARKER_DOC_ID}\"`)).length,
-            2,
-        );
+        assert.equal(vectorDatabase.getControlCalls, 2);
         assert.equal(
             vectorDatabase.queryCalls.filter((call) => call.filter.includes('fileExtension != \".satori_meta\"')).length,
             1,
         );
 
         vectorDatabase.listCollectionsCalls = 0;
+        vectorDatabase.getControlCalls = 0;
         vectorDatabase.queryCalls.length = 0;
         const second = await context.proveIndexedGeneration(codebasePath, first);
         assert.ok(second);
@@ -3722,21 +3997,16 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         assert.deepEqual(second.observations, first.observations);
         assert.equal(context.getIndexAuthorityObservation(codebasePath), authorityObservation);
         assert.equal(vectorDatabase.listCollectionsCalls, 0);
-        assert.equal(
-            vectorDatabase.queryCalls.filter((call) => call.filter.includes(`id == \"${INDEX_COMPLETION_MARKER_DOC_ID}\"`)).length,
-            2,
-        );
+        assert.equal(vectorDatabase.getControlCalls, 2);
         assert.equal(
             vectorDatabase.queryCalls.filter((call) => call.filter.includes('fileExtension != \".satori_meta\"')).length,
             1,
         );
         vectorDatabase.queryCalls.length = 0;
+        vectorDatabase.getControlCalls = 0;
         const warm = await context.revalidateProvenGeneration(codebasePath, second);
         assert.ok(warm);
-        assert.equal(
-            vectorDatabase.queryCalls.filter((call) => call.filter.includes(`id == \"${INDEX_COMPLETION_MARKER_DOC_ID}\"`)).length,
-            1,
-        );
+        assert.equal(vectorDatabase.getControlCalls, 1);
         assert.equal(
             vectorDatabase.queryCalls.filter((call) => call.filter.includes('fileExtension != \".satori_meta\"')).length,
             0,
@@ -5109,8 +5379,8 @@ test('Context proven generation rejects a same-hash policy rebound to another co
         );
 
         let rebound = false;
-        vectorDatabase.queryHook = (call) => {
-            if (!rebound && call.filter.includes(`id == "${INDEX_COMPLETION_MARKER_DOC_ID}"`)) {
+        vectorDatabase.controlReadHook = (call) => {
+            if (!rebound && call.id === INDEX_COMPLETION_MARKER_DOC_ID) {
                 rebound = true;
                 context.publishResolvedIndexPolicy(
                     acceptedPolicy,
@@ -6590,13 +6860,13 @@ test('Context.repairIndex missing_marker_doc + complete collection repairs marke
 
         let throwOnEmbed = false;
         const embedding = new (class extends TestEmbedding {
-            async embed(text: string) {
+            async embedQuery(text: string) {
                 if (throwOnEmbed) throw new Error('embedding should not be called during repair');
-                return super.embed(text);
+                return super.embedQuery(text);
             }
-            async embedBatch(texts: string[]) {
+            async embedDocuments(texts: string[]) {
                 if (throwOnEmbed) throw new Error('embedding should not be called during repair');
-                return super.embedBatch(texts);
+                return super.embedDocuments(texts);
             }
         })();
 
@@ -6692,6 +6962,57 @@ test('Context.repairIndex missing marker refuses to forge current fingerprint ov
         assert.equal(repairResult.proof.fingerprint.status, 'failed');
         assert.equal(repairResult.proof.payload.status, 'not_checked');
         assert.equal(await upgradedContext.getIndexCompletionMarker(codebasePath), null);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex does not upgrade raw-content legacy vectors to current projection versions', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-legacy-projection-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function auth() { return true; }\n', 'utf8');
+
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const embedding = new TestEmbedding();
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+        });
+
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        const legacyFingerprint = { ...await readTrustedFingerprint(context, codebasePath) };
+        delete legacyFingerprint.embeddingProjectionVersion;
+        delete legacyFingerprint.lexicalProjectionVersion;
+
+        const collectionName = context.resolveCollectionName(codebasePath);
+        const collection = vectorDatabase.collections.get(collectionName);
+        assert.ok(collection);
+        for (const document of collection.values()) {
+            if (document.id === INDEX_COMPLETION_MARKER_DOC_ID) continue;
+            document.vector = (await embedding.embedDocuments([document.content]))[0].vector;
+        }
+        await context.clearIndexCompletionMarker(codebasePath);
+
+        const repairResult = await context.repairIndex(codebasePath, {
+            snapshotEvidence: verifiedSnapshotEvidence(legacyFingerprint),
+        });
+
+        assert.equal(repairResult.status, 'requires_reindex');
+        assert.equal(repairResult.reason, 'requires_reindex');
+        assert.equal(repairResult.proof.collection.status, 'matched');
+        assert.equal(repairResult.proof.marker.status, 'missing');
+        assert.equal(repairResult.proof.snapshot.status, 'failed');
+        assert.equal(repairResult.proof.fingerprint.status, 'failed');
+        assert.equal(repairResult.proof.payload.status, 'not_checked');
+        assert.equal(await context.getIndexCompletionMarker(codebasePath), null);
+        assert.equal(await context.getActiveIndexedCollectionName(codebasePath), null);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

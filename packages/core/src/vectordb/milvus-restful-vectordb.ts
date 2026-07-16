@@ -11,6 +11,8 @@
 
 import {
     VectorDocument,
+    VectorControlRecord,
+    IndexedVectorDocument,
     SearchOptions,
     VectorSearchResult,
     VectorDatabase,
@@ -24,6 +26,11 @@ import {
     VectorDocumentMetadata,
     VectorRecord,
 } from './types';
+import {
+    fromLegacyMilvusControlRow,
+    toLegacyMilvusControlDocument,
+    withMilvusControlExclusion,
+} from './milvus-control-record';
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
 import { buildMilvusIdInFilter } from './filters';
@@ -33,6 +40,19 @@ type MilvusRestResponse<T = unknown> = {
     data?: T;
     message?: string;
 };
+
+function toMilvusRestWriteRow(document: VectorDocument): Record<string, unknown> {
+    return {
+        id: document.id,
+        vector: document.vector,
+        content: document.content,
+        relativePath: document.relativePath,
+        startLine: document.startLine,
+        endLine: document.endLine,
+        fileExtension: document.fileExtension,
+        metadata: JSON.stringify(document.metadata),
+    };
+}
 
 type MilvusRestSearchRow = {
     id?: unknown;
@@ -198,6 +218,8 @@ export interface MilvusRestfulConfig {
     username?: string;
     password?: string;
     database?: string;
+    /** Dimension used only for placeholder vectors required by the legacy Milvus control-row schema. */
+    vectorDimension: number;
 }
 
 function normalizeHost(address: string): string {
@@ -601,22 +623,14 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         };
     }
 
-    async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
+    async insert(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {
         await this.ensureInitialized();
 
         try {
             const restfulConfig = this.config as MilvusRestfulConfig;
-            // Transform VectorDocument array to Milvus entity format
-            const data = documents.map(doc => ({
-                id: doc.id,
-                vector: doc.vector,
-                content: doc.content,
-                relativePath: doc.relativePath,
-                startLine: doc.startLine,
-                endLine: doc.endLine,
-                fileExtension: doc.fileExtension,
-                metadata: JSON.stringify(doc.metadata) // Convert metadata object to JSON string
-            }));
+            // Preserve the legacy Milvus source-content schema; the dense vector
+            // was produced from the supplied Core projection before this call.
+            const data = documents.map(({ document }) => toMilvusRestWriteRow(document));
 
             const insertRequest = {
                 collectionName,
@@ -630,6 +644,32 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
             console.error(`[MilvusRestfulDB] ❌ Failed to insert documents into collection '${collectionName}':`, error);
             throw error;
         }
+    }
+
+    async insertControl(collectionName: string, record: VectorControlRecord): Promise<void> {
+        await this.ensureInitialized();
+        const restfulConfig = this.config as MilvusRestfulConfig;
+        const response = await this.makeRequest('/entities/insert', 'POST', {
+            collectionName,
+            data: [toMilvusRestWriteRow(toLegacyMilvusControlDocument(record, this.config.vectorDimension))],
+            dbName: restfulConfig.database,
+        });
+        if (!isSuccessCode(response.code)) {
+            throw new Error(`Control-record insert failed: ${response.message || 'Unknown error'}`);
+        }
+    }
+
+    async getControl(collectionName: string, id: string): Promise<VectorControlRecord | null> {
+        const rows = await this.query(collectionName, buildMilvusIdInFilter([id]), ['id', 'metadata'], 2);
+        for (const row of rows) {
+            const record = fromLegacyMilvusControlRow(row, id);
+            if (record) return record;
+        }
+        return null;
+    }
+
+    async deleteControl(collectionName: string, id: string): Promise<void> {
+        await this.delete(collectionName, [id]);
     }
 
     async search(collectionName: string, queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
@@ -658,13 +698,9 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
                 searchParams: {
                     metricType: "COSINE", // Match the index metric type
                     params: {}
-                }
+                },
+                filter: withMilvusControlExclusion(options?.filterExpr),
             };
-
-            // Apply boolean expression filter if provided (e.g., fileExtension in ['.ts','.py']) 
-            if (options?.filterExpr && options.filterExpr.trim().length > 0) {
-                searchRequest.filter = options.filterExpr;
-            }
 
             const response = await this.makeRequest<MilvusRestSearchRow[]>('/entities/search', 'POST', searchRequest);
 
@@ -889,22 +925,13 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
         }
     }
 
-    async insertHybrid(collectionName: string, documents: VectorDocument[]): Promise<void> {
+    async insertHybrid(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {
         await this.ensureInitialized();
 
         try {
             const restfulConfig = this.config as MilvusRestfulConfig;
 
-            const data = documents.map(doc => ({
-                id: doc.id,
-                content: doc.content,
-                vector: doc.vector,
-                relativePath: doc.relativePath,
-                startLine: doc.startLine,
-                endLine: doc.endLine,
-                fileExtension: doc.fileExtension,
-                metadata: JSON.stringify(doc.metadata),
-            }));
+            const data = documents.map(({ document }) => toMilvusRestWriteRow(document));
 
             const insertRequest = {
                 collectionName,
@@ -943,7 +970,8 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
                 searchParams: {
                     metricType: "COSINE",
                     params: searchRequests[0].param || { "nprobe": 10 }
-                }
+                },
+                filter: withMilvusControlExclusion(options?.filterExpr),
             };
 
             // For sparse vector search - data must be array of queries: ["query text"]
@@ -955,14 +983,9 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
                 searchParams: {
                     metricType: "BM25",
                     params: searchRequests[1].param || { "drop_ratio_search": 0.2 }
-                }
+                },
+                filter: withMilvusControlExclusion(options?.filterExpr),
             };
-
-            // Apply filter to both search parameters if provided
-            if (options?.filterExpr && options.filterExpr.trim().length > 0) {
-                search_param_1.filter = options.filterExpr;
-                search_param_2.filter = options.filterExpr;
-            }
 
             const rerank_strategy = {
                 strategy: "rrf",
@@ -1036,10 +1059,8 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
                     drop_ratio_search: options?.dropRatioSearch ?? 0.2,
                 },
             },
+            filter: withMilvusControlExclusion(options?.filterExpr),
         };
-        if (options?.filterExpr && options.filterExpr.trim().length > 0) {
-            searchRequest.filter = options.filterExpr;
-        }
 
         const response = await this.makeRequest<MilvusRestSearchRow[]>('/entities/search', 'POST', searchRequest);
         if (!isSuccessCode(response.code)) {

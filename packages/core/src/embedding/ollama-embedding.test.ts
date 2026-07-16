@@ -56,8 +56,8 @@ test('OllamaEmbedding shares in-flight dimension detection across concurrent emb
     embedding.setEmbedDimension(3);
     embedding.setPendingDimension(detected.promise);
 
-    const single = embedding.embed('one');
-    const batch = embedding.embedBatch(['two']);
+    const single = embedding.embedQuery('one');
+    const batch = embedding.embedDocuments(['two']);
     await Promise.resolve();
 
     assert.equal(embedding.detectCalls, 1);
@@ -74,14 +74,14 @@ test('OllamaEmbedding invalidates detected dimension when host changes', async (
     const embedding = new TestOllamaEmbedding([3, 5]);
     embedding.setEmbedDimension(3);
 
-    const first = await embedding.embed('one');
+    const first = await embedding.embedQuery('one');
     assert.equal(first.dimension, 3);
     assert.equal(embedding.detectCalls, 1);
 
     embedding.setHost('http://127.0.0.1:11435');
     embedding.setEmbedDimension(5);
 
-    const second = await embedding.embed('two');
+    const second = await embedding.embedQuery('two');
     assert.equal(second.dimension, 5);
     assert.equal(embedding.detectCalls, 2);
 });

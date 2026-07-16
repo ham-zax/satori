@@ -53,7 +53,7 @@ export class OpenAIEmbedding extends Embedding {
         }
     }
 
-    async embed(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string): Promise<EmbeddingVector> {
         const processedText = this.preprocessText(text);
         const model = this.config.model || 'text-embedding-3-small';
 
@@ -84,7 +84,7 @@ export class OpenAIEmbedding extends Embedding {
         }
     }
 
-    async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
+    async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
         const processedTexts = this.preprocessTexts(texts);
         const model = this.config.model || 'text-embedding-3-small';
 
@@ -174,4 +174,4 @@ export class OpenAIEmbedding extends Embedding {
             }
         };
     }
-} 
+}

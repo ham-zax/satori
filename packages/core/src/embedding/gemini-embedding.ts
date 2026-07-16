@@ -56,7 +56,7 @@ export class GeminiEmbedding extends Embedding {
         return this.dimension;
     }
 
-    async embed(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string): Promise<EmbeddingVector> {
         const processedText = this.preprocessText(text);
         const model = this.config.model || 'gemini-embedding-001';
 
@@ -82,7 +82,7 @@ export class GeminiEmbedding extends Embedding {
         }
     }
 
-    async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
+    async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
         const processedTexts = this.preprocessTexts(texts);
         const model = this.config.model || 'gemini-embedding-001';
 

@@ -1,6 +1,9 @@
 // Re-export types and interfaces
 export {
     VectorDocument,
+    VectorControlRecord,
+    IndexedVectorDocument,
+    SearchProjections,
     SearchOptions,
     VectorSearchResult,
     VectorDatabase,

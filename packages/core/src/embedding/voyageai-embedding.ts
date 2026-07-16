@@ -39,6 +39,7 @@ function isExplicitVoyageBatchLimitError(error: unknown): boolean {
 
 export type VoyageOutputDimension = 256 | 512 | 1024 | 2048;
 export type VoyageOutputDtype = 'float' | 'int8' | 'uint8' | 'binary' | 'ubinary';
+type VoyageInputType = 'document' | 'query';
 
 export interface VoyageAIEmbeddingConfig {
     model: string;
@@ -51,7 +52,6 @@ export class VoyageAIEmbedding extends Embedding {
     private client: VoyageAIClient;
     private config: VoyageAIEmbeddingConfig;
     private dimension: number = 1024; // Default dimension for voyage-4 series
-    private inputType: 'document' | 'query' = 'document';
     protected maxTokens: number = 32000; // Default max tokens
     private operationMetrics: EmbeddingOperationMetricsSnapshot = {
         providerRequestCount: 0,
@@ -121,15 +121,19 @@ export class VoyageAIEmbedding extends Embedding {
         return this.dimension;
     }
 
-    async embed(text: string): Promise<EmbeddingVector> {
-        const [embedding] = await this.embedBatch([text]);
+    async embedQuery(text: string): Promise<EmbeddingVector> {
+        const [embedding] = await this.embedTexts([text], 'query');
         if (!embedding) {
             throw new Error('VoyageAI API returned invalid response');
         }
         return embedding;
     }
 
-    async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
+    async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+        return this.embedTexts(texts, 'document');
+    }
+
+    private async embedTexts(texts: string[], inputType: VoyageInputType): Promise<EmbeddingVector[]> {
         const processedTexts = this.preprocessTexts(texts);
         if (processedTexts.length === 0) return [];
 
@@ -139,17 +143,21 @@ export class VoyageAIEmbedding extends Embedding {
             for (let offset = 0; offset < processedTexts.length; offset += policy.hardMaxItems) {
                 embeddings.push(...await this.embedProcessedBatch(
                     processedTexts.slice(offset, offset + policy.hardMaxItems),
+                    inputType,
                 ));
             }
             return embeddings;
         }
 
-        return this.embedProcessedBatch(processedTexts);
+        return this.embedProcessedBatch(processedTexts, inputType);
     }
 
-    private async embedProcessedBatch(processedTexts: string[]): Promise<EmbeddingVector[]> {
+    private async embedProcessedBatch(
+        processedTexts: string[],
+        inputType: VoyageInputType,
+    ): Promise<EmbeddingVector[]> {
         try {
-            const response = await this.requestEmbeddingBatch(processedTexts);
+            const response = await this.requestEmbeddingBatch(processedTexts, inputType);
 
             if (!response.data || response.data.length !== processedTexts.length) {
                 throw new Error(
@@ -175,13 +183,13 @@ export class VoyageAIEmbedding extends Embedding {
             // estimate. Split in stable input order instead of enabling silent
             // truncation and weakening the resulting index.
             const midpoint = Math.ceil(processedTexts.length / 2);
-            const left = await this.embedProcessedBatch(processedTexts.slice(0, midpoint));
-            const right = await this.embedProcessedBatch(processedTexts.slice(midpoint));
+            const left = await this.embedProcessedBatch(processedTexts.slice(0, midpoint), inputType);
+            const right = await this.embedProcessedBatch(processedTexts.slice(midpoint), inputType);
             return [...left, ...right];
         }
     }
 
-    private async requestEmbeddingBatch(processedTexts: string[]) {
+    private async requestEmbeddingBatch(processedTexts: string[], inputType: VoyageInputType) {
         const model = this.config.model || 'voyage-4';
         const submittedBytes = processedTexts.reduce(
             (total, text) => total + Buffer.byteLength(text, 'utf8'),
@@ -204,7 +212,7 @@ export class VoyageAIEmbedding extends Embedding {
                 const response = await this.client.embed({
                     input: processedTexts,
                     model,
-                    inputType: this.inputType,
+                    inputType,
                     truncation: false,
                     ...(this.config.outputDimension && { outputDimension: this.config.outputDimension }),
                     ...(this.config.outputDtype && { outputDtype: this.config.outputDtype }),
@@ -272,14 +280,6 @@ export class VoyageAIEmbedding extends Embedding {
     setModel(model: string): void {
         this.config.model = model;
         this.updateModelSettings(model);
-    }
-
-    /**
-     * Set input type (VoyageAI specific feature)
-     * @param inputType Input type: 'document' | 'query'
-     */
-    setInputType(inputType: 'document' | 'query'): void {
-        this.inputType = inputType;
     }
 
     /**

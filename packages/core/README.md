@@ -57,14 +57,17 @@ Filesystem indexing binds traversal and file opens to the canonical codebase roo
 ```ts
 import { Context, OpenAIEmbedding, MilvusVectorDatabase } from '@zokizuan/satori-core';
 
+const embedding = new OpenAIEmbedding({
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: 'text-embedding-3-small'
+});
+
 const context = new Context({
-  embedding: new OpenAIEmbedding({
-    apiKey: process.env.OPENAI_API_KEY!,
-    model: 'text-embedding-3-small'
-  }),
+  embedding,
   vectorDatabase: new MilvusVectorDatabase({
     address: process.env.MILVUS_ADDRESS,
-    token: process.env.MILVUS_TOKEN
+    token: process.env.MILVUS_TOKEN,
+    vectorDimension: embedding.getDimension()
   })
 });
 

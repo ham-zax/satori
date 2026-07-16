@@ -372,6 +372,11 @@ export class LanceDbVectorDatabase implements VectorDatabase {
     async finalizeCollectionForSearch(collectionName: string): Promise<void> {
         assertCollectionName(collectionName);
         const connection = await this.getConnection();
+        // Publication finalization only establishes search readiness (FTS).
+        // Compaction/optimize is maintenance, not a completion-marker requirement:
+        // optimize({ cleanupOlderThan: new Date(0) }) fails to decode real multi-file
+        // UTF-8 payloads at scale under @lancedb/lancedb 0.31.x and must not gate
+        // searchable publication. Do not fail-soft around optimize on this path.
         await withTable(connection, collectionName, async (table) => {
             await table.createIndex('lexicalText', {
                 config: Index.fts({
@@ -384,12 +389,6 @@ export class LanceDbVectorDatabase implements VectorDatabase {
                     asciiFolding: false,
                 }),
                 replace: true,
-            });
-            // Epoch cleanup preserves every real dataset version while making
-            // compaction/index maintenance explicit instead of accepting SDK defaults.
-            await table.optimize({
-                cleanupOlderThan: new Date(0),
-                deleteUnverified: false,
             });
         });
     }

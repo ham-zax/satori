@@ -340,3 +340,265 @@ test('LanceDB rejects malformed dimensions, duplicate payloads, and inconsistent
         /inconsistent kind fields/,
     );
 });
+
+test('LanceDB publication finalization creates FTS and does not call optimize', async (t) => {
+    // Freeze the publication contract: search readiness is FTS only. Compaction
+    // must not run on this path (epoch optimize corrupted real multi-file payloads).
+    const sourcePath = path.resolve(import.meta.dirname, 'lancedb-vectordb.ts');
+    const source = fs.readFileSync(sourcePath, 'utf8');
+    const finalizeMatch = source.match(
+        /async finalizeCollectionForSearch\([\s\S]*?\n    \}\n\n    async dropCollection/,
+    );
+    assert.ok(finalizeMatch, 'expected to locate finalizeCollectionForSearch in source');
+    const finalizeBody = finalizeMatch[0];
+    assert.match(finalizeBody, /createIndex\(\s*['"]lexicalText['"]/);
+    // Comments may mention optimize; only reject an actual call site.
+    assert.equal(
+        /\.optimize\s*\(/.test(finalizeBody),
+        false,
+        'finalizeCollectionForSearch must not call table.optimize()',
+    );
+
+    const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lancedb-finalize-contract-'));
+    t.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));
+    const database = new LanceDbVectorDatabase({ databasePath });
+    t.after(() => database.close());
+    const collectionName = 'hybrid_code_chunks_finalize_contract__gen_one';
+    await database.createHybridCollection(collectionName, 2, undefined, { deferIndexBuild: true });
+    await database.writeDocuments(collectionName, [
+        indexedDocument({ id: 'ready', vector: [1, 0], lexicalText: 'finalizecontractterm ready' }),
+    ]);
+    await database.finalizeCollectionForSearch(collectionName);
+
+    const lexical = await database.retrieveLexical(collectionName, {
+        query: 'finalizecontractterm',
+        limit: 5,
+    });
+    assert.deepEqual(lexical.map((candidate) => candidate.document.id), ['ready']);
+});
+
+function voyageLikeVector(seed: number, dimension: number): number[] {
+    const vector = new Array<number>(dimension);
+    let state = (seed * 1_103_515_245 + 12_345) >>> 0;
+    for (let index = 0; index < dimension; index += 1) {
+        state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+        vector[index] = ((state / 0xffff_ffff) * 2 - 1) * 0.15;
+    }
+    return vector;
+}
+
+function buildVariedCorpusChunks(root: string, targetCount: number): Array<{
+    id: string;
+    content: string;
+    lexicalText: string;
+    relativePath: string;
+    startLine: number;
+    endLine: number;
+    fileExtension: string;
+}> {
+    const fixtures: Array<{ relativePath: string; content: string }> = [
+        {
+            relativePath: 'src/parser.ts',
+            content: [
+                "import { readFile } from 'node:fs/promises';",
+                'export function parseHTTPResponse(raw: string): { status: number; body: string } {',
+                "  const match = /^HTTP\\/1\\.1 (\\d{3})/.exec(raw);",
+                '  if (!match) throw new Error(`invalid status in ${raw.slice(0, 40)}`);',
+                '  return { status: Number(match[1]), body: raw.split("\\r\\n\\r\\n")[1] ?? "" };',
+                '}',
+                '// punctuation-heavy: {}[]()<>?!@#$%^&*-+=|\\/~`',
+            ].join('\n'),
+        },
+        {
+            relativePath: 'docs/unicode.md',
+            content: [
+                '# 検索と索引',
+                '',
+                'LanceDB must retain UTF-8: 你好世界 αβγ π — café.',
+                '',
+                '```ts',
+                'const label = "シンボル";',
+                '```',
+                '',
+                'Multiline notes:\n- first\n- second\n- third',
+            ].join('\n'),
+        },
+        {
+            relativePath: 'config/sample.json',
+            content: `${JSON.stringify({
+                name: 'satori-fixture',
+                nested: { path: "O'Brien/src", flags: ['a', 'b', 'c'] },
+                regex: '^[A-Za-z0-9_]+$',
+                note: 'JSON-like text with "quotes" and commas,',
+            }, null, 2)}\n`,
+        },
+        {
+            relativePath: 'src/short.ts',
+            content: 'export const ok = true;\n',
+        },
+        {
+            relativePath: 'src/long-module.ts',
+            content: Array.from({ length: 80 }, (_, index) => (
+                `export function helper_${index}(value: number): number { return value + ${index}; } // end`
+            )).join('\n'),
+        },
+    ];
+
+    for (const fixture of fixtures) {
+        const absolute = path.join(root, fixture.relativePath);
+        fs.mkdirSync(path.dirname(absolute), { recursive: true });
+        fs.writeFileSync(absolute, fixture.content, 'utf8');
+    }
+
+    const chunks: Array<{
+        id: string;
+        content: string;
+        lexicalText: string;
+        relativePath: string;
+        startLine: number;
+        endLine: number;
+        fileExtension: string;
+    }> = [];
+    let sequence = 0;
+    while (chunks.length < targetCount) {
+        for (const fixture of fixtures) {
+            if (chunks.length >= targetCount) break;
+            const pieceSize = 400 + ((sequence * 97) % 1400);
+            const content = fixture.content.length <= pieceSize
+                ? fixture.content
+                : fixture.content.repeat(Math.ceil(pieceSize / fixture.content.length)).slice(0, pieceSize);
+            const uniqueToken = `corpustoken${sequence}`;
+            const startLine = 1 + (sequence % 40);
+            const endLine = startLine + content.split('\n').length - 1;
+            const relativePath = fixture.relativePath;
+            chunks.push({
+                id: `chunk_${sequence}`,
+                content: `${content}\n// ${uniqueToken}\n`,
+                lexicalText: `${uniqueToken} ${path.basename(relativePath, path.extname(relativePath))} ${content.slice(0, 200)}`,
+                relativePath,
+                startLine,
+                endLine,
+                fileExtension: path.extname(relativePath) || '.txt',
+            });
+            sequence += 1;
+        }
+    }
+    return chunks;
+}
+
+function toIndexedDocuments(
+    chunks: ReturnType<typeof buildVariedCorpusChunks>,
+    dimension: number,
+): IndexedVectorDocument[] {
+    return chunks.map((chunk, index) => ({
+        document: {
+            id: chunk.id,
+            vector: voyageLikeVector(index + 1, dimension),
+            content: chunk.content,
+            relativePath: chunk.relativePath,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            fileExtension: chunk.fileExtension,
+            metadata: { language: chunk.fileExtension === '.md' ? 'markdown' : 'typescript' },
+        },
+        projections: {
+            embeddingText: chunk.lexicalText,
+            lexicalText: chunk.lexicalText,
+            embeddingVersion: 'embedding_projection_v1',
+            lexicalVersion: 'lexical_projection_v1',
+        },
+    }));
+}
+
+async function writeInBatches(
+    database: LanceDbVectorDatabase,
+    collectionName: string,
+    documents: IndexedVectorDocument[],
+    batchSizes: number[],
+): Promise<void> {
+    let offset = 0;
+    for (const batchSize of batchSizes) {
+        if (offset >= documents.length) break;
+        const batch = documents.slice(offset, offset + batchSize);
+        await database.writeDocuments(collectionName, batch);
+        offset += batch.length;
+    }
+    if (offset < documents.length) {
+        await database.writeDocuments(collectionName, documents.slice(offset));
+    }
+}
+
+test('LanceDB finalizes real multi-file UTF-8 corpora without optimize and remains searchable', async (t) => {
+    const dimension = 1024;
+    const corpusRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lancedb-corpus-'));
+    t.after(() => fs.rmSync(corpusRoot, { recursive: true, force: true }));
+
+    const cases: Array<{
+        label: string;
+        rowCount: number;
+        batchSizes: number[];
+        probeTokenPrefix: string;
+    }> = [
+        {
+            label: '2500',
+            rowCount: 2500,
+            batchSizes: [400, 400, 400, 400, 400, 400, 100],
+            probeTokenPrefix: 'corpustoken',
+        },
+        {
+            // Production-shaped total with a trailing 208-row batch after multi-batch merges.
+            label: '4904_final_208',
+            rowCount: 4904,
+            batchSizes: [
+                400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
+                400, 400, 296, 208,
+            ],
+            probeTokenPrefix: 'corpustoken',
+        },
+    ];
+
+    for (const testCase of cases) {
+        await t.test(testCase.label, async (subtest) => {
+            const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), `satori-lancedb-real-${testCase.label}-`));
+            subtest.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));
+
+            const chunks = buildVariedCorpusChunks(corpusRoot, testCase.rowCount);
+            assert.equal(chunks.length, testCase.rowCount);
+            const documents = toIndexedDocuments(chunks, dimension);
+            const collectionName = `hybrid_code_chunks_real_${testCase.label}__gen_one`;
+            const expectedProbeId = 'chunk_0';
+            const probeToken = `${testCase.probeTokenPrefix}0`;
+
+            const writer = new LanceDbVectorDatabase({ databasePath, maxWriteBatchSize: 512 });
+            try {
+                await writer.createHybridCollection(collectionName, dimension, undefined, {
+                    deferIndexBuild: true,
+                });
+                await writeInBatches(writer, collectionName, documents, testCase.batchSizes);
+                await writer.finalizeCollectionForSearch(collectionName);
+            } finally {
+                await writer.close();
+            }
+
+            const reader = new LanceDbVectorDatabase({ databasePath, maxWriteBatchSize: 512 });
+            subtest.after(() => reader.close());
+            assert.equal(await reader.countDocuments(collectionName), testCase.rowCount);
+
+            const dense = await reader.retrieveDense(collectionName, {
+                vector: voyageLikeVector(1, dimension),
+                limit: 5,
+            });
+            assert.equal(dense[0]?.document.id, expectedProbeId);
+            assert.ok(dense.length >= 1);
+
+            const lexical = await reader.retrieveLexical(collectionName, {
+                query: probeToken,
+                limit: 5,
+            });
+            assert.ok(
+                lexical.some((candidate) => candidate.document.id === expectedProbeId),
+                `expected lexical hit for ${expectedProbeId} via ${probeToken}`,
+            );
+        });
+    }
+});

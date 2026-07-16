@@ -125,3 +125,31 @@ function serializeValidatedMilvusFilter(filter: VectorFilter): string {
 export function serializeMilvusFilter(filter?: VectorFilter): string {
     return filter ? serializeValidatedMilvusFilter(validateVectorFilter(filter)) : '';
 }
+
+/** Escape one DataFusion SQL string literal without accepting caller SQL. */
+export function escapeLanceDbStringLiteral(value: string): string {
+    return value.replace(/'/g, "''");
+}
+
+function serializeLanceDbFilterValue(value: VectorFilterValue): string {
+    return `'${escapeLanceDbStringLiteral(value)}'`;
+}
+
+function serializeValidatedLanceDbFilter(filter: VectorFilter): string {
+    switch (filter.kind) {
+        case 'comparison':
+            return `${filter.field} ${filter.operator === 'eq' ? '=' : '!='} ${serializeLanceDbFilterValue(filter.value)}`;
+        case 'in':
+            return `${filter.field} IN (${filter.values.map(serializeLanceDbFilterValue).join(', ')})`;
+        case 'and': {
+            const operands = filter.operands.map(serializeValidatedLanceDbFilter);
+            return operands.length === 1
+                ? operands[0]
+                : operands.map((operand) => `(${operand})`).join(' AND ');
+        }
+    }
+}
+
+export function serializeLanceDbFilter(filter?: VectorFilter): string {
+    return filter ? serializeValidatedLanceDbFilter(validateVectorFilter(filter)) : '';
+}

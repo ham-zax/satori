@@ -4,6 +4,19 @@
   "description": "Core indexing and retrieval engine for Satori's codebase map.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./lancedb": {
+      "types": "./dist/lancedb.d.ts",
+      "require": "./dist/lancedb.js",
+      "default": "./dist/lancedb.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "pnpm clean && tsc --build --force",
     "dev": "tsc --watch",
@@ -16,8 +29,10 @@
   },
   "dependencies": {
     "@google/genai": "^1.52.0",
+    "@lancedb/lancedb": "0.31.0",
     "@vscode/tree-sitter-wasm": "0.3.1",
     "@zilliz/milvus2-sdk-node": "^2.6.17",
+    "apache-arrow": "18.1.0",
     "ignore": "^7.0.5",
     "ollama": "^0.5.16",
     "openai": "^5.23.2",

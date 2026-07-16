@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { Embedding, EmbeddingVector } from './base-embedding';
+import { Embedding, EmbeddingVector, type EmbeddingIdentity } from './base-embedding';
 
 export interface OpenAIEmbeddingConfig {
     model: string;
@@ -132,6 +132,10 @@ export class OpenAIEmbedding extends Embedding {
 
     getProvider(): string {
         return 'OpenAI';
+    }
+
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return this.buildIdentity(this.config.model);
     }
 
     /**

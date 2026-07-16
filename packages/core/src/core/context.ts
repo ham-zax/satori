@@ -2,6 +2,8 @@ import {
     Embedding,
     EmbeddingVector,
     OpenAIEmbedding,
+    resolveValidatedEmbeddingIdentity,
+    type EmbeddingIdentity,
     type EmbeddingOperationMetricsSnapshot,
 } from '../embedding';
 import {
@@ -18,6 +20,7 @@ import {
     INDEX_COMPLETION_MARKER_DOC_ID,
     deleteCollectionWithVerification,
     type VectorWriteMetricsSnapshot,
+    type VectorStoreProviderIdentity,
 } from '../vectordb';
 import { validateVectorFilter } from '../vectordb/filters';
 import { SemanticSearchRequest, SemanticSearchResult } from '../types';
@@ -377,6 +380,7 @@ export type MutationGenerationObserver = (
 export interface ContextConfig {
     embedding?: Embedding;
     vectorDatabase?: VectorDatabase;
+    vectorStoreProvider?: VectorStoreProviderIdentity;
     languageAnalyzer?: LanguageAnalysisPort;
     supportedExtensions?: string[];
     ignorePatterns?: string[];
@@ -683,6 +687,7 @@ type CollectionPayloadVerification =
 
 export class Context {
     private embedding: Embedding;
+    private embeddingIdentity: Readonly<EmbeddingIdentity>;
     private vectorDatabase: VectorDatabase;
     private readonly languageAnalyzer: LanguageAnalysisPort;
     private supportedExtensions: string[];
@@ -706,6 +711,7 @@ export class Context {
     private preparedIndexCollectionReceipts = new WeakSet<PreparedIndexCollectionReceipt>();
     private symbolRegistryStateRoot?: string;
     private readonly mutationGenerationObserver?: MutationGenerationObserver;
+    private vectorStoreProvider: VectorStoreProviderIdentity;
 
     constructor(config: ContextConfig = {}) {
         // Initialize services
@@ -722,11 +728,24 @@ export class Context {
                 ...(envManager.get('OPENAI_BASE_URL') && { baseURL: envManager.get('OPENAI_BASE_URL') })
             });
         }
+        this.embeddingIdentity = resolveValidatedEmbeddingIdentity(this.embedding);
 
         if (!config.vectorDatabase) {
             throw new Error('VectorDatabase is required. Please provide a vectorDatabase instance in the config.');
         }
         this.vectorDatabase = config.vectorDatabase;
+        const backendInfo = config.vectorDatabase.getBackendInfo?.();
+        const inferredVectorStoreProvider = backendInfo?.provider === 'lancedb' ? 'LanceDB' : 'Milvus';
+        if (
+            config.vectorStoreProvider !== undefined
+            && backendInfo !== undefined
+            && config.vectorStoreProvider !== inferredVectorStoreProvider
+        ) {
+            throw new Error(
+                `Configured vector-store provider '${config.vectorStoreProvider}' does not match adapter provider '${inferredVectorStoreProvider}'.`,
+            );
+        }
+        this.vectorStoreProvider = config.vectorStoreProvider ?? inferredVectorStoreProvider;
         this.mutationGenerationObserver = config.mutationGenerationObserver;
 
         this.languageAnalyzer = config.languageAnalyzer || createLanguageAnalysisService({
@@ -1202,24 +1221,15 @@ export class Context {
         return rows.some((row) => typeof row?.id === 'string' && row.id !== INDEX_COMPLETION_MARKER_DOC_ID);
     }
 
-    private getEmbeddingModelForFingerprint(): string {
-        const embeddingWithConfig = this.embedding as unknown as {
-            config?: {
-                model?: unknown;
-            };
-        };
-        const model = embeddingWithConfig.config?.model;
-        return typeof model === 'string' && model.trim().length > 0
-            ? model.trim()
-            : this.embedding.getProvider();
-    }
-
     private buildIndexCompletionFingerprint(): IndexCompletionFingerprint {
+        const embeddingIdentity = this.assertEmbeddingIdentityCurrent();
         return {
-            embeddingProvider: this.embedding.getProvider(),
-            embeddingModel: this.getEmbeddingModelForFingerprint(),
-            embeddingDimension: this.embedding.getDimension(),
-            vectorStoreProvider: 'Milvus',
+            embeddingProvider: embeddingIdentity.provider,
+            embeddingModel: embeddingIdentity.model,
+            embeddingDimension: embeddingIdentity.dimension,
+            embeddingArtifactDigest: embeddingIdentity.artifactDigest,
+            embeddingNormalizationPolicy: embeddingIdentity.normalizationPolicy,
+            vectorStoreProvider: this.vectorStoreProvider,
             schemaVersion: this.getIsHybrid() === true ? 'hybrid_v3' : 'dense_v3',
             parserVersion: LANGUAGE_PARSER_VERSION,
             extractorVersion: SYMBOL_EXTRACTOR_VERSION,
@@ -3013,7 +3023,9 @@ export class Context {
         if (isHybrid) {
             // 1. Generate query vector
             console.log(`[Context] 🔍 Generating query embedding: query_length=${resolvedRequest.query.length}, request_id=${requestId}`);
+            this.assertEmbeddingIdentityCurrent();
             const queryEmbedding: EmbeddingVector = await this.embedding.embedQuery(resolvedRequest.query);
+            this.assertEmbeddingIdentityCurrent();
             console.log(`[Context] ✅ Generated embedding vector with dimension: ${queryEmbedding.vector.length}`);
 
             // 2. Prepare hybrid search requests
@@ -3072,7 +3084,9 @@ export class Context {
         } else {
             // Regular semantic search
             // 1. Generate query vector
+            this.assertEmbeddingIdentityCurrent();
             const queryEmbedding: EmbeddingVector = await this.embedding.embedQuery(resolvedRequest.query);
+            this.assertEmbeddingIdentityCurrent();
             const denseThreshold = resolvedRequest.scorePolicy.kind === 'dense_similarity_min'
                 ? resolvedRequest.scorePolicy.min
                 : undefined;
@@ -4207,8 +4221,25 @@ export class Context {
      * @param embedding New embedding instance
      */
     updateEmbedding(embedding: Embedding): void {
+        const identity = resolveValidatedEmbeddingIdentity(embedding);
         this.embedding = embedding;
+        this.embeddingIdentity = identity;
         console.log(`[Context] 🔄 Updated embedding provider: ${embedding.getProvider()}`);
+    }
+
+    private assertEmbeddingIdentityCurrent(): Readonly<EmbeddingIdentity> {
+        const current = resolveValidatedEmbeddingIdentity(this.embedding);
+        const expected = this.embeddingIdentity;
+        if (
+            current.provider !== expected.provider
+            || current.model !== expected.model
+            || current.dimension !== expected.dimension
+            || current.artifactDigest !== expected.artifactDigest
+            || current.normalizationPolicy !== expected.normalizationPolicy
+        ) {
+            throw new Error('Embedding identity changed after it was installed into Context. Install a new embedding explicitly before continuing.');
+        }
+        return expected;
     }
 
     /**
@@ -4217,6 +4248,9 @@ export class Context {
      */
     updateVectorDatabase(vectorDatabase: VectorDatabase): void {
         this.vectorDatabase = vectorDatabase;
+        this.vectorStoreProvider = vectorDatabase.getBackendInfo?.().provider === 'lancedb'
+            ? 'LanceDB'
+            : 'Milvus';
         console.log(`[Context] 🔄 Updated vector database`);
     }
 
@@ -4228,6 +4262,9 @@ export class Context {
         forceReindex: boolean = false,
         assertMutationCurrent?: () => void,
     ): Promise<void> {
+        // Identity drift must fail before a valid published collection is
+        // dropped or a staged generation is otherwise mutated.
+        const embeddingIdentity = this.assertEmbeddingIdentityCurrent();
         const isHybrid = this.getIsHybrid();
         const collectionType = isHybrid === true ? 'hybrid vector' : 'vector';
         console.log(`[Context] 🔧 Preparing ${collectionType} collection for codebase: ${codebasePath}${forceReindex ? ' (FORCE REINDEX)' : ''}`);
@@ -4250,6 +4287,10 @@ export class Context {
 
         console.log(`[Context] 🔍 Detecting embedding dimension for ${this.embedding.getProvider()} provider...`);
         const dimension = await this.embedding.detectDimension();
+        this.assertEmbeddingIdentityCurrent();
+        if (dimension !== embeddingIdentity.dimension) {
+            throw new Error(`Detected embedding dimension ${dimension} does not match installed identity dimension ${embeddingIdentity.dimension}.`);
+        }
         console.log(`[Context] 📏 Detected dimension: ${dimension} for ${this.embedding.getProvider()}`);
         const dirName = path.basename(codebasePath);
 
@@ -5823,6 +5864,7 @@ export class Context {
 
         // Generate embedding vectors
         const embeddingTexts = projections.map(({ embeddingText }) => embeddingText);
+        const embeddingIdentity = this.assertEmbeddingIdentityCurrent();
         const batchPolicy = this.embedding.getBatchPolicy?.() ?? null;
         if (batchPolicy && chunkEntries.length > batchPolicy.hardMaxItems) {
             throw new Error(
@@ -5864,7 +5906,8 @@ export class Context {
                 performance.logicalEmbeddingDurationMs += Date.now() - embeddingStartedAt;
             }
         }
-        const expectedDimension = this.embedding.getDimension();
+        this.assertEmbeddingIdentityCurrent();
+        const expectedDimension = embeddingIdentity.dimension;
         if (!Array.isArray(embeddings) || embeddings.length !== chunks.length) {
             throw new Error(`Embedding batch returned ${Array.isArray(embeddings) ? embeddings.length : 'a non-array result'} for ${chunks.length} chunks.`);
         }

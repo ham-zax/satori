@@ -4,10 +4,16 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const GENERATION_ID = /^[a-zA-Z0-9_-]+$/;
 const SYMBOL_MANIFEST_HASH = /^symmanifest_[a-f0-9]{32}$/;
 
+export const EMBEDDING_NORMALIZATION_POLICY_VERSION = 'provider_output_v1';
+
 export interface IndexFingerprint {
     embeddingProvider: string;
     embeddingModel: string;
     embeddingDimension: number;
+    /** Absent only on fingerprints created before local artifact identity was frozen. */
+    embeddingArtifactDigest?: string | null;
+    /** Absent only on fingerprints created before normalization policy was explicit. */
+    embeddingNormalizationPolicy?: string;
     vectorStoreProvider: string;
     schemaVersion: string;
     /** Absent only on legacy persisted fingerprints. */
@@ -20,15 +26,42 @@ export interface IndexFingerprint {
 }
 
 export interface CanonicalCompletionFingerprint extends IndexFingerprint {
+    embeddingArtifactDigest: string | null;
+    embeddingNormalizationPolicy: string;
     parserVersion: string;
     extractorVersion: string;
     relationshipVersion: string;
+    embeddingProjectionVersion: string;
+    lexicalProjectionVersion: string;
 }
+
+const LEGACY_BASE_INDEX_FINGERPRINT_FIELDS = [
+    'embeddingProvider',
+    'embeddingModel',
+    'embeddingDimension',
+    'vectorStoreProvider',
+    'schemaVersion',
+] as const;
+
+const LEGACY_ANALYSIS_INDEX_FINGERPRINT_FIELDS = [
+    ...LEGACY_BASE_INDEX_FINGERPRINT_FIELDS,
+    'parserVersion',
+    'extractorVersion',
+    'relationshipVersion',
+] as const;
+
+const LEGACY_PROJECTION_INDEX_FINGERPRINT_FIELDS = [
+    ...LEGACY_ANALYSIS_INDEX_FINGERPRINT_FIELDS,
+    'embeddingProjectionVersion',
+    'lexicalProjectionVersion',
+] as const;
 
 export const INDEX_FINGERPRINT_FIELDS = [
     'embeddingProvider',
     'embeddingModel',
     'embeddingDimension',
+    'embeddingArtifactDigest',
+    'embeddingNormalizationPolicy',
     'vectorStoreProvider',
     'schemaVersion',
     'parserVersion',
@@ -37,9 +70,6 @@ export const INDEX_FINGERPRINT_FIELDS = [
     'embeddingProjectionVersion',
     'lexicalProjectionVersion',
 ] as const satisfies readonly (keyof IndexFingerprint)[];
-
-const BASE_INDEX_FINGERPRINT_FIELDS = INDEX_FINGERPRINT_FIELDS.slice(0, 5);
-const ANALYSIS_INDEX_FINGERPRINT_FIELDS = INDEX_FINGERPRINT_FIELDS.slice(0, 8);
 
 export type IndexFingerprintField = typeof INDEX_FINGERPRINT_FIELDS[number];
 
@@ -136,13 +166,20 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
 export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
     if (!isRecord(value)) return null;
     if (
-        (!hasExactKeys(value, BASE_INDEX_FINGERPRINT_FIELDS)
-            && !hasExactKeys(value, ANALYSIS_INDEX_FINGERPRINT_FIELDS)
+        (!hasExactKeys(value, LEGACY_BASE_INDEX_FINGERPRINT_FIELDS)
+            && !hasExactKeys(value, LEGACY_ANALYSIS_INDEX_FINGERPRINT_FIELDS)
+            && !hasExactKeys(value, LEGACY_PROJECTION_INDEX_FINGERPRINT_FIELDS)
             && !hasExactKeys(value, INDEX_FINGERPRINT_FIELDS))
         || !isNonemptyString(value.embeddingProvider)
         || !isNonemptyString(value.embeddingModel)
         || !isNonNegativeInteger(value.embeddingDimension)
         || value.embeddingDimension === 0
+        || (value.embeddingArtifactDigest !== undefined
+            && value.embeddingArtifactDigest !== null
+            && (typeof value.embeddingArtifactDigest !== 'string'
+                || !SHA256.test(value.embeddingArtifactDigest)))
+        || (value.embeddingNormalizationPolicy !== undefined
+            && !isNonemptyString(value.embeddingNormalizationPolicy))
         || !isNonemptyString(value.vectorStoreProvider)
         || !isNonemptyString(value.schemaVersion)
         || (value.parserVersion !== undefined && !isNonemptyString(value.parserVersion))
@@ -159,6 +196,12 @@ export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
         embeddingProvider: value.embeddingProvider,
         embeddingModel: value.embeddingModel,
         embeddingDimension: value.embeddingDimension,
+        ...(value.embeddingArtifactDigest !== undefined
+            ? { embeddingArtifactDigest: value.embeddingArtifactDigest as string | null }
+            : {}),
+        ...(value.embeddingNormalizationPolicy !== undefined
+            ? { embeddingNormalizationPolicy: value.embeddingNormalizationPolicy }
+            : {}),
         vectorStoreProvider: value.vectorStoreProvider,
         schemaVersion: value.schemaVersion,
         ...(value.parserVersion !== undefined ? { parserVersion: value.parserVersion } : {}),
@@ -178,6 +221,8 @@ function parseCurrentRuntimeFingerprint(value: unknown): CanonicalCompletionFing
     const parsed = parseIndexFingerprint(value);
     if (
         !parsed?.parserVersion
+        || parsed.embeddingArtifactDigest === undefined
+        || !parsed.embeddingNormalizationPolicy
         || !parsed.extractorVersion
         || !parsed.relationshipVersion
         || !parsed.embeddingProjectionVersion
@@ -185,6 +230,8 @@ function parseCurrentRuntimeFingerprint(value: unknown): CanonicalCompletionFing
     ) return null;
     return {
         ...parsed,
+        embeddingArtifactDigest: parsed.embeddingArtifactDigest,
+        embeddingNormalizationPolicy: parsed.embeddingNormalizationPolicy,
         parserVersion: parsed.parserVersion,
         extractorVersion: parsed.extractorVersion,
         relationshipVersion: parsed.relationshipVersion,
@@ -219,24 +266,11 @@ export function indexFingerprintsEqual(left: unknown, right: IndexFingerprint): 
 
 function parseFingerprint(value: unknown): CanonicalCompletionFingerprint | null {
     if (!isRecord(value)) return null;
-    const legacyKeys = [
-        'embeddingProvider',
-        'embeddingModel',
-        'embeddingDimension',
-        'vectorStoreProvider',
-        'schemaVersion',
-        'parserVersion',
-        'extractorVersion',
-        'relationshipVersion',
-    ];
-    const projectionKeys = [
-        ...legacyKeys,
-        'embeddingProjectionVersion',
-        'lexicalProjectionVersion',
-    ];
     const parsed = parseIndexFingerprint(value);
     if (
-        (!hasExactKeys(value, legacyKeys) && !hasExactKeys(value, projectionKeys))
+        (!hasExactKeys(value, LEGACY_ANALYSIS_INDEX_FINGERPRINT_FIELDS)
+            && !hasExactKeys(value, LEGACY_PROJECTION_INDEX_FINGERPRINT_FIELDS)
+            && !hasExactKeys(value, INDEX_FINGERPRINT_FIELDS))
         || !parsed
         || !parsed.parserVersion
         || !parsed.extractorVersion
@@ -244,9 +278,16 @@ function parseFingerprint(value: unknown): CanonicalCompletionFingerprint | null
     ) return null;
     return {
         ...parsed,
+        embeddingArtifactDigest: parsed.embeddingArtifactDigest ?? null,
+        embeddingNormalizationPolicy: parsed.embeddingNormalizationPolicy
+            ?? 'legacy_unspecified',
         parserVersion: parsed.parserVersion,
         extractorVersion: parsed.extractorVersion,
         relationshipVersion: parsed.relationshipVersion,
+        embeddingProjectionVersion: parsed.embeddingProjectionVersion
+            ?? 'legacy_unspecified',
+        lexicalProjectionVersion: parsed.lexicalProjectionVersion
+            ?? 'legacy_unspecified',
     };
 }
 

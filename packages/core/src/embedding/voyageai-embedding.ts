@@ -6,6 +6,7 @@ import {
 import {
     Embedding,
     type EmbeddingBatchPolicy,
+    type EmbeddingIdentity,
     type EmbeddingOperationMetricsSnapshot,
     type EmbeddingVector,
 } from './base-embedding';
@@ -257,6 +258,10 @@ export class VoyageAIEmbedding extends Embedding {
 
     getProvider(): string {
         return 'VoyageAI';
+    }
+
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return this.buildIdentity(this.config.model);
     }
 
     getBatchPolicy(): EmbeddingBatchPolicy | null {

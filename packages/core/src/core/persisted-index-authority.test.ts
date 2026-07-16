@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import {
     buildCanonicalIndexPolicyDocument,
     compareIndexCompatibility,
+    EMBEDDING_NORMALIZATION_POLICY_VERSION,
     inspectCompletionMarker,
     inspectIndexPolicyDocument,
     parseIndexFingerprint,
@@ -25,6 +26,8 @@ function fingerprint() {
         embeddingProvider: 'test',
         embeddingModel: 'test-model',
         embeddingDimension: 4,
+        embeddingArtifactDigest: null,
+        embeddingNormalizationPolicy: EMBEDDING_NORMALIZATION_POLICY_VERSION,
         vectorStoreProvider: 'memory',
         schemaVersion: 'schema-v1',
         parserVersion: 'parser-v1',
@@ -57,6 +60,8 @@ test('completion marker inspector admits only complete canonical v3 shapes', () 
     assert.equal(notBound.status, 'current');
 
     const legacyProjectionFingerprint = structuredClone(canonicalMarker());
+    delete legacyProjectionFingerprint.fingerprint.embeddingArtifactDigest;
+    delete legacyProjectionFingerprint.fingerprint.embeddingNormalizationPolicy;
     delete legacyProjectionFingerprint.fingerprint.embeddingProjectionVersion;
     delete legacyProjectionFingerprint.fingerprint.lexicalProjectionVersion;
     assert.equal(inspectCompletionMarker(legacyProjectionFingerprint).status, 'current');
@@ -93,11 +98,18 @@ test('fingerprint parsing and compatibility use one deterministic field contract
     assert.deepEqual(parseIndexFingerprint(current), current);
 
     const legacy = { ...current } as Partial<typeof current>;
+    delete legacy.embeddingArtifactDigest;
+    delete legacy.embeddingNormalizationPolicy;
     delete legacy.embeddingProjectionVersion;
     delete legacy.lexicalProjectionVersion;
     assert.deepEqual(compareIndexCompatibility(legacy, current), {
         status: 'requires_reindex',
-        differingFields: ['embeddingProjectionVersion', 'lexicalProjectionVersion'],
+        differingFields: [
+            'embeddingArtifactDigest',
+            'embeddingNormalizationPolicy',
+            'embeddingProjectionVersion',
+            'lexicalProjectionVersion',
+        ],
     });
 
     const oldestSupported = {
@@ -110,6 +122,8 @@ test('fingerprint parsing and compatibility use one deterministic field contract
     assert.deepEqual(compareIndexCompatibility(oldestSupported, current), {
         status: 'requires_reindex',
         differingFields: [
+            'embeddingArtifactDigest',
+            'embeddingNormalizationPolicy',
             'parserVersion',
             'extractorVersion',
             'relationshipVersion',
@@ -139,6 +153,8 @@ test('fingerprint parsing and compatibility use one deterministic field contract
     });
 
     const legacyRuntime = { ...current } as Partial<typeof current>;
+    delete legacyRuntime.embeddingArtifactDigest;
+    delete legacyRuntime.embeddingNormalizationPolicy;
     delete legacyRuntime.parserVersion;
     delete legacyRuntime.extractorVersion;
     delete legacyRuntime.relationshipVersion;

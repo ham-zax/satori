@@ -52,6 +52,7 @@ export interface VectorControlRecord {
 }
 
 export type RetrievalMode = 'dense' | 'lexical' | 'hybrid';
+export type VectorStoreProviderIdentity = 'Milvus' | 'LanceDB';
 
 export type ScorePolicy =
     | { kind: 'dense_similarity_min'; min: number }
@@ -125,11 +126,17 @@ export interface CollectionDetails {
     createdAt?: string;
 }
 
-export interface VectorStoreBackendInfo {
-    provider: 'milvus' | 'zilliz';
-    transport: 'grpc' | 'rest';
-    address?: string;
-}
+export type VectorStoreBackendInfo =
+    | {
+        provider: 'milvus' | 'zilliz';
+        transport: 'grpc' | 'rest';
+        address?: string;
+    }
+    | {
+        provider: 'lancedb';
+        transport: 'embedded';
+        address: string;
+    };
 
 export type IndexCompletionFingerprint = CanonicalCompletionFingerprint;
 
@@ -163,6 +170,9 @@ export type VectorWriteMetricsSnapshot = {
 };
 
 export interface VectorDatabase {
+    /** Release adapter-owned resources when the runtime shuts down. */
+    close?(): Promise<void> | void;
+
     /**
      * Create collection
      * @param collectionName Collection name

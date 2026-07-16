@@ -1,8 +1,9 @@
 import { EmbedRequest, Fetch, Ollama, Options } from 'ollama';
-import { Embedding, EmbeddingVector } from './base-embedding';
+import { Embedding, EmbeddingVector, type EmbeddingIdentity } from './base-embedding';
 
 export interface OllamaEmbeddingConfig {
     model: string;
+    artifactDigest?: string;
     host?: string;
     fetch?: Fetch;
     keepAlive?: string | number;
@@ -165,6 +166,10 @@ export class OllamaEmbedding extends Embedding {
 
     getProvider(): string {
         return 'Ollama';
+    }
+
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return this.buildIdentity(this.config.model, this.config.artifactDigest ?? null);
     }
 
     /**

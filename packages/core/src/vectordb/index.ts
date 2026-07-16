@@ -23,6 +23,7 @@ export {
     RetrievalMode,
     ScorePolicy,
     BackendScoreKind,
+    VectorStoreProviderIdentity,
     IndexCompletionFingerprint,
     IndexCompletionMarkerDocument,
     INDEX_COMPLETION_MARKER_DOC_ID,

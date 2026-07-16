@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Context, IndexPolicyPublicationError } from './context';
+import { EMBEDDING_NORMALIZATION_POLICY_VERSION } from './persisted-index-authority';
 import type { RepairProof } from './repair-proof';
 import {
     buildSearchProjections,
@@ -18,7 +19,7 @@ import { clearSymbolRegistrySidecar, readRelationshipSidecar, readSymbolRegistry
 import { resolveNavigationSidecarRoot } from '../symbols/sidecar';
 import type { SymbolRecord, SymbolRegistryManifestFile } from '../symbols';
 import { Embedding } from '../embedding';
-import type { EmbeddingBatchPolicy, EmbeddingVector } from '../embedding';
+import type { EmbeddingBatchPolicy, EmbeddingIdentity, EmbeddingVector } from '../embedding';
 import {
     createLanguageAnalysisService,
     LANGUAGE_PARSER_VERSION,
@@ -74,6 +75,10 @@ class TestEmbedding extends Embedding {
     getProvider(): string {
         return 'TestEmbedding';
     }
+
+    getIdentity(): Readonly<EmbeddingIdentity> {
+        return this.buildIdentity('test-embedding-v1');
+    }
 }
 
 class NamedTestEmbedding extends TestEmbedding {
@@ -83,6 +88,57 @@ class NamedTestEmbedding extends TestEmbedding {
 
     getProvider(): string {
         return this.providerName;
+    }
+}
+
+class ExplicitIdentityEmbedding extends TestEmbedding {
+    override getProvider(): string {
+        return 'Ollama';
+    }
+
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return Object.freeze({
+            provider: 'Ollama',
+            model: 'nomic-embed-text:sha256-test',
+            dimension: 4,
+            artifactDigest: 'a'.repeat(64),
+            normalizationPolicy: EMBEDDING_NORMALIZATION_POLICY_VERSION,
+        });
+    }
+}
+
+class MismatchedIdentityEmbedding extends TestEmbedding {
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return Object.freeze({
+            ...super.getIdentity(),
+            dimension: 8,
+        });
+    }
+}
+
+class DriftingIdentityEmbedding extends TestEmbedding {
+    private model = 'test-embedding-v1';
+
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return this.buildIdentity(this.model);
+    }
+
+    override async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+        const vectors = await super.embedDocuments(texts);
+        this.model = 'test-embedding-v2';
+        return vectors;
+    }
+}
+
+class ManuallyDriftingIdentityEmbedding extends TestEmbedding {
+    private model = 'test-embedding-v1';
+
+    drift(): void {
+        this.model = 'test-embedding-v2';
+    }
+
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return this.buildIdentity(this.model);
     }
 }
 
@@ -454,6 +510,8 @@ function testIndexFingerprint(
         embeddingProvider: 'TestEmbedding',
         embeddingModel: 'TestEmbedding',
         embeddingDimension: 4,
+        embeddingArtifactDigest: null,
+        embeddingNormalizationPolicy: EMBEDDING_NORMALIZATION_POLICY_VERSION,
         vectorStoreProvider: 'Milvus',
         schemaVersion: 'hybrid_v3',
         parserVersion: LANGUAGE_PARSER_VERSION,
@@ -629,6 +687,117 @@ async function readTrustedFingerprint(context: Context, codebasePath: string): P
     assert.ok(marker);
     return marker.fingerprint;
 }
+
+test('Context persists the explicit embedding identity without inspecting implementation fields', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-embedding-identity-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'identity.ts'), 'export const identity = true;\n', 'utf8');
+        const context = new Context({
+            embedding: new ExplicitIdentityEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+            symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
+        });
+
+        await context.indexCodebase(codebasePath);
+
+        assert.deepEqual(await readTrustedFingerprint(context, codebasePath), testIndexFingerprint({
+            embeddingProvider: 'Ollama',
+            embeddingModel: 'nomic-embed-text:sha256-test',
+            embeddingArtifactDigest: 'a'.repeat(64),
+        }));
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context rejects an embedding identity that disagrees with the provider dimension', () => {
+    assert.throws(
+        () => new Context({
+            embedding: new MismatchedIdentityEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+        }),
+        /identity dimension 8 does not match provider dimension 4/,
+    );
+});
+
+test('Context rejects malformed JavaScript embedding identity values deterministically', () => {
+    const embedding = new TestEmbedding();
+    Object.defineProperty(embedding, 'getIdentity', { value: () => null });
+    assert.throws(
+        () => new Context({
+            embedding,
+            vectorDatabase: new InMemoryVectorDatabase(),
+        }),
+        /Embedding identity must contain provider, model, dimension, artifactDigest, and normalizationPolicy/,
+    );
+});
+
+test('Context refuses to persist vectors after embedding identity drifts during a batch', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-embedding-drift-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'identity.ts'), 'export const identity = true;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new DriftingIdentityEmbedding(),
+            vectorDatabase,
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+            symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
+        });
+
+        await assert.rejects(
+            () => context.indexCodebase(codebasePath),
+            /Embedding identity changed after it was installed into Context/,
+        );
+        assert.equal(await context.getIndexCompletionMarker(codebasePath), null);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context preserves a published collection when embedding identity drifts before a rebuild', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-embedding-drift-existing-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'identity.ts'), 'export const identity = true;\n', 'utf8');
+        const embedding = new ManuallyDriftingIdentityEmbedding();
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+            symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
+        });
+
+        await context.indexCodebase(codebasePath);
+        const collectionName = context.resolveCollectionName(codebasePath);
+        const originalCollection = structuredClone(
+            Array.from(vectorDatabase.collections.get(collectionName)?.entries() ?? []),
+        );
+        const originalMarker = await context.getIndexCompletionMarker(codebasePath);
+        assert.ok(originalMarker);
+
+        embedding.drift();
+        await assert.rejects(
+            () => context.indexCodebase(codebasePath),
+            /Embedding identity changed after it was installed into Context/,
+        );
+
+        assert.deepEqual(
+            Array.from(vectorDatabase.collections.get(collectionName)?.entries() ?? []),
+            originalCollection,
+        );
+        assert.deepEqual(await context.getIndexCompletionMarker(codebasePath), originalMarker);
+        assert.deepEqual(Array.from(vectorDatabase.collections.keys()), [collectionName]);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
 
 function verifiedSnapshotEvidence(fingerprint: IndexCompletionFingerprint) {
     return {

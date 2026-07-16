@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     buildMilvusIdInFilter,
+    serializeLanceDbFilter,
     serializeMilvusFilter,
     validateVectorFilter,
 } from './filters';
@@ -24,6 +25,28 @@ test('Milvus filter strings escape every permitted line and control character', 
             value: 'src/line\nbreak\r\ttab\u007f.ts',
         }),
         'relativePath == "src/line\\nbreak\\r\\ttab\\u007f.ts"',
+    );
+});
+
+test('LanceDB filter serialization escapes SQL literals and keeps the field allowlist', () => {
+    assert.equal(
+        serializeLanceDbFilter({
+            kind: 'and',
+            operands: [
+                {
+                    kind: 'comparison',
+                    field: 'relativePath',
+                    operator: 'eq',
+                    value: "src/O'Brien.ts' OR 1=1 --",
+                },
+                {
+                    kind: 'in',
+                    field: 'fileExtension',
+                    values: ['.ts', '.tsx'],
+                },
+            ],
+        }),
+        "(relativePath = 'src/O''Brien.ts'' OR 1=1 --') AND (fileExtension IN ('.ts', '.tsx'))",
     );
 });
 

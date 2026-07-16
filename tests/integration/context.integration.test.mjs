@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { Context } = require('../../packages/core/dist/context.js');
 const {
+  EMBEDDING_NORMALIZATION_POLICY_VERSION,
   FileSynchronizer,
   RemoteCollectionDeletePendingError,
   deleteCollectionWithVerification
@@ -43,6 +44,16 @@ class DeterministicEmbedding {
 
   getProvider() {
     return 'DeterministicTestEmbedding';
+  }
+
+  getIdentity() {
+    return Object.freeze({
+      provider: this.getProvider(),
+      model: 'deterministic-integration-v1',
+      dimension: this.getDimension(),
+      artifactDigest: null,
+      normalizationPolicy: EMBEDDING_NORMALIZATION_POLICY_VERSION,
+    });
   }
 }
 

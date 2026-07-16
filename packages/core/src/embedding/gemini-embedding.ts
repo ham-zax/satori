@@ -1,5 +1,5 @@
 import type { ContentEmbedding, GoogleGenAI as GoogleGenAIClient } from '@google/genai' with { "resolution-mode": "require" };
-import { Embedding, EmbeddingVector } from './base-embedding';
+import { Embedding, EmbeddingVector, type EmbeddingIdentity } from './base-embedding';
 
 const { GoogleGenAI } = require('@google/genai') as typeof import('@google/genai', { with: { "resolution-mode": "require" } });
 
@@ -119,6 +119,10 @@ export class GeminiEmbedding extends Embedding {
 
     getProvider(): string {
         return 'Gemini';
+    }
+
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return this.buildIdentity(this.config.model);
     }
 
     /**

@@ -97,6 +97,7 @@ export class ToolResponseBuilders {
             languageCapabilities?: ManageIndexResponseEnvelope["languageCapabilities"];
             syncStats?: ManageIndexResponseEnvelope["syncStats"];
             operation?: ManageIndexResponseEnvelope["operation"];
+            publication?: ManageIndexResponseEnvelope["publication"];
             repairProof?: ManageIndexResponseEnvelope["repairProof"];
         } = {},
     ): ManageIndexResponseEnvelope {
@@ -142,6 +143,9 @@ export class ToolResponseBuilders {
         }
         if (options.operation) {
             envelope.operation = options.operation;
+        }
+        if (options.publication) {
+            envelope.publication = options.publication;
         }
         if (options.repairProof) {
             envelope.repairProof = options.repairProof;

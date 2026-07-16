@@ -72,9 +72,13 @@ function classifyRepairSnapshotEvidence(info: Record<string, unknown> | undefine
     const fingerprint = parseIndexFingerprint(info?.indexFingerprint);
     if (
         !fingerprint
+        || fingerprint.embeddingArtifactDigest === undefined
+        || !fingerprint.embeddingNormalizationPolicy
         || !fingerprint.parserVersion
         || !fingerprint.extractorVersion
         || !fingerprint.relationshipVersion
+        || !fingerprint.embeddingProjectionVersion
+        || !fingerprint.lexicalProjectionVersion
     ) {
         return {
             status: "missing",
@@ -87,9 +91,13 @@ function classifyRepairSnapshotEvidence(info: Record<string, unknown> | undefine
             basis: "snapshot_fingerprint_unverified",
             fingerprint: {
                 ...fingerprint,
+                embeddingArtifactDigest: fingerprint.embeddingArtifactDigest,
+                embeddingNormalizationPolicy: fingerprint.embeddingNormalizationPolicy,
                 parserVersion: fingerprint.parserVersion,
                 extractorVersion: fingerprint.extractorVersion,
                 relationshipVersion: fingerprint.relationshipVersion,
+                embeddingProjectionVersion: fingerprint.embeddingProjectionVersion,
+                lexicalProjectionVersion: fingerprint.lexicalProjectionVersion,
             },
         };
     }
@@ -98,9 +106,13 @@ function classifyRepairSnapshotEvidence(info: Record<string, unknown> | undefine
         basis: "verified_snapshot_fingerprint",
         fingerprint: {
             ...fingerprint,
+            embeddingArtifactDigest: fingerprint.embeddingArtifactDigest,
+            embeddingNormalizationPolicy: fingerprint.embeddingNormalizationPolicy,
             parserVersion: fingerprint.parserVersion,
             extractorVersion: fingerprint.extractorVersion,
             relationshipVersion: fingerprint.relationshipVersion,
+            embeddingProjectionVersion: fingerprint.embeddingProjectionVersion,
+            lexicalProjectionVersion: fingerprint.lexicalProjectionVersion,
         },
     };
 }

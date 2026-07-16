@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     Context,
+    Embedding,
     FileSynchronizer,
     createLanguageAnalysisService,
     resetSharedRuntimeNavigationStoreForTests,
@@ -12,7 +13,6 @@ import {
 import type {
     CollectionDetails,
     DenseCandidateRequest,
-    Embedding,
     EmbeddingVector,
     IndexedVectorDocument,
     LexicalCandidateRequest,
@@ -36,6 +36,8 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
+    embeddingArtifactDigest: null,
+    embeddingNormalizationPolicy: 'provider_output_v1',
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3',
     parserVersion: 'parser-v1',
@@ -48,6 +50,9 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
 const CAPABILITIES = new CapabilityResolver({
     name: 'test',
     version: '0.0.0',
+    executionProfile: 'connected',
+    networkPolicy: { kind: 'remote-allowed' },
+    vectorStoreProvider: 'Milvus',
     encoderProvider: 'VoyageAI',
     encoderModel: 'voyage-4-large',
 });
@@ -68,7 +73,7 @@ type MutableCodebaseInfo = {
     ignoreRulesVersion?: number;
 };
 
-class TestEmbedding implements Embedding {
+class TestEmbedding extends Embedding {
     protected maxTokens = 8192;
 
     async detectDimension(): Promise<number> {
@@ -92,6 +97,10 @@ class TestEmbedding implements Embedding {
 
     getProvider(): string {
         return 'TestEmbedding';
+    }
+
+    getIdentity() {
+        return this.buildIdentity('test-embedding-v1');
     }
 }
 
@@ -355,6 +364,8 @@ test('MCP handlers fail closed after ignore reconciliation deletes indexed paths
                 embeddingProvider: 'TestEmbedding',
                 embeddingModel: 'test',
                 embeddingDimension: 4,
+                embeddingArtifactDigest: null,
+                embeddingNormalizationPolicy: 'provider_output_v1',
                 vectorStoreProvider: 'InMemory',
                 schemaVersion: 'hybrid_v3',
                 parserVersion: 'test',

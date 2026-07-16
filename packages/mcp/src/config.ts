@@ -1,8 +1,11 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import {
+    assertNetworkPolicyAllowsEndpoint,
+    EMBEDDING_NORMALIZATION_POLICY_VERSION,
     indexFingerprintsEqual as coreIndexFingerprintsEqual,
     envManager,
     EMBEDDING_PROJECTION_VERSION,
@@ -11,14 +14,43 @@ import {
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
     parseIndexFingerprint as parseCoreIndexFingerprint,
+    resolveExecutionPolicy,
+    resolveOllamaModelIdentity,
+    type ExecutionProfile,
     type IndexFingerprint as CoreIndexFingerprint,
+    type NetworkPolicy,
+    type ResolvedOllamaModelIdentity,
 } from "@zokizuan/satori-core";
 
 export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama';
-export type VectorStoreProvider = 'Milvus';
+export type VectorStoreProvider = 'Milvus' | 'LanceDB';
+export type ResolvedVectorStoreConfig =
+    | { vectorStoreProvider: 'Milvus' }
+    | { vectorStoreProvider: 'LanceDB'; lanceDbPath: string };
 export type FingerprintSource = 'verified' | 'assumed_v2';
 export const DEFAULT_WATCH_DEBOUNCE_MS = 5000;
 export const DEFAULT_MANAGE_RETRY_AFTER_MS = 2000;
+
+export function resolveVectorStoreConfig(input: {
+    provider?: string;
+    lanceDbPath?: string;
+    homeDir: string;
+}): ResolvedVectorStoreConfig {
+    const provider = input.provider || 'LanceDB';
+    if (provider !== 'Milvus' && provider !== 'LanceDB') {
+        throw new Error(`Invalid VECTOR_STORE_PROVIDER '${provider}'. Expected Milvus or LanceDB.`);
+    }
+    if (provider === 'Milvus') return { vectorStoreProvider: 'Milvus' };
+
+    const databasePath = input.lanceDbPath || path.join(input.homeDir, '.satori', 'vector', 'lancedb');
+    if (!path.isAbsolute(databasePath)) {
+        throw new Error('LANCEDB_PATH must be absolute when VECTOR_STORE_PROVIDER=LanceDB.');
+    }
+    return {
+        vectorStoreProvider: 'LanceDB',
+        lanceDbPath: path.resolve(databasePath),
+    };
+}
 
 /** Package version from packages/mcp/package.json (not the stale historical default 1.0.0). */
 export function resolveMcpPackageVersion(): string {
@@ -49,7 +81,7 @@ export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
     if (
         !record
         || !['OpenAI', 'VoyageAI', 'Gemini', 'Ollama'].includes(record.embeddingProvider)
-        || record.vectorStoreProvider !== 'Milvus'
+        || !['Milvus', 'LanceDB'].includes(record.vectorStoreProvider)
         || (record.schemaVersion !== 'dense_v3' && record.schemaVersion !== 'hybrid_v3')
     ) {
         return null;
@@ -58,7 +90,13 @@ export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
         embeddingProvider: record.embeddingProvider as EmbeddingProvider,
         embeddingModel: record.embeddingModel,
         embeddingDimension: record.embeddingDimension,
-        vectorStoreProvider: record.vectorStoreProvider,
+        ...(record.embeddingArtifactDigest !== undefined
+            ? { embeddingArtifactDigest: record.embeddingArtifactDigest }
+            : {}),
+        ...(record.embeddingNormalizationPolicy !== undefined
+            ? { embeddingNormalizationPolicy: record.embeddingNormalizationPolicy }
+            : {}),
+        vectorStoreProvider: record.vectorStoreProvider as VectorStoreProvider,
         schemaVersion: record.schemaVersion,
         ...(record.parserVersion !== undefined ? { parserVersion: record.parserVersion } : {}),
         ...(record.extractorVersion !== undefined ? { extractorVersion: record.extractorVersion } : {}),
@@ -86,6 +124,8 @@ export function summarizeIndexFingerprint(fingerprint: IndexFingerprint): string
         fingerprint.embeddingDimension,
         fingerprint.vectorStoreProvider,
         fingerprint.schemaVersion,
+        `artifact=${summarizeIdentity(fingerprint.embeddingArtifactDigest ?? undefined)}`,
+        `normalization=${fingerprint.embeddingNormalizationPolicy || 'legacy'}`,
         `parser=${summarizeIdentity(fingerprint.parserVersion)}`,
         `extractor=${summarizeIdentity(fingerprint.extractorVersion)}`,
         `relationship=${summarizeIdentity(fingerprint.relationshipVersion)}`,
@@ -116,10 +156,13 @@ export interface IndexOperationReceipt {
 export interface ContextMcpConfig {
     name: string;
     version: string;
+    executionProfile: ExecutionProfile;
+    networkPolicy: NetworkPolicy;
     // Embedding provider configuration
     encoderProvider: EmbeddingProvider;
     encoderModel: string;
     encoderOutputDimension?: number;  // For VoyageAI: 256, 512, 1024, 2048
+    embeddingArtifactDigest?: string;
     // Provider-specific API keys
     openaiKey?: string;
     openaiEndpoint?: string;
@@ -128,10 +171,13 @@ export interface ContextMcpConfig {
     geminiEndpoint?: string;
     // Ollama configuration
     ollamaEncoderModel?: string;
+    ollamaModelDigest?: string;
     ollamaEndpoint?: string;
     // Vector database configuration
+    vectorStoreProvider: VectorStoreProvider;
     milvusEndpoint?: string; // Required for provider-backed tool calls
     milvusApiToken?: string;
+    lanceDbPath?: string;
     // Reranker configuration
     rankerModel?: 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite';
     // read_file behavior
@@ -139,6 +185,25 @@ export interface ContextMcpConfig {
     // Proactive sync watcher behavior
     watchSyncEnabled?: boolean;
     watchDebounceMs?: number;
+}
+
+export function assertExecutionPolicyAllowsRuntime(input: {
+    executionProfile: ExecutionProfile;
+    encoderProvider: EmbeddingProvider;
+    vectorStoreProvider: VectorStoreProvider;
+}): void {
+    if (input.executionProfile !== 'offline') return;
+
+    if (input.encoderProvider !== 'Ollama') {
+        throw new Error(
+            'SATORI_RUNTIME_PROFILE=offline requires EMBEDDING_PROVIDER=Ollama.',
+        );
+    }
+    if (input.vectorStoreProvider !== 'LanceDB') {
+        throw new Error(
+            'SATORI_RUNTIME_PROFILE=offline requires VECTOR_STORE_PROVIDER=LanceDB.',
+        );
+    }
 }
 
 export interface CallGraphSidecarInfo {
@@ -289,12 +354,28 @@ function getSchemaVersionFromEnv(): 'dense_v3' | 'hybrid_v3' {
     return hybridModeRaw.toLowerCase() === 'true' ? 'hybrid_v3' : 'dense_v3';
 }
 
+export function resolveConfiguredEmbeddingDimension(config: ContextMcpConfig): number {
+    switch (config.encoderProvider) {
+        case 'OpenAI':
+            return config.encoderModel === 'text-embedding-3-large' ? 3072 : 1536;
+        case 'Gemini':
+            return 3072;
+        case 'Ollama':
+            return config.encoderOutputDimension || 768;
+        case 'VoyageAI':
+        default:
+            return config.encoderOutputDimension || 1024;
+    }
+}
+
 export function buildRuntimeIndexFingerprint(config: ContextMcpConfig, embeddingDimension: number): IndexFingerprint {
     return {
         embeddingProvider: config.encoderProvider,
         embeddingModel: config.encoderModel,
         embeddingDimension,
-        vectorStoreProvider: 'Milvus',
+        embeddingArtifactDigest: config.embeddingArtifactDigest ?? null,
+        embeddingNormalizationPolicy: EMBEDDING_NORMALIZATION_POLICY_VERSION,
+        vectorStoreProvider: config.vectorStoreProvider,
         schemaVersion: getSchemaVersionFromEnv(),
         parserVersion: LANGUAGE_PARSER_VERSION,
         extractorVersion: SYMBOL_EXTRACTOR_VERSION,
@@ -304,19 +385,138 @@ export function buildRuntimeIndexFingerprint(config: ContextMcpConfig, embedding
     };
 }
 
+export interface ResolvedMcpRuntimeBootstrap {
+    config: Readonly<ContextMcpConfig>;
+    runtimeFingerprint: IndexFingerprint;
+}
+
+function parseRecordedOllamaDigest(value: string): string {
+    const match = /^(?:sha256:)?([a-f0-9]{64})$/i.exec(value.trim());
+    if (!match?.[1]) {
+        throw new Error('OLLAMA_MODEL_DIGEST must be a SHA-256 digest.');
+    }
+    return match[1].toLowerCase();
+}
+
+export async function resolveMcpRuntimeBootstrap(
+    config: ContextMcpConfig,
+    dependencies: {
+        resolveOllamaIdentity?: (input: {
+            model: string;
+            host?: string;
+        }) => Promise<Readonly<ResolvedOllamaModelIdentity>>;
+    } = {},
+    options: { useRecordedOllamaIdentity?: boolean } = {},
+): Promise<ResolvedMcpRuntimeBootstrap> {
+    if (config.encoderProvider !== 'Ollama') {
+        const resolvedConfig = Object.freeze({ ...config });
+        return Object.freeze({
+            config: resolvedConfig,
+            runtimeFingerprint: buildRuntimeIndexFingerprint(
+                resolvedConfig,
+                resolveConfiguredEmbeddingDimension(resolvedConfig),
+            ),
+        });
+    }
+
+    const host = config.ollamaEndpoint || 'http://127.0.0.1:11434';
+    assertNetworkPolicyAllowsEndpoint(config.networkPolicy, host, 'OLLAMA_HOST');
+    if (config.executionProfile === 'offline' && !config.ollamaModelDigest) {
+        throw new Error(
+            'SATORI_RUNTIME_PROFILE=offline requires installer-recorded OLLAMA_MODEL_DIGEST.',
+        );
+    }
+
+    if (options.useRecordedOllamaIdentity) {
+        const artifactDigest = config.ollamaModelDigest
+            ? parseRecordedOllamaDigest(config.ollamaModelDigest)
+            : null;
+        const dimension = config.encoderOutputDimension;
+        if (
+            !artifactDigest
+            || typeof dimension !== 'number'
+            || !Number.isSafeInteger(dimension)
+            || dimension <= 0
+        ) {
+            throw new Error(
+                'Recorded Ollama bootstrap requires OLLAMA_MODEL_DIGEST and EMBEDDING_OUTPUT_DIMENSION.',
+            );
+        }
+        const resolvedConfig = Object.freeze({
+            ...config,
+            embeddingArtifactDigest: artifactDigest,
+            encoderOutputDimension: dimension,
+            ollamaEndpoint: host,
+        });
+        return Object.freeze({
+            config: resolvedConfig,
+            runtimeFingerprint: buildRuntimeIndexFingerprint(resolvedConfig, dimension),
+        });
+    }
+
+    const resolveIdentity = dependencies.resolveOllamaIdentity ?? resolveOllamaModelIdentity;
+    const identity = await resolveIdentity({
+        model: config.ollamaEncoderModel || config.encoderModel,
+        host,
+    });
+    const recordedDigest = config.ollamaModelDigest
+        ? parseRecordedOllamaDigest(config.ollamaModelDigest)
+        : undefined;
+    if (recordedDigest && recordedDigest !== identity.artifactDigest) {
+        throw new Error(
+            `Configured Ollama model digest does not match the installed artifact for '${identity.resolvedModel}'.`,
+        );
+    }
+
+    const resolvedConfig = Object.freeze({
+        ...config,
+        encoderModel: identity.resolvedModel,
+        encoderOutputDimension: identity.dimension,
+        embeddingArtifactDigest: identity.artifactDigest,
+        ollamaEndpoint: host,
+    });
+    return Object.freeze({
+        config: resolvedConfig,
+        runtimeFingerprint: buildRuntimeIndexFingerprint(
+            resolvedConfig,
+            identity.dimension,
+        ),
+    });
+}
+
 export function createMcpConfig(): ContextMcpConfig {
+    const executionPolicy = resolveExecutionPolicy(envManager.get('SATORI_RUNTIME_PROFILE'));
     const defaultProvider = (envManager.get('EMBEDDING_PROVIDER') as EmbeddingProvider) || 'VoyageAI';
     const defaultReadFileMaxLines = 1000;
+    const vectorStore = resolveVectorStoreConfig({
+        provider: envManager.get('VECTOR_STORE_PROVIDER')
+            || (envManager.get('MILVUS_ADDRESS') ? 'Milvus' : 'LanceDB'),
+        lanceDbPath: envManager.get('LANCEDB_PATH'),
+        homeDir: os.homedir(),
+    });
+    assertExecutionPolicyAllowsRuntime({
+        executionProfile: executionPolicy.executionProfile,
+        encoderProvider: defaultProvider,
+        vectorStoreProvider: vectorStore.vectorStoreProvider,
+    });
 
     // Parse output dimension from env var
     const outputDimensionStr = envManager.get('EMBEDDING_OUTPUT_DIMENSION');
     let encoderOutputDimension: number | undefined;
     if (outputDimensionStr) {
-        const parsed = parseInt(outputDimensionStr, 10);
-        if ([256, 512, 1024, 2048].includes(parsed)) {
+        const parsed = Number(outputDimensionStr);
+        if (
+            (defaultProvider === 'VoyageAI' && [256, 512, 1024, 2048].includes(parsed))
+            || (defaultProvider === 'Ollama' && Number.isSafeInteger(parsed) && parsed > 0)
+        ) {
             encoderOutputDimension = parsed;
         } else {
-            console.warn(`[WARN] Invalid EMBEDDING_OUTPUT_DIMENSION value: ${outputDimensionStr}. Must be 256, 512, 1024, or 2048.`);
+            const expected = defaultProvider === 'VoyageAI'
+                ? '256, 512, 1024, or 2048'
+                : defaultProvider === 'Ollama'
+                    ? 'a positive safe integer resolved from the installed model'
+                    : `unset because ${defaultProvider} ignores this setting`;
+            console.warn(`[WARN] Invalid EMBEDDING_OUTPUT_DIMENSION value for ${defaultProvider}: ${outputDimensionStr}. Expected ${expected}.`);
         }
     } else if (defaultProvider === 'VoyageAI') {
         // Default to 1024 for VoyageAI to balance quality/cost.
@@ -362,6 +562,8 @@ export function createMcpConfig(): ContextMcpConfig {
     const config: ContextMcpConfig = {
         name: envManager.get('MCP_SERVER_NAME') || "Satori MCP Server",
         version: envManager.get('MCP_SERVER_VERSION') || resolveMcpPackageVersion(),
+        executionProfile: executionPolicy.executionProfile,
+        networkPolicy: executionPolicy.networkPolicy,
         // Embedding provider configuration
         encoderProvider: defaultProvider,
         encoderModel: getEmbeddingModelForProvider(defaultProvider),
@@ -374,10 +576,15 @@ export function createMcpConfig(): ContextMcpConfig {
         geminiEndpoint: envManager.get('GEMINI_BASE_URL'),
         // Ollama configuration
         ollamaEncoderModel: envManager.get('OLLAMA_MODEL'),
+        ollamaModelDigest: envManager.get('OLLAMA_MODEL_DIGEST'),
         ollamaEndpoint: envManager.get('OLLAMA_HOST'),
         // Vector database configuration
+        vectorStoreProvider: vectorStore.vectorStoreProvider,
         milvusEndpoint: envManager.get('MILVUS_ADDRESS'),
         milvusApiToken: envManager.get('MILVUS_TOKEN'),
+        ...(vectorStore.vectorStoreProvider === 'LanceDB'
+            ? { lanceDbPath: vectorStore.lanceDbPath }
+            : {}),
         // Reranker configuration
         rankerModel,
         // read_file behavior
@@ -395,9 +602,15 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
     console.log(`[MCP] 🚀 Starting Satori MCP Server`);
     console.log(`[MCP] Configuration Summary:`);
     console.log(`[MCP]   Server: ${config.name} v${config.version}`);
+    console.log(`[MCP]   Runtime Profile: ${config.executionProfile} (${config.networkPolicy.kind})`);
     console.log(`[MCP]   Embedding Provider: ${config.encoderProvider}`);
     console.log(`[MCP]   Embedding Model: ${config.encoderModel}`);
-    console.log(`[MCP]   Milvus Address: ${config.milvusEndpoint || '[Not configured]'}`);
+    console.log(`[MCP]   Vector Store: ${config.vectorStoreProvider}`);
+    if (config.vectorStoreProvider === 'LanceDB') {
+        console.log(`[MCP]   LanceDB Path: ${config.lanceDbPath}`);
+    } else {
+        console.log(`[MCP]   Milvus Address: ${config.milvusEndpoint || '[Not configured]'}`);
+    }
     console.log(`[MCP]   Proactive Watcher: ${config.watchSyncEnabled ? `enabled (${config.watchDebounceMs || DEFAULT_WATCH_DEBOUNCE_MS}ms debounce)` : 'disabled'}`);
 
     // Log provider-specific configuration without exposing sensitive data
@@ -457,8 +670,10 @@ Environment Variables:
   OLLAMA_MODEL            Ollama model name (alternative to EMBEDDING_MODEL for Ollama)
 
   Vector Database Configuration:
+  VECTOR_STORE_PROVIDER   Vector store: LanceDB or Milvus (default: LanceDB; legacy MILVUS_ADDRESS selects Milvus)
   MILVUS_ADDRESS          Milvus address (required for index/search/clear tool calls)
   MILVUS_TOKEN            Milvus token (optional, used for authenticated endpoints)
+  LANCEDB_PATH            Absolute LanceDB directory (default: ~/.satori/vector/lancedb)
 
   Read File Configuration:
   READ_FILE_MAX_LINES     Max lines returned by read_file when no explicit range is provided (default: 1000)

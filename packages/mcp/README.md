@@ -99,7 +99,13 @@ Completed full indexes write a derived symbol registry and relationship sidecar.
 
 Node.js 22.13 or newer is required. Parser, symbol-extractor, and relationship-builder identities are part of durable index compatibility; indexes built by the previous parser stack return `requires_reindex` and require one full rebuild.
 
-Configure an embedding provider and Milvus-compatible backend before indexing. Supported embedding providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model, dimension, vector store, or schema requires a reindex because those values are part of the index fingerprint.
+The default runtime is connected VoyageAI plus installer-owned LanceDB. Milvus
+SDK and REST/Zilliz adapters remain supported when
+`VECTOR_STORE_PROVIDER=Milvus` is explicit (or for legacy connected installs
+that provide `MILVUS_ADDRESS` without a backend selector). Supported embedding
+providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model,
+dimension, vector store, projection version, or schema requires a reindex
+because those values are part of the index fingerprint.
 
 MCP startup, `tools/list`, and installer operations are lazy with respect to provider credentials. Missing provider values become `MISSING_PROVIDER_CONFIG` only when a provider-backed tool call needs them.
 
@@ -113,26 +119,31 @@ Users who want literal values in a client config can replace the generated pass-
 
 ```toml
 [mcp_servers.satori.env]
+SATORI_RUNTIME_PROFILE = "connected"
+VECTOR_STORE_PROVIDER = "LanceDB"
 EMBEDDING_PROVIDER = "VoyageAI"
 EMBEDDING_MODEL = "voyage-code-3"
 EMBEDDING_OUTPUT_DIMENSION = "1024"
 VOYAGEAI_API_KEY = "pa-..."
 VOYAGEAI_RERANKER_MODEL = "rerank-2.5"
-MILVUS_ADDRESS = "https://your-zilliz-endpoint"
-MILVUS_TOKEN = "your-zilliz-token"
 ```
 
 Cloud-quality setup:
 
 ```bash
+SATORI_RUNTIME_PROFILE=connected
+VECTOR_STORE_PROVIDER=LanceDB
 EMBEDDING_PROVIDER=VoyageAI
 EMBEDDING_MODEL=voyage-code-3
 EMBEDDING_OUTPUT_DIMENSION=1024
 VOYAGEAI_API_KEY=your-api-key
 VOYAGEAI_RERANKER_MODEL=rerank-2.5
-MILVUS_ADDRESS=your-milvus-endpoint
-MILVUS_TOKEN=your-milvus-token
 ```
+
+Existing Milvus deployments remain supported with
+`VECTOR_STORE_PROVIDER=Milvus`, `MILVUS_ADDRESS`, and optional `MILVUS_TOKEN`.
+Switching to LanceDB requires reindexing and never deletes or imports the Milvus
+collection automatically.
 
 The full generated tool reference below is kept in the npm README for MCP clients and package consumers.
 
@@ -223,7 +234,7 @@ No parameters.
 
 - Exact `open_symbol` requires `mode` plus `contractVersion: 2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`; success is one bounded structured `symbol_context` package in both modes. Direct spans remain unversioned `startLine`/`endLine` source reads. On symbol-owned flows, `symbolId` should carry `symbolInstanceId`.
 - `MILVUS_TOKEN` is optional auth; local unauthenticated Milvus only needs `MILVUS_ADDRESS`.
-- MCP startup does not require provider credentials or a live Milvus backend. Provider-backed calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
+- MCP startup does not require provider credentials or a live selected backend. Provider-backed calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
 - `MISSING_PROVIDER_CONFIG` is an active setup failure only when it appears as a tool response `code` or `reason`.
 
 ## Local Development

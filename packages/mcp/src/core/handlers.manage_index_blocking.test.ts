@@ -49,6 +49,8 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
+    embeddingArtifactDigest: null,
+    embeddingNormalizationPolicy: 'provider_output_v1',
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3',
     parserVersion: 'parser-v1',
@@ -61,6 +63,9 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
 const CAPABILITIES = new CapabilityResolver({
     name: 'test',
     version: '0.0.0',
+    executionProfile: 'connected',
+    networkPolicy: { kind: 'remote-allowed' },
+    vectorStoreProvider: 'Milvus',
     encoderProvider: 'VoyageAI',
     encoderModel: 'voyage-4-large',
 });
@@ -976,7 +981,7 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
         assert.match(envelope.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
         assert.match(
             (envelope.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint || '',
-            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}\/embedding_projection=[a-f0-9]{12}\/lexical_projection=[a-f0-9]{12}$/,
+            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/artifact=legacy\/normalization=provider_output_v1\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}\/embedding_projection=[a-f0-9]{12}\/lexical_projection=[a-f0-9]{12}$/,
         );
     });
 });

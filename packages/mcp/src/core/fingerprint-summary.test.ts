@@ -35,7 +35,7 @@ test('fingerprint summaries expose parser-only mismatches deterministically', ()
     });
 
     assert.notEqual(indexed, runtime);
-    assert.match(indexed, /\/parser=[0-9a-f]{12}\/extractor=[0-9a-f]{12}\/relationship=[0-9a-f]{12}\/embedding_projection=[0-9a-f]{12}\/lexical_projection=[0-9a-f]{12}$/);
+    assert.match(indexed, /\/Milvus\/hybrid_v3\/artifact=legacy\/normalization=legacy\/parser=[0-9a-f]{12}\/extractor=[0-9a-f]{12}\/relationship=[0-9a-f]{12}\/embedding_projection=[0-9a-f]{12}\/lexical_projection=[0-9a-f]{12}$/);
     assert.equal(indexed, summarizeIndexFingerprint({
         ...baseFingerprint,
         parserVersion: 'parser-v1',
@@ -49,11 +49,11 @@ test('fingerprint summaries expose parser-only mismatches deterministically', ()
 test('fingerprint summaries identify legacy analysis identities', () => {
     assert.equal(
         summarizeIndexFingerprint(baseFingerprint),
-        'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3/parser=legacy/extractor=legacy/relationship=legacy/embedding_projection=legacy/lexical_projection=legacy',
+        'VoyageAI/voyage-code-3/1024/Milvus/hybrid_v3/artifact=legacy/normalization=legacy/parser=legacy/extractor=legacy/relationship=legacy/embedding_projection=legacy/lexical_projection=legacy',
     );
 });
 
-test('projection fingerprints parse as an all-or-nothing compatibility pair', () => {
+test('current identity and projection fingerprint fields are an all-or-nothing format', () => {
     const legacy = parseIndexFingerprint({
         ...baseFingerprint,
         parserVersion: 'parser-v1',
@@ -63,6 +63,8 @@ test('projection fingerprints parse as an all-or-nothing compatibility pair', ()
     assert.ok(legacy);
     const current = parseIndexFingerprint({
         ...legacy,
+        embeddingArtifactDigest: null,
+        embeddingNormalizationPolicy: 'provider_output_v1',
         embeddingProjectionVersion: 'embedding-projection-v1',
         lexicalProjectionVersion: 'lexical-projection-v1',
     });

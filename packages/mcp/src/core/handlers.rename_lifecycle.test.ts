@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
     Context,
     createLanguageAnalysisService,
+    Embedding,
     FileSynchronizer,
     resetSharedRuntimeNavigationStoreForTests,
     resolveNavigationSidecarRoot,
@@ -13,7 +14,6 @@ import {
 import type {
     CollectionDetails,
     DenseCandidateRequest,
-    Embedding,
     EmbeddingVector,
     IndexedVectorDocument,
     LexicalCandidateRequest,
@@ -44,6 +44,9 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
 const CAPABILITIES = new CapabilityResolver({
     name: 'test',
     version: '0.0.0',
+    executionProfile: 'connected',
+    networkPolicy: { kind: 'remote-allowed' },
+    vectorStoreProvider: 'Milvus',
     encoderProvider: 'VoyageAI',
     encoderModel: 'voyage-4-large',
 });
@@ -65,7 +68,7 @@ type SearchGroup = {
     navigation: { graph: string; callerSearchTerm?: string };
 };
 
-class TestEmbedding implements Embedding {
+class TestEmbedding extends Embedding {
     protected maxTokens = 8192;
 
     async detectDimension(): Promise<number> {
@@ -89,6 +92,10 @@ class TestEmbedding implements Embedding {
 
     getProvider(): string {
         return 'VoyageAI';
+    }
+
+    getIdentity() {
+        return this.buildIdentity('voyage-code-3');
     }
 }
 

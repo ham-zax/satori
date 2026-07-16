@@ -41,6 +41,9 @@ function buildToolDocsSection(): string {
     const config: ContextMcpConfig = {
         name: 'Satori MCP Server',
         version: '1.0.0',
+        executionProfile: 'connected',
+        networkPolicy: { kind: 'remote-allowed' },
+        vectorStoreProvider: 'Milvus',
         encoderProvider: 'VoyageAI',
         encoderModel: 'voyage-4-large',
         encoderOutputDimension: 1024,

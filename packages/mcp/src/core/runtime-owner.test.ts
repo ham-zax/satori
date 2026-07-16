@@ -501,6 +501,32 @@ test('different config identity blocks mutation even with matching fingerprint',
     });
 });
 
+test('LanceDB runtime-owner identity binds the resolved local database path', () => {
+    const lanceFingerprint = {
+        ...FINGERPRINT,
+        vectorStoreProvider: 'LanceDB' as const,
+    };
+    const identityForPath = (lanceDbPath: string) => buildRuntimeOwnerIdentity({
+        satoriVersion: CURRENT_SATORI_VERSION,
+        runtimeFingerprint: lanceFingerprint,
+        configSource: 'env',
+        configSummary: {
+            embeddingProvider: 'VoyageAI',
+            embeddingModel: 'voyage-4-large',
+            embeddingDimension: 1024,
+            vectorStoreProvider: 'LanceDB',
+            schemaVersion: 'hybrid_v3',
+            lanceDbPath,
+            rankerModel: 'rerank-2.5',
+        },
+    });
+
+    assert.notEqual(
+        identityForPath('/var/lib/satori/a').hash,
+        identityForPath('/var/lib/satori/b').hash,
+    );
+});
+
 test('PID reuse is pruned instead of treated as a live Satori owner', async () => {
     await withTempState((stateDir) => {
         const reusedPid = snapshot(202, {

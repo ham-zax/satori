@@ -55,6 +55,10 @@ class FakeEmbedding extends Embedding {
     getProvider(): string {
         return 'VoyageAI';
     }
+
+    getIdentity() {
+        return this.buildIdentity('voyage-code-3');
+    }
 }
 
 function createInMemoryVectorDb(options?: { hybridResults?: VectorCandidate[]; vectorResults?: VectorCandidate[] }) {
@@ -202,8 +206,10 @@ function buildMarker(indexPolicyHash = TEST_POLICY_HASH): IndexCompletionMarkerD
         codebasePath: '/repo/app',
         fingerprint: {
             embeddingProvider: 'VoyageAI',
-            embeddingModel: 'VoyageAI',
+            embeddingModel: 'voyage-code-3',
             embeddingDimension: 4,
+            embeddingArtifactDigest: null,
+            embeddingNormalizationPolicy: 'provider_output_v1',
             vectorStoreProvider: 'Milvus',
             schemaVersion: 'hybrid_v3',
             parserVersion: LANGUAGE_PARSER_VERSION,

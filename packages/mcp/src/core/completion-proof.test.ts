@@ -7,6 +7,8 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
+    embeddingArtifactDigest: null,
+    embeddingNormalizationPolicy: 'provider_output_v1',
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3',
     parserVersion: 'parser-v1',

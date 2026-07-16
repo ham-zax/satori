@@ -7,6 +7,9 @@ function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig
     return {
         name: 'test',
         version: '1.0.0',
+        executionProfile: 'connected',
+        networkPolicy: { kind: 'remote-allowed' },
+        vectorStoreProvider: 'Milvus',
         encoderProvider: 'VoyageAI',
         encoderModel: 'voyage-4-large',
         encoderOutputDimension: 1024,
@@ -43,6 +46,21 @@ test('capability resolver disables default rerank on slow profile', () => {
     assert.equal(resolver.getDefaultRerankEnabled(), false);
 });
 
+test('offline policy disables cloud reranking even when credentials remain configured', () => {
+    const resolver = new CapabilityResolver(baseConfig({
+        executionProfile: 'offline',
+        networkPolicy: { kind: 'local-only' },
+        vectorStoreProvider: 'LanceDB',
+        lanceDbPath: '/tmp/satori-lancedb',
+        encoderProvider: 'Ollama',
+        encoderModel: 'nomic-embed-text',
+        voyageKey: 'retained-cloud-key',
+    }));
+
+    assert.equal(resolver.hasReranker(), false);
+    assert.equal(resolver.getDefaultRerankEnabled(), false);
+});
+
 test('capability resolver does not treat token-only Milvus config as vector-ready', () => {
     const resolver = new CapabilityResolver(baseConfig({
         milvusEndpoint: undefined,
@@ -50,4 +68,15 @@ test('capability resolver does not treat token-only Milvus config as vector-read
     }));
 
     assert.equal(resolver.hasVectorStore(), false);
+});
+
+test('capability resolver treats a resolved LanceDB path as vector-ready without Milvus', () => {
+    const resolver = new CapabilityResolver(baseConfig({
+        vectorStoreProvider: 'LanceDB',
+        lanceDbPath: '/tmp/satori-lancedb',
+        milvusEndpoint: undefined,
+        milvusApiToken: undefined,
+    }));
+
+    assert.equal(resolver.hasVectorStore(), true);
 });

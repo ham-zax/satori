@@ -72,6 +72,13 @@ export type ManageCompactSymbolQuality = Pick<
     "status" | "basis" | "message" | "evidenceAvailability"
 >;
 
+export interface IndexPublicationReceipt {
+    collectionName: string;
+    markerRunId: string;
+    indexPolicyHash: string;
+    policyDocumentDigest: string;
+}
+
 export interface ManageIndexResponseEnvelope {
     tool: "manage_index";
     version: 1;
@@ -92,6 +99,8 @@ export interface ManageIndexResponseEnvelope {
         probeFailed?: boolean;
     };
     operation?: IndexOperationReceipt;
+    /** Stable published-generation identity, independent of sync operation ids. */
+    publication?: IndexPublicationReceipt;
     repairProof?: RepairProof;
     /** Observed symbol quality from registry (F9); not parser-cause diagnosis. */
     symbolQuality?: SymbolQualitySummary | ManageCompactSymbolQuality;

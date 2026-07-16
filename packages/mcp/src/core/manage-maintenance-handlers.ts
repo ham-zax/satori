@@ -812,6 +812,14 @@ export class ManageMaintenanceHandlers {
             const operation = typeof this.host.snapshotManager.getLatestOperation === "function"
                 ? this.host.snapshotManager.getLatestOperation(envelopePath)
                 : undefined;
+            const publication = trackedRootState.state === "ready" && trackedRootState.vectorReceipt
+                ? {
+                    collectionName: trackedRootState.vectorReceipt.collectionName,
+                    markerRunId: trackedRootState.vectorReceipt.marker.runId,
+                    indexPolicyHash: trackedRootState.vectorReceipt.marker.indexPolicyHash,
+                    policyDocumentDigest: trackedRootState.vectorReceipt.policyDocumentDigest,
+                }
+                : undefined;
 
             return this.host.manageResponse(
                 "status",
@@ -835,6 +843,7 @@ export class ManageMaintenanceHandlers {
                     } : {}),
                     ...(languageCapabilities ? { languageCapabilities } : {}),
                     ...(operation ? { operation } : {}),
+                    ...(publication ? { publication } : {}),
                     ...(envelopeMessage ? { message: envelopeMessage } : {}),
                 },
             );

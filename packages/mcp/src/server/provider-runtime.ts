@@ -2,6 +2,7 @@ import {
     Context,
     Embedding,
     EmbeddingVector,
+    type EmbeddingIdentity,
     MilvusVectorDatabase,
     VectorDatabase,
     VoyageAIReranker,
@@ -13,7 +14,11 @@ import type { RuntimeOwnerMutationGate } from "../core/runtime-owner.js";
 import { MutationLeaseCoordinator } from "../core/mutation-lease.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import { SyncManager } from "../core/sync.js";
-import { ContextMcpConfig, IndexFingerprint } from "../config.js";
+import {
+    ContextMcpConfig,
+    IndexFingerprint,
+    resolveConfiguredEmbeddingDimension,
+} from "../config.js";
 import { createEmbeddingInstance, logEmbeddingProviderInfo } from "../embedding.js";
 import { MissingProviderConfigIssue, ProviderBackedOperation, ToolContext } from "../tools/types.js";
 
@@ -37,11 +42,17 @@ type ResolvedProviderRuntimeBootstrap = Readonly<{
             dimension: number;
         }
     >;
-    vectorBackend: Readonly<{
-        kind: 'milvus';
-        address: string;
-        token?: string;
-    }>;
+    vectorBackend: Readonly<
+        | {
+            kind: 'milvus';
+            address: string;
+            token?: string;
+        }
+        | {
+            kind: 'lancedb';
+            databasePath: string;
+        }
+    >;
     reranker: Readonly<{
         kind: 'voyage';
         apiKey: string;
@@ -106,6 +117,10 @@ class MetadataOnlyEmbedding extends Embedding {
     getProvider(): string {
         return this.provider;
     }
+
+    override getIdentity(): Readonly<EmbeddingIdentity> {
+        return this.buildIdentity(this.config.model);
+    }
 }
 
 class UnconfiguredVectorDatabase implements VectorDatabase {
@@ -132,20 +147,7 @@ class UnconfiguredVectorDatabase implements VectorDatabase {
 // Local-only startup scaffolding: these satisfy Context/ToolHandlers constructor
 // contracts for provider-free tools. They must not perform provider I/O.
 // Provider-backed tools must use ProviderRuntime.requireToolContext instead.
-export function resolveConfiguredEmbeddingDimension(config: ContextMcpConfig): number {
-    switch (config.encoderProvider) {
-        case "OpenAI":
-            if (config.encoderModel === "text-embedding-3-large") return 3072;
-            return 1536;
-        case "Gemini":
-            return 3072;
-        case "Ollama":
-            return 768;
-        case "VoyageAI":
-        default:
-            return config.encoderOutputDimension || 1024;
-    }
-}
+export { resolveConfiguredEmbeddingDimension } from "../config.js";
 
 function createDurableAuthorityRecoveryPublisher(
     coordinator: MutationLeaseCoordinator,
@@ -173,6 +175,7 @@ export function createLocalOnlyContext(
             resolveConfiguredEmbeddingDimension(config),
         ),
         vectorDatabase: new UnconfiguredVectorDatabase(),
+        vectorStoreProvider: config.vectorStoreProvider,
         ...(mutationLeaseCoordinator ? {
             durableAuthorityRecoveryPublisher: createDurableAuthorityRecoveryPublisher(mutationLeaseCoordinator),
         } : {}),
@@ -260,8 +263,11 @@ export class ProviderRuntime {
             }
         }
 
-        if (!this.config.milvusEndpoint) {
+        if (this.config.vectorStoreProvider === 'Milvus' && !this.config.milvusEndpoint) {
             missing.push("MILVUS_ADDRESS");
+        }
+        if (this.config.vectorStoreProvider === 'LanceDB' && !this.config.lanceDbPath) {
+            missing.push("LANCEDB_PATH");
         }
 
         return missing.length > 0 ? createMissingConfigIssue(missing) : null;
@@ -300,10 +306,11 @@ export class ProviderRuntime {
     private async createRuntime(requireEmbedding: boolean): Promise<ToolContext> {
         const bootstrap = await this.resolveRuntimeBootstrap(requireEmbedding);
         const embedding = this.createEmbeddingProvider(bootstrap);
-        const vectorDatabase = this.createVectorBackend(bootstrap, embedding.getDimension());
+        const vectorDatabase = await this.createVectorBackend(bootstrap, embedding.getDimension());
         const context = new Context({
             embedding,
             vectorDatabase,
+            vectorStoreProvider: this.config.vectorStoreProvider,
             mutationGenerationObserver: (canonicalRoot) => (
                 this.mutationLeaseCoordinator.observe(canonicalRoot)
             ),
@@ -361,9 +368,23 @@ export class ProviderRuntime {
     private async resolveRuntimeBootstrap(
         requireEmbedding: boolean,
     ): Promise<ResolvedProviderRuntimeBootstrap> {
-        const address = this.config.milvusEndpoint;
-        if (!address) {
-            throw new Error('MISSING_PROVIDER_CONFIG MILVUS_ADDRESS is not configured');
+        const vectorBackend = this.config.vectorStoreProvider === 'LanceDB'
+            ? this.config.lanceDbPath
+                ? Object.freeze({
+                    kind: 'lancedb' as const,
+                    databasePath: this.config.lanceDbPath,
+                })
+                : null
+            : this.config.milvusEndpoint
+                ? Object.freeze({
+                    kind: 'milvus' as const,
+                    address: this.config.milvusEndpoint,
+                    ...(this.config.milvusApiToken ? { token: this.config.milvusApiToken } : {}),
+                })
+                : null;
+        if (!vectorBackend) {
+            const missing = this.config.vectorStoreProvider === 'LanceDB' ? 'LANCEDB_PATH' : 'MILVUS_ADDRESS';
+            throw new Error(`MISSING_PROVIDER_CONFIG ${missing} is not configured`);
         }
         const reranker = requireEmbedding && this.capabilities.hasReranker()
             ? {
@@ -382,11 +403,7 @@ export class ProviderRuntime {
             });
         return Object.freeze({
             embedding,
-            vectorBackend: Object.freeze({
-                kind: 'milvus' as const,
-                address,
-                ...(this.config.milvusApiToken ? { token: this.config.milvusApiToken } : {}),
-            }),
+            vectorBackend,
             reranker: reranker ? Object.freeze(reranker) : null,
             embeddingCapable: requireEmbedding,
         });
@@ -405,15 +422,27 @@ export class ProviderRuntime {
         return embedding;
     }
 
-    private createVectorBackend(
+    private async createVectorBackend(
         bootstrap: ResolvedProviderRuntimeBootstrap,
         vectorDimension: number,
-    ): VectorDatabase {
-        return new MilvusVectorDatabase({
-            address: bootstrap.vectorBackend.address,
-            ...(bootstrap.vectorBackend.token ? { token: bootstrap.vectorBackend.token } : {}),
-            vectorDimension,
-        });
+    ): Promise<VectorDatabase> {
+        switch (bootstrap.vectorBackend.kind) {
+            case 'lancedb': {
+                const moduleSpecifier = '@zokizuan/satori-core/lancedb';
+                const { LanceDbVectorDatabase } = await import(moduleSpecifier) as {
+                    LanceDbVectorDatabase: new (config: { databasePath: string }) => VectorDatabase;
+                };
+                return new LanceDbVectorDatabase({
+                    databasePath: bootstrap.vectorBackend.databasePath,
+                });
+            }
+            case 'milvus':
+                return new MilvusVectorDatabase({
+                    address: bootstrap.vectorBackend.address,
+                    ...(bootstrap.vectorBackend.token ? { token: bootstrap.vectorBackend.token } : {}),
+                    vectorDimension,
+                });
+        }
     }
 
     private createReranker(
@@ -463,6 +492,7 @@ export class ProviderRuntime {
         await Promise.all(this.activeContexts.map(async (toolContext) => {
             toolContext.syncManager.stopBackgroundSync();
             await toolContext.syncManager.stopWatcherMode();
+            await toolContext.context.getVectorStore().close?.();
         }));
     }
 }

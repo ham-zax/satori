@@ -34,8 +34,11 @@ export class CapabilityResolver {
             performanceProfile = 'standard';
         }
 
-        const hasVectorStore = Boolean(this.config.milvusEndpoint);
-        const hasReranker = Boolean(this.config.voyageKey);
+        const hasVectorStore = this.config.vectorStoreProvider === 'LanceDB'
+            ? Boolean(this.config.lanceDbPath)
+            : Boolean(this.config.milvusEndpoint);
+        const hasReranker = this.config.networkPolicy.kind === 'remote-allowed'
+            && Boolean(this.config.voyageKey);
 
         const defaultSearchLimit =
             performanceProfile === 'fast' ? 50 :

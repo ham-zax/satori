@@ -53,6 +53,9 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
 const CAPABILITIES = new CapabilityResolver({
     name: "test",
     version: "0.0.0",
+    executionProfile: "connected",
+    networkPolicy: { kind: "remote-allowed" },
+    vectorStoreProvider: "Milvus",
     encoderProvider: "VoyageAI",
     encoderModel: "voyage-4-large",
 });
@@ -89,6 +92,10 @@ class TestEmbedding extends Embedding {
 
     getProvider(): string {
         return "TestEmbedding";
+    }
+
+    getIdentity() {
+        return this.buildIdentity("test-embedding-v1");
     }
 }
 

@@ -6,6 +6,7 @@ import {
     type IndexFingerprint,
 } from "../config.js";
 import {
+    type CanonicalCompletionFingerprint,
     inspectCompletionMarker,
     type ProvenGenerationReceipt,
     type ProvenVectorGenerationReceipt,
@@ -40,11 +41,10 @@ export type CompletionProofValidationResult = {
 export type ValidatedCompletionMarker = {
     kind: 'satori_index_completion_v3';
     codebasePath: string;
-    fingerprint: IndexFingerprint & {
-        parserVersion: string;
-        extractorVersion: string;
-        relationshipVersion: string;
-    };
+    fingerprint: CanonicalCompletionFingerprint & Pick<
+        IndexFingerprint,
+        'embeddingProvider' | 'vectorStoreProvider' | 'schemaVersion'
+    >;
     indexedFiles: number;
     totalChunks: number;
     completedAt: string;

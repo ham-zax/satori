@@ -19,6 +19,9 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
 const CAPABILITIES = new CapabilityResolver({
     name: 'test',
     version: '0.0.0',
+    executionProfile: 'connected',
+    networkPolicy: { kind: 'remote-allowed' },
+    vectorStoreProvider: 'Milvus',
     encoderProvider: 'VoyageAI',
     encoderModel: 'voyage-4-large',
 });
@@ -335,7 +338,12 @@ test('handleGetIndexingStatus preserves vector readiness while exposing a missin
             root: { path: repoPath, info },
             vectorReceipt: {
                 collectionName,
-                marker: { indexStatus: 'completed' },
+                marker: {
+                    indexStatus: 'completed',
+                    runId: 'marker-run-checkpoint-status',
+                    indexPolicyHash: 'a'.repeat(64),
+                },
+                policyDocumentDigest: 'b'.repeat(64),
             },
             navigationStatus: 'valid',
         });
@@ -345,6 +353,12 @@ test('handleGetIndexingStatus preserves vector readiness while exposing a missin
             status?: string;
             humanText?: string;
             hints?: Record<string, unknown>;
+            publication?: {
+                collectionName: string;
+                markerRunId: string;
+                indexPolicyHash: string;
+                policyDocumentDigest: string;
+            };
         };
 
         assert.equal(payload.status, 'ok');
@@ -354,5 +368,11 @@ test('handleGetIndexingStatus preserves vector readiness while exposing a missin
         assert.equal((payload.hints?.sourceFreshness as { status?: string } | undefined)?.status, 'missing');
         assert.ok(payload.hints?.reindex);
         assert.equal(payload.hints?.create, undefined);
+        assert.deepEqual(payload.publication, {
+            collectionName,
+            markerRunId: 'marker-run-checkpoint-status',
+            indexPolicyHash: 'a'.repeat(64),
+            policyDocumentDigest: 'b'.repeat(64),
+        });
     });
 });

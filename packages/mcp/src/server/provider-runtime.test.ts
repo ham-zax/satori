@@ -1,9 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { SnapshotManager } from "../core/snapshot.js";
-import { buildRuntimeIndexFingerprint, ContextMcpConfig } from "../config.js";
+import {
+    buildRuntimeIndexFingerprint,
+    ContextMcpConfig,
+    parseIndexFingerprint,
+    resolveVectorStoreConfig,
+} from "../config.js";
 import type { ToolContext } from "../tools/types.js";
 import {
     createLocalOnlyContext,
@@ -23,6 +31,9 @@ function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig
     return {
         name: "test",
         version: "1.0.0",
+        executionProfile: "connected",
+        networkPolicy: { kind: "remote-allowed" },
+        vectorStoreProvider: "Milvus",
         encoderProvider: "VoyageAI",
         encoderModel: "voyage-4-large",
         encoderOutputDimension: 1024,
@@ -68,6 +79,72 @@ test("runtime fingerprint seals analysis and projection versions", () => {
     assert.equal(fingerprint.relationshipVersion, RELATIONSHIP_BUILDER_VERSION);
     assert.equal(fingerprint.embeddingProjectionVersion, EMBEDDING_PROJECTION_VERSION);
     assert.equal(fingerprint.lexicalProjectionVersion, LEXICAL_PROJECTION_VERSION);
+});
+
+test("vector-store configuration defaults to LanceDB while preserving explicit Milvus", () => {
+    assert.deepEqual(resolveVectorStoreConfig({ homeDir: "/home/test" }), {
+        vectorStoreProvider: "LanceDB",
+        lanceDbPath: path.resolve("/home/test/.satori/vector/lancedb"),
+    });
+    assert.deepEqual(resolveVectorStoreConfig({
+        provider: "Milvus",
+        homeDir: "/home/test",
+    }), { vectorStoreProvider: "Milvus" });
+    assert.deepEqual(resolveVectorStoreConfig({
+        provider: "LanceDB",
+        homeDir: "/home/test",
+    }), {
+        vectorStoreProvider: "LanceDB",
+        lanceDbPath: path.resolve("/home/test/.satori/vector/lancedb"),
+    });
+    assert.throws(() => resolveVectorStoreConfig({
+        provider: "LanceDB",
+        lanceDbPath: "relative/database",
+        homeDir: "/home/test",
+    }), /must be absolute/);
+    assert.throws(() => resolveVectorStoreConfig({
+        provider: "Unknown",
+        homeDir: "/home/test",
+    }), /Invalid VECTOR_STORE_PROVIDER/);
+});
+
+test("LanceDB runtime selection seals backend identity without requiring Milvus", async (t) => {
+    const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), "satori-provider-lancedb-"));
+    t.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));
+    const config = baseConfig({
+        vectorStoreProvider: "LanceDB",
+        lanceDbPath: databasePath,
+        milvusEndpoint: undefined,
+        milvusApiToken: undefined,
+    });
+    const fingerprint = buildRuntimeIndexFingerprint(config, 1024);
+    assert.equal(fingerprint.vectorStoreProvider, "LanceDB");
+    assert.deepEqual(parseIndexFingerprint(fingerprint), fingerprint);
+
+    const runtime = createRuntime(config);
+    assert.equal(runtime.validate("vector_only"), null);
+    const toolContext = await runtime.requireToolContext("vector_only");
+    assert.equal("ok" in toolContext, false);
+    if ("ok" in toolContext) return;
+
+    const vectorStore = toolContext.context.getVectorStore();
+    assert.deepEqual(vectorStore.getBackendInfo?.(), {
+        provider: "lancedb",
+        transport: "embedded",
+        address: databasePath,
+    });
+    await vectorStore.createCollection("runtime_probe", 2);
+    assert.deepEqual(await vectorStore.listCollections(), ["runtime_probe"]);
+
+    const contextFingerprint = (
+        toolContext.context as unknown as {
+            buildIndexCompletionFingerprint(): { vectorStoreProvider: string };
+        }
+    ).buildIndexCompletionFingerprint();
+    assert.equal(contextFingerprint.vectorStoreProvider, "LanceDB");
+
+    await runtime.shutdown();
+    await assert.rejects(vectorStore.listCollections(), /closed/);
 });
 
 test("vector-only context preserves the configured embedding model fingerprint", () => {

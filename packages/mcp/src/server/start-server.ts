@@ -7,11 +7,11 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { withSourceMeasurementOperation } from "@zokizuan/satori-core";
 import {
-    buildRuntimeIndexFingerprint,
     ContextMcpConfig,
     createMcpConfig,
     IndexFingerprint,
     logConfigurationSummary,
+    resolveMcpRuntimeBootstrap,
     showHelpMessage,
 } from "../config.js";
 import { CapabilityResolver } from "../core/capabilities.js";
@@ -26,7 +26,7 @@ import {
 import { MutationLeaseCoordinator } from "../core/mutation-lease.js";
 import { ToolContext } from "../tools/types.js";
 import { getMcpToolList, toolRegistry } from "../tools/registry.js";
-import { createLocalOnlyContext, ProviderRuntime, resolveConfiguredEmbeddingDimension } from "./provider-runtime.js";
+import { createLocalOnlyContext, ProviderRuntime } from "./provider-runtime.js";
 
 export type ServerRunMode = "mcp" | "cli" | "postflight";
 
@@ -124,7 +124,13 @@ class ContextMcpServer {
     private protocolStdout?: Writable;
     private keepAliveTimer: NodeJS.Timeout | null = null;
 
-    constructor(config: ContextMcpConfig, runMode: ServerRunMode, protocolStdout?: Writable, protocolStdin?: Readable) {
+    constructor(
+        config: ContextMcpConfig,
+        runtimeFingerprint: IndexFingerprint,
+        runMode: ServerRunMode,
+        protocolStdout?: Writable,
+        protocolStdin?: Readable,
+    ) {
         this.runMode = runMode;
         this.protocolStdin = protocolStdin;
         this.protocolStdout = protocolStdout;
@@ -142,7 +148,7 @@ class ContextMcpServer {
         );
 
         this.capabilities = new CapabilityResolver(config);
-        this.runtimeFingerprint = buildRuntimeIndexFingerprint(config, resolveConfiguredEmbeddingDimension(config));
+        this.runtimeFingerprint = runtimeFingerprint;
         this.readFileMaxLines = Math.max(1, config.readFileMaxLines ?? 1000);
         this.watchSyncEnabled = config.watchSyncEnabled === true;
         this.watchDebounceMs = Math.max(1, config.watchDebounceMs ?? 5000);
@@ -316,10 +322,24 @@ export async function startMcpServerFromEnv(options: StartMcpServerOptions = {})
 
     migrateLegacyStateDir();
 
-    const config = createMcpConfig();
+    const parsedConfig = createMcpConfig();
+    const { config, runtimeFingerprint } = await resolveMcpRuntimeBootstrap(
+        parsedConfig,
+        {},
+        {
+            useRecordedOllamaIdentity: runMode === "postflight"
+                && parsedConfig.executionProfile === "offline",
+        },
+    );
     logConfigurationSummary(config);
 
-    const server = new ContextMcpServer(config, runMode, options.protocolStdout, options.protocolStdin);
+    const server = new ContextMcpServer(
+        config,
+        runtimeFingerprint,
+        runMode,
+        options.protocolStdout,
+        options.protocolStdin,
+    );
     await server.start();
     return server;
 }

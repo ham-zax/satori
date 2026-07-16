@@ -11,12 +11,15 @@ export type RuntimeOwnerMutationAction = "create" | "reindex" | "sync" | "clear"
 
 
 export interface RuntimeOwnerConfigSummary {
+    executionProfile?: 'connected' | 'offline';
+    networkPolicy?: 'remote-allowed' | 'local-only';
     embeddingProvider: string;
     embeddingModel: string;
     embeddingDimension: number;
     vectorStoreProvider: string;
     schemaVersion: string;
     milvusEndpoint?: string | null;
+    lanceDbPath?: string | null;
     rankerModel?: string | null;
 }
 
@@ -164,12 +167,17 @@ export function buildRuntimeOwnerIdentity(args: {
     configSummary: RuntimeOwnerConfigSummary;
 }): RuntimeOwnerIdentity {
     const normalizedSummary: RuntimeOwnerConfigSummary = {
+        executionProfile: args.configSummary.executionProfile ?? 'connected',
+        networkPolicy: args.configSummary.networkPolicy ?? 'remote-allowed',
         embeddingProvider: args.configSummary.embeddingProvider,
         embeddingModel: args.configSummary.embeddingModel,
         embeddingDimension: args.configSummary.embeddingDimension,
         vectorStoreProvider: args.configSummary.vectorStoreProvider,
         schemaVersion: args.configSummary.schemaVersion,
         milvusEndpoint: normalizeEndpoint(args.configSummary.milvusEndpoint ?? undefined),
+        ...(args.configSummary.lanceDbPath
+            ? { lanceDbPath: path.resolve(args.configSummary.lanceDbPath) }
+            : {}),
         rankerModel: args.configSummary.rankerModel ?? null,
     };
     const identityPayload = {
@@ -195,12 +203,15 @@ export function buildRuntimeOwnerIdentityFromConfig(args: {
         runtimeFingerprint: args.runtimeFingerprint,
         configSource: args.configSource || "env",
         configSummary: {
+            executionProfile: args.config.executionProfile,
+            networkPolicy: args.config.networkPolicy.kind,
             embeddingProvider: args.config.encoderProvider,
             embeddingModel: args.config.encoderModel,
             embeddingDimension: args.runtimeFingerprint.embeddingDimension,
             vectorStoreProvider: args.runtimeFingerprint.vectorStoreProvider,
             schemaVersion: args.runtimeFingerprint.schemaVersion,
             milvusEndpoint: args.config.milvusEndpoint,
+            ...(args.config.lanceDbPath ? { lanceDbPath: args.config.lanceDbPath } : {}),
             rankerModel: args.config.rankerModel || null,
         }
     });

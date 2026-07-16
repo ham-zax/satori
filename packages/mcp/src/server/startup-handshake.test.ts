@@ -379,7 +379,7 @@ test("manage_index create returns MISSING_PROVIDER_CONFIG with empty provider en
         assert.equal(payload.status, "error");
         assert.equal(payload.reason, "missing_provider_config");
         assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
-        assert.deepEqual(payload.hints?.setup?.missingEnv, ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"]);
+        assert.deepEqual(payload.hints?.setup?.missingEnv, ["VOYAGEAI_API_KEY"]);
 
         const toolsAfterError = await session.request("tools/list");
         assert.deepEqual(toolNames(toolsAfterError), [...EXPECTED_TOOLS].sort());
@@ -404,6 +404,6 @@ test("search_codebase returns MISSING_PROVIDER_CONFIG with empty provider env", 
         assert.equal(payload.reason, "missing_provider_config");
         assert.equal(payload.code, "MISSING_PROVIDER_CONFIG");
         assert.deepEqual(payload.results, []);
-        assert.deepEqual(payload.hints?.setup?.missingEnv, ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"]);
+        assert.deepEqual(payload.hints?.setup?.missingEnv, ["VOYAGEAI_API_KEY"]);
     });
 });

@@ -142,6 +142,8 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingProvider: 'VoyageAI',
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
+    embeddingArtifactDigest: null,
+    embeddingNormalizationPolicy: 'provider_output_v1',
     vectorStoreProvider: 'Milvus',
     schemaVersion: 'hybrid_v3',
     parserVersion: 'parser-v1',
@@ -159,6 +161,9 @@ const DENSE_RUNTIME_FINGERPRINT: IndexFingerprint = {
 const CAPABILITIES_NO_RERANK = new CapabilityResolver({
     name: 'test',
     version: '0.0.0',
+    executionProfile: 'connected',
+    networkPolicy: { kind: 'remote-allowed' },
+    vectorStoreProvider: 'Milvus',
     encoderProvider: 'VoyageAI',
     encoderModel: 'voyage-4-large',
 });
@@ -569,6 +574,9 @@ function createHandlers(
     const capabilities = new CapabilityResolver({
         name: 'test',
         version: '0.0.0',
+        executionProfile: 'connected',
+        networkPolicy: { kind: 'remote-allowed' },
+        vectorStoreProvider: 'Milvus',
         encoderProvider: 'VoyageAI',
         encoderModel: 'voyage-4-large',
         ...(reranker ? { voyageKey: 'test' } : {}),
@@ -5352,6 +5360,9 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
         const context = createLocalOnlyContext({
             name: 'test',
             version: '0.0.0',
+            executionProfile: 'connected',
+            networkPolicy: { kind: 'remote-allowed' },
+            vectorStoreProvider: 'Milvus',
             encoderProvider: 'VoyageAI',
             encoderModel: 'voyage-4-large',
             encoderOutputDimension: 1024,
@@ -6049,6 +6060,9 @@ test('handleSearchCode marks rerank.enabled=false when reranker instance is miss
         const capabilities = new CapabilityResolver({
             name: 'test',
             version: '0.0.0',
+            executionProfile: 'connected',
+            networkPolicy: { kind: 'remote-allowed' },
+            vectorStoreProvider: 'Milvus',
             encoderProvider: 'VoyageAI',
             encoderModel: 'voyage-4-large',
             voyageKey: 'test'

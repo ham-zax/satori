@@ -18,7 +18,7 @@ class DeterministicEmbedding {
     return 4;
   }
 
-  async embed(text) {
+  embedText(text) {
     const lower = (text || '').toLowerCase();
     const vector = [
       /auth|token|login|session|credential|password|user/.test(lower) ? 1 : 0,
@@ -29,8 +29,12 @@ class DeterministicEmbedding {
     return { vector, dimension: 4 };
   }
 
-  async embedBatch(texts) {
-    return Promise.all(texts.map((text) => this.embed(text)));
+  async embedQuery(text) {
+    return this.embedText(text);
+  }
+
+  async embedDocuments(texts) {
+    return texts.map((text) => this.embedText(text));
   }
 
   getDimension() {
@@ -86,13 +90,41 @@ class InMemoryVectorDatabase {
   async insert(collectionName, documents) {
     const collection = this.collections.get(collectionName);
     if (!collection) throw new Error(`Collection not found: ${collectionName}`);
-    for (const doc of documents) {
+    for (const input of documents) {
+      const doc = input.projections ? input.document : input;
       collection.docs.set(doc.id, doc);
     }
   }
 
   async insertHybrid(collectionName, documents) {
     return this.insert(collectionName, documents);
+  }
+
+  async insertControl(collectionName, record) {
+    return this.insert(collectionName, [{
+      id: record.id,
+      vector: [],
+      content: '',
+      relativePath: '.__satori__/control.json',
+      startLine: 0,
+      endLine: 0,
+      fileExtension: '.satori_meta',
+      metadata: { ...record.metadata, kind: record.kind },
+    }]);
+  }
+
+  async getControl(collectionName, id) {
+    const document = this.collections.get(collectionName)?.docs.get(id);
+    if (!document) return null;
+    return {
+      id,
+      kind: typeof document.metadata?.kind === 'string' ? document.metadata.kind : '',
+      metadata: { ...document.metadata },
+    };
+  }
+
+  async deleteControl(collectionName, id) {
+    return this.delete(collectionName, [id]);
   }
 
   async search(collectionName, queryVector, options = {}) {
@@ -560,7 +592,26 @@ test('integration: semantic_search applies threshold in hybrid mode', async () =
       retrievalMode: 'dense',
       scorePolicy: { kind: 'dense_similarity_min', min: 0.5 },
     });
-    assert.deepEqual(results.map((result) => result.relativePath), ['src/auth.ts']);
+    assert.deepEqual(results.map(({ relativePath, startLine, endLine, content }) => ({
+      relativePath,
+      startLine,
+      endLine,
+      content,
+    })), [
+      {
+        relativePath: 'src/auth.ts',
+        startLine: 1,
+        endLine: 1,
+        content: 'export ',
+      },
+      {
+        relativePath: 'src/auth.ts',
+        startLine: 1,
+        endLine: 1,
+        content: 'function issueToken(user) { return `token-${user}`; }',
+      },
+    ]);
+    assert.ok(results.every((result) => result.score >= 0.5));
   } finally {
     fs.rmSync(codebasePath, { recursive: true, force: true });
   }

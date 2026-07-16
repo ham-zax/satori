@@ -113,7 +113,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     const action = message.params.arguments.action;
     payload = action === "sync"
       ? { status: ${JSON.stringify(status)}, action, path: message.params.arguments.path, operation: operation(), syncStats: { added: 0, removed: 0, modified: 0 } }
-      : { status: ${JSON.stringify(status)}, action: "status", path: message.params.arguments.path, operation: operation() };
+      : { status: ${JSON.stringify(status)}, action: "status", path: message.params.arguments.path, operation: operation(), publication: { collectionName: "generation-7", markerRunId: "marker-run-7", indexPolicyHash: "${"a".repeat(64)}", policyDocumentDigest: "${"b".repeat(64)}" } };
   } else if (name === "search_codebase") {
     if (dirtyFile) fs.appendFileSync(dirtyFile, "changed during recording\\n");
     const proofMode = measuredSearchRan ? "warm" : "cold";
@@ -521,6 +521,7 @@ rl.on("line", (line) => {
     };
     payload = {
       status: "ok", action, path: message.params.arguments.path, runtimeId: process.pid, operation,
+      ...(action === "status" ? { publication: { collectionName: "generation-7", markerRunId: "marker-run-7", indexPolicyHash: "${"a".repeat(64)}", policyDocumentDigest: "${"b".repeat(64)}" } } : {}),
       ...(action === "sync" ? { syncStats: { added: 0, removed: 0, modified: 0 } } : {})
     };
   } else if (name === "search_codebase") {

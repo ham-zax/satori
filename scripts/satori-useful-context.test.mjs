@@ -12,6 +12,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const COMMITTED_TASKS = path.join(REPO_ROOT, "evals/useful-context/tasks.json");
 
 const {
+    canonicalJson,
     validateTaskSuite,
     validateObservationSet,
     serializedPayloadBytes,
@@ -21,6 +22,13 @@ const {
     parseArgs,
     main,
 } = await import("./satori-useful-context.mjs");
+
+test("canonical JSON ignores object insertion order while preserving values", () => {
+    assert.equal(
+        canonicalJson({ root: "/repo", fingerprint: { model: "voyage", provider: "VoyageAI" } }),
+        canonicalJson({ fingerprint: { provider: "VoyageAI", model: "voyage" }, root: "/repo" }),
+    );
+});
 
 const QUERY_CLASSES = [
     "owner_discovery",

@@ -105,6 +105,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         runtimeFingerprint: { embeddingProvider: "VoyageAI", embeddingModel: "voyage-4-lite", embeddingDimension: 1024, vectorStoreProvider: "Milvus", schemaVersion: "hybrid_v3" },
         writer: { ownerId: "fake-owner", pid: process.pid, satoriVersion: "1" }
       },
+      ...(args.action === "status" ? { publication: { collectionName: "generation-2", markerRunId: "marker-run-2", indexPolicyHash: "${"a".repeat(64)}", policyDocumentDigest: "${"b".repeat(64)}" } } : {}),
       ...(args.action === "sync" ? { syncStats: { added: 0, removed: 0, modified } } : {})
     };
   } else if (name === "call_graph") {

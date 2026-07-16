@@ -32,6 +32,7 @@
     "release:cli": "pnpm --filter @zokizuan/satori-cli... run build && pnpm run release:smoke:cli && pnpm --filter @zokizuan/satori-cli publish --access public --no-git-checks",
     "test:integration": "pnpm --filter @zokizuan/satori-core run test:integration",
     "eval:useful-context:record": "node scripts/satori-useful-context-record.mjs",
+    "eval:vector-stacks": "node scripts/satori-vector-stack-compare.mjs",
     "eval:useful-context:fixtures": "node scripts/satori-useful-context-fixture-record.mjs",
     "eval:search-quality": "pnpm --filter @zokizuan/satori-mcp exec tsx ../../evals/search-quality/run.ts",
     "eval:agent-discovery": "node --no-warnings evals/agent-discovery/run-opencode.mjs",

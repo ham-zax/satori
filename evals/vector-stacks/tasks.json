@@ -1,0 +1,162 @@
+{
+  "version": 1,
+  "name": "Satori vector-stack paired comparison corpus",
+  "tasks": [
+    {
+      "id": "hybrid-install-preflight-owner",
+      "queryClass": "owner_discovery",
+      "comparisonClass": "hybrid",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "packages/cli/src/install-preflight.ts",
+        "ownerSymbol": "runInstallPreflight"
+      },
+      "workload": {
+        "setup": [
+          {
+            "tool": "manage_index",
+            "args": {
+              "action": "status",
+              "path": "$REPO_ROOT"
+            }
+          }
+        ],
+        "invocations": [
+          {
+            "tool": "search_codebase",
+            "args": {
+              "path": "$REPO_ROOT",
+              "query": "owner of installer runtime preflight and local model identity checks",
+              "scope": "runtime",
+              "resultMode": "grouped",
+              "groupBy": "symbol",
+              "rankingMode": "auto_changed_first",
+              "debugMode": "full"
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "start a fresh MCP runtime, complete an unmeasured sync with durable status proof, then run the workload once",
+          "warm": "repeat the identical workload while the proven index operation remains unchanged"
+        }
+      }
+    },
+    {
+      "id": "lexical-projection-version-owner",
+      "queryClass": "exact_identifier",
+      "comparisonClass": "lexical",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "packages/core/src/core/search-projections.ts",
+        "ownerSymbol": "EMBEDDING_PROJECTION_VERSION"
+      },
+      "workload": {
+        "setup": [
+          {
+            "tool": "manage_index",
+            "args": {
+              "action": "status",
+              "path": "$REPO_ROOT"
+            }
+          }
+        ],
+        "invocations": [
+          {
+            "tool": "search_codebase",
+            "args": {
+              "path": "$REPO_ROOT",
+              "query": "EMBEDDING_PROJECTION_VERSION",
+              "scope": "runtime",
+              "resultMode": "grouped",
+              "groupBy": "symbol",
+              "rankingMode": "auto_changed_first",
+              "debugMode": "full"
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "start a fresh MCP runtime, complete an unmeasured sync with durable status proof, then run the workload once",
+          "warm": "repeat the identical workload while the proven index operation remains unchanged"
+        }
+      }
+    },
+    {
+      "id": "configuration-runtime-profile-owner",
+      "queryClass": "owner_discovery",
+      "comparisonClass": "configuration",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "packages/mcp/src/config.ts",
+        "ownerSymbol": "createMcpConfig"
+      },
+      "workload": {
+        "setup": [
+          {
+            "tool": "manage_index",
+            "args": {
+              "action": "status",
+              "path": "$REPO_ROOT"
+            }
+          }
+        ],
+        "invocations": [
+          {
+            "tool": "search_codebase",
+            "args": {
+              "path": "$REPO_ROOT",
+              "query": "where is SATORI_RUNTIME_PROFILE configured",
+              "scope": "runtime",
+              "resultMode": "grouped",
+              "groupBy": "symbol",
+              "rankingMode": "auto_changed_first",
+              "debugMode": "full"
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "start a fresh MCP runtime, complete an unmeasured sync with durable status proof, then run the workload once",
+          "warm": "repeat the identical workload while the proven index operation remains unchanged"
+        }
+      }
+    },
+    {
+      "id": "structural-runtime-bootstrap-owner",
+      "queryClass": "owner_discovery",
+      "comparisonClass": "structural",
+      "language": "typescript",
+      "expected": {
+        "ownerFile": "packages/mcp/src/config.ts",
+        "ownerSymbol": "resolveMcpRuntimeBootstrap"
+      },
+      "workload": {
+        "setup": [
+          {
+            "tool": "manage_index",
+            "args": {
+              "action": "status",
+              "path": "$REPO_ROOT"
+            }
+          }
+        ],
+        "invocations": [
+          {
+            "tool": "search_codebase",
+            "args": {
+              "path": "$REPO_ROOT",
+              "query": "trace runtime provider bootstrap architecture",
+              "scope": "runtime",
+              "resultMode": "grouped",
+              "groupBy": "symbol",
+              "rankingMode": "auto_changed_first",
+              "debugMode": "full"
+            }
+          }
+        ],
+        "phaseProtocol": {
+          "cold": "start a fresh MCP runtime, complete an unmeasured sync with durable status proof, then run the workload once",
+          "warm": "repeat the identical workload while the proven index operation remains unchanged"
+        }
+      }
+    }
+  ]
+}

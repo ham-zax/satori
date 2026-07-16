@@ -7,7 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { validateObservationSet, validateTaskSuite } from "./satori-useful-context.mjs";
+import { canonicalJson, validateObservationSet, validateTaskSuite } from "./satori-useful-context.mjs";
 
 const EXPECTED_TOOLS = [
     "manage_index",
@@ -353,6 +353,7 @@ export function extractCompletedOperationProof(payload, expectedRoot, expectedAc
     return {
         id: operation.id,
         action: operation.action,
+        canonicalRoot: operation.canonicalRoot,
         generation: operation.generation,
         phase: operation.phase,
         lastDurableTransitionAt: operation.lastDurableTransitionAt,
@@ -360,9 +361,45 @@ export function extractCompletedOperationProof(payload, expectedRoot, expectedAc
     };
 }
 
+function extractPublicationProof(payload, expectedRoot) {
+    const publication = payload?.publication;
+    if (!isRecord(publication)
+        || typeof publication.collectionName !== "string"
+        || publication.collectionName.trim().length === 0
+        || typeof publication.markerRunId !== "string"
+        || publication.markerRunId.trim().length === 0
+        || typeof publication.indexPolicyHash !== "string"
+        || !/^[a-f0-9]{64}$/.test(publication.indexPolicyHash)
+        || typeof publication.policyDocumentDigest !== "string"
+        || !/^[a-f0-9]{64}$/.test(publication.policyDocumentDigest)) {
+        throw new Error(`Missing stable publication proof for '${expectedRoot}'.`);
+    }
+    return {
+        collectionName: publication.collectionName,
+        markerRunId: publication.markerRunId,
+        indexPolicyHash: publication.indexPolicyHash,
+        policyDocumentDigest: publication.policyDocumentDigest,
+    };
+}
+
 function assertSameIndexProof(expected, actual, taskId) {
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    if (canonicalJson(actual) !== canonicalJson(expected)) {
         throw new Error(`Task '${taskId}' index generation or operation proof drifted during measured calls.`);
+    }
+}
+
+function publicationIdentity(proof) {
+    return {
+        canonicalRoot: proof.canonicalRoot,
+        generation: proof.generation,
+        runtimeFingerprint: structuredClone(proof.runtimeFingerprint),
+        publication: structuredClone(proof.publication),
+    };
+}
+
+function assertSamePublishedGeneration(expected, actual, taskId) {
+    if (canonicalJson(publicationIdentity(actual)) !== canonicalJson(publicationIdentity(expected))) {
+        throw new Error(`Task '${taskId}' index publication changed between task runs.`);
     }
 }
 
@@ -592,11 +629,22 @@ async function prepareMeasurementState(session, task, repoRoot) {
         .every((value) => Number.isSafeInteger(value) && value >= 0)) {
         throw new Error(`Task '${task.id}' freshness preparation returned no structured syncStats proof.`);
     }
+    if ([syncStats.added, syncStats.removed, syncStats.modified].some((value) => value !== 0)) {
+        throw new Error(
+            `Task '${task.id}' freshness preparation changed the index; publish a stable no-change generation before recording.`,
+        );
+    }
     const preparedProof = extractCompletedOperationProof(prepared, repoRoot, "sync");
     const readiness = await proveReady(session, task);
     const readinessProof = extractCompletedOperationProof(readiness, repoRoot, "sync");
     assertSameIndexProof(preparedProof, readinessProof, task.id);
-    return { syncStats: structuredClone(syncStats), indexProof: preparedProof };
+    return {
+        syncStats: structuredClone(syncStats),
+        indexProof: {
+            ...preparedProof,
+            publication: extractPublicationProof(readiness, repoRoot),
+        },
+    };
 }
 
 export async function recordPhase(session, task, phase, repoRoot, sample) {
@@ -716,6 +764,7 @@ export async function recordSuite(taskSuite, options) {
     const revision = cleanGitRevision(repoRoot);
     const observations = [];
     const taskRuns = [];
+    let armIndexProof;
     let serverInfo;
     for (const task of expanded.tasks) {
         const session = new JsonRpcStdioSession({ ...options, cwd: repoRoot });
@@ -726,21 +775,27 @@ export async function recordSuite(taskSuite, options) {
             }
             serverInfo = structuredClone(session.serverInfo);
             const prepared = await prepareMeasurementState(session, task, repoRoot);
-            observations.push(await recordPhase(
+            if (armIndexProof) {
+                assertSamePublishedGeneration(armIndexProof, prepared.indexProof, task.id);
+            } else {
+                armIndexProof = structuredClone(prepared.indexProof);
+            }
+            const generationReceipt = publicationIdentity(prepared.indexProof);
+            observations.push({ ...(await recordPhase(
                 session,
                 task,
                 "cold",
                 repoRoot,
                 outputVersion === 2 ? 0 : undefined,
-            ));
+            )), generationReceipt });
             for (let sample = 1; sample <= warmSampleCount; sample += 1) {
-                observations.push(await recordPhase(
+                observations.push({ ...(await recordPhase(
                     session,
                     task,
                     "warm",
                     repoRoot,
                     outputVersion === 2 ? sample : undefined,
-                ));
+                )), generationReceipt });
             }
             const finalStatus = (await callAndDecode(session, {
                 tool: "manage_index",
@@ -749,7 +804,10 @@ export async function recordSuite(taskSuite, options) {
             if (finalStatus.status !== "ok") {
                 throw new Error(`Task '${task.id}' index status changed during measured calls.`);
             }
-            const finalProof = extractCompletedOperationProof(finalStatus, repoRoot, "sync");
+            const finalProof = {
+                ...extractCompletedOperationProof(finalStatus, repoRoot, "sync"),
+                publication: extractPublicationProof(finalStatus, repoRoot),
+            };
             assertSameIndexProof(prepared.indexProof, finalProof, task.id);
             taskRuns.push({ taskId: task.id, ...prepared });
         } finally {
@@ -760,6 +818,9 @@ export async function recordSuite(taskSuite, options) {
     if (finalRevision !== revision) {
         throw new Error(`Repository revision changed during recording (${revision} -> ${finalRevision}); discard this run.`);
     }
+    if (!armIndexProof) {
+        throw new Error("No arm-level index generation proof was recorded.");
+    }
     const recorded = {
         version: outputVersion,
         ...(outputVersion === 2 ? { warmSampleCount } : {}),
@@ -769,6 +830,7 @@ export async function recordSuite(taskSuite, options) {
             taskSuiteSha256: hashTaskSuite(validated),
             serverInfo,
             node: recorderNodeMetadata(),
+            armIndexProof,
             taskRuns,
             warmSampleCount,
         },

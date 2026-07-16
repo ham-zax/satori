@@ -12,6 +12,14 @@ const QUERY_CLASSES = [
     "dirty_owner",
     "stale_recovery",
 ];
+const COMPARISON_CLASSES = new Set([
+    "exact",
+    "lexical",
+    "dense",
+    "hybrid",
+    "structural",
+    "configuration",
+]);
 const PHASES = new Set(["cold", "warm"]);
 const PHASE_ORDER = ["cold", "warm"];
 const STATUSES = new Set(["ok", "zero_result", "fallback", "error"]);
@@ -45,6 +53,18 @@ const MCP_TOOLS = new Set([
 
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function canonicalize(value) {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (isRecord(value)) {
+        return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+    }
+    return value;
+}
+
+export function canonicalJson(value) {
+    return JSON.stringify(canonicalize(value));
 }
 
 function requireRecord(value, label) {
@@ -271,10 +291,21 @@ export function validateTaskSuite(value) {
         if (task.queryClass === "caller_recovery" && expected.callerSymbols === undefined) {
             throw new Error(`tasks[${index}].expected.callerSymbols is required for caller_recovery.`);
         }
+        let comparisonClass;
+        if (task.comparisonClass !== undefined) {
+            comparisonClass = requireNonEmptyString(
+                task.comparisonClass,
+                `tasks[${index}].comparisonClass`,
+            );
+            if (!COMPARISON_CLASSES.has(comparisonClass)) {
+                throw new Error(`tasks[${index}].comparisonClass is unsupported.`);
+            }
+        }
 
         const normalized = {
             id,
             queryClass: task.queryClass,
+            ...(comparisonClass !== undefined ? { comparisonClass } : {}),
             language: requireNonEmptyString(task.language, `tasks[${index}].language`),
             expected,
             workload: requireWorkload(task.workload, `tasks[${index}].workload`),
@@ -556,6 +587,7 @@ export function gradeObservation(task, observation) {
     return {
         taskId: task.id,
         queryClass: task.queryClass,
+        ...(task.comparisonClass !== undefined ? { comparisonClass: task.comparisonClass } : {}),
         phase: observation.phase,
         ...(observation.sample !== undefined ? { sample: observation.sample } : {}),
         status: observation.status,

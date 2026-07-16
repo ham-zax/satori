@@ -66,11 +66,11 @@ class MetadataOnlyEmbedding extends Embedding {
         return this.dimension;
     }
 
-    async embed(_text: string): Promise<EmbeddingVector> {
+    async embedQuery(_text: string): Promise<EmbeddingVector> {
         throw new Error("MISSING_PROVIDER_CONFIG embedding provider is not configured");
     }
 
-    async embedBatch(_texts: string[]): Promise<EmbeddingVector[]> {
+    async embedDocuments(_texts: string[]): Promise<EmbeddingVector[]> {
         throw new Error("MISSING_PROVIDER_CONFIG embedding provider is not configured");
     }
 
@@ -95,6 +95,9 @@ class UnconfiguredVectorDatabase implements VectorDatabase {
     async listCollections(): Promise<string[]> { this.throwMissing(); }
     async insert(): Promise<void> { this.throwMissing(); }
     async insertHybrid(): Promise<void> { this.throwMissing(); }
+    async insertControl(): Promise<void> { this.throwMissing(); }
+    async getControl(): Promise<null> { this.throwMissing(); }
+    async deleteControl(): Promise<void> { this.throwMissing(); }
     async search(): Promise<VectorSearchResults> { this.throwMissing(); }
     async hybridSearch(): Promise<HybridVectorSearchResults> { this.throwMissing(); }
     async delete(): Promise<void> { this.throwMissing(); }
@@ -285,6 +288,7 @@ export class ProviderRuntime {
         const vectorDatabase = new MilvusVectorDatabase({
             address: this.config.milvusEndpoint,
             ...(this.config.milvusApiToken && { token: this.config.milvusApiToken }),
+            vectorDimension: embedding.getDimension(),
         });
         const context = new Context({
             embedding,

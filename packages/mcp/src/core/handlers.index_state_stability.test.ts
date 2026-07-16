@@ -1336,7 +1336,7 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
         assert.match(payload.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
         assert.match(
             (payload.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint || '',
-            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}$/,
+            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}\/embedding_projection=legacy\/lexical_projection=legacy$/,
         );
         assert.equal(startedBackgroundIndexing, false);
         assert.equal(collectionLimitCalls, 0);

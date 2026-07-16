@@ -16,7 +16,9 @@ import type {
     HybridSearchOptions,
     HybridSearchRequest,
     HybridSearchResult,
+    IndexedVectorDocument,
     SearchOptions,
+    VectorControlRecord,
     VectorDatabase,
     VectorDocument,
     VectorSearchResult,
@@ -68,15 +70,15 @@ class TestEmbedding implements Embedding {
         return 4;
     }
 
-    async embed(text: string): Promise<EmbeddingVector> {
+    async embedQuery(text: string): Promise<EmbeddingVector> {
         return {
             vector: [text.length % 3, text.length % 5, text.length % 7, 1],
             dimension: 4,
         };
     }
 
-    async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
-        return Promise.all(texts.map((text) => this.embed(text)));
+    async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+        return Promise.all(texts.map((text) => this.embedQuery(text)));
     }
 
     getDimension(): number {
@@ -128,18 +130,51 @@ class InMemoryVectorDatabase implements VectorDatabase {
         return Array.from(this.collections.keys()).map((name) => ({ name }));
     }
 
-    async insert(collectionName: string, documents: VectorDocument[]): Promise<void> {
+    async insert(
+        collectionName: string,
+        documents: Array<IndexedVectorDocument | VectorDocument>,
+    ): Promise<void> {
         const collection = this.collections.get(collectionName);
         if (!collection) {
             throw new Error(`Collection not found: ${collectionName}`);
         }
-        for (const document of documents) {
+        for (const input of documents) {
+            const document = 'projections' in input ? input.document : input;
             collection.set(document.id, document);
         }
     }
 
-    async insertHybrid(collectionName: string, documents: VectorDocument[]): Promise<void> {
+    async insertHybrid(
+        collectionName: string,
+        documents: Array<IndexedVectorDocument | VectorDocument>,
+    ): Promise<void> {
         await this.insert(collectionName, documents);
+    }
+
+    async insertControl(collectionName: string, record: VectorControlRecord): Promise<void> {
+        await this.insert(collectionName, [{
+            id: record.id,
+            vector: [],
+            content: '',
+            relativePath: '.__satori__/control.json',
+            startLine: 0,
+            endLine: 0,
+            fileExtension: '.satori_meta',
+            metadata: { ...record.metadata, kind: record.kind },
+        }]);
+    }
+
+    async getControl(collectionName: string, id: string): Promise<VectorControlRecord | null> {
+        const document = this.collections.get(collectionName)?.get(id);
+        return document ? {
+            id,
+            kind: typeof document.metadata.kind === 'string' ? document.metadata.kind : '',
+            metadata: { ...document.metadata },
+        } : null;
+    }
+
+    async deleteControl(collectionName: string, id: string): Promise<void> {
+        await this.delete(collectionName, [id]);
     }
 
     async search(collectionName: string, _queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {

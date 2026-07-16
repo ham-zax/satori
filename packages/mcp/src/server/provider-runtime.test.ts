@@ -12,7 +12,9 @@ import {
     startProviderSyncLifecycle,
 } from "./provider-runtime.js";
 import {
+    EMBEDDING_PROJECTION_VERSION,
     LANGUAGE_PARSER_VERSION,
+    LEXICAL_PROJECTION_VERSION,
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
 } from "@zokizuan/satori-core";
@@ -59,11 +61,13 @@ test("embedding/vector operations require provider key and MILVUS_ADDRESS", () =
     }
 });
 
-test("runtime fingerprint seals parser, extractor, and relationship versions", () => {
+test("runtime fingerprint seals analysis and projection versions", () => {
     const fingerprint = buildRuntimeIndexFingerprint(baseConfig(), 1024);
     assert.equal(fingerprint.parserVersion, LANGUAGE_PARSER_VERSION);
     assert.equal(fingerprint.extractorVersion, SYMBOL_EXTRACTOR_VERSION);
     assert.equal(fingerprint.relationshipVersion, RELATIONSHIP_BUILDER_VERSION);
+    assert.equal(fingerprint.embeddingProjectionVersion, EMBEDDING_PROJECTION_VERSION);
+    assert.equal(fingerprint.lexicalProjectionVersion, LEXICAL_PROJECTION_VERSION);
 });
 
 test("vector-only context preserves the configured embedding model fingerprint", () => {

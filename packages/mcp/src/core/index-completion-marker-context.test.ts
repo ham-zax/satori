@@ -5,22 +5,26 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     Context,
+    EMBEDDING_PROJECTION_VERSION,
     Embedding,
     INDEX_COMPLETION_MARKER_DOC_ID,
     INDEX_COMPLETION_MARKER_FILE_EXTENSION,
     LANGUAGE_PARSER_VERSION,
+    LEXICAL_PROJECTION_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
     RELATIONSHIP_BUILDER_VERSION,
 } from '@zokizuan/satori-core';
 import type {
     EmbeddingVector,
     VectorDatabase,
+    VectorControlRecord,
     VectorDocument,
     SearchOptions,
     VectorSearchResult,
     HybridSearchRequest,
     HybridSearchOptions,
     HybridSearchResult,
+    IndexedVectorDocument,
     IndexCompletionMarkerDocument,
     SemanticSearchRequest
 } from '@zokizuan/satori-core';
@@ -36,11 +40,11 @@ class FakeEmbedding extends Embedding {
         return 4;
     }
 
-    async embed(_text: string): Promise<EmbeddingVector> {
+    async embedQuery(_text: string): Promise<EmbeddingVector> {
         return { vector: [0.1, 0.2, 0.3, 0.4], dimension: 4 };
     }
 
-    async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
+    async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
         return texts.map(() => ({ vector: [0.1, 0.2, 0.3, 0.4], dimension: 4 }));
     }
 
@@ -73,7 +77,7 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
         return match?.[1] || null;
     };
 
-    const db: VectorDatabase = {
+    const db = {
         async createCollection(collectionName) { ensureCollection(collectionName); },
         async createHybridCollection(collectionName) { ensureCollection(collectionName); },
         async dropCollection(collectionName) {
@@ -85,17 +89,48 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
         async listCollections() {
             return Array.from(byCollection.keys());
         },
-        async insert(collectionName, documents) {
+        async insert(
+            collectionName: string,
+            documents: Array<IndexedVectorDocument | VectorDocument>,
+        ) {
             const collection = ensureCollection(collectionName);
-            for (const doc of documents) {
+            for (const input of documents) {
+                const doc = 'projections' in input ? input.document : input;
                 collection.set(doc.id, doc);
             }
         },
-        async insertHybrid(collectionName, documents) {
+        async insertHybrid(
+            collectionName: string,
+            documents: Array<IndexedVectorDocument | VectorDocument>,
+        ) {
             const collection = ensureCollection(collectionName);
-            for (const doc of documents) {
+            for (const input of documents) {
+                const doc = 'projections' in input ? input.document : input;
                 collection.set(doc.id, doc);
             }
+        },
+        async insertControl(collectionName: string, record: VectorControlRecord) {
+            ensureCollection(collectionName).set(record.id, {
+                id: record.id,
+                vector: [],
+                content: '',
+                relativePath: '.__satori__/control.json',
+                startLine: 0,
+                endLine: 0,
+                fileExtension: '.satori_meta',
+                metadata: { ...record.metadata, kind: record.kind },
+            });
+        },
+        async getControl(collectionName: string, id: string): Promise<VectorControlRecord | null> {
+            const document = byCollection.get(collectionName)?.get(id);
+            return document ? {
+                id,
+                kind: typeof document.metadata.kind === 'string' ? document.metadata.kind : '',
+                metadata: { ...document.metadata },
+            } : null;
+        },
+        async deleteControl(collectionName: string, id: string) {
+            byCollection.get(collectionName)?.delete(id);
         },
         async search(collectionName, _queryVector, searchOptions?: SearchOptions): Promise<VectorSearchResult[]> {
             lastSearchCollectionName = collectionName;
@@ -144,7 +179,7 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
         async checkCollectionLimit() {
             return true;
         }
-    };
+    } satisfies VectorDatabase;
 
     return {
         db: {
@@ -185,6 +220,8 @@ function buildMarker(indexPolicyHash = TEST_POLICY_HASH): IndexCompletionMarkerD
             parserVersion: LANGUAGE_PARSER_VERSION,
             extractorVersion: SYMBOL_EXTRACTOR_VERSION,
             relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
+            embeddingProjectionVersion: EMBEDDING_PROJECTION_VERSION,
+            lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
         },
         indexedFiles: 169,
         totalChunks: 1,

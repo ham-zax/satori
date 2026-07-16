@@ -12,6 +12,8 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     parserVersion: 'parser-v1',
     extractorVersion: 'extractor-v1',
     relationshipVersion: 'relationship-v1',
+    embeddingProjectionVersion: 'embedding_projection_v1',
+    lexicalProjectionVersion: 'lexical_projection_v1',
 };
 
 const POLICY_HASH = 'a'.repeat(64);

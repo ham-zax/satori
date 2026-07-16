@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import {
     envManager,
+    EMBEDDING_PROJECTION_VERSION,
     LANGUAGE_PARSER_VERSION,
+    LEXICAL_PROJECTION_VERSION,
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
 } from "@zokizuan/satori-core";
@@ -40,6 +42,8 @@ export interface IndexFingerprint {
     parserVersion?: string;
     extractorVersion?: string;
     relationshipVersion?: string;
+    embeddingProjectionVersion?: string;
+    lexicalProjectionVersion?: string;
 }
 
 export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
@@ -58,6 +62,14 @@ export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
         || (record.parserVersion !== undefined && typeof record.parserVersion !== 'string')
         || (record.extractorVersion !== undefined && typeof record.extractorVersion !== 'string')
         || (record.relationshipVersion !== undefined && typeof record.relationshipVersion !== 'string')
+        || (record.embeddingProjectionVersion !== undefined
+            && (typeof record.embeddingProjectionVersion !== 'string'
+                || record.embeddingProjectionVersion.trim().length === 0))
+        || (record.lexicalProjectionVersion !== undefined
+            && (typeof record.lexicalProjectionVersion !== 'string'
+                || record.lexicalProjectionVersion.trim().length === 0))
+        || ((record.embeddingProjectionVersion === undefined)
+            !== (record.lexicalProjectionVersion === undefined))
     ) {
         return null;
     }
@@ -70,6 +82,12 @@ export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
         ...(record.parserVersion !== undefined ? { parserVersion: record.parserVersion } : {}),
         ...(record.extractorVersion !== undefined ? { extractorVersion: record.extractorVersion } : {}),
         ...(record.relationshipVersion !== undefined ? { relationshipVersion: record.relationshipVersion } : {}),
+        ...(record.embeddingProjectionVersion !== undefined
+            ? { embeddingProjectionVersion: record.embeddingProjectionVersion }
+            : {}),
+        ...(record.lexicalProjectionVersion !== undefined
+            ? { lexicalProjectionVersion: record.lexicalProjectionVersion }
+            : {}),
     };
 }
 
@@ -81,7 +99,9 @@ export function indexFingerprintsEqual(left: IndexFingerprint, right: IndexFinge
         && left.schemaVersion === right.schemaVersion
         && left.parserVersion === right.parserVersion
         && left.extractorVersion === right.extractorVersion
-        && left.relationshipVersion === right.relationshipVersion;
+        && left.relationshipVersion === right.relationshipVersion
+        && left.embeddingProjectionVersion === right.embeddingProjectionVersion
+        && left.lexicalProjectionVersion === right.lexicalProjectionVersion;
 }
 
 export function summarizeIndexFingerprint(fingerprint: IndexFingerprint): string {
@@ -97,6 +117,8 @@ export function summarizeIndexFingerprint(fingerprint: IndexFingerprint): string
         `parser=${summarizeIdentity(fingerprint.parserVersion)}`,
         `extractor=${summarizeIdentity(fingerprint.extractorVersion)}`,
         `relationship=${summarizeIdentity(fingerprint.relationshipVersion)}`,
+        `embedding_projection=${summarizeIdentity(fingerprint.embeddingProjectionVersion)}`,
+        `lexical_projection=${summarizeIdentity(fingerprint.lexicalProjectionVersion)}`,
     ].join('/');
 }
 
@@ -305,6 +327,8 @@ export function buildRuntimeIndexFingerprint(config: ContextMcpConfig, embedding
         parserVersion: LANGUAGE_PARSER_VERSION,
         extractorVersion: SYMBOL_EXTRACTOR_VERSION,
         relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
+        embeddingProjectionVersion: EMBEDDING_PROJECTION_VERSION,
+        lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
     };
 }
 

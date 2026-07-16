@@ -41,8 +41,6 @@ import {
 import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
-    SEARCH_MAX_CANDIDATES,
-    SEARCH_MUST_RETRY_ROUNDS,
     SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N,
     PathCategory,
     SearchGroupBy,
@@ -173,6 +171,7 @@ import {
     type SearchDiagnostics,
     type SearchFilterSummary,
 } from "./search-execution.js";
+import { resolveSearchPolicy } from './search-policy.js';
 import { runExactRegistryFastPath } from "./search-exact-fast-path.js";
 import { finalizeSearchResults } from "./search-result-finalization.js";
 import type {
@@ -3351,8 +3350,12 @@ export class ToolHandlers {
             const queryPlan = this.searchQuerySupport.buildSearchQueryPlan(semanticQuery, parsedOperators);
             searchDiagnostics.routeKind = queryPlan.route.kind;
             searchDiagnostics.retrievalMode = queryPlan.retrievalMode;
-            const maxAttempts = parsedOperators.must.length > 0 ? 1 + SEARCH_MUST_RETRY_ROUNDS : 1;
-            let candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
+            const retrievalPolicy = resolveSearchPolicy({
+                resultLimit: input.limit,
+                hasMustOperators: parsedOperators.must.length > 0,
+            });
+            const maxAttempts = retrievalPolicy.maxAttempts;
+            const candidateLimit = retrievalPolicy.candidateLimit;
             const initialFilterSummary: SearchFilterSummary = {
                 removedByScope: 0,
                 removedByLanguage: 0,

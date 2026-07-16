@@ -2,9 +2,6 @@ import type { SemanticSearchResult, VoyageAIReranker } from "@zokizuan/satori-co
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
-    SEARCH_MAX_CANDIDATES,
-    SEARCH_MUST_RETRY_MULTIPLIER,
-    SEARCH_MUST_RETRY_ROUNDS,
     SEARCH_RERANK_RRF_K,
     SEARCH_RERANK_WEIGHT,
     SEARCH_RRF_K,
@@ -42,6 +39,10 @@ import {
     selectRerankCandidates,
     type RerankBudgetReason,
 } from "./search-rerank-policy.js";
+import {
+    resolveNextSearchCandidateLimit,
+    resolveSearchPolicy,
+} from './search-policy.js';
 
 type SearchPassId = "primary" | "expanded";
 type BackendScoreKind = "dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown";
@@ -321,6 +322,151 @@ export type SearchExecutionInput = {
     observedChangedFilesState: ChangedFilesState;
 };
 
+type RerankPhaseResult = {
+    exactMatchPinningApplied: boolean;
+    rerankerAttempted: boolean;
+    rerankerApplied: boolean;
+    skippedByExactPin: boolean;
+    rerankerFailurePhase?: 'api_call' | 'parse_results';
+    rerankerCandidatesIn: number;
+    rerankerCandidatesReranked: number;
+    rerankerFamilyCount: number;
+    rerankerSupplementalCandidates: number;
+    rerankerCandidatePoolCount: number;
+    rerankerCandidateBudget: number;
+    rerankerBudgetReason?: RerankBudgetReason;
+    warning?: 'RERANKER_FAILED';
+};
+
+async function rerankSearchCandidates(
+    input: SearchExecutionInput,
+    host: SearchExecutionHost,
+    searchDiagnostics: SearchDiagnostics,
+    scored: SearchCandidate[],
+    initialExactMatchPinningApplied: boolean,
+): Promise<RerankPhaseResult> {
+    const rerankDecision = host.searchQuerySupport.resolveRerankDecision(input.scope, input.queryPlan);
+    let exactMatchPinningApplied = initialExactMatchPinningApplied;
+    let rerankerApplied = false;
+    let rerankerAttempted = false;
+    let rerankerFailurePhase: 'api_call' | 'parse_results' | undefined;
+    const rerankerCandidatesIn = scored.length;
+    let rerankerCandidatesReranked = 0;
+    let rerankerFamilyCount = 0;
+    let rerankerSupplementalCandidates = 0;
+    let rerankerCandidatePoolCount = 0;
+    let rerankerCandidateBudget = 0;
+    let rerankerBudgetReason: RerankBudgetReason | undefined;
+    const skippedByExactPin = Boolean(
+        rerankDecision.enabled
+        && host.reranker
+        && scored.length > 0
+        && shouldSkipRerankForExactPin({
+            scored,
+            exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
+            mustTokenCount: input.parsedOperators.must.length,
+        }),
+    );
+
+    if (rerankDecision.enabled && scored.length > 0 && host.reranker && !skippedByExactPin) {
+        rerankerAttempted = true;
+        try {
+            const selection = selectRerankCandidates({
+                candidates: scored,
+                requestedLimit: input.limit,
+            });
+            const rerankCount = selection.selected.length;
+            rerankerCandidatesReranked = rerankCount;
+            rerankerFamilyCount = selection.familyCount;
+            rerankerSupplementalCandidates = selection.supplementalCandidateCount;
+            rerankerCandidatePoolCount = selection.candidatePoolCount;
+            rerankerCandidateBudget = selection.budget;
+            rerankerBudgetReason = selection.budgetReason;
+            const rerankSlice = selection.selected;
+            const rerankDocuments = rerankSlice.map((candidate) => (
+                host.searchQuerySupport.buildRerankDocument(candidate.result)
+            ));
+            searchDiagnostics.rerankerCalls += 1;
+            searchDiagnostics.rerankerCandidates += rerankDocuments.length;
+            searchDiagnostics.rerankerInputBytes += rerankDocuments.reduce(
+                (total, document) => total + Buffer.byteLength(document, 'utf8'),
+                0,
+            );
+            let rerankResults: Array<{ index: number }> = [];
+            try {
+                rerankResults = await host.measureSearchPhase(
+                    'rerank',
+                    () => host.reranker!.rerank(input.semanticQuery, rerankDocuments, {
+                        topK: rerankCount,
+                        truncation: true,
+                        returnDocuments: false,
+                    }),
+                );
+            } catch {
+                rerankerFailurePhase = 'api_call';
+                throw new Error('reranker_api_call_failed');
+            }
+
+            const rerankRanks = new Map<number, number>();
+            try {
+                for (let idx = 0; idx < rerankResults.length; idx++) {
+                    const originalIndex = rerankResults[idx]?.index;
+                    if (
+                        Number.isInteger(originalIndex)
+                        && originalIndex >= 0
+                        && originalIndex < rerankCount
+                        && !rerankRanks.has(originalIndex)
+                    ) {
+                        rerankRanks.set(originalIndex, idx + 1);
+                    }
+                }
+            } catch {
+                rerankerFailurePhase = 'parse_results';
+                throw new Error('reranker_parse_failed');
+            }
+
+            let rerankerUpdatedCandidates = 0;
+            for (let idx = 0; idx < rerankSlice.length; idx++) {
+                const rank = rerankRanks.get(idx);
+                if (!rank) continue;
+                const rerankRrf = 1 / (SEARCH_RERANK_RRF_K + rank);
+                rerankSlice[idx].fusionScore += SEARCH_RERANK_WEIGHT * rerankRrf;
+                rerankSlice[idx].finalScore = (rerankSlice[idx].fusionScore + rerankSlice[idx].lexicalScore)
+                    * rerankSlice[idx].pathMultiplier
+                    * rerankSlice[idx].changedFilesMultiplier
+                    * rerankSlice[idx].agentFitMultiplier;
+                rerankSlice[idx].rerankAdjusted = true;
+                rerankerUpdatedCandidates++;
+            }
+
+            exactMatchPinningApplied = sortSearchCandidatesHelper(
+                scored,
+                rerankDecision.exactMatchPinningEnabled,
+                input.parsedOperators.must.length > 0,
+            ) || exactMatchPinningApplied;
+            rerankerApplied = rerankerUpdatedCandidates > 0;
+        } catch {
+            rerankerFailurePhase ||= 'parse_results';
+        }
+    }
+
+    return {
+        exactMatchPinningApplied,
+        rerankerAttempted,
+        rerankerApplied,
+        skippedByExactPin,
+        rerankerFailurePhase,
+        rerankerCandidatesIn,
+        rerankerCandidatesReranked,
+        rerankerFamilyCount,
+        rerankerSupplementalCandidates,
+        rerankerCandidatePoolCount,
+        rerankerCandidateBudget,
+        rerankerBudgetReason,
+        ...(rerankerFailurePhase ? { warning: 'RERANKER_FAILED' as const } : {}),
+    };
+}
+
 function buildEmptyFilterSummary(): SearchFilterSummary {
     return {
         removedByScope: 0,
@@ -338,8 +484,12 @@ export async function runSearchExecution(
     searchDiagnostics: SearchDiagnostics,
 ): Promise<SearchExecutionOutcome> {
     const expandedQuery = `${input.semanticQuery}\nimplementation runtime source entrypoint`;
-    const maxAttempts = input.parsedOperators.must.length > 0 ? 1 + SEARCH_MUST_RETRY_ROUNDS : 1;
-    let candidateLimit = Math.max(1, Math.min(SEARCH_MAX_CANDIDATES, Math.max(input.limit * 8, 32)));
+    const retrievalPolicy = resolveSearchPolicy({
+        resultLimit: input.limit,
+        hasMustOperators: input.parsedOperators.must.length > 0,
+    });
+    const maxAttempts = retrievalPolicy.maxAttempts;
+    let candidateLimit = retrievalPolicy.candidateLimit;
     let trackedLexicalDebug: TrackedLexicalSearchDebug | undefined;
     const operatorSummary = host.searchQuerySupport.buildOperatorSummary(input.parsedOperators);
     let filterSummary = buildEmptyFilterSummary();
@@ -726,15 +876,12 @@ export async function runSearchExecution(
             input.parsedOperators.must.length === 0
             || scored.length >= input.limit
             || attempt === maxAttempts - 1
-            || candidateLimit >= SEARCH_MAX_CANDIDATES
+            || candidateLimit >= retrievalPolicy.maxCandidateLimit
         ) {
             break;
         }
 
-        candidateLimit = Math.min(
-            SEARCH_MAX_CANDIDATES,
-            Math.max(candidateLimit + 1, candidateLimit * SEARCH_MUST_RETRY_MULTIPLIER),
-        );
+        candidateLimit = resolveNextSearchCandidateLimit(candidateLimit);
     }
 
     const searchWarnings = Array.from(searchWarningsSet);
@@ -749,111 +896,28 @@ export async function runSearchExecution(
     }
     freshnessSummary.changedFilesBoostApplied = boostedCandidates > 0;
 
-    const rerankDecision = host.searchQuerySupport.resolveRerankDecision(input.scope, input.queryPlan);
-    let rerankerApplied = false;
-    let rerankerAttempted = false;
-    let rerankerFailurePhase: "api_call" | "parse_results" | undefined;
-    const rerankerCandidatesIn = scored.length;
-    let rerankerCandidatesReranked = 0;
-    let rerankerFamilyCount = 0;
-    let rerankerSupplementalCandidates = 0;
-    let rerankerCandidatePoolCount = 0;
-    let rerankerCandidateBudget = 0;
-    let rerankerBudgetReason: RerankBudgetReason | undefined;
-    // Cost policy: only claim exact-pin skip when rerank would otherwise run (enabled + reranker present).
-    // This skips reranking the entire candidate tail for latency; top exact pin is already owned.
-    const skippedByExactPin = Boolean(
-        rerankDecision.enabled
-        && host.reranker
-        && scored.length > 0
-        && shouldSkipRerankForExactPin({
-            scored,
-            exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
-            mustTokenCount: input.parsedOperators.must.length,
-        }),
+    const rerankPhase = await rerankSearchCandidates(
+        input,
+        host,
+        searchDiagnostics,
+        scored,
+        exactMatchPinningApplied,
     );
-
-    if (rerankDecision.enabled && scored.length > 0 && host.reranker && !skippedByExactPin) {
-        rerankerAttempted = true;
-        try {
-            const selection = selectRerankCandidates({
-                candidates: scored,
-                requestedLimit: input.limit,
-            });
-            const rerankCount = selection.selected.length;
-            rerankerCandidatesReranked = rerankCount;
-            rerankerFamilyCount = selection.familyCount;
-            rerankerSupplementalCandidates = selection.supplementalCandidateCount;
-            rerankerCandidatePoolCount = selection.candidatePoolCount;
-            rerankerCandidateBudget = selection.budget;
-            rerankerBudgetReason = selection.budgetReason;
-            const rerankSlice = selection.selected;
-            const rerankDocuments = rerankSlice.map((candidate) => (
-                host.searchQuerySupport.buildRerankDocument(candidate.result)
-            ));
-            searchDiagnostics.rerankerCalls += 1;
-            searchDiagnostics.rerankerCandidates += rerankDocuments.length;
-            searchDiagnostics.rerankerInputBytes += rerankDocuments.reduce(
-                (total, document) => total + Buffer.byteLength(document, "utf8"),
-                0,
-            );
-            let rerankResults: Array<{ index: number }> = [];
-            try {
-                rerankResults = await host.measureSearchPhase(
-                    "rerank",
-                    () => host.reranker!.rerank(input.semanticQuery, rerankDocuments, {
-                        topK: rerankCount,
-                        truncation: true,
-                        returnDocuments: false,
-                    }),
-                );
-            } catch {
-                rerankerFailurePhase = "api_call";
-                throw new Error("reranker_api_call_failed");
-            }
-
-            const rerankRanks = new Map<number, number>();
-            try {
-                for (let idx = 0; idx < rerankResults.length; idx++) {
-                    const originalIndex = rerankResults[idx]?.index;
-                    if (Number.isInteger(originalIndex) && originalIndex >= 0 && originalIndex < rerankCount && !rerankRanks.has(originalIndex)) {
-                        rerankRanks.set(originalIndex, idx + 1);
-                    }
-                }
-            } catch {
-                rerankerFailurePhase = "parse_results";
-                throw new Error("reranker_parse_failed");
-            }
-
-            let rerankerUpdatedCandidates = 0;
-            for (let idx = 0; idx < rerankSlice.length; idx++) {
-                const rank = rerankRanks.get(idx);
-                if (!rank) {
-                    continue;
-                }
-                const rerankRrf = 1 / (SEARCH_RERANK_RRF_K + rank);
-                rerankSlice[idx].fusionScore += SEARCH_RERANK_WEIGHT * rerankRrf;
-                rerankSlice[idx].finalScore = (rerankSlice[idx].fusionScore + rerankSlice[idx].lexicalScore)
-                    * rerankSlice[idx].pathMultiplier
-                    * rerankSlice[idx].changedFilesMultiplier
-                    * rerankSlice[idx].agentFitMultiplier;
-                rerankSlice[idx].rerankAdjusted = true;
-                rerankerUpdatedCandidates++;
-            }
-
-            exactMatchPinningApplied = sortSearchCandidatesHelper(
-                scored,
-                rerankDecision.exactMatchPinningEnabled,
-                input.parsedOperators.must.length > 0,
-            ) || exactMatchPinningApplied;
-            rerankerApplied = rerankerUpdatedCandidates > 0;
-        } catch {
-            if (!rerankerFailurePhase) {
-                rerankerFailurePhase = "parse_results";
-            }
-            searchWarnings.push("RERANKER_FAILED");
-        }
-    }
+    exactMatchPinningApplied = rerankPhase.exactMatchPinningApplied;
+    if (rerankPhase.warning) searchWarnings.push(rerankPhase.warning);
+    const {
+        rerankerAttempted,
+        rerankerApplied,
+        skippedByExactPin,
+        rerankerFailurePhase,
+        rerankerCandidatesIn,
+        rerankerCandidatesReranked,
+        rerankerFamilyCount,
+        rerankerSupplementalCandidates,
+        rerankerCandidatePoolCount,
+        rerankerCandidateBudget,
+        rerankerBudgetReason,
+    } = rerankPhase;
 
     searchDiagnostics.excludedByIgnore = Math.max(0, searchDiagnostics.resultsBeforeFilter - searchDiagnostics.resultsAfterFilter);
     searchDiagnostics.rerankerAttempted = rerankerAttempted;
